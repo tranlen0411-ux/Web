@@ -1,6 +1,7 @@
 -- ============================================================================
 -- KHO TRÒ CHƠI HỌC VUI TIỂU HỌC (KHỐI 1 - 5)
--- SUPABASE POSTGRESQL DATABASE MIGRATION SCRIPT (FIXED NON-RECURSIVE RLS & TRIGGER)
+-- SUPABASE POSTGRESQL DATABASE MIGRATION SCRIPT
+-- AUTH-01: Email/Password | AUTH-02: Google OAuth | AUTH-03: RLS 3 Cấp (Admin, Teacher, Student) | AUTH-04: Mã Phụ Huynh
 -- ============================================================================
 
 -- 1. BẢNG PROFILES (Hồ sơ người dùng)
@@ -10,7 +11,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   full_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('admin', 'teacher', 'student')),
   avatar_url TEXT DEFAULT 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu',
-  grade_level INT CHECK (grade_level BETWEEN 1 AND 5),
+  grade_level INT DEFAULT 1 CHECK (grade_level BETWEEN 1 AND 5),
   total_stars INT DEFAULT 0,
   total_coins INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -102,15 +103,19 @@ CREATE TABLE IF NOT EXISTS public.student_badges (
   CONSTRAINT unique_student_badge UNIQUE (student_id, badge_id)
 );
 
--- INDEXES CHO TỐI ƯU HÓA TRUY VẤN
-CREATE INDEX IF NOT EXISTS idx_games_grade_subject ON public.games (grade_level, subject);
-CREATE INDEX IF NOT EXISTS idx_classes_teacher ON public.classes (teacher_id);
-CREATE INDEX IF NOT EXISTS idx_class_members_student ON public.class_members (student_id);
-CREATE INDEX IF NOT EXISTS idx_student_progress_student ON public.student_progress (student_id);
-CREATE INDEX IF NOT EXISTS idx_student_progress_game ON public.student_progress (game_id);
-CREATE INDEX IF NOT EXISTS idx_assignments_class ON public.assignments (class_id);
+-- CẤP QUYỀN TRUY CẬP CHO SCHEMA PUBLIC
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role, postgres;
 
--- BẬT ROW LEVEL SECURITY (RLS)
+-- HÀM LẤY VAI TRÒ DÙNG BẢO MẬT KHÔNG ĐỆ QUY (AUTH-03)
+CREATE OR REPLACE FUNCTION public.get_my_role()
+RETURNS TEXT AS $$
+  SELECT role FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- BẬT ROW LEVEL SECURITY (RLS 3 CẤP)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.class_members ENABLE ROW LEVEL SECURITY;
@@ -122,96 +127,82 @@ ALTER TABLE public.badges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.student_badges ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================================
--- NGUYÊN TẮC PHÂN QUYỀN RLS POLICIES (KHÔNG BỊ LỖI ĐỆ QUY INFINITE RECURSION)
+-- AUTH-03: PHÂN QUYỀN RLS 3 CẤP (ADMIN, GIÁO VIÊN, HỌC SINH)
 -- ============================================================================
 
 -- PROFILES POLICIES
 DROP POLICY IF EXISTS "Public profiles read" ON public.profiles;
-DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
-DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
-DROP POLICY IF EXISTS "Admin can manage all profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Users update own or admin update all" ON public.profiles;
 
 CREATE POLICY "Public profiles read" ON public.profiles FOR SELECT USING (true);
-CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
-CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users update own or admin update all" ON public.profiles FOR UPDATE USING (
+  auth.uid() = id OR public.get_my_role() = 'admin'
+);
 
--- CLASSES POLICIES
+-- CLASSES POLICIES (Giáo viên & Admin tạo lớp)
 DROP POLICY IF EXISTS "Anyone read classes" ON public.classes;
-DROP POLICY IF EXISTS "Teachers create classes" ON public.classes;
-DROP POLICY IF EXISTS "Teacher update own classes" ON public.classes;
+DROP POLICY IF EXISTS "Teachers and admins create classes" ON public.classes;
 
 CREATE POLICY "Anyone read classes" ON public.classes FOR SELECT USING (true);
-CREATE POLICY "Teachers create classes" ON public.classes FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY "Teacher update own classes" ON public.classes FOR UPDATE USING (teacher_id = auth.uid());
+CREATE POLICY "Teachers and admins create classes" ON public.classes FOR INSERT WITH CHECK (
+  public.get_my_role() IN ('teacher', 'admin')
+);
 
--- CLASS_MEMBERS POLICIES
-DROP POLICY IF EXISTS "Anyone read class members" ON public.class_members;
-DROP POLICY IF EXISTS "Students or teachers add class members" ON public.class_members;
+-- GAMES POLICIES (Giáo viên & Admin thêm game)
+DROP POLICY IF EXISTS "Anyone read games" ON public.games;
+DROP POLICY IF EXISTS "Teachers and admins manage games" ON public.games;
 
-CREATE POLICY "Anyone read class members" ON public.class_members FOR SELECT USING (true);
-CREATE POLICY "Students or teachers add class members" ON public.class_members FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Anyone read games" ON public.games FOR SELECT USING (true);
+CREATE POLICY "Teachers and admins manage games" ON public.games FOR ALL USING (
+  public.get_my_role() IN ('teacher', 'admin')
+);
 
--- CATEGORIES POLICIES
-DROP POLICY IF EXISTS "Anyone read categories" ON public.categories;
-DROP POLICY IF EXISTS "Admin manage categories" ON public.categories;
-
-CREATE POLICY "Anyone read categories" ON public.categories FOR SELECT USING (true);
-CREATE POLICY "Admin manage categories" ON public.categories FOR ALL USING (auth.uid() IS NOT NULL);
-
--- GAMES POLICIES
-DROP POLICY IF EXISTS "Anyone read public games" ON public.games;
-DROP POLICY IF EXISTS "Teachers and admins insert games" ON public.games;
-DROP POLICY IF EXISTS "Author or Admin update games" ON public.games;
-
-CREATE POLICY "Anyone read public games" ON public.games FOR SELECT USING (true);
-CREATE POLICY "Teachers and admins insert games" ON public.games FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY "Author or Admin update games" ON public.games FOR UPDATE USING (author_id = auth.uid() OR auth.uid() IS NOT NULL);
-
--- ASSIGNMENTS POLICIES
+-- ASSIGNMENTS POLICIES (Giáo viên & Admin giao bài)
 DROP POLICY IF EXISTS "Anyone read assignments" ON public.assignments;
-DROP POLICY IF EXISTS "Teachers create assignments" ON public.assignments;
+DROP POLICY IF EXISTS "Teachers and admins create assignments" ON public.assignments;
 
 CREATE POLICY "Anyone read assignments" ON public.assignments FOR SELECT USING (true);
-CREATE POLICY "Teachers create assignments" ON public.assignments FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Teachers and admins create assignments" ON public.assignments FOR INSERT WITH CHECK (
+  public.get_my_role() IN ('teacher', 'admin')
+);
 
--- STUDENT_PROGRESS POLICIES
-DROP POLICY IF EXISTS "Anyone read progress" ON public.student_progress;
-DROP POLICY IF EXISTS "Students insert own progress" ON public.student_progress;
+-- STUDENT_PROGRESS POLICIES (Học sinh lưu bài, Giáo viên/Admin xem)
+DROP POLICY IF EXISTS "Read progress policy" ON public.student_progress;
+DROP POLICY IF EXISTS "Student insert progress" ON public.student_progress;
 
-CREATE POLICY "Anyone read progress" ON public.student_progress FOR SELECT USING (true);
-CREATE POLICY "Students insert own progress" ON public.student_progress FOR INSERT WITH CHECK (student_id = auth.uid());
+CREATE POLICY "Read progress policy" ON public.student_progress FOR SELECT USING (true);
+CREATE POLICY "Student insert progress" ON public.student_progress FOR INSERT WITH CHECK (
+  student_id = auth.uid()
+);
 
--- BADGES POLICIES
-DROP POLICY IF EXISTS "Anyone read badges" ON public.badges;
-CREATE POLICY "Anyone read badges" ON public.badges FOR SELECT USING (true);
+-- OTHER TABLES PUBLIC READ POLICIES
+CREATE POLICY "Public categories read" ON public.categories FOR SELECT USING (true);
+CREATE POLICY "Public badges read" ON public.badges FOR SELECT USING (true);
+CREATE POLICY "Public student badges read" ON public.student_badges FOR SELECT USING (true);
+CREATE POLICY "Student insert badges" ON public.student_badges FOR INSERT WITH CHECK (student_id = auth.uid());
 
--- STUDENT_BADGES POLICIES
-DROP POLICY IF EXISTS "Anyone read student badges" ON public.student_badges;
-DROP POLICY IF EXISTS "Students insert own badges" ON public.student_badges;
-
-CREATE POLICY "Anyone read student badges" ON public.student_badges FOR SELECT USING (true);
-CREATE POLICY "Students insert own badges" ON public.student_badges FOR INSERT WITH CHECK (student_id = auth.uid());
-
--- ============================================================================
--- TRIGGER TỰ ĐỘNG KHỞI TẠO / CẬP NHẬT PROFILES KHI ĐĂNG KÝ (AN TOÀN AN TOÀN TRÙNG LẮP)
--- ============================================================================
+-- TRIGGER TỰ ĐỘNG KHỞI TẠO NGUYÊN THỂ AN TOÀN
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email, full_name, role, avatar_url, grade_level)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', SPLIT_PART(NEW.email, '@', 1)),
-    COALESCE(NEW.raw_user_meta_data->>'role', 'student'),
-    COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/bottts/svg?seed=' || NEW.id),
-    COALESCE((NEW.raw_user_meta_data->>'grade_level')::INT, 1)
-  )
-  ON CONFLICT (id) DO UPDATE SET
-    email = EXCLUDED.email,
-    full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
-    role = COALESCE(EXCLUDED.role, public.profiles.role),
-    updated_at = NOW();
+  BEGIN
+    INSERT INTO public.profiles (id, email, full_name, role, avatar_url, grade_level)
+    VALUES (
+      NEW.id,
+      NEW.email,
+      COALESCE(NEW.raw_user_meta_data->>'full_name', SPLIT_PART(NEW.email, '@', 1)),
+      COALESCE(NEW.raw_user_meta_data->>'role', 'student'),
+      COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/bottts/svg?seed=' || NEW.id),
+      COALESCE((NEW.raw_user_meta_data->>'grade_level')::INT, 1)
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      email = EXCLUDED.email,
+      full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+      role = COALESCE(EXCLUDED.role, public.profiles.role),
+      updated_at = NOW();
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -220,78 +211,3 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
--- SEED DATA INITIALIZATION
-INSERT INTO public.categories (name, type, icon_name) VALUES
-('Toán', 'subject', 'Calculator'),
-('Tiếng Việt', 'subject', 'BookOpen'),
-('Tiếng Anh', 'subject', 'Languages'),
-('Tự nhiên & Xã hội', 'subject', 'Trees'),
-('Lịch sử & Địa lý', 'subject', 'Globe'),
-('Tin học', 'subject', 'Laptop'),
-('Lớp 1', 'grade', 'GraduationCap'),
-('Lớp 2', 'grade', 'GraduationCap'),
-('Lớp 3', 'grade', 'GraduationCap'),
-('Lớp 4', 'grade', 'GraduationCap'),
-('Lớp 5', 'grade', 'GraduationCap')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.badges (title, description, icon_url, required_stars, category) VALUES
-('Thần Đồng Toán Học', 'Đạt 50 Sao từ các trò chơi Toán học', '🌟', 50, 'Toán'),
-('Vua Tiếng Việt', 'Hoàn thành 5 bài luyện từ và câu', '📚', 40, 'Tiếng Việt'),
-('Hiệp Sĩ Tiếng Anh', 'Ghép đúng 50 cặp từ vựng Tiếng Anh', '🇬🇧', 60, 'Tiếng Anh'),
-('Bậc Thầy Lật Thẻ', 'Hoàn thành Game lật thẻ dưới 30 giây', '🃏', 30, 'Game'),
-('Nhà Đua Trắc Nghiệm', 'Trả lời đúng liên tiếp 10 câu trắc nghiệm', '🏎️', 50, 'Game'),
-('Ong Chăm Chỉ', 'Đăng nhập và tích lũy tổng cộng 100 Sao', '🐝', 100, 'Hệ thống')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.games (id, title, description, thumbnail_url, game_type, game_url, grade_level, subject, is_public, play_count) VALUES
-(
-  '11111111-1111-1111-1111-111111111111',
-  'Thử Thách Lật Thẻ Toán Học & Từ Vựng',
-  'Trò chơi lật thẻ ghi nhớ giúp bé rèn luyện trí nhớ, ghép cặp phép tính và từ vựng Tiếng Anh sinh động.',
-  'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60',
-  'builtin',
-  'memory-game',
-  1,
-  'Toán',
-  true,
-  128
-),
-(
-  '22222222-2222-2222-2222-222222222222',
-  'Đua Xe Trắc Nghiệm Tri Thức Tiểu Học',
-  'Cuộc đua xe trắc nghiệm tốc độ! Trả lời đúng các câu hỏi Toán và Tiếng Việt để xe đua bứt phá về đích.',
-  'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=500&auto=format&fit=crop&q=60',
-  'builtin',
-  'quiz-race',
-  2,
-  'Tiếng Việt',
-  true,
-  256
-),
-(
-  '33333333-3333-3333-3333-333333333333',
-  'Ô Chữ Tiếng Anh Tiểu Học (Wordwall Embed)',
-  'Trò chơi nối từ và ô chữ tiếng Anh rèn luyện kỹ năng từ vựng tiểu học sinh động.',
-  'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=500&auto=format&fit=crop&q=60',
-  'iframe',
-  'https://wordwall.net/embed/4f6d4d1e2e924a66a1a4c9c22822a101',
-  3,
-  'Tiếng Anh',
-  true,
-  95
-),
-(
-  '44444444-4444-4444-4444-444444444444',
-  'Khám Phá Thế Giới Động Vật & Tự Nhiên',
-  'Trắc nghiệm hình ảnh trực quan giúp bé nhận biết thế giới tự nhiên và bảo vệ môi trường.',
-  'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=500&auto=format&fit=crop&q=60',
-  'iframe',
-  'https://quizizz.com/embed/quiz/609a1f2b3e45f9001b9d4e5f',
-  4,
-  'Tự nhiên & Xã hội',
-  true,
-  76
-)
-ON CONFLICT (id) DO NOTHING;

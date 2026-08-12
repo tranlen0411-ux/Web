@@ -236,6 +236,26 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Đăng nhập nhanh bằng Google OAuth (AUTH-02)
+  const signInWithGoogle = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+      return { data, error: null };
+    } catch (error) {
+      console.error('Google OAuth error:', error);
+      return { data: null, error };
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -243,6 +263,7 @@ export const AuthProvider = ({ children }) => {
       loading,
       signUp,
       signIn,
+      signInWithGoogle,
       quickStudentSignIn,
       signOut,
       refreshProfile,
