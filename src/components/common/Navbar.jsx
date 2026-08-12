@@ -9,18 +9,22 @@ import {
   Sparkles, 
   ShieldCheck, 
   GraduationCap,
-  ChevronDown
+  ChevronDown,
+  Lock
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
 import { useSound } from '../../context/SoundContext';
+import { ChangePasswordModal } from './ChangePasswordModal';
 
 export const Navbar = () => {
   const { user, profile, signOut } = useAuth();
   const { triggerSound } = useSound();
   const navigate = useNavigate();
   const location = useLocation();
+
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isChangePassOpen, setIsChangePassOpen] = useState(false);
 
   const handleNavClick = (path) => {
     triggerSound('click');
@@ -150,6 +154,17 @@ export const Navbar = () => {
                   </button>
 
                   <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      triggerSound('click');
+                      setIsChangePassOpen(true);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                  >
+                    <Lock className="w-4 h-4 text-amber-500" /> Đổi Mật Khẩu
+                  </button>
+
+                  <button
                     onClick={handleLogout}
                     className="w-full text-left px-4 py-2 text-sm font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 border-t border-slate-100 mt-1"
                   >
@@ -169,6 +184,11 @@ export const Navbar = () => {
         </div>
 
       </div>
+
+      <ChangePasswordModal
+        isOpen={isChangePassOpen}
+        onClose={() => setIsChangePassOpen(false)}
+      />
     </header>
   );
 };
