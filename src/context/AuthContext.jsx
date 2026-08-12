@@ -115,46 +115,49 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     const cleanEmail = email.toLowerCase().trim();
     try {
+      // 1. Thử đăng nhập chuẩn
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password
       });
 
-      if (error) {
-        // Tự động khởi tạo tài khoản thử nghiệm nếu chưa được nạp vào auth.users
-        const sampleRoles = {
-          'admin@hoclapvui.edu.vn': { name: 'Quản Trị Viên Hệ Thống', role: 'admin', grade: 1 },
-          'co.hoa@hoclapvui.edu.vn': { name: 'Cô Nguyễn Thị Hoa', role: 'teacher', grade: 1 },
-          'thay.minh@hoclapvui.edu.vn': { name: 'Thầy Trần Đức Minh', role: 'teacher', grade: 3 },
-          'hs_nam@hoclapvui.edu.vn': { name: 'Nguyễn Văn Nam (HS101)', role: 'student', grade: 1 },
-          'hs_an@hoclapvui.edu.vn': { name: 'Lê Thúy An (HS202)', role: 'student', grade: 2 },
-          'hs_duc@hoclapvui.edu.vn': { name: 'Trần Minh Đức (HS303)', role: 'student', grade: 3 },
-          'hs_bao@hoclapvui.edu.vn': { name: 'Phạm Gia Bảo (HS404)', role: 'student', grade: 4 },
-          'hs_mai@hoclapvui.edu.vn': { name: 'Hoàng Thị Mai (HS505)', role: 'student', grade: 5 },
-        };
-
-        const preset = sampleRoles[cleanEmail];
-        if (preset) {
-          const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-            email: cleanEmail,
-            password,
-            options: {
-              data: {
-                full_name: preset.name,
-                role: preset.role,
-                grade_level: preset.grade,
-                avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${preset.role}`
-              }
-            }
-          });
-
-          if (!signUpErr && signUpData) {
-            return { data: signUpData, error: null };
-          }
-        }
-        throw error;
+      if (!error && data?.user) {
+        return { data, error: null };
       }
-      return { data, error: null };
+
+      // 2. Thử tự động đăng ký qua Supabase Auth SDK nếu tài khoản thử nghiệm chưa khởi tạo
+      const sampleRoles = {
+        'admin@hoclapvui.edu.vn': { name: 'Quản Trị Viên Hệ Thống', role: 'admin', grade: 1 },
+        'co.hoa@hoclapvui.edu.vn': { name: 'Cô Nguyễn Thị Hoa', role: 'teacher', grade: 1 },
+        'thay.minh@hoclapvui.edu.vn': { name: 'Thầy Trần Đức Minh', role: 'teacher', grade: 3 },
+        'hs_nam@hoclapvui.edu.vn': { name: 'Nguyễn Văn Nam (HS101)', role: 'student', grade: 1 },
+        'hs_an@hoclapvui.edu.vn': { name: 'Lê Thúy An (HS202)', role: 'student', grade: 2 },
+        'hs_duc@hoclapvui.edu.vn': { name: 'Trần Minh Đức (HS303)', role: 'student', grade: 3 },
+        'hs_bao@hoclapvui.edu.vn': { name: 'Phạm Gia Bảo (HS404)', role: 'student', grade: 4 },
+        'hs_mai@hoclapvui.edu.vn': { name: 'Hoàng Thị Mai (HS505)', role: 'student', grade: 5 },
+      };
+
+      const preset = sampleRoles[cleanEmail];
+      if (preset) {
+        const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            data: {
+              full_name: preset.name,
+              role: preset.role,
+              grade_level: preset.grade,
+              avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${preset.role}`
+            }
+          }
+        });
+
+        if (!signUpErr && signUpData?.user) {
+          return { data: signUpData, error: null };
+        }
+      }
+
+      throw error;
     } catch (error) {
       console.error('Sign in error:', error);
       return { data: null, error };
