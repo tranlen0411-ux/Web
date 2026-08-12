@@ -130,13 +130,29 @@ export const AuthProvider = ({ children }) => {
   // Đăng nhập Nhanh dành cho Học sinh nhỏ tuổi (dùng Mã/Tên học sinh)
   const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
     setLoading(true);
-    const generatedEmail = `hs_${studentCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@hoclapvui.edu.vn`;
-    const defaultPassword = `hs_${studentCode}_123456`;
+    const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    
+    // Bản đồ tài khoản học sinh mẫu
+    const sampleEmails = {
+      'hs101': 'hs_nam@hoclapvui.edu.vn',
+      'nam': 'hs_nam@hoclapvui.edu.vn',
+      'hs202': 'hs_an@hoclapvui.edu.vn',
+      'an': 'hs_an@hoclapvui.edu.vn',
+      'hs303': 'hs_duc@hoclapvui.edu.vn',
+      'duc': 'hs_duc@hoclapvui.edu.vn',
+      'hs404': 'hs_bao@hoclapvui.edu.vn',
+      'bao': 'hs_bao@hoclapvui.edu.vn',
+      'hs505': 'hs_mai@hoclapvui.edu.vn',
+      'mai': 'hs_mai@hoclapvui.edu.vn',
+    };
+
+    const targetEmail = sampleEmails[cleanCode] || `hs_${cleanCode}@hoclapvui.edu.vn`;
+    const defaultPassword = sampleEmails[cleanCode] ? '123456' : `hs_${cleanCode}_123456`;
 
     try {
-      // Thử đăng nhập trước
+      // 1. Thử đăng nhập với tài khoản mẫu (Pass: 123456)
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: generatedEmail,
+        email: targetEmail,
         password: defaultPassword
       });
 
@@ -144,16 +160,26 @@ export const AuthProvider = ({ children }) => {
         return { data: signInData, error: null };
       }
 
-      // Nếu tài khoản chưa có -> Tự động đăng ký
+      // 2. Thử đăng nhập nếu có pass phụ
+      const { data: subData, error: subError } = await supabase.auth.signInWithPassword({
+        email: targetEmail,
+        password: '123456'
+      });
+
+      if (!subError && subData) {
+        return { data: subData, error: null };
+      }
+
+      // 3. Nếu tài khoản chưa có -> Tự động đăng ký
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: generatedEmail,
+        email: targetEmail,
         password: defaultPassword,
         options: {
           data: {
             full_name: `${fullName} (${studentCode.toUpperCase()})`,
             role: 'student',
             grade_level: parseInt(gradeLevel),
-            avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${studentCode}`
+            avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
           }
         }
       });
@@ -161,6 +187,7 @@ export const AuthProvider = ({ children }) => {
       if (signUpError) throw signUpError;
       return { data: signUpData, error: null };
     } catch (error) {
+      console.error('Quick student auth error:', error);
       return { data: null, error };
     } finally {
       setLoading(false);
