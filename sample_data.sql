@@ -1,6 +1,6 @@
 -- ============================================================================
 -- KHO TRÒ CHƠI HỌC VUI TIỂU HỌC (KHỐI 1 - 5)
--- DỮ LIỆU MẪU THỬ NGHIỆM HỆ THỐNG (SAMPLE TEST DATA FOR SUPABASE)
+-- DỮ LIỆU MẪU THỬ NGHIỆM HỆ THỐNG (CHUẨN HEXADECIMAL UUID)
 -- ============================================================================
 
 -- 1. NẠP TÀI KHOẢN MẪU VÀO AUTH.USERS & PROFILES
@@ -23,7 +23,7 @@ INSERT INTO auth.users (
 ),
 -- Giáo Viên 1 (Cô Nguyễn Thị Hoa)
 (
-  't0000000-0000-0000-0000-000000000001',
+  'b1000000-0000-0000-0000-000000000001',
   '00000000-0000-0000-0000-000000000000',
   'co.hoa@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
@@ -34,7 +34,7 @@ INSERT INTO auth.users (
 ),
 -- Giáo Viên 2 (Thầy Trần Đức Minh)
 (
-  't0000000-0000-0000-0000-000000000002',
+  'b2000000-0000-0000-0000-000000000002',
   '00000000-0000-0000-0000-000000000000',
   'thay.minh@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
@@ -45,7 +45,7 @@ INSERT INTO auth.users (
 ),
 -- Học Sinh 1 (Nguyễn Văn Nam - Khối 1)
 (
-  's0000000-0000-0000-0000-000000000001',
+  'c1000000-0000-0000-0000-000000000001',
   '00000000-0000-0000-0000-000000000000',
   'hs_nam@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
@@ -56,7 +56,7 @@ INSERT INTO auth.users (
 ),
 -- Học Sinh 2 (Lê Thúy An - Khối 2)
 (
-  's0000000-0000-0000-0000-000000000002',
+  'c2000000-0000-0000-0000-000000000002',
   '00000000-0000-0000-0000-000000000000',
   'hs_an@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
@@ -67,7 +67,7 @@ INSERT INTO auth.users (
 ),
 -- Học Sinh 3 (Trần Minh Đức - Khối 3)
 (
-  's0000000-0000-0000-0000-000000000003',
+  'c3000000-0000-0000-0000-000000000003',
   '00000000-0000-0000-0000-000000000000',
   'hs_duc@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
@@ -78,8 +78,8 @@ INSERT INTO auth.users (
 ),
 -- Học Sinh 4 (Phạm Gia Bảo - Khối 4)
 (
-  's0000000-0000-0000-0000-000000000004',
-  '00000000-0000-0000-0000-000000000004',
+  'c4000000-0000-0000-0000-000000000004',
+  '00000000-0000-0000-0000-000000000000',
   'hs_bao@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
   now(),
@@ -89,8 +89,8 @@ INSERT INTO auth.users (
 ),
 -- Học Sinh 5 (Hoàng Thị Mai - Khối 5)
 (
-  's0000000-0000-0000-0000-000000000005',
-  '00000000-0000-0000-0000-000000000005',
+  'c5000000-0000-0000-0000-000000000005',
+  '00000000-0000-0000-0000-000000000000',
   'hs_mai@hoclapvui.edu.vn',
   crypt('123456', gen_salt('bf')),
   now(),
@@ -101,29 +101,29 @@ INSERT INTO auth.users (
 ON CONFLICT (id) DO NOTHING;
 
 -- 2. CẬP NHẬT ĐIỂM SAO VÀ XU CHO CÁC HỌC SINH MẪU
-UPDATE public.profiles SET total_stars = 150, total_coins = 60, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Nam' WHERE id = 's0000000-0000-0000-0000-000000000001';
-UPDATE public.profiles SET total_stars = 120, total_coins = 45, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=An' WHERE id = 's0000000-0000-0000-0000-000000000002';
-UPDATE public.profiles SET total_stars = 210, total_coins = 90, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Duc' WHERE id = 's0000000-0000-0000-0000-000000000003';
-UPDATE public.profiles SET total_stars = 280, total_coins = 120, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Bao' WHERE id = 's0000000-0000-0000-0000-000000000004';
-UPDATE public.profiles SET total_stars = 350, total_coins = 150, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Mai' WHERE id = 's0000000-0000-0000-0000-000000000005';
+UPDATE public.profiles SET total_stars = 150, total_coins = 60, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Nam' WHERE id = 'c1000000-0000-0000-0000-000000000001';
+UPDATE public.profiles SET total_stars = 120, total_coins = 45, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=An' WHERE id = 'c2000000-0000-0000-0000-000000000002';
+UPDATE public.profiles SET total_stars = 210, total_coins = 90, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Duc' WHERE id = 'c3000000-0000-0000-0000-000000000003';
+UPDATE public.profiles SET total_stars = 280, total_coins = 120, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Bao' WHERE id = 'c4000000-0000-0000-0000-000000000004';
+UPDATE public.profiles SET total_stars = 350, total_coins = 150, avatar_url = 'https://api.dicebear.com/7.x/bottts/svg?seed=Mai' WHERE id = 'c5000000-0000-0000-0000-000000000005';
 
 -- 3. NẠP DỮ LIỆU LỚP HỌC MẪU (CLASSES)
 INSERT INTO public.classes (id, name, grade_level, code, teacher_id) VALUES
-('c0000000-0000-0000-0000-000000000001', 'Lớp 1A - Họa Mi', 1, 'LOP1A', 't0000000-0000-0000-0000-000000000001'),
-('c0000000-0000-0000-0000-000000000002', 'Lớp 2B - Vàng Anh', 2, 'LOP2B', 't0000000-0000-0000-0000-000000000001'),
-('c0000000-0000-0000-0000-000000000003', 'Lớp 3A - Sơn Ca', 3, 'LOP3A', 't0000000-0000-0000-0000-000000000002'),
-('c0000000-0000-0000-0000-000000000004', 'Lớp 4C - Đại Bàng', 4, 'LOP4C', 't0000000-0000-0000-0000-000000000002'),
-('c0000000-0000-0000-0000-000000000005', 'Lớp 5A - Phượng Hoàng', 5, 'LOP5A', 't0000000-0000-0000-0000-000000000002')
+('d1000000-0000-0000-0000-000000000001', 'Lớp 1A - Họa Mi', 1, 'LOP1A', 'b1000000-0000-0000-0000-000000000001'),
+('d2000000-0000-0000-0000-000000000002', 'Lớp 2B - Vàng Anh', 2, 'LOP2B', 'b1000000-0000-0000-0000-000000000001'),
+('d3000000-0000-0000-0000-000000000003', 'Lớp 3A - Sơn Ca', 3, 'LOP3A', 'b2000000-0000-0000-0000-000000000002'),
+('d4000000-0000-0000-0000-000000000004', 'Lớp 4C - Đại Bàng', 4, 'LOP4C', 'b2000000-0000-0000-0000-000000000002'),
+('d5000000-0000-0000-0000-000000000005', 'Lớp 5A - Phượng Hoàng', 5, 'LOP5A', 'b2000000-0000-0000-0000-000000000002')
 ON CONFLICT (id) DO NOTHING;
 
 -- 4. PHÂN HỌC SINH VÀO CÁC LỚP (CLASS_MEMBERS)
 INSERT INTO public.class_members (class_id, student_id) VALUES
-('c0000000-0000-0000-0000-000000000001', 's0000000-0000-0000-0000-000000000001'),
-('c0000000-0000-0000-0000-000000000002', 's0000000-0000-0000-0000-000000000002'),
-('c0000000-0000-0000-0000-000000000003', 's0000000-0000-0000-0000-000000000003'),
-('c0000000-0000-0000-0000-000000000004', 's0000000-0000-0000-0000-000000000004'),
-('c0000000-0000-0000-0000-000000000005', 's0000000-0000-0000-0000-000000000005')
-ON CONFLICT DO NOTHING;
+('d1000000-0000-0000-0000-000000000001', 'c1000000-0000-0000-0000-000000000001'),
+('d2000000-0000-0000-0000-000000000002', 'c2000000-0000-0000-0000-000000000002'),
+('d3000000-0000-0000-0000-000000000003', 'c3000000-0000-0000-0000-000000000003'),
+('d4000000-0000-0000-0000-000000000004', 'c4000000-0000-0000-0000-000000000004'),
+('d5000000-0000-0000-0000-000000000005', 'c5000000-0000-0000-0000-000000000005')
+ON CONFLICT (id) DO NOTHING;
 
 -- 5. PHÁT TRIỂN THÊM KHO GAME HỌC TẬP (GAMES)
 INSERT INTO public.games (id, title, description, thumbnail_url, game_type, game_url, grade_level, subject, is_public, play_count) VALUES
@@ -179,27 +179,27 @@ ON CONFLICT (id) DO NOTHING;
 
 -- 6. GIAO BÀI TẬP MẪU CHO CÁC LỚP (ASSIGNMENTS)
 INSERT INTO public.assignments (id, game_id, class_id, reward_stars, due_date) VALUES
-('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'c0000000-0000-0000-0000-000000000001', 20, now() + interval '7 days'),
-('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'c0000000-0000-0000-0000-000000000002', 25, now() + interval '5 days'),
-('a3333333-3333-3333-3333-333333333333', '66666666-6666-6666-6666-666666666666', 'c0000000-0000-0000-0000-000000000003', 30, now() + interval '10 days')
+('e1000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'd1000000-0000-0000-0000-000000000001', 20, now() + interval '7 days'),
+('e2000000-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222', 'd2000000-0000-0000-0000-000000000002', 25, now() + interval '5 days'),
+('e3000000-0000-0000-0000-000000000003', '66666666-6666-6666-6666-666666666666', 'd3000000-0000-0000-0000-000000000003', 30, now() + interval '10 days')
 ON CONFLICT (id) DO NOTHING;
 
 -- 7. NHẬT KÝ TIẾN ĐỘ HOÀN THÀNH GAME CỦA HỌC SINH (STUDENT_PROGRESS)
 INSERT INTO public.student_progress (assignment_id, game_id, student_id, status, score, stars_earned, completion_time_seconds) VALUES
-('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 's0000000-0000-0000-0000-000000000001', 'completed', 100, 20, 45),
-('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 's0000000-0000-0000-0000-000000000002', 'completed', 90, 25, 60),
-('a3333333-3333-3333-3333-333333333333', '66666666-6666-6666-6666-666666666666', 's0000000-0000-0000-0000-000000000003', 'completed', 100, 30, 50);
+('e1000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'c1000000-0000-0000-0000-000000000001', 'completed', 100, 20, 45),
+('e2000000-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222', 'c2000000-0000-0000-0000-000000000002', 'completed', 90, 25, 60),
+('e3000000-0000-0000-0000-000000000003', '66666666-6666-6666-6666-666666666666', 'c3000000-0000-0000-0000-000000000003', 'completed', 100, 30, 50);
 
--- 8. GHI NHẬN HUY HIỆU ĐÃ MỞ KHÓA CHO HỌC SINH TOP (STUDENT_BADGES)
+-- 8. GHI NHẬN HUY HIỆU ĐÃ MỞ KHÓA CHO TOP HỌC SINH (STUDENT_BADGES)
 INSERT INTO public.student_badges (student_id, badge_id)
-SELECT 's0000000-0000-0000-0000-000000000005', id FROM public.badges WHERE title = 'Thần Đồng Toán Học'
+SELECT 'c5000000-0000-0000-0000-000000000005', id FROM public.badges WHERE title = 'Thần Đồng Toán Học'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.student_badges (student_id, badge_id)
-SELECT 's0000000-0000-0000-0000-000000000004', id FROM public.badges WHERE title = 'Ong Chăm Chỉ'
+SELECT 'c4000000-0000-0000-0000-000000000004', id FROM public.badges WHERE title = 'Ong Chăm Chỉ'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.student_badges (student_id, badge_id)
-SELECT 's0000000-0000-0000-0000-000000000003', id FROM public.badges WHERE title = 'Bậc Thầy Lật Thẻ'
+SELECT 'c3000000-0000-0000-0000-000000000003', id FROM public.badges WHERE title = 'Bậc Thầy Lật Thẻ'
 ON CONFLICT DO NOTHING;
 
