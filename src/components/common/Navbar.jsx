@@ -1,0 +1,174 @@
+import React, { useState } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { 
+  Gamepad2, 
+  Trophy, 
+  User, 
+  LogOut, 
+  BookOpen, 
+  Sparkles, 
+  ShieldCheck, 
+  GraduationCap,
+  ChevronDown
+} from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { SoundToggle } from './SoundToggle';
+import { useSound } from '../../context/SoundContext';
+
+export const Navbar = () => {
+  const { user, profile, signOut } = useAuth();
+  const { triggerSound } = useSound();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const handleNavClick = (path) => {
+    triggerSound('click');
+    navigate(path);
+  };
+
+  const handleLogout = async () => {
+    triggerSound('click');
+    await signOut();
+    navigate('/auth');
+  };
+
+  const role = profile?.role || 'student';
+
+  return (
+    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-4 border-amber-200 shadow-sm">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+        
+        {/* LOGO TIỂU HỌC */}
+        <Link 
+          to="/" 
+          onClick={() => triggerSound('click')}
+          className="flex items-center gap-3 group"
+        >
+          <div className="w-12 h-12 bg-gradient-to-tr from-sky-400 to-amber-400 rounded-2xl border-4 border-amber-300 flex items-center justify-center shadow-md transform group-hover:rotate-6 transition-transform">
+            <Gamepad2 className="w-7 h-7 text-white" />
+          </div>
+          <div>
+            <span className="text-xl font-black text-amber-900 tracking-tight flex items-center gap-1">
+              HỌC VUI <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+            </span>
+            <span className="text-xs font-bold text-sky-600 uppercase tracking-widest block -mt-1">
+              Kho Trò Chơi Tiểu Học
+            </span>
+          </div>
+        </Link>
+
+        {/* ĐIỀU HƯỚNG CHÍNH */}
+        <nav className="hidden md:flex items-center gap-2">
+          <button
+            onClick={() => handleNavClick('/')}
+            className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+              location.pathname === '/' 
+                ? 'bg-sky-500 text-white border-sky-600 shadow-sm' 
+                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-sky-50 hover:text-sky-600'
+            }`}
+          >
+            <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
+          </button>
+
+          <button
+            onClick={() => handleNavClick('/leaderboard')}
+            className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+              location.pathname === '/leaderboard' 
+                ? 'bg-amber-500 text-white border-amber-600 shadow-sm' 
+                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
+            }`}
+          >
+            <Trophy className="w-4 h-4 text-amber-400" /> Bảng Xếp Hạng
+          </button>
+
+          {/* DASHBOARD THEO ROLE */}
+          {user && (
+            <button
+              onClick={() => handleNavClick(
+                role === 'admin' ? '/admin' : role === 'teacher' ? '/teacher' : '/student'
+              )}
+              className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+                location.pathname.includes('/dashboard') || location.pathname === `/${role}`
+                  ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50 hover:text-emerald-600'
+              }`}
+            >
+              {role === 'admin' && <ShieldCheck className="w-4 h-4" />}
+              {role === 'teacher' && <GraduationCap className="w-4 h-4" />}
+              {role === 'student' && <BookOpen className="w-4 h-4" />}
+              {role === 'admin' ? 'Quản Trị Hệ Thống' : role === 'teacher' ? 'Lớp & Giao Bài' : 'Góc Học Tập'}
+            </button>
+          )}
+        </nav>
+
+        {/* THÔNG TIN HỌC SINH & ÂM THANH */}
+        <div className="flex items-center gap-3">
+          <SoundToggle />
+
+          {user ? (
+            <div className="relative">
+              <button
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                className="flex items-center gap-2 p-1.5 pr-3 bg-amber-50 hover:bg-amber-100 rounded-2xl border-2 border-amber-200 transition-all"
+              >
+                <img
+                  src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
+                  alt="Avatar"
+                  className="w-9 h-9 rounded-xl border-2 border-amber-300 bg-white"
+                />
+                <div className="text-left hidden sm:block">
+                  <p className="text-xs font-black text-amber-900 truncate max-w-[100px]">
+                    {profile?.full_name || 'Học sinh'}
+                  </p>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700">
+                    <span className="flex items-center gap-0.5">🌟 {profile?.total_stars || 0}</span>
+                    <span className="flex items-center gap-0.5">🪙 {profile?.total_coins || 0}</span>
+                  </div>
+                </div>
+                <ChevronDown className="w-4 h-4 text-amber-700" />
+              </button>
+
+              {/* DROPDOWN MENU */}
+              {isMenuOpen && (
+                <div className="absolute right-0 mt-2 w-56 bg-white rounded-3xl border-4 border-amber-200 shadow-xl py-2 z-50 animate-fadeIn">
+                  <div className="px-4 py-2 border-b-2 border-slate-100 mb-1">
+                    <p className="text-xs text-slate-500 font-bold">Tài khoản vai trò</p>
+                    <p className="text-sm font-black text-amber-900 capitalize">
+                      {role === 'admin' ? '🛡️ Quản trị viên' : role === 'teacher' ? '👩‍🏫 Giáo viên' : '🎒 Học sinh'}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      handleNavClick(role === 'admin' ? '/admin' : role === 'teacher' ? '/teacher' : '/student');
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                  >
+                    <User className="w-4 h-4 text-amber-500" /> Hồ Sơ & Bảng Quản Lý
+                  </button>
+
+                  <button
+                    onClick={handleLogout}
+                    className="w-full text-left px-4 py-2 text-sm font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 border-t border-slate-100 mt-1"
+                  >
+                    <LogOut className="w-4 h-4" /> Đăng Xuất
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={() => handleNavClick('/auth')}
+              className="px-5 py-2.5 bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white font-black text-sm rounded-2xl border-b-4 border-sky-700 shadow-md active:translate-y-0.5 transition-all"
+            >
+              Đăng Nhập
+            </button>
+          )}
+        </div>
+
+      </div>
+    </header>
+  );
+};
