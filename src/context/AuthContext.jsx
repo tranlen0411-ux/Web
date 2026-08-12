@@ -110,56 +110,54 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập bằng Email
+  // Đăng nhập bằng Email & Mật khẩu qua Supabase Auth (AUTH-01)
   const signIn = async ({ email, password }) => {
     setLoading(true);
     const cleanEmail = email.toLowerCase().trim();
     try {
-      // 1. Thử đăng nhập chuẩn
+      // 1. Thực hiện signInWithPassword
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password
       });
 
-      if (!error && data?.user) {
-        return { data, error: null };
+      console.log('AUTH RESULT', {
+        userId: data?.user?.id,
+        email: data?.user?.email,
+        errorMessage: error?.message,
+        errorName: error?.name,
+        errorCode: error?.code,
+        errorStatus: error?.status
+      });
+
+      if (error) {
+        console.error('❌ Supabase signInWithPassword Failed:', {
+          message: error.message,
+          name: error.name,
+          code: error.code,
+          status: error.status
+        });
+        return { data: null, error };
       }
 
-      // 2. Thử tự động đăng ký qua Supabase Auth SDK nếu tài khoản thử nghiệm chưa khởi tạo
-      const sampleRoles = {
-        'admin@hoclapvui.edu.vn': { name: 'Quản Trị Viên Hệ Thống', role: 'admin', grade: 1 },
-        'co.hoa@hoclapvui.edu.vn': { name: 'Cô Nguyễn Thị Hoa', role: 'teacher', grade: 1 },
-        'thay.minh@hoclapvui.edu.vn': { name: 'Thầy Trần Đức Minh', role: 'teacher', grade: 3 },
-        'hs_nam@hoclapvui.edu.vn': { name: 'Nguyễn Văn Nam (HS101)', role: 'student', grade: 1 },
-        'hs_an@hoclapvui.edu.vn': { name: 'Lê Thúy An (HS202)', role: 'student', grade: 2 },
-        'hs_duc@hoclapvui.edu.vn': { name: 'Trần Minh Đức (HS303)', role: 'student', grade: 3 },
-        'hs_bao@hoclapvui.edu.vn': { name: 'Phạm Gia Bảo (HS404)', role: 'student', grade: 4 },
-        'hs_mai@hoclapvui.edu.vn': { name: 'Hoàng Thị Mai (HS505)', role: 'student', grade: 5 },
-      };
+      // 2. Nếu signIn thành công mới thực hiện query public.profiles
+      if (data?.user?.id) {
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
 
-      const preset = sampleRoles[cleanEmail];
-      if (preset) {
-        const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: {
-            data: {
-              full_name: preset.name,
-              role: preset.role,
-              grade_level: preset.grade,
-              avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${preset.role}`
-            }
-          }
-        });
-
-        if (!signUpErr && signUpData?.user) {
-          return { data: signUpData, error: null };
+        if (profileError) {
+          console.error('❌ Query public.profiles Failed:', profileError.message);
+        } else if (profileData) {
+          setProfile(profileData);
         }
       }
 
-      throw error;
+      return { data, error: null };
     } catch (error) {
-      console.error('Sign in error:', error);
+      console.error('❌ Unexpected Login Exception:', error);
       return { data: null, error };
     } finally {
       setLoading(false);
