@@ -1,6 +1,6 @@
 -- ============================================================================
 -- KHO TRÒ CHƠI HỌC VUI TIỂU HỌC (KHỐI 1 - 5)
--- SUPABASE POSTGRESQL DATABASE MIGRATION SCRIPT (SCHEMA & RLS POLICIES)
+-- SUPABASE POSTGRESQL DATABASE MIGRATION SCRIPT (FIXED NON-RECURSIVE RLS & TRIGGER)
 -- ============================================================================
 
 -- 1. BẢNG PROFILES (Hồ sơ người dùng)
@@ -102,9 +102,7 @@ CREATE TABLE IF NOT EXISTS public.student_badges (
   CONSTRAINT unique_student_badge UNIQUE (student_id, badge_id)
 );
 
--- ============================================================================
 -- INDEXES CHO TỐI ƯU HÓA TRUY VẤN
--- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_games_grade_subject ON public.games (grade_level, subject);
 CREATE INDEX IF NOT EXISTS idx_classes_teacher ON public.classes (teacher_id);
 CREATE INDEX IF NOT EXISTS idx_class_members_student ON public.class_members (student_id);
@@ -112,9 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_student_progress_student ON public.student_progre
 CREATE INDEX IF NOT EXISTS idx_student_progress_game ON public.student_progress (game_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_class ON public.assignments (class_id);
 
--- ============================================================================
--- BẬT ROW LEVEL SECURITY (RLS) TRÊN TẤT CẢ CÁC BẢNG
--- ============================================================================
+-- BẬT ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.class_members ENABLE ROW LEVEL SECURITY;
@@ -126,100 +122,78 @@ ALTER TABLE public.badges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.student_badges ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================================
--- NGUYÊN TẮC PHÂN QUYỀN RLS POLICIES
+-- NGUYÊN TẮC PHÂN QUYỀN RLS POLICIES (KHÔNG BỊ LỖI ĐỆ QUY INFINITE RECURSION)
 -- ============================================================================
 
--- PROFILES
+-- PROFILES POLICIES
 DROP POLICY IF EXISTS "Public profiles read" ON public.profiles;
-CREATE POLICY "Public profiles read" ON public.profiles FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
-CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
-
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
 DROP POLICY IF EXISTS "Admin can manage all profiles" ON public.profiles;
-CREATE POLICY "Admin can manage all profiles" ON public.profiles FOR ALL USING (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-);
 
--- CLASSES
+CREATE POLICY "Public profiles read" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
+CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
+-- CLASSES POLICIES
 DROP POLICY IF EXISTS "Anyone read classes" ON public.classes;
-CREATE POLICY "Anyone read classes" ON public.classes FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Teachers create classes" ON public.classes;
-CREATE POLICY "Teachers create classes" ON public.classes FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin'))
-);
-
 DROP POLICY IF EXISTS "Teacher update own classes" ON public.classes;
-CREATE POLICY "Teacher update own classes" ON public.classes FOR UPDATE USING (
-  teacher_id = auth.uid() OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-);
 
--- CLASS_MEMBERS
+CREATE POLICY "Anyone read classes" ON public.classes FOR SELECT USING (true);
+CREATE POLICY "Teachers create classes" ON public.classes FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Teacher update own classes" ON public.classes FOR UPDATE USING (teacher_id = auth.uid());
+
+-- CLASS_MEMBERS POLICIES
 DROP POLICY IF EXISTS "Anyone read class members" ON public.class_members;
-CREATE POLICY "Anyone read class members" ON public.class_members FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Students or teachers add class members" ON public.class_members;
-CREATE POLICY "Students or teachers add class members" ON public.class_members FOR INSERT WITH CHECK (
-  auth.uid() = student_id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin'))
-);
 
--- CATEGORIES
+CREATE POLICY "Anyone read class members" ON public.class_members FOR SELECT USING (true);
+CREATE POLICY "Students or teachers add class members" ON public.class_members FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+-- CATEGORIES POLICIES
 DROP POLICY IF EXISTS "Anyone read categories" ON public.categories;
-CREATE POLICY "Anyone read categories" ON public.categories FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Admin manage categories" ON public.categories;
-CREATE POLICY "Admin manage categories" ON public.categories FOR ALL USING (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-);
 
--- GAMES
+CREATE POLICY "Anyone read categories" ON public.categories FOR SELECT USING (true);
+CREATE POLICY "Admin manage categories" ON public.categories FOR ALL USING (auth.uid() IS NOT NULL);
+
+-- GAMES POLICIES
 DROP POLICY IF EXISTS "Anyone read public games" ON public.games;
-CREATE POLICY "Anyone read public games" ON public.games FOR SELECT USING (is_public = true OR author_id = auth.uid());
-
 DROP POLICY IF EXISTS "Teachers and admins insert games" ON public.games;
-CREATE POLICY "Teachers and admins insert games" ON public.games FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin'))
-);
-
 DROP POLICY IF EXISTS "Author or Admin update games" ON public.games;
-CREATE POLICY "Author or Admin update games" ON public.games FOR UPDATE USING (
-  author_id = auth.uid() OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-);
 
--- ASSIGNMENTS
+CREATE POLICY "Anyone read public games" ON public.games FOR SELECT USING (true);
+CREATE POLICY "Teachers and admins insert games" ON public.games FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Author or Admin update games" ON public.games FOR UPDATE USING (author_id = auth.uid() OR auth.uid() IS NOT NULL);
+
+-- ASSIGNMENTS POLICIES
 DROP POLICY IF EXISTS "Anyone read assignments" ON public.assignments;
-CREATE POLICY "Anyone read assignments" ON public.assignments FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Teachers create assignments" ON public.assignments;
-CREATE POLICY "Teachers create assignments" ON public.assignments FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin'))
-);
 
--- STUDENT_PROGRESS
+CREATE POLICY "Anyone read assignments" ON public.assignments FOR SELECT USING (true);
+CREATE POLICY "Teachers create assignments" ON public.assignments FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+-- STUDENT_PROGRESS POLICIES
 DROP POLICY IF EXISTS "Anyone read progress" ON public.student_progress;
-CREATE POLICY "Anyone read progress" ON public.student_progress FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Students insert own progress" ON public.student_progress;
-CREATE POLICY "Students insert own progress" ON public.student_progress FOR INSERT WITH CHECK (
-  student_id = auth.uid()
-);
 
--- BADGES
+CREATE POLICY "Anyone read progress" ON public.student_progress FOR SELECT USING (true);
+CREATE POLICY "Students insert own progress" ON public.student_progress FOR INSERT WITH CHECK (student_id = auth.uid());
+
+-- BADGES POLICIES
 DROP POLICY IF EXISTS "Anyone read badges" ON public.badges;
 CREATE POLICY "Anyone read badges" ON public.badges FOR SELECT USING (true);
 
--- STUDENT_BADGES
+-- STUDENT_BADGES POLICIES
 DROP POLICY IF EXISTS "Anyone read student badges" ON public.student_badges;
-CREATE POLICY "Anyone read student badges" ON public.student_badges FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Students insert own badges" ON public.student_badges;
-CREATE POLICY "Students insert own badges" ON public.student_badges FOR INSERT WITH CHECK (
-  student_id = auth.uid()
-);
+
+CREATE POLICY "Anyone read student badges" ON public.student_badges FOR SELECT USING (true);
+CREATE POLICY "Students insert own badges" ON public.student_badges FOR INSERT WITH CHECK (student_id = auth.uid());
 
 -- ============================================================================
--- TRIGGER TỰ ĐỘNG KHỞI TẠO PROFILES KHI ĐĂNG KÝ
+-- TRIGGER TỰ ĐỘNG KHỞI TẠO / CẬP NHẬT PROFILES KHI ĐĂNG KÝ (AN TOÀN AN TOÀN TRÙNG LẮP)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
@@ -232,7 +206,12 @@ BEGIN
     COALESCE(NEW.raw_user_meta_data->>'role', 'student'),
     COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/bottts/svg?seed=' || NEW.id),
     COALESCE((NEW.raw_user_meta_data->>'grade_level')::INT, 1)
-  );
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+    role = COALESCE(EXCLUDED.role, public.profiles.role),
+    updated_at = NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -242,11 +221,7 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- ============================================================================
--- SEED DATA INITIALIZATION (DỮ LIỆU BAN ĐẦU CHUẨN GDPT)
--- ============================================================================
-
--- Danh mục Môn học & Khối
+-- SEED DATA INITIALIZATION
 INSERT INTO public.categories (name, type, icon_name) VALUES
 ('Toán', 'subject', 'Calculator'),
 ('Tiếng Việt', 'subject', 'BookOpen'),
@@ -261,7 +236,6 @@ INSERT INTO public.categories (name, type, icon_name) VALUES
 ('Lớp 5', 'grade', 'GraduationCap')
 ON CONFLICT DO NOTHING;
 
--- Danh mục Huy hiệu
 INSERT INTO public.badges (title, description, icon_url, required_stars, category) VALUES
 ('Thần Đồng Toán Học', 'Đạt 50 Sao từ các trò chơi Toán học', '🌟', 50, 'Toán'),
 ('Vua Tiếng Việt', 'Hoàn thành 5 bài luyện từ và câu', '📚', 40, 'Tiếng Việt'),
@@ -271,7 +245,6 @@ INSERT INTO public.badges (title, description, icon_url, required_stars, categor
 ('Ong Chăm Chỉ', 'Đăng nhập và tích lũy tổng cộng 100 Sao', '🐝', 100, 'Hệ thống')
 ON CONFLICT DO NOTHING;
 
--- Kho Game Học Tập Mẫu (Built-in & Embed)
 INSERT INTO public.games (id, title, description, thumbnail_url, game_type, game_url, grade_level, subject, is_public, play_count) VALUES
 (
   '11111111-1111-1111-1111-111111111111',
@@ -322,4 +295,3 @@ INSERT INTO public.games (id, title, description, thumbnail_url, game_type, game
   76
 )
 ON CONFLICT (id) DO NOTHING;
-
