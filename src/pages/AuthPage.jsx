@@ -85,7 +85,7 @@ export const AuthPage = () => {
       navigate('/');
     } catch (err) {
       console.error('Preset login error:', err);
-      setErrorMsg('Không thể đăng nhập. Vui lòng đảm bảo đã nạp dữ liệu mẫu trên Supabase.');
+      setErrorMsg(err.message || 'Lỗi đăng nhập. Vui lòng bấm nút RUN trong Supabase SQL Editor để dọn dẹp CSDL.');
     } finally {
       setLoading(false);
     }
