@@ -7,7 +7,6 @@ import {
   BookOpen, 
   Gamepad2, 
   GraduationCap, 
-  Plus, 
   CheckCircle2, 
   Clock, 
   Star,
@@ -164,39 +163,57 @@ export const StudentDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* HEADER GÓC HỌC TẬP CÁ NHÂN */}
-      <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-300 rounded-3xl border-4 border-amber-500 p-6 sm:p-8 shadow-lg mb-8 text-amber-950 flex flex-col md:flex-row items-center justify-between gap-6">
-        <div className="flex items-center gap-5">
-          <img
-            src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
-            alt="Avatar"
-            className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-4 border-white bg-white shadow-md"
-          />
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl sm:text-3xl font-black">{profile?.full_name || 'Học Sinh Vui Học'}</h1>
-              <span className="px-3 py-1 bg-amber-950 text-amber-200 text-xs font-black rounded-xl uppercase">
-                {profile?.role === 'admin' ? '🛡️ Quản trị viên' : profile?.role === 'teacher' ? '👩‍🏫 Giáo viên' : `Khối ${profile?.grade_level || 1}`}
-              </span>
+      {/* BANNER NỀN DÙNG CHUNG KÈM DỮ LIỆU ĐỘNG RENDER PHÍA TRÊN */}
+      <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 min-h-[220px] sm:min-h-[260px] flex items-center">
+        {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG KHÔNG CHỨA DỮ LIỆU TĨNH */}
+        <img
+          src="/images/student_banner.png"
+          alt="Student Banner Background"
+          className="absolute inset-0 w-full h-full object-cover object-center"
+        />
+
+        {/* 2. OVERLAY LỚP PHỦ MỊN ĐẢM BẢO CHỮ VÀ DỮ LIỆU ĐỘNG NỔI BẬT RÕ RÀNG TRÊN MỌI MÀN HÌNH */}
+        <div className="absolute inset-0 bg-gradient-to-r from-slate-950/60 via-slate-900/35 to-transparent" />
+
+        {/* 3. LỚP ĐIỀU HƯỚNG DỮ LIỆU ĐỘNG RENDER BẰNG REACT / HTML NỔI TRÊN NỀN */}
+        <div className="relative z-10 w-full p-6 sm:p-8 flex flex-col md:flex-row items-center justify-between gap-6 text-white">
+          <div className="flex items-center gap-5">
+            {/* AVATAR TÀI KHOẢN HỌC SINH ĐỘNG */}
+            <img
+              src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
+              alt="Avatar"
+              className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-4 border-white bg-white shadow-2xl shrink-0"
+            />
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* TÊN HỌC SINH ĐỘNG */}
+                <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
+                  {profile?.full_name || 'Học Sinh Vui Học'}
+                </h1>
+                {/* VAI TRÒ / KHỐI LỚP ĐỘNG */}
+                <span className="px-3 py-1 bg-amber-400 text-amber-950 text-xs font-black rounded-xl uppercase shadow-md border border-amber-300">
+                  {profile?.role === 'admin' ? '🛡️ Quản trị viên' : profile?.role === 'teacher' ? '👩‍🏫 Giáo viên' : `Khối ${profile?.grade_level || 1}`}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm font-bold text-amber-100 mt-1.5 drop-shadow">
+                🎮 Kho Trò Chơi Học Tập Tiểu Học — Khám phá và tích lũy thật nhiều Sao thưởng nhé!
+              </p>
             </div>
-            <p className="text-xs sm:text-sm font-bold text-amber-900 mt-1">
-              🎮 Kho Trò Chơi Học Tập Tiểu Học — Khám phá và trải nghiệm các trò chơi học vui!
-            </p>
-          </div>
-        </div>
-
-        {/* KHUNG THỐNG KÊ SAO & XU */}
-        <div className="flex items-center gap-4 bg-white/90 backdrop-blur-sm p-4 rounded-2xl border-2 border-amber-500 shadow-inner">
-          <div className="text-center px-3 border-r-2 border-amber-200">
-            <span className="text-3xl">🌟</span>
-            <p className="text-2xl font-black text-amber-900">{profile?.total_stars || 0}</p>
-            <span className="text-[10px] font-extrabold text-amber-700 uppercase">Sao Thưởng</span>
           </div>
 
-          <div className="text-center px-3">
-            <span className="text-3xl">🪙</span>
-            <p className="text-2xl font-black text-amber-900">{profile?.total_coins || 0}</p>
-            <span className="text-[10px] font-extrabold text-amber-700 uppercase">Xu Tích Lũy</span>
+          {/* KHUNG THỐNG KÊ SAO & XU ĐỘNG (GLASSMORPHISM CARD) */}
+          <div className="flex items-center gap-4 bg-white/95 backdrop-blur-md p-4 rounded-3xl border-2 border-amber-300 shadow-2xl text-amber-950 shrink-0">
+            <div className="text-center px-4 border-r-2 border-amber-200">
+              <span className="text-3xl drop-shadow-sm">🌟</span>
+              <p className="text-2xl font-black text-amber-900 leading-none mt-1">{profile?.total_stars || 0}</p>
+              <span className="text-[10px] font-extrabold text-amber-700 uppercase tracking-wider block mt-1">Sao Thưởng</span>
+            </div>
+
+            <div className="text-center px-4">
+              <span className="text-3xl drop-shadow-sm">🪙</span>
+              <p className="text-2xl font-black text-amber-900 leading-none mt-1">{profile?.total_coins || 0}</p>
+              <span className="text-[10px] font-extrabold text-amber-700 uppercase tracking-wider block mt-1">Xu Tích Lũy</span>
+            </div>
           </div>
         </div>
       </div>
