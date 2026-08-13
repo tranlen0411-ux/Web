@@ -163,7 +163,7 @@ export const StudentDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* BANNER NỀN BỐ CỤC CHUẨN HOÀN HẢO TINH GỌN (TUYỆT ĐỐI KHÔNG CHE TAY ROBOT HOẶC HỌC SINH) */}
+      {/* BANNER NỀN BỐ CỤC CHUẨN HOÀN HẢO VÙNG BẦU TRỜI TRÊN CÙNG (TUYỆT ĐỐI KHÔNG CHE TAY ROBOT HOẶC HỌC SINH) */}
       <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
         <img
@@ -190,13 +190,13 @@ export const StudentDashboard = () => {
           </div>
         </div>
 
-        {/* 4. KHUNG THÔNG TIN HỌC SINH COMPACT TINH GỌN (left-[46%] HOÀN TOÀN KHÔNG TOUCH VÀO TAY ROBOT) */}
-        <div className="absolute top-1/2 left-[46%] -translate-x-1/2 -translate-y-1/2 z-20 w-max max-w-[85%]">
+        {/* 4. KHUNG THÔNG TIN HỌC SINH DỜI LÊN VÙNG BẦU TRỜI TRÊN CÙNG (top-3 left-[48%] VƯỢT CAO HOÀN TOÀN KHỎI TAY ROBOT VÀ ĐẦU HỌC SINH) */}
+        <div className="absolute top-3 sm:top-4 left-[46%] sm:left-[48%] -translate-x-1/2 z-20 w-max max-w-[85%]">
           <div className="flex items-center gap-2.5 bg-slate-900/85 backdrop-blur-md px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl border-2 border-amber-300/90 shadow-2xl">
             <img
               src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
               alt="Avatar"
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border-2 border-white bg-white shadow shrink-0"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 border-white bg-white shadow shrink-0"
             />
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
