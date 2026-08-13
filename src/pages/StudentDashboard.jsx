@@ -104,6 +104,24 @@ export const StudentDashboard = () => {
     triggerSound('click');
     setJoinMsg('');
     try {
+      // 1. Thử gọi RPC join_class_by_code an toàn tuyệt đối
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('join_class_by_code', {
+        p_code: classCodeInput.trim()
+      });
+
+      if (!rpcErr && rpcRes) {
+        if (rpcRes.success) {
+          triggerSound('victory');
+          setJoinMsg(`🎉 ${rpcRes.message}`);
+          setClassCodeInput('');
+          fetchInitialData();
+        } else {
+          setJoinMsg(`❌ ${rpcRes.message}`);
+        }
+        return;
+      }
+
+      // 2. Dự phòng truy vấn bảng trực tiếp nếu RPC chưa được khởi tạo
       const { data: classData, error: classErr } = await supabase
         .from('classes')
         .select('id, name')
@@ -128,13 +146,13 @@ export const StudentDashboard = () => {
         throw joinErr;
       } else {
         triggerSound('victory');
-        setJoinMsg(`🎉 Chúc mừng bé gia nhập thành công lớp ${classData.name}!`);
+        setJoinMsg(`🎉 Chúc mừng bé đã gia nhập lớp ${classData.name} thành công!`);
         setClassCodeInput('');
         fetchInitialData();
       }
     } catch (err) {
-      console.error('Join error:', err);
-      setJoinMsg('❌ Có lỗi khi gia nhập lớp học.');
+      console.error('Join class error:', err);
+      setJoinMsg('Lỗi khi gia nhập lớp học.');
     }
   };
 
