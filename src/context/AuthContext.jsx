@@ -32,6 +32,12 @@ export const AuthProvider = ({ children }) => {
         .single();
 
       if (!error && data) {
+        if (data.is_disabled) {
+          await supabase.auth.signOut();
+          setUser(null);
+          setProfile(null);
+          return;
+        }
         setProfile(data);
       } else {
         // Dự phòng nếu Trigger DB chưa kịp nạp dữ liệu
@@ -151,6 +157,12 @@ export const AuthProvider = ({ children }) => {
         if (profileError) {
           console.error('❌ Query public.profiles Failed:', profileError.message);
         } else if (profileData) {
+          if (profileData.is_disabled) {
+            await supabase.auth.signOut();
+            setUser(null);
+            setProfile(null);
+            return { data: null, error: { message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên. Vui lòng liên hệ Admin.' } };
+          }
           setProfile(profileData);
         }
       }
