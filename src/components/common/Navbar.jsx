@@ -79,7 +79,7 @@ export const Navbar = () => {
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-4 border-amber-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
         
-        {/* LOGO TIỂU HỌC */}
+        {/* LOGO CÚ TIỂU HỌC HỌC VUI */}
         <a 
           href="/" 
           onClick={(e) => {
@@ -88,14 +88,14 @@ export const Navbar = () => {
           }}
           className="flex items-center gap-3 group cursor-pointer"
         >
-          <div className="w-12 h-12 bg-gradient-to-tr from-sky-400 to-amber-400 rounded-2xl border-4 border-amber-300 flex items-center justify-center shadow-md transform group-hover:rotate-6 transition-transform">
-            <Gamepad2 className="w-7 h-7 text-white" />
+          <div className="w-12 h-12 bg-gradient-to-tr from-amber-400 via-yellow-400 to-amber-300 rounded-2xl border-4 border-amber-300 flex items-center justify-center shadow-md transform group-hover:rotate-6 transition-transform text-2xl">
+            🦉
           </div>
           <div>
             <span className="text-xl font-black text-amber-900 tracking-tight flex items-center gap-1">
               HỌC VUI <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
             </span>
-            <span className="text-xs font-bold text-sky-600 uppercase tracking-widest block -mt-1">
+            <span className="text-xs font-black text-sky-600 uppercase tracking-wider block -mt-1">
               Kho Trò Chơi Tiểu Học
             </span>
           </div>
