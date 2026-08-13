@@ -6,7 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Rate Limiter Đơn giản theo IP để chống tấn công Dò Mã (Brute-force)
+// Rate Limiter trong Bộ Nhớ (In-Memory Supplement Defense Layer)
+// Lưu ý: Đây là lớp bảo vệ bổ sung ở tầng Edge Function instance để hạn chế các request dò mã liên tục từ cùng 1 IP
 const ipRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10; // Tối đa 10 lượt tra cứu
 const WINDOW_MS = 5 * 60 * 1000; // Trong 5 phút
@@ -17,7 +18,7 @@ serve(async (req) => {
   }
 
   try {
-    // 1. Kiểm tra Rate Limiting chống Brute-force
+    // 1. Kiểm tra Rate Limiting bổ sung theo IP
     const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown_client';
     const now = Date.now();
     const rateData = ipRateLimitMap.get(clientIp);
@@ -59,42 +60,16 @@ serve(async (req) => {
     // Khởi tạo Supabase Admin Client bằng Service Role Key (Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 3. Tra cứu học sinh theo parent_access_code hoặc mã mẫu quy đổi
-    let studentProfile: any = null;
-
-    // A. Tra cứu theo cột parent_access_code
-    const { data: profileByAccessCode } = await supabaseAdmin
+    // 3. Tra cứu DUY NHẤT bằng cột parent_access_code
+    // Tuyệt đối KHÔNG fallback sang student_code (như HS101) hay email để đảm bảo 2 mã độc lập 100%
+    const { data: studentProfile } = await supabaseAdmin
       .from('profiles')
-      .select('id, full_name, grade_level, total_stars, total_coins, avatar_url, role')
+      .select('id, full_name, grade_level, total_stars, total_coins, avatar_url')
       .eq('parent_access_code', cleanCode)
       .eq('role', 'student')
       .maybeSingle();
 
-    if (profileByAccessCode) {
-      studentProfile = profileByAccessCode;
-    } else {
-      // B. Quy đổi mã mẫu nếu CSDL chưa nạp parent_access_code (Dự phòng cho học sinh mẫu)
-      const sampleParentCodes: Record<string, string> = {
-        'PAR-HS101': 'hs_nam@hoclapvui.edu.vn',
-        'PAR-HS202': 'hs_an@hoclapvui.edu.vn',
-        'PAR-HS303': 'hs_duc@hoclapvui.edu.vn',
-        'PAR-HS404': 'hs_bao@hoclapvui.edu.vn',
-        'PAR-HS505': 'hs_mai@hoclapvui.edu.vn',
-      };
-
-      const mappedEmail = sampleParentCodes[cleanCode];
-      if (mappedEmail) {
-        const { data: mappedProfile } = await supabaseAdmin
-          .from('profiles')
-          .select('id, full_name, grade_level, total_stars, total_coins, avatar_url, role')
-          .eq('email', mappedEmail)
-          .maybeSingle();
-
-        if (mappedProfile) studentProfile = mappedProfile;
-      }
-    }
-
-    // Nếu không tìm thấy học sinh -> Trả thông báo bảo mật chung, KHÔNG tiết lộ nguyên nhân
+    // Nếu không tìm thấy học sinh theo parent_access_code -> Trả lỗi chung 400 (Không tiết lộ nguyên nhân)
     if (!studentProfile) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã tra cứu không hợp lệ.' }),
@@ -116,7 +91,7 @@ serve(async (req) => {
       .select('earned_at, badges(title, icon_url, description)')
       .eq('student_id', studentProfile.id);
 
-    // 6. Lọc sạch dữ liệu trước khi trả về cho Frontend (Bảo vệ thông tin cá nhân)
+    // 6. Lọc sạch dữ liệu trước khi trả về (TUYỆT ĐỐI KHÔNG trả email, UUID, metadata hay role)
     const sanitizedProgress = (rawProgress || []).map((p: any) => ({
       gameTitle: p.games?.title || 'Bài tập học tập',
       subject: p.games?.subject || 'Tổng hợp',
