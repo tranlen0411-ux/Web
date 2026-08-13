@@ -122,12 +122,20 @@ export const Navbar = () => {
                   className="w-9 h-9 rounded-xl border-2 border-amber-300 bg-white"
                 />
                 <div className="text-left hidden sm:block">
-                  <p className="text-xs font-black text-amber-900 truncate max-w-[100px]">
-                    {profile?.full_name || 'Học sinh'}
+                  <p className="text-xs font-black text-amber-900 truncate max-w-[120px]">
+                    {profile?.full_name || (role === 'admin' ? 'Quản trị viên' : role === 'teacher' ? 'Giáo viên' : 'Học sinh')}
                   </p>
                   <div className="flex items-center gap-2 text-[10px] font-bold text-amber-700">
-                    <span className="flex items-center gap-0.5">🌟 {profile?.total_stars || 0}</span>
-                    <span className="flex items-center gap-0.5">🪙 {profile?.total_coins || 0}</span>
+                    {role === 'student' ? (
+                      <>
+                        <span className="flex items-center gap-0.5">🌟 {profile?.total_stars || 0}</span>
+                        <span className="flex items-center gap-0.5">🪙 {profile?.total_coins || 0}</span>
+                      </>
+                    ) : (
+                      <span className="text-emerald-700 font-extrabold flex items-center gap-1">
+                        {role === 'admin' ? '🛡️ Admin System' : '👩‍🏫 Giáo Viên'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <ChevronDown className="w-4 h-4 text-amber-700" />

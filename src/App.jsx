@@ -11,7 +11,7 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { GamePlayView } from './pages/GamePlayView';
 import { LeaderboardView } from './pages/LeaderboardView';
 
-// Protected Route Component theo Role
+// Protected Route Component theo Role từ Supabase
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, profile, loading } = useAuth();
 
@@ -29,11 +29,40 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     return <Navigate to="/auth" replace />;
   }
 
+  // Nếu vai trò không nằm trong allowedRoles -> Điều hướng về đúng Dashboard của vai trò đó
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
-    return <Navigate to="/" replace />;
+    const targetPath = profile.role === 'admin' ? '/admin' : profile.role === 'teacher' ? '/teacher' : '/student';
+    return <Navigate to={targetPath} replace />;
   }
 
   return children;
+};
+
+// Home Dispatcher điều hướng route '/' theo đúng profile.role lấy từ Supabase
+const HomeDispatcher = () => {
+  const { user, profile, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-amber-50">
+        <div className="text-center font-black text-amber-900 animate-bounce text-lg">
+          🎮 Đang tải hệ thống học vui... 🌟
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || !profile) {
+    return <Navigate to="/auth" replace />;
+  }
+
+  if (profile.role === 'admin') {
+    return <Navigate to="/admin" replace />;
+  }
+  if (profile.role === 'teacher') {
+    return <Navigate to="/teacher" replace />;
+  }
+  return <Navigate to="/student" replace />;
 };
 
 function AppRoutes() {
@@ -43,14 +72,14 @@ function AppRoutes() {
       
       <main className="flex-grow">
         <Routes>
-          <Route path="/" element={<StudentDashboard />} />
+          <Route path="/" element={<HomeDispatcher />} />
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
           
           <Route 
             path="/student" 
             element={
-              <ProtectedRoute allowedRoles={['student', 'teacher', 'admin']}>
+              <ProtectedRoute allowedRoles={['student']}>
                 <StudentDashboard />
               </ProtectedRoute>
             } 
