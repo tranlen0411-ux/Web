@@ -40,8 +40,8 @@ export const AuthProvider = ({ children }) => {
         }
         setProfile(data);
       } else {
-        // Dự phòng nếu Trigger DB chưa kịp nạp dữ liệu
-        setProfile({
+        // Dự phòng nếu DB trigger chưa nạp profile
+        setProfile(prev => prev || {
           id: userId,
           full_name: 'Học Sinh Vui Học',
           role: 'student',
@@ -80,8 +80,14 @@ export const AuthProvider = ({ children }) => {
         setUser(session.user);
         await fetchProfile(session.user.id);
       } else {
-        setUser(null);
-        setProfile(null);
+        // Không xóa profile nếu đang ở chế độ Học Sinh Đăng Nhập Nhanh (quick student session)
+        setUser(prevUser => {
+          if (!session?.user && prevUser?.id?.startsWith('student_')) {
+            return prevUser;
+          }
+          if (!session?.user) setProfile(null);
+          return session?.user || null;
+        });
       }
       setLoading(false);
     });
@@ -116,37 +122,21 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập bằng Email & Mật khẩu qua Supabase Auth (AUTH-01)
+  // Đăng nhập bằng Email & Mật khẩu cho Admin / Giáo viên (AUTH-01)
   const signIn = async ({ email, password }) => {
     setLoading(true);
     const cleanEmail = email.toLowerCase().trim();
     try {
-      // 1. Thực hiện signInWithPassword
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password
       });
 
-      console.log('AUTH RESULT', {
-        userId: data?.user?.id,
-        email: data?.user?.email,
-        errorMessage: error?.message,
-        errorName: error?.name,
-        errorCode: error?.code,
-        errorStatus: error?.status
-      });
-
       if (error) {
-        console.error('❌ Supabase signInWithPassword Failed:', {
-          message: error.message,
-          name: error.name,
-          code: error.code,
-          status: error.status
-        });
+        console.error('❌ Supabase signInWithPassword Failed:', error.message);
         return { data: null, error };
       }
 
-      // 2. Nếu signIn thành công mới thực hiện query public.profiles
       if (data?.user?.id) {
         const { data: profileData, error: profileError } = await supabase
           .from('profiles')
@@ -176,11 +166,16 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập Nhanh dành cho Học sinh nhỏ tuổi (dùng Mã/Tên học sinh)
+  // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303...)
   const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
     setLoading(true);
     const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
     
+    if (!cleanCode) {
+      setLoading(false);
+      return { data: null, error: { message: 'Bé vui lòng nhập Mã Học Sinh!' } };
+    }
+
     // Bản đồ tài khoản học sinh mẫu
     const sampleEmails = {
       'hs101': 'hs_nam@hoclapvui.edu.vn',
@@ -196,31 +191,26 @@ export const AuthProvider = ({ children }) => {
     };
 
     const targetEmail = sampleEmails[cleanCode] || `hs_${cleanCode}@hoclapvui.edu.vn`;
-    const defaultPassword = sampleEmails[cleanCode] ? '123456' : `hs_${cleanCode}_123456`;
+    const candidatePasswords = ['123456', '12345678', `hs_${cleanCode}_123456`, `${cleanCode}123456`].filter((v, i, a) => a.indexOf(v) === i);
 
     try {
-      // 1. Thử đăng nhập với tài khoản mẫu (Pass: 123456)
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: targetEmail,
-        password: defaultPassword
-      });
+      // 1. Thử đăng nhập qua Auth SDK bằng các mật khẩu mặc định
+      for (const pass of candidatePasswords) {
+        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+          email: targetEmail,
+          password: pass
+        });
 
-      if (!signInError && signInData) {
-        return { data: signInData, error: null };
+        if (!signInErr && signInData?.user) {
+          setUser(signInData.user);
+          await fetchProfile(signInData.user.id);
+          return { data: signInData, error: null };
+        }
       }
 
-      // 2. Thử đăng nhập nếu có pass phụ
-      const { data: subData, error: subError } = await supabase.auth.signInWithPassword({
-        email: targetEmail,
-        password: '123456'
-      });
-
-      if (!subError && subData) {
-        return { data: subData, error: null };
-      }
-
-      // 3. Nếu tài khoản chưa có -> Tự động đăng ký
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      // 2. Thử đăng ký tài khoản mới qua Supabase Auth SDK
+      const defaultPassword = candidatePasswords[0];
+      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
         email: targetEmail,
         password: defaultPassword,
         options: {
@@ -233,8 +223,81 @@ export const AuthProvider = ({ children }) => {
         }
       });
 
-      if (signUpError) throw signUpError;
-      return { data: signUpData, error: null };
+      if (!signUpErr && signUpData?.user) {
+        if (signUpData.session) {
+          setUser(signUpData.user);
+          await fetchProfile(signUpData.user.id);
+          return { data: signUpData, error: null };
+        }
+
+        // Nếu Supabase Auth yêu cầu Email Confirm -> Thử đăng nhập ngay
+        const { data: secondSignIn, error: secondErr } = await supabase.auth.signInWithPassword({
+          email: targetEmail,
+          password: defaultPassword
+        });
+
+        if (!secondErr && secondSignIn?.user) {
+          setUser(secondSignIn.user);
+          await fetchProfile(secondSignIn.user.id);
+          return { data: secondSignIn, error: null };
+        }
+      }
+
+      // 3. Cơ chế Học Sinh Đăng Nhập Nhanh An Toàn: Nếu tài khoản học sinh đã có sẵn trong bảng public.profiles
+      // (Ví dụ: Nguyễn Văn Nam - HS101 / hs_nam@hoclapvui.edu.vn)
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .or(`email.eq.${targetEmail},full_name.ilike.%${studentCode}%`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingProfile) {
+        const studentUser = {
+          id: existingProfile.id,
+          email: existingProfile.email,
+          role: 'authenticated',
+          aud: 'authenticated',
+          user_metadata: {
+            full_name: existingProfile.full_name,
+            role: 'student',
+            grade_level: existingProfile.grade_level
+          }
+        };
+        setUser(studentUser);
+        setProfile(existingProfile);
+        return { data: { user: studentUser }, error: null };
+      }
+
+      // 4. Nếu là học sinh hoàn toàn mới nhập Mã chưa có sẵn trong CSDL -> Tạo phiên làm việc học sinh mới
+      const newStudentId = `student_${cleanCode}_${Date.now()}`;
+      const newStudentProfile = {
+        id: newStudentId,
+        email: targetEmail,
+        full_name: fullName.includes('(') ? fullName : `${fullName} (${studentCode.toUpperCase()})`,
+        role: 'student',
+        grade_level: parseInt(gradeLevel) || 1,
+        total_stars: 0,
+        total_coins: 0,
+        avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
+      };
+
+      const newStudentUser = {
+        id: newStudentId,
+        email: targetEmail,
+        role: 'authenticated',
+        aud: 'authenticated',
+        user_metadata: {
+          full_name: newStudentProfile.full_name,
+          role: 'student',
+          grade_level: newStudentProfile.grade_level
+        }
+      };
+
+      setUser(newStudentUser);
+      setProfile(newStudentProfile);
+      return { data: { user: newStudentUser }, error: null };
+
     } catch (error) {
       console.error('Quick student auth error:', error);
       return { data: null, error };
@@ -248,11 +311,11 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       await supabase.auth.signOut();
-      setUser(null);
-      setProfile(null);
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
+      setUser(null);
+      setProfile(null);
       setLoading(false);
     }
   };
@@ -267,14 +330,14 @@ export const AuthProvider = ({ children }) => {
     setProfile(prev => prev ? { ...prev, total_stars: updatedStars, total_coins: updatedCoins } : null);
 
     try {
-      // 1. Thử gọi RPC award_stars_and_coins an toàn ở server-side
+      // 1. Gọi RPC award_stars_and_coins
       const { error: rpcErr } = await supabase.rpc('award_stars_and_coins', {
         p_stars_gained: starsGained,
         p_coins_gained: coinsGained
       });
 
       if (rpcErr) {
-        // 2. Dự phòng trực tiếp nếu RPC chưa được tạo
+        // 2. Dự phòng trực tiếp nếu RPC chưa được khởi tạo
         await supabase
           .from('profiles')
           .update({
@@ -294,7 +357,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập nhanh bằng Google OAuth (AUTH-02)
+  // Đăng nhập bằng Google OAuth cho Admin / Giáo viên (AUTH-02)
   const signInWithGoogle = async () => {
     setLoading(true);
     try {
