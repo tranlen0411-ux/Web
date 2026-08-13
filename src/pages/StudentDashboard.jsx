@@ -163,8 +163,8 @@ export const StudentDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* BANNER NỀN BỐ CỤC HOÀN HẢO VÙNG GIỮA (TUYỆT ĐỐI KHÔNG CHE ROBOT BÊN TRÁI & HỌC SINH BÊN PHẢI) */}
-      <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px] flex items-center justify-center">
+      {/* BANNER NỀN BỐ CỤC CHUẨN HOÀN HẢO TẠI VÙNG BẦU TRỜI (TUYỆT ĐỐI KHÔNG CHE ROBOT VÀ HỌC SINH) */}
+      <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
         <img
           src="/images/student_banner.png"
@@ -173,17 +173,30 @@ export const StudentDashboard = () => {
         />
 
         {/* 2. OVERLAY LỚP PHỦ MỊN */}
-        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/20 via-transparent to-slate-950/30 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/25 via-transparent to-slate-950/20 pointer-events-none" />
 
-        {/* 3. NỘI DUNG ĐỘNG ĐƯỢC TẬP TRUNG TẠI VÙNG GIỮA BẦU TRỜI (SAFE ZONE 28% -> 58%) */}
-        <div className="relative z-10 w-full max-w-xl px-4 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 pointer-events-auto">
-          
-          {/* KHUNG THÔNG TIN HỌC SINH TINH GỌN BẦU TRỜI GIỮA */}
-          <div className="flex items-center gap-3 bg-slate-900/85 backdrop-blur-md px-4 py-2.5 rounded-2xl border-2 border-amber-300/90 shadow-2xl">
+        {/* 3. KHUNG SAO THƯỞNG & XU TÍCH LŨY DỜI CAO LÊN TRÊN BẦU TRỜI GÓC PHẢI (TUYỆT ĐỐI KHÔNG CHE MẶT HỌC SINH BÊN PHẢI) */}
+        <div className="absolute top-3 right-3 sm:top-4 sm:right-6 z-20 bg-white/95 backdrop-blur-md px-4 py-2 sm:px-5 sm:py-2.5 rounded-2xl sm:rounded-3xl border-2 border-amber-300 shadow-2xl text-amber-950 flex items-center gap-3 sm:gap-4">
+          <div className="text-center px-2 sm:px-3 border-r border-amber-200">
+            <span className="text-base sm:text-xl drop-shadow-sm">🌟</span>
+            <span className="text-sm sm:text-base font-black text-amber-900 ml-1">{profile?.total_stars || 0}</span>
+            <span className="text-[9px] font-black text-amber-700 uppercase block -mt-1">SAO THƯỞNG</span>
+          </div>
+
+          <div className="text-center px-2 sm:px-3">
+            <span className="text-base sm:text-xl drop-shadow-sm">🪙</span>
+            <span className="text-sm sm:text-base font-black text-amber-900 ml-1">{profile?.total_coins || 0}</span>
+            <span className="text-[9px] font-black text-amber-700 uppercase block -mt-1">XU TÍCH LŨY</span>
+          </div>
+        </div>
+
+        {/* 4. KHUNG THÔNG TIN HỌC SINH NẰM CHÍNH GIỮA BẦU TRỜI VƯỢT TRÊN CẦU VỒNG (TUYỆT ĐỐI KHÔNG CHE ROBOT BÊN TRÁI) */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-max max-w-[90%] sm:max-w-md">
+          <div className="flex items-center gap-3 bg-slate-900/85 backdrop-blur-md px-4 py-2.5 sm:px-5 sm:py-3 rounded-2xl sm:rounded-3xl border-2 border-amber-300/90 shadow-2xl">
             <img
               src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
               alt="Avatar"
-              className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 border-white bg-white shadow shrink-0"
+              className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl border-2 border-white bg-white shadow shrink-0"
             />
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -199,23 +212,8 @@ export const StudentDashboard = () => {
               </p>
             </div>
           </div>
-
-          {/* KHUNG THỐNG KÊ SAO & XU TINH GỌN BẦU TRỜI GIỮA */}
-          <div className="flex items-center gap-3 bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border-2 border-amber-300 shadow-2xl text-amber-950 shrink-0">
-            <div className="text-center px-2 border-r border-amber-200">
-              <span className="text-base">🌟</span>
-              <span className="text-sm font-black text-amber-900 ml-1">{profile?.total_stars || 0}</span>
-              <span className="text-[9px] font-black text-amber-700 uppercase block -mt-1">SAO THƯỞNG</span>
-            </div>
-
-            <div className="text-center px-2">
-              <span className="text-base">🪙</span>
-              <span className="text-sm font-black text-amber-900 ml-1">{profile?.total_coins || 0}</span>
-              <span className="text-[9px] font-black text-amber-700 uppercase block -mt-1">XU TÍCH LŨY</span>
-            </div>
-          </div>
-
         </div>
+
       </div>
 
       {/* FORM GIA NHẬP LỚP HỌC */}
