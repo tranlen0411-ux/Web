@@ -6,15 +6,16 @@ import {
   Gamepad2, 
   Award, 
   BarChart2, 
-  CheckCircle2, 
-  Copy,
-  BookOpen
+  BookOpen,
+  Info,
+  ShieldCheck
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { ClassManageModal } from '../components/dashboard/ClassManageModal';
 import { AssignGameModal } from '../components/dashboard/AssignGameModal';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
+import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 
 export const TeacherDashboard = () => {
@@ -24,6 +25,7 @@ export const TeacherDashboard = () => {
   const [classes, setClasses] = useState([]);
   const [games, setGames] = useState([]);
   const [studentProgressList, setStudentProgressList] = useState([]);
+  const [managedStudents, setManagedStudents] = useState([]);
   
   const [isClassModalOpen, setIsClassModalOpen] = useState(false);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -41,7 +43,7 @@ export const TeacherDashboard = () => {
   const fetchTeacherData = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách lớp học của giáo viên
+      // 1. Lấy danh sách lớp học do Giáo viên quản lý
       const { data: classData } = await supabase
         .from('classes')
         .select('*')
@@ -49,7 +51,31 @@ export const TeacherDashboard = () => {
       
       setClasses(classData || []);
 
-      // 2. Lấy kho game công khai và game do GV đóng góp
+      const classIds = (classData || []).map(c => c.id);
+
+      // 2. Lấy danh sách Học sinh thuộc các Lớp học do Giáo viên này quản lý (Phân quyền RLS chặt chẽ)
+      let studentsInMyClasses = [];
+      if (classIds.length > 0) {
+        const { data: memberData } = await supabase
+          .from('class_members')
+          .select(`
+            student_id,
+            classes:class_id(name, grade_level),
+            profiles:student_id(id, full_name, email, grade_level, total_stars, parent_access_code)
+          `)
+          .in('class_id', classIds);
+
+        studentsInMyClasses = (memberData || [])
+          .map(m => ({
+            ...m.profiles,
+            className: m.classes?.name,
+            classGrade: m.classes?.grade_level
+          }))
+          .filter(s => s && s.id);
+      }
+      setManagedStudents(studentsInMyClasses);
+
+      // 3. Lấy kho game công khai và game do GV đóng góp
       const { data: gameData } = await supabase
         .from('games')
         .select('*')
@@ -57,7 +83,7 @@ export const TeacherDashboard = () => {
       
       setGames(gameData || []);
 
-      // 3. Lấy tiến độ làm bài của học sinh
+      // 4. Lấy tiến độ làm bài của học sinh
       const { data: progressData } = await supabase
         .from('student_progress')
         .select(`
@@ -95,7 +121,7 @@ export const TeacherDashboard = () => {
           </div>
           <h1 className="text-2xl sm:text-3xl font-black">{profile?.full_name || 'Giáo Viên Tiểu Học'}</h1>
           <p className="text-xs sm:text-sm font-bold text-emerald-100 mt-1">
-            Quản lý Lớp học, tạo bài tập trò chơi tương tác và xem báo cáo tiến độ học sinh.
+            Quản lý Lớp học, cấp Mã Tra Cứu Phụ Huynh cho học sinh trong lớp và xem báo cáo tiến độ.
           </p>
         </div>
 
@@ -141,7 +167,7 @@ export const TeacherDashboard = () => {
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-500">
-                  <span className="flex items-center gap-1"><Users className="w-4 h-4 text-amber-500" /> Học Sinh</span>
+                  <span className="flex items-center gap-1"><Users className="w-4 h-4 text-amber-500" /> Học Sinh Trong Lớp</span>
                   <span className="text-emerald-600 font-black">Hoạt Động</span>
                 </div>
               </div>
@@ -160,6 +186,57 @@ export const TeacherDashboard = () => {
             </button>
           </div>
         )}
+      </div>
+
+      {/* DỰ ÁN HỌC SINH TRONG LỚP & MÃ TRA CỨU PHỤ HUYNH (CHỈ CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN) */}
+      <div className="mb-10">
+        <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
+          <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Mã Tra Cứu Phụ Huynh ({managedStudents.length})
+        </h3>
+
+        {/* GHI CHÚ BẢO MẬT MÃ PHÚ HUYNH GIÁO VIÊN */}
+        <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
+          <Info className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>
+            <strong>Mã Tra Cứu Phụ Huynh:</strong> Chỉ gửi mã này cho phụ huynh của học sinh. Không chia sẻ công khai.
+          </span>
+        </div>
+
+        <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
+          {managedStudents.length > 0 ? (
+            <table className="w-full text-left text-xs font-bold whitespace-nowrap">
+              <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
+                <tr>
+                  <th className="p-3">Tên Học Sinh</th>
+                  <th className="p-3">Lớp Học</th>
+                  <th className="p-3">Khối</th>
+                  <th className="p-3">Tổng Sao</th>
+                  <th className="p-3">Mã Tra Cứu PH</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-amber-100 text-slate-700">
+                {managedStudents.map((st) => (
+                  <tr key={st.id} className="hover:bg-amber-50">
+                    <td className="p-3 font-black text-slate-800 flex items-center gap-2">
+                      <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
+                      <span>{st.full_name}</span>
+                    </td>
+                    <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
+                    <td className="p-3">Khối {st.grade_level || 1}</td>
+                    <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
+                    <td className="p-3">
+                      <ParentCodeCell code={st.parent_access_code} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="p-6 text-center text-slate-500 font-bold">
+              Chưa có học sinh nào gia nhập các lớp học của Thầy/Cô. Thầy/Cô hãy gửi Mã Lớp cho học sinh nhé!
+            </div>
+          )}
+        </div>
       </div>
 
       {/* KHO GAME & GIAO BÀI TẬP */}

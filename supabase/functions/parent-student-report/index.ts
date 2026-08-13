@@ -6,11 +6,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Rate Limiter trong Bộ Nhớ (In-Memory Supplement Defense Layer)
-// Lưu ý: Đây là lớp bảo vệ bổ sung ở tầng Edge Function instance để hạn chế các request dò mã liên tục từ cùng 1 IP
+// Rate Limiter trong Bộ Nhớ (Lớp phòng thủ bổ sung ở tầng Edge Worker instance)
 const ipRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10; // Tối đa 10 lượt tra cứu
 const WINDOW_MS = 5 * 60 * 1000; // Trong 5 phút
+
+// Regex kiểm tra định dạng mã Phụ Huynh: PAR- theo sau bởi đúng 24 ký tự HEX ngẫu nhiên
+const PARENT_CODE_REGEX = /^PAR-[A-F0-9]{24}$/;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -45,7 +47,7 @@ serve(async (req) => {
     // 2. Lấy thông tin đầu vào
     const { accessCode } = await req.json();
 
-    if (!accessCode || typeof accessCode !== 'string' || accessCode.trim().length < 3) {
+    if (!accessCode || typeof accessCode !== 'string') {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã tra cứu không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -54,14 +56,22 @@ serve(async (req) => {
 
     const cleanCode = accessCode.trim().toUpperCase();
 
+    // 3. Kiểm tra định dạng Regex chính xác: PAR- + 24 ký tự Hex
+    if (!PARENT_CODE_REGEX.test(cleanCode)) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mã tra cứu không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
     // Khởi tạo Supabase Admin Client bằng Service Role Key (Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 3. Tra cứu DUY NHẤT bằng cột parent_access_code
-    // Tuyệt đối KHÔNG fallback sang student_code (như HS101) hay email để đảm bảo 2 mã độc lập 100%
+    // 4. Tra cứu DUY NHẤT bằng cột parent_access_code
+    // Tuyệt đối KHÔNG fallback sang HS101, student_code, email hay full_name
     const { data: studentProfile } = await supabaseAdmin
       .from('profiles')
       .select('id, full_name, grade_level, total_stars, total_coins, avatar_url')
@@ -77,7 +87,7 @@ serve(async (req) => {
       );
     }
 
-    // 4. Lấy lịch sử tiến độ học tập (Giới hạn tối đa 10 bản ghi gần nhất)
+    // 5. Lấy lịch sử tiến độ học tập (Giới hạn tối đa 10 bản ghi gần nhất)
     const { data: rawProgress } = await supabaseAdmin
       .from('student_progress')
       .select('score, stars_earned, completed_at, games(title, subject)')
@@ -85,13 +95,13 @@ serve(async (req) => {
       .order('completed_at', { ascending: false })
       .limit(10);
 
-    // 5. Lấy danh sách huy hiệu
+    // 6. Lấy danh sách huy hiệu
     const { data: rawBadges } = await supabaseAdmin
       .from('student_badges')
       .select('earned_at, badges(title, icon_url, description)')
       .eq('student_id', studentProfile.id);
 
-    // 6. Lọc sạch dữ liệu trước khi trả về (TUYỆT ĐỐI KHÔNG trả email, UUID, metadata hay role)
+    // 7. Lọc sạch dữ liệu trước khi trả về (TUYỆT ĐỐI KHÔNG trả email, UUID, metadata, role hay parent_access_code)
     const sanitizedProgress = (rawProgress || []).map((p: any) => ({
       gameTitle: p.games?.title || 'Bài tập học tập',
       subject: p.games?.subject || 'Tổng hợp',

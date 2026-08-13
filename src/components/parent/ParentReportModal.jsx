@@ -27,7 +27,7 @@ export const ParentReportModal = ({ isOpen, onClose }) => {
       });
 
       if (error || !data || !data.success) {
-        setErrorMsg(data?.message || 'Mã tra cứu không hợp lệ. Vui lòng kiểm tra lại Mã Phụ Huynh!');
+        setErrorMsg(data?.message || 'Mã tra cứu không hợp lệ.');
         setLoading(false);
         return;
       }
@@ -36,7 +36,7 @@ export const ParentReportModal = ({ isOpen, onClose }) => {
       setReportData(data);
     } catch (err) {
       console.error('Parent lookup exception:', err);
-      setErrorMsg('Mã tra cứu không hợp lệ. Vui lòng thử lại sau.');
+      setErrorMsg('Mã tra cứu không hợp lệ.');
     } finally {
       setLoading(false);
     }
@@ -61,7 +61,7 @@ export const ParentReportModal = ({ isOpen, onClose }) => {
             👨‍👩‍👧
           </div>
           <div>
-            <h3 className="text-xl font-black text-amber-950">MÃ TRUY CẬP PHỤ HUYNH (AUTH-04)</h3>
+            <h3 className="text-xl font-black text-amber-950">MÃ TRA CỨU PHỤ HUYNH (AUTH-04)</h3>
             <p className="text-xs font-bold text-slate-500">
               Tra cứu báo cáo kết quả học tập của con mà không cần tạo tài khoản!
             </p>
@@ -73,7 +73,7 @@ export const ParentReportModal = ({ isOpen, onClose }) => {
           <div className="relative flex-1">
             <input
               type="text"
-              placeholder="Nhập Mã Tra Cứu Phụ Huynh (Ví dụ: PAR-HS101...)"
+              placeholder="Nhập mã PAR-..."
               value={accessCode}
               onChange={(e) => setAccessCode(e.target.value)}
               className="w-full p-3.5 pl-11 bg-amber-50 border-2 border-amber-300 rounded-2xl font-black text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-amber-500"

@@ -7,18 +7,17 @@ import {
   GraduationCap, 
   Plus, 
   Trash2, 
-  CheckCircle2, 
-  Settings,
-  BookOpen,
-  Edit2,
-  Lock,
-  UserPlus
+  Edit2, 
+  Lock, 
+  UserPlus,
+  Info
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
 import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
+import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 
 export const AdminDashboard = () => {
@@ -201,7 +200,7 @@ export const AdminDashboard = () => {
       {/* TAB 1: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG */}
       {activeAdminTab === 'users' && (
         <div className="mb-10 animate-fadeIn">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-3">
             <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
               <Users className="w-6 h-6 text-emerald-600" /> Danh Sách Tài Khoản Người Dùng ({usersList.length})
             </h3>
@@ -218,13 +217,22 @@ export const AdminDashboard = () => {
             </button>
           </div>
 
-          <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm">
-            <table className="w-full text-left text-xs font-bold">
+          {/* GHI CHÚ BẢO MẬT MÃ TRACỨU PHỤ HUYNH */}
+          <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
+            <Info className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Mã Tra Cứu Phụ Huynh:</strong> Chỉ gửi mã này cho phụ huynh của học sinh. Không chia sẻ công khai.
+            </span>
+          </div>
+
+          <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
+            <table className="w-full text-left text-xs font-bold whitespace-nowrap">
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                 <tr>
                   <th className="p-3">Họ và Tên</th>
-                  <th className="p-3">Email / Mã</th>
+                  <th className="p-3">Email / Đăng Nhập</th>
                   <th className="p-3">Vai Trò</th>
+                  <th className="p-3">Mã Tra Cứu PH</th>
                   <th className="p-3">Khối</th>
                   <th className="p-3">Tổng Sao</th>
                   <th className="p-3">Trạng Thái</th>
@@ -234,6 +242,8 @@ export const AdminDashboard = () => {
               <tbody className="divide-y divide-amber-100 text-slate-700">
                 {usersList.map((u) => {
                   const isSelf = u.id === profile?.id;
+                  const isStudent = u.role === 'student';
+
                   return (
                     <tr key={u.id} className="hover:bg-amber-50">
                       <td className="p-3 font-black text-slate-800 flex items-center gap-2">
@@ -257,6 +267,16 @@ export const AdminDashboard = () => {
                           <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-black rounded-lg">🎓 Student</span>
                         )}
                       </td>
+
+                      {/* CỘT MÃ TRA CỨU PHỤ HUYNH (CHỈ HIỂN THỊ CHO RÔL HỌC SINH) */}
+                      <td className="p-3">
+                        {isStudent ? (
+                          <ParentCodeCell code={u.parent_access_code} />
+                        ) : (
+                          <span className="text-slate-300 font-normal">—</span>
+                        )}
+                      </td>
+
                       <td className="p-3">Khối {u.grade_level || 1}</td>
                       <td className="p-3 text-amber-600 font-extrabold">{u.total_stars || 0} 🌟</td>
                       <td className="p-3">
@@ -333,7 +353,7 @@ export const AdminDashboard = () => {
         </div>
       )}
 
-      {/* TAB 2: QUẢN LÝ KHO TRÒ CHƠI DÀNH CHO ADMIN (TUYỆT ĐỐI KHÔNG RENDER GIAO DIỆN HỌC SINH) */}
+      {/* TAB 2: QUẢN LÝ KHO TRÒ CHƠI DÀNH CHO ADMIN */}
       {activeAdminTab === 'games' && (
         <div className="mb-10 animate-fadeIn">
           <div className="flex items-center justify-between gap-4 mb-4">
