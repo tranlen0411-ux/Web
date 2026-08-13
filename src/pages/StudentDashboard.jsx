@@ -163,7 +163,7 @@ export const StudentDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* BANNER NỀN BỐ CỤC CHUẨN HOÀN HẢO TẠI VÙNG BẦU TRỜI (TUYỆT ĐỐI KHÔNG CHE ROBOT VÀ HỌC SINH) */}
+      {/* BANNER NỀN BỐ CỤC HOÀN HẢO CÂN ĐỐI (DỜI THẺ HỌC SINH SANG TRÁI LỌT LÒNG VÒM CẦU VỒNG) */}
       <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
         <img
@@ -175,7 +175,7 @@ export const StudentDashboard = () => {
         {/* 2. OVERLAY LỚP PHỦ MỊN */}
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950/25 via-transparent to-slate-950/20 pointer-events-none" />
 
-        {/* 3. KHUNG SAO THƯỞNG & XU TÍCH LŨY DỜI CAO LÊN TRÊN BẦU TRỜI GÓC PHẢI (TUYỆT ĐỐI KHÔNG CHE MẶT HỌC SINH BÊN PHẢI) */}
+        {/* 3. KHUNG SAO THƯỞNG & XU TÍCH LŨY TRÊN BẦU TRỜI GÓC PHẢI (HOÀN TOÀN TRÊN ĐẦU HỌC SINH) */}
         <div className="absolute top-3 right-3 sm:top-4 sm:right-6 z-20 bg-white/95 backdrop-blur-md px-4 py-2 sm:px-5 sm:py-2.5 rounded-2xl sm:rounded-3xl border-2 border-amber-300 shadow-2xl text-amber-950 flex items-center gap-3 sm:gap-4">
           <div className="text-center px-2 sm:px-3 border-r border-amber-200">
             <span className="text-base sm:text-xl drop-shadow-sm">🌟</span>
@@ -190,8 +190,8 @@ export const StudentDashboard = () => {
           </div>
         </div>
 
-        {/* 4. KHUNG THÔNG TIN HỌC SINH NẰM CHÍNH GIỮA BẦU TRỜI VƯỢT TRÊN CẦU VỒNG (TUYỆT ĐỐI KHÔNG CHE ROBOT BÊN TRÁI) */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-max max-w-[90%] sm:max-w-md">
+        {/* 4. KHUNG THÔNG TIN HỌC SINH CÂN ĐỐI DỜI SANG TRÁI CHÍNH GIỮA VÒM CẦU VỒNG (left-[43%]) */}
+        <div className="absolute top-1/2 left-[43%] -translate-x-1/2 -translate-y-1/2 z-20 w-max max-w-[90%] sm:max-w-md">
           <div className="flex items-center gap-3 bg-slate-900/85 backdrop-blur-md px-4 py-2.5 sm:px-5 sm:py-3 rounded-2xl sm:rounded-3xl border-2 border-amber-300/90 shadow-2xl">
             <img
               src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
