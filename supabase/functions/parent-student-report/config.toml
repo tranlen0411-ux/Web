@@ -1,0 +1,4 @@
+# CẤU HÌNH CHO EDGE FUNCTION PARENT-STUDENT-REPORT (AUTH-04)
+# Cho phép Phụ huynh tra cứu mà không cần đăng nhập JWT
+[functions.parent-student-report]
+verify_jwt = false
