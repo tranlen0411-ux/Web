@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Gamepad2, Sparkles, UserCheck, ShieldCheck, GraduationCap, ArrowRight, User, Zap, Users } from 'lucide-react';
+import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../context/SoundContext';
 import { ParentReportModal } from '../components/parent/ParentReportModal';
@@ -30,22 +30,22 @@ export const AuthPage = () => {
 
     try {
       if (mode === 'student_quick') {
-        if (!studentCode) {
-          setErrorMsg('Bé vui lòng nhập Mã Học Sinh hoặc chọn nút Đăng Nhập 1-Click!');
+        if (!studentCode.trim()) {
+          setErrorMsg('Bé vui lòng nhập Mã Học Sinh hoặc Tên Đăng Nhập!');
           setLoading(false);
           return;
         }
-        const res = await quickStudentSignIn(studentCode, fullName || 'Học Sinh Tiểu Học', gradeLevel);
+        const res = await quickStudentSignIn(studentCode.trim(), fullName || 'Học Sinh Tiểu Học', gradeLevel);
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/student');
       } else if (mode === 'email_login') {
-        const res = await signIn({ email, password });
+        const res = await signIn({ email: email.trim(), password });
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/');
       } else if (mode === 'email_signup') {
-        const res = await signUp({ email, password, fullName, role, gradeLevel });
+        const res = await signUp({ email: email.trim(), password, fullName: fullName.trim(), role, gradeLevel });
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/');
@@ -58,56 +58,12 @@ export const AuthPage = () => {
     }
   };
 
-  // AUTH-02: Đăng nhập Google OAuth
   const handleGoogleSignIn = async () => {
     triggerSound('click');
     setLoading(true);
     const res = await signInWithGoogle();
     if (res.error) {
       setErrorMsg(res.error.message || 'Lỗi đăng nhập bằng Google.');
-      setLoading(false);
-    }
-  };
-
-  // Nút chọn đăng nhập 1-Click tài khoản mẫu
-  const handlePresetLogin = async (presetEmail, presetPass) => {
-    triggerSound('click');
-    setMode('email_login');
-    setEmail(presetEmail);
-    setPassword(presetPass);
-    setLoading(true);
-    setErrorMsg('');
-
-    try {
-      const res = await signIn({ email: presetEmail, password: presetPass });
-      if (res.error) throw res.error;
-      triggerSound('victory');
-      navigate('/');
-    } catch (err) {
-      console.error('Preset login error:', err);
-      setErrorMsg(err.message || 'Lỗi đăng nhập. Vui lòng bấm nút RUN trong Supabase SQL Editor để dọn dẹp CSDL.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePresetStudentQuick = async (code, name, grade) => {
-    triggerSound('click');
-    setMode('student_quick');
-    setStudentCode(code);
-    setFullName(name);
-    setGradeLevel(grade);
-    setLoading(true);
-
-    try {
-      const res = await quickStudentSignIn(code, name, grade);
-      if (res.error) throw res.error;
-      triggerSound('victory');
-      navigate('/student');
-    } catch (err) {
-      console.error('Quick student login error:', err);
-      setErrorMsg('Lỗi đăng nhập nhanh học sinh.');
-    } finally {
       setLoading(false);
     }
   };
@@ -127,15 +83,15 @@ export const AuthPage = () => {
           </p>
         </div>
 
-        {/* NÚT AUTH-04: TRA CỨU MÃ PHỤ HUYNH KHÔNG CẦN ACCOUNT */}
+        {/* NÚT TRA CỨU MÃ PHỤ HUYNH KHÔNG CẦN ACCOUNT */}
         <button
           onClick={() => { triggerSound('click'); setIsParentModalOpen(true); }}
           className="w-full py-2.5 mb-5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs rounded-2xl border-b-4 border-emerald-800 shadow-sm flex items-center justify-center gap-2 active:translate-y-0.5 transition-all"
         >
-          👨‍👩‍👧 PHỤ HUYNH TRA CỨU BÁO CÁO (AUTH-04 - Không cần tài khoản)
+          👨‍👩‍👧 PHỤ HUYNH TRA CỨU BÁO CÁO (Không cần tài khoản)
         </button>
 
-        {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ ĐĂNG NHẬP (AUTH-01) */}
+        {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ ĐĂNG NHẬP */}
         <div className="flex bg-amber-100 p-1.5 rounded-2xl mb-5 border-2 border-amber-200">
           <button
             onClick={() => { setMode('student_quick'); setErrorMsg(''); triggerSound('click'); }}
@@ -165,7 +121,7 @@ export const AuthPage = () => {
           </div>
         )}
 
-        {/* AUTH-02: NÚT ĐĂNG NHẬP GOOGLE OAUTH */}
+        {/* GOOGLE OAUTH */}
         {mode !== 'student_quick' && (
           <div className="mb-4">
             <button
@@ -180,7 +136,7 @@ export const AuthPage = () => {
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
               </svg>
-              ĐĂNG NHẬP NHANH VỚI GOOGLE (AUTH-02)
+              ĐĂNG NHẬP NHANH VỚI GOOGLE
             </button>
             
             <div className="relative my-4">
@@ -192,65 +148,26 @@ export const AuthPage = () => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-3.5">
+        <form onSubmit={handleSubmit} className="space-y-4">
           
-          {/* LUỒNG ĐĂNG NHẬP NHANH CHO HỌC SINH */}
+          {/* LUỒNG ĐĂNG NHẬP NHANH CHO HỌC SINH THẬT */}
           {mode === 'student_quick' && (
-            <>
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1">
-                  Mã Học Sinh / Tên Đăng Nhập Nhanh:
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ví dụ: HS101, HS202, HS303..."
-                  value={studentCode}
-                  onChange={(e) => setStudentCode(e.target.value)}
-                  className="w-full p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400"
-                  required
-                />
-              </div>
-
-              {/* NÚT CHỌN HỌC SINH MẪU 1-CLICK */}
-              <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200">
-                <p className="text-[11px] font-black text-amber-900 mb-2 flex items-center gap-1">
-                  <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-400" /> Bấm 1-Click chọn Học sinh thử nghiệm:
-                </p>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => handlePresetStudentQuick('HS101', 'Nguyễn Văn Nam', 1)}
-                    className="p-2 bg-white hover:bg-amber-100 rounded-xl border border-amber-300 font-bold text-slate-700 text-left"
-                  >
-                    🎒 Nam (Khối 1)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePresetStudentQuick('HS202', 'Lê Thúy An', 2)}
-                    className="p-2 bg-white hover:bg-amber-100 rounded-xl border border-amber-300 font-bold text-slate-700 text-left"
-                  >
-                    🎒 An (Khối 2)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePresetStudentQuick('HS303', 'Trần Minh Đức', 3)}
-                    className="p-2 bg-white hover:bg-amber-100 rounded-xl border border-amber-300 font-bold text-slate-700 text-left"
-                  >
-                    🎒 Đức (Khối 3)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePresetStudentQuick('HS404', 'Phạm Gia Bảo', 4)}
-                    className="p-2 bg-white hover:bg-amber-100 rounded-xl border border-amber-300 font-bold text-slate-700 text-left"
-                  >
-                    🎒 Bảo (Khối 4)
-                  </button>
-                </div>
-              </div>
-            </>
+            <div>
+              <label className="block text-xs font-black text-slate-700 mb-1.5">
+                Mã Học Sinh / Tên Đăng Nhập Nhanh:
+              </label>
+              <input
+                type="text"
+                placeholder="Nhập Mã Học Sinh của bé (Ví dụ: HS101)..."
+                value={studentCode}
+                onChange={(e) => setStudentCode(e.target.value)}
+                className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner"
+                required
+              />
+            </div>
           )}
 
-          {/* LUỒNG EMAIL PASS FOR TEACHER / ADMIN / PARENTS (AUTH-01) */}
+          {/* LUỒNG EMAIL PASS FOR TEACHER / ADMIN / PARENTS */}
           {mode !== 'student_quick' && (
             <>
               {mode === 'email_signup' && (
@@ -268,15 +185,14 @@ export const AuthPage = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-black text-slate-700 mb-1">Phân Quyền RLS 3 Cấp (AUTH-03):</label>
+                    <label className="block text-xs font-black text-slate-700 mb-1">Đăng ký vai trò:</label>
                     <select
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
-                      className="w-full p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl font-bold text-sm"
+                      className="w-full p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl font-bold text-sm bg-white"
                     >
                       <option value="teacher">👩‍🏫 Giáo Viên Tiểu Học</option>
                       <option value="student">🎒 Học Sinh Tiểu Học</option>
-                      <option value="admin">🛡️ Quản Trị Viên (Admin)</option>
                     </select>
                   </div>
                 </>
@@ -313,47 +229,13 @@ export const AuthPage = () => {
             disabled={loading}
             className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-black text-base rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center justify-center gap-2 active:translate-y-0.5 transition-all mt-4"
           >
-            {loading ? 'Đang Xử Lý...' : 'VÀO HỌC NGAY 🚀'}
+            {loading ? 'Đang Xử Lý...' : mode === 'email_signup' ? 'ĐĂNG KÝ TÀI KHOẢN 🚀' : 'VÀO HỌC NGAY 🚀'}
           </button>
         </form>
 
-        {/* NÚT ĐĂNG NHẬP 1-CLICK TÀI KHOẢN MẪU CHO GIÁO VIÊN & ADMIN */}
-        {mode !== 'student_quick' && (
-          <div className="mt-4 p-3 bg-sky-50 rounded-2xl border border-sky-200">
-            <p className="text-[11px] font-black text-sky-900 mb-2 flex items-center gap-1">
-              <Zap className="w-3.5 h-3.5 text-sky-600 fill-sky-500" /> Bấm 1-Click Đăng nhập Tài khoản Thử nghiệm:
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handlePresetLogin('co.hoa@hoclapvui.edu.vn', '123456')}
-                className="p-2 bg-white hover:bg-sky-100 rounded-xl border border-sky-300 font-bold text-sky-900 text-left"
-              >
-                👩‍🏫 Cô Hoa (Pass: 123456)
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handlePresetLogin('thay.minh@hoclapvui.edu.vn', '123456')}
-                className="p-2 bg-white hover:bg-sky-100 rounded-xl border border-sky-300 font-bold text-sky-900 text-left"
-              >
-                👨‍🏫 Thầy Minh (Pass: 123456)
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handlePresetLogin('admin@hoclapvui.edu.vn', 'admin123456')}
-                className="p-2 bg-white hover:bg-purple-100 rounded-xl border border-purple-300 font-bold text-purple-900 text-left col-span-2"
-              >
-                🛡️ Quản Trị Viên Admin (Pass: admin123456)
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* FOOTER SWITCH MODES */}
         {mode !== 'student_quick' && (
-          <div className="mt-4 text-center">
+          <div className="mt-5 text-center">
             {mode === 'email_login' ? (
               <button
                 onClick={() => setMode('email_signup')}
