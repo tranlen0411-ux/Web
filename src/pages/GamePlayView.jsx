@@ -61,29 +61,41 @@ export const GamePlayView = () => {
   };
 
   // Xử lý khi bé hoàn thành trò chơi
-  const handleGameComplete = async (stars = 15, timeSec = 60) => {
+  const handleGameComplete = async (score = 100, timeSec = 60, assignmentId = null) => {
     triggerSound('victory');
-    setEarnedStars(stars);
-    setIsBadgeModalOpen(true);
 
     if (profile?.id && game?.id) {
-      // 1. Cộng Sao & Xu vào Profile
-      await awardStars(stars, Math.floor(stars / 2));
-
-      // 2. Ghi nhận nhật ký tiến độ vào student_progress
       try {
-        await supabase.from('student_progress').insert({
-          game_id: game.id,
-          student_id: profile.id,
-          status: 'completed',
-          score: stars * 10,
-          stars_earned: stars,
-          completion_time_seconds: timeSec
+        // 1. Thực thi RPC complete_game_and_award an toàn tuyệt đối ở Server-side
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('complete_game_and_award', {
+          p_game_id: game.id,
+          p_assignment_id: assignmentId,
+          p_score: score,
+          p_completion_time_seconds: timeSec
         });
+
+        if (!rpcErr && rpcRes && rpcRes.success) {
+          setEarnedStars(rpcRes.stars_earned || 10);
+          refreshProfile();
+        } else {
+          // Fallback nếu RPC chưa được tạo
+          await awardStars(10, 5);
+          await supabase.from('student_progress').insert({
+            game_id: game.id,
+            student_id: profile.id,
+            status: 'completed',
+            score: score,
+            stars_earned: 10,
+            completion_time_seconds: timeSec
+          });
+          refreshProfile();
+        }
       } catch (err) {
         console.error('Save progress error:', err);
       }
     }
+
+    setIsBadgeModalOpen(true);
   };
 
   if (loading) {
