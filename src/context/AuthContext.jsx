@@ -255,13 +255,22 @@ export const AuthProvider = ({ children }) => {
     setProfile(prev => prev ? { ...prev, total_stars: updatedStars, total_coins: updatedCoins } : null);
 
     try {
-      await supabase
-        .from('profiles')
-        .update({
-          total_stars: updatedStars,
-          total_coins: updatedCoins
-        })
-        .eq('id', profile.id);
+      // 1. Thử gọi RPC award_stars_and_coins an toàn ở server-side
+      const { error: rpcErr } = await supabase.rpc('award_stars_and_coins', {
+        p_stars_gained: starsGained,
+        p_coins_gained: coinsGained
+      });
+
+      if (rpcErr) {
+        // 2. Dự phòng trực tiếp nếu RPC chưa được tạo
+        await supabase
+          .from('profiles')
+          .update({
+            total_stars: updatedStars,
+            total_coins: updatedCoins
+          })
+          .eq('id', profile.id);
+      }
     } catch (err) {
       console.error('Error updating stars/coins:', err);
     }
