@@ -37,14 +37,15 @@ export const StudentDashboard = () => {
   const [joinMsg, setJoinMsg] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Lắng nghe thay đổi profile?.id để gọi fetchInitialData chính xác khi học sinh đăng nhập
   useEffect(() => {
     fetchInitialData();
-  }, [selectedGrade, selectedSubject]);
+  }, [selectedGrade, selectedSubject, profile?.id]);
 
   const fetchInitialData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Games
+      // 1. Fetch Games công khai
       let query = supabase.from('games').select('*').eq('is_public', true);
       if (selectedGrade !== 'ALL') {
         query = query.eq('grade_level', parseInt(selectedGrade));
@@ -56,15 +57,40 @@ export const StudentDashboard = () => {
       setGames(gamesData || []);
 
       if (profile?.id) {
-        // 2. Fetch Assignments
-        const { data: assignData } = await supabase
-          .from('assignments')
-          .select(`
-            id, reward_stars, due_date,
-            games:game_id (*),
-            classes:class_id (name, code)
-          `);
-        setAssignments(assignData || []);
+        // 2. Fetch Assignments theo đúng các Lớp Học mà Học Sinh này đang tham gia
+        const { data: myClassMembers, error: memberErr } = await supabase
+          .from('class_members')
+          .select('class_id')
+          .eq('student_id', profile.id);
+
+        if (memberErr) {
+          console.error('Error fetching student class memberships:', memberErr);
+        }
+
+        const myClassIds = (myClassMembers || []).map(c => c.class_id);
+
+        let fetchedAssignments = [];
+        if (myClassIds.length > 0) {
+          const { data: assignData, error: assignErr } = await supabase
+            .from('assignments')
+            .select(`
+              id, reward_stars, due_date, created_at,
+              games:game_id (*),
+              classes:class_id (
+                id, name, code, grade_level, teacher_id,
+                profiles:teacher_id (full_name)
+              )
+            `)
+            .in('class_id', myClassIds)
+            .order('created_at', { ascending: false });
+
+          if (assignErr) {
+            console.error('Error fetching assignments:', assignErr);
+          } else if (assignData) {
+            fetchedAssignments = assignData;
+          }
+        }
+        setAssignments(fetchedAssignments);
 
         // 3. Fetch Badges & Student Badges
         const { data: allBadges } = await supabase.from('badges').select('*');
@@ -155,15 +181,15 @@ export const StudentDashboard = () => {
     }
   };
 
-  const handlePlayGame = (game) => {
+  const handlePlayGame = (game, assignmentId = null) => {
     triggerSound('click');
-    navigate(`/play/${game.id}`);
+    navigate(`/play/${game.id}`, { state: { assignmentId } });
   };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* BANNER NỀN BỐ CỤC CHUẨN ĐẸP CÂN ĐỐI NẰM DƯỚI LỐI ĐI SÂN TRƯỜNG (bottom-3 sm:bottom-4 left-[46%]) */}
+      {/* BANNER NỀN BỐ CỤC CHUẨN ĐẸP CÂN ĐỐI NẰM DƯỚI LỐI ĐI SÂN TRƯỜNG */}
       <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
         <img
@@ -355,39 +381,67 @@ export const StudentDashboard = () => {
         </div>
       )}
 
-      {/* TAB BÀI TẬP ĐƯỢC GIAO */}
+      {/* TAB BÀI TẬP ĐƯỢC GIAO THẬT TỪ SUPABASE (AUTH-ASSIGNMENTS) */}
       {activeTab === 'assignments' && (
-        <div className="space-y-4">
+        <div className="space-y-4 animate-fadeIn">
           {assignments.length > 0 ? (
-            assignments.map((item) => (
-              <div
-                key={item.id}
-                className="bg-white p-5 rounded-2xl border-3 border-amber-300 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-amber-100 rounded-2xl border-2 border-amber-300 flex items-center justify-center text-2xl">
-                    🎯
-                  </div>
-                  <div>
-                    <h4 className="text-base font-black text-slate-800">{item.games?.title}</h4>
-                    <p className="text-xs font-bold text-slate-500">
-                      Lớp: <span className="text-amber-700">{item.classes?.name}</span> • Thưởng: <span className="text-amber-600">+{item.reward_stars} 🌟</span>
-                    </p>
-                  </div>
-                </div>
+            assignments.map((item) => {
+              const teacherName = item.classes?.profiles?.full_name || 'Giáo viên';
+              const className = item.classes?.name || 'Lớp học';
+              const gradeLevel = item.games?.grade_level || item.classes?.grade_level || 1;
+              const subject = item.games?.subject || 'Học Tập';
+              const assignedDate = item.created_at ? new Date(item.created_at).toLocaleDateString('vi-VN') : 'Mới giao';
+              const dueDateText = item.due_date ? new Date(item.due_date).toLocaleDateString('vi-VN') : 'Không giới hạn';
 
-                <button
-                  onClick={() => handlePlayGame(item.games)}
-                  className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white font-black text-xs rounded-xl shadow-md border-b-2 border-emerald-700"
+              return (
+                <div
+                  key={item.id}
+                  className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 hover:border-amber-400 transition-all"
                 >
-                  Làm Bài Ngay 🚀
-                </button>
-              </div>
-            ))
+                  <div className="flex items-center gap-4 w-full sm:w-auto">
+                    <img
+                      src={item.games?.thumbnail_url || 'https://images.unsplash.com/photo-1596495578065-6e0763fa1178?w=500&auto=format&fit=crop&q=60'}
+                      alt={item.games?.title}
+                      className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover border-2 border-amber-300 shadow-sm shrink-0"
+                    />
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 text-[10px] font-black rounded-lg border border-amber-300">
+                          Khối {gradeLevel} • Môn {subject}
+                        </span>
+                        <span className="px-2.5 py-0.5 bg-sky-100 text-sky-900 text-[10px] font-black rounded-lg border border-sky-300">
+                          Lớp: {className}
+                        </span>
+                      </div>
+                      <h4 className="text-base sm:text-lg font-black text-slate-800 line-clamp-1">{item.games?.title}</h4>
+                      <p className="text-xs font-bold text-slate-500 mt-0.5">
+                        👩‍🏫 Người giao: <span className="text-amber-800 font-extrabold">{teacherName}</span>
+                        <span className="mx-1.5">•</span>
+                        📅 Ngày giao: <span className="text-slate-700">{assignedDate}</span>
+                        <span className="mx-1.5">•</span>
+                        ⏳ Hạn: <span className="text-rose-600 font-extrabold">{dueDateText}</span>
+                      </p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-xs font-black text-amber-600">
+                          Thưởng hoàn thành: +{item.reward_stars || 10} 🌟
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handlePlayGame(item.games, item.id)}
+                    className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white font-black text-xs sm:text-sm rounded-2xl shadow-md border-b-4 border-emerald-700 whitespace-nowrap active:translate-y-0.5 transition-all flex items-center justify-center gap-2"
+                  >
+                    🚀 LÀM BÀI NGAY
+                  </button>
+                </div>
+              );
+            })
           ) : (
             <div className="text-center py-12 bg-white rounded-3xl border-4 border-amber-200">
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
-              <h3 className="text-lg font-black text-amber-900">Bé đã hoàn thành hết bài tập!</h3>
+              <h3 className="text-lg font-black text-amber-900">Bé đã hoàn thành hết bài tập được giao!</h3>
               <p className="text-xs font-bold text-slate-500">Bé có thể chơi game tự do ở Kho Trò Chơi nhé.</p>
             </div>
           )}
