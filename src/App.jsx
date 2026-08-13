@@ -38,7 +38,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
   return children;
 };
 
-// Home Dispatcher điều hướng route '/' theo đúng profile.role lấy từ Supabase
+// Home Dispatcher phân luồng điều hướng trang chủ '/' chính xác theo role
 const HomeDispatcher = () => {
   const { user, profile, loading } = useAuth();
 
@@ -56,8 +56,17 @@ const HomeDispatcher = () => {
     return <Navigate to="/auth" replace />;
   }
 
-  // Người dùng đã đăng nhập (Học sinh, Giáo viên, Admin) truy cập '/' đều xem Kho Trò Chơi (Catalog Game)
-  return <StudentDashboard />;
+  // Phân luồng theo vai trò người dùng:
+  // Admin -> Điều hướng về Kho Trò Chơi Quản Trị (/admin?tab=games)
+  // Teacher -> Điều hướng về Bảng Quản Lý Lớp & Game (/teacher)
+  // Student -> Điều hướng về Góc Học Tập / Kho Game Học Sinh (/student)
+  if (profile?.role === 'admin') {
+    return <Navigate to="/admin?tab=games" replace />;
+  }
+  if (profile?.role === 'teacher') {
+    return <Navigate to="/teacher" replace />;
+  }
+  return <Navigate to="/student" replace />;
 };
 
 function AppRoutes() {

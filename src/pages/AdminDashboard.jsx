@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { 
   ShieldCheck, 
   Users, 
@@ -23,8 +24,20 @@ import { useSound } from '../context/SoundContext';
 export const AdminDashboard = () => {
   const { profile } = useAuth();
   const { triggerSound } = useSound();
+  const [searchParams] = useSearchParams();
 
-  const [activeAdminTab, setActiveAdminTab] = useState('users'); // 'users' | 'games'
+  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users
+  const tabParam = searchParams.get('tab');
+  const [activeAdminTab, setActiveAdminTab] = useState(
+    tabParam === 'games' ? 'games' : 'users'
+  );
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'games' || tab === 'users') {
+      setActiveAdminTab(tab);
+    }
+  }, [searchParams]);
 
   const [stats, setStats] = useState({ users: 0, games: 0, classes: 0 });
   const [usersList, setUsersList] = useState([]);
@@ -98,7 +111,9 @@ export const AdminDashboard = () => {
           <span className="px-3 py-1 bg-purple-900 text-purple-200 text-xs font-black rounded-xl uppercase">
             🛡️ Bảng Quản Trị Hệ Thống
           </span>
-          <h1 className="text-2xl sm:text-3xl font-black mt-1">Quản Lý Hệ Thống & Người Dùng</h1>
+          <h1 className="text-2xl sm:text-3xl font-black mt-1">
+            {activeAdminTab === 'games' ? 'Quản Lý Kho Trò Chơi' : 'Quản Lý Hệ Thống & Người Dùng'}
+          </h1>
           <p className="text-xs sm:text-sm font-bold text-purple-100 mt-0.5">
             Hệ thống Quản trị tổng thể Kho Trò Chơi Học Vui Tiểu Học.
           </p>
@@ -318,7 +333,7 @@ export const AdminDashboard = () => {
         </div>
       )}
 
-      {/* TAB 2: QUẢN LÝ KHO TRÒ CHƠI (KHÔNG HIỂN THỊ DANH SÁCH NGƯỜI DÙNG) */}
+      {/* TAB 2: QUẢN LÝ KHO TRÒ CHƠI DÀNH CHO ADMIN (TUYỆT ĐỐI KHÔNG RENDER GIAO DIỆN HỌC SINH) */}
       {activeAdminTab === 'games' && (
         <div className="mb-10 animate-fadeIn">
           <div className="flex items-center justify-between gap-4 mb-4">

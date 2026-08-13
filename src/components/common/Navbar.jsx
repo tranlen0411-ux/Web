@@ -26,9 +26,35 @@ export const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
 
+  const role = profile?.role || 'student';
+
   const handleNavClick = (path) => {
     triggerSound('click');
     navigate(path);
+  };
+
+  // Điều hướng Kho Trò Chơi theo đúng vai trò role
+  const handleGamesNavClick = () => {
+    triggerSound('click');
+    if (role === 'admin') {
+      navigate('/admin?tab=games');
+    } else if (role === 'teacher') {
+      navigate('/teacher');
+    } else {
+      navigate('/student');
+    }
+  };
+
+  // Điều hướng Bảng Quản Lý theo đúng vai trò role
+  const handleDashboardNavClick = () => {
+    triggerSound('click');
+    if (role === 'admin') {
+      navigate('/admin?tab=users');
+    } else if (role === 'teacher') {
+      navigate('/teacher');
+    } else {
+      navigate('/student');
+    }
   };
 
   const handleLogout = async () => {
@@ -37,17 +63,30 @@ export const Navbar = () => {
     navigate('/auth');
   };
 
-  const role = profile?.role || 'student';
+  // Kiểm tra active cho nút Kho Trò Chơi
+  const isGamesActive = 
+    (role === 'admin' && location.pathname === '/admin' && location.search.includes('tab=games')) ||
+    (role === 'teacher' && location.pathname === '/teacher') ||
+    (role === 'student' && (location.pathname === '/' || location.pathname === '/student'));
+
+  // Kiểm tra active cho nút Bảng Quản Lý theo Role
+  const isDashboardActive = 
+    (role === 'admin' && location.pathname === '/admin' && !location.search.includes('tab=games')) ||
+    (role === 'teacher' && location.pathname === '/teacher') ||
+    (role === 'student' && location.pathname === '/student');
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-4 border-amber-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
         
         {/* LOGO TIỂU HỌC */}
-        <Link 
-          to="/" 
-          onClick={() => triggerSound('click')}
-          className="flex items-center gap-3 group"
+        <a 
+          href="/" 
+          onClick={(e) => {
+            e.preventDefault();
+            handleGamesNavClick();
+          }}
+          className="flex items-center gap-3 group cursor-pointer"
         >
           <div className="w-12 h-12 bg-gradient-to-tr from-sky-400 to-amber-400 rounded-2xl border-4 border-amber-300 flex items-center justify-center shadow-md transform group-hover:rotate-6 transition-transform">
             <Gamepad2 className="w-7 h-7 text-white" />
@@ -60,14 +99,15 @@ export const Navbar = () => {
               Kho Trò Chơi Tiểu Học
             </span>
           </div>
-        </Link>
+        </a>
 
-        {/* ĐIỀU HƯỚNG CHÍNH */}
+        {/* ĐIỀU HƯỚNG CHÍNH CHUẨN ROLE */}
         <nav className="hidden md:flex items-center gap-2">
+          {/* NÚT KHO TRÒ CHƠI */}
           <button
-            onClick={() => handleNavClick('/')}
+            onClick={handleGamesNavClick}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
-              location.pathname === '/' 
+              isGamesActive
                 ? 'bg-sky-500 text-white border-sky-600 shadow-sm' 
                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-sky-50 hover:text-sky-600'
             }`}
@@ -75,6 +115,7 @@ export const Navbar = () => {
             <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
           </button>
 
+          {/* NÚT BẢNG XẾP HẠNG */}
           <button
             onClick={() => handleNavClick('/leaderboard')}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
@@ -89,11 +130,9 @@ export const Navbar = () => {
           {/* DASHBOARD THEO ROLE */}
           {user && (
             <button
-              onClick={() => handleNavClick(
-                role === 'admin' ? '/admin' : role === 'teacher' ? '/teacher' : '/student'
-              )}
+              onClick={handleDashboardNavClick}
               className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
-                location.pathname.includes('/dashboard') || location.pathname === `/${role}`
+                isDashboardActive
                   ? 'bg-emerald-500 text-white border-emerald-600 shadow-sm'
                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50 hover:text-emerald-600'
               }`}
@@ -106,7 +145,7 @@ export const Navbar = () => {
           )}
         </nav>
 
-        {/* THÔNG TIN HỌC SINH & ÂM THANH */}
+        {/* THÔNG TIN NGƯỜI DÙNG & ÂM THANH */}
         <div className="flex items-center gap-3">
           <SoundToggle />
 
@@ -154,7 +193,7 @@ export const Navbar = () => {
                   <button
                     onClick={() => {
                       setIsMenuOpen(false);
-                      handleNavClick(role === 'admin' ? '/admin' : role === 'teacher' ? '/teacher' : '/student');
+                      handleDashboardNavClick();
                     }}
                     className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
                   >
