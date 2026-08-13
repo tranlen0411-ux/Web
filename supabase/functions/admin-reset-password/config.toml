@@ -1,0 +1,4 @@
+# CẤU HÌNH TẠM THỜI GIAI ĐOẠN 1: EMERGENCY RECOVERY
+# Tắt verify_jwt ở cổng Gateway để chấp nhận request khôi phục một lần bằng ADMIN_RECOVERY_SECRET
+[functions.admin-reset-password]
+verify_jwt = false

@@ -16,7 +16,6 @@ serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const envRecoverySecret = Deno.env.get('ADMIN_RECOVERY_SECRET');
 
@@ -26,7 +25,7 @@ serve(async (req) => {
     const body = await req.json();
     const { targetUserId, email, newPassword, recoverySecret } = body;
 
-    // Validate độ dài newPassword
+    // Validate newPassword
     if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mật khẩu mới phải từ 6 ký tự trở lên.' }),
@@ -34,53 +33,28 @@ serve(async (req) => {
       );
     }
 
-    // 1. Kiểm tra JWT của Caller (Long-term Admin Mode)
-    const authHeader = req.headers.get('Authorization');
-    let isAuthorizedAdmin = false;
+    // GIAI ĐOẠN 1: Bắt buộc kiểm tra đồng thời 4 điều kiện xác thực Emergency Recovery
+    const isSecretValid =
+      !!envRecoverySecret &&
+      typeof recoverySecret === 'string' &&
+      recoverySecret.trim() === envRecoverySecret.trim();
 
-    if (authHeader) {
-      const supabaseCaller = createClient(supabaseUrl, supabaseAnonKey, {
-        global: { headers: { Authorization: authHeader } },
-      });
-      const { data: { user: caller } } = await supabaseCaller.auth.getUser();
+    const isTargetValid =
+      targetUserId === SYSTEM_ADMIN_ID &&
+      typeof email === 'string' &&
+      email.trim().toLowerCase() === SYSTEM_ADMIN_EMAIL;
 
-      if (caller) {
-        const { data: callerProfile } = await supabaseAdmin
-          .from('profiles')
-          .select('role')
-          .eq('id', caller.id)
-          .single();
-
-        if (callerProfile?.role === 'admin') {
-          isAuthorizedAdmin = true;
-        }
-      }
+    // Nếu không khớp đồng thời tất cả điều kiện -> Trả 403 bảo mật chung (Không log secret hay password)
+    if (!isSecretValid || !isTargetValid) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Từ chối truy cập: Thông tin xác thực không hợp lệ.' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // 2. Nếu không có Admin JWT -> Yêu cầu Emergency Recovery Secret + Đúng Admin Target
-    if (!isAuthorizedAdmin) {
-      const isSecretValid =
-        !!envRecoverySecret &&
-        typeof recoverySecret === 'string' &&
-        recoverySecret.trim() === envRecoverySecret.trim();
-
-      const isTargetValid =
-        targetUserId === SYSTEM_ADMIN_ID &&
-        typeof email === 'string' &&
-        email.trim().toLowerCase() === SYSTEM_ADMIN_EMAIL;
-
-      // Không đủ điều kiện đồng thời -> Trả 403 bảo mật chung, không tiết lộ nguyên nhân hỏng
-      if (!isSecretValid || !isTargetValid) {
-        return new Response(
-          JSON.stringify({ success: false, message: 'Từ chối truy cập: Thông tin xác thực không hợp lệ.' }),
-          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-    }
-
-    // 3. Thực hiện Đặt lại mật khẩu bằng Supabase Auth Admin API (updateUserById)
+    // Thực hiện Đặt lại mật khẩu duy nhất qua Supabase Auth Admin API (updateUserById)
     const { data: updatedUserData, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
-      targetUserId,
+      SYSTEM_ADMIN_ID,
       {
         password: newPassword,
       }
@@ -96,7 +70,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: 'Đã đặt lại mật khẩu thành công!',
+        message: 'Đã đặt lại mật khẩu Admin hệ thống thành công!',
         user_id: updatedUserData.user.id,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
