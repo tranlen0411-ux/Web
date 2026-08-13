@@ -96,45 +96,27 @@ export const UserFormModal = ({ isOpen, onClose, userToEdit, onSaved }) => {
           return;
         }
 
-        // 1. Ưu tiên gọi Supabase Edge Function admin-create-user (dùng Admin API createUser)
-        let resData = null;
-        let fnError = null;
+        // Gọi trực tiếp Supabase Edge Function admin-create-user (Admin API createUser)
+        const { data, error } = await supabase.functions.invoke('admin-create-user', {
+          body: {
+            email: formData.email.trim(),
+            password: formData.password,
+            fullName: formData.fullName.trim(),
+            role: formData.role,
+            gradeLevel: parseInt(formData.gradeLevel),
+          }
+        });
 
-        try {
-          const { data, error } = await supabase.functions.invoke('admin-create-user', {
-            body: {
-              email: formData.email.trim(),
-              password: formData.password,
-              fullName: formData.fullName.trim(),
-              role: formData.role,
-              gradeLevel: parseInt(formData.gradeLevel),
-            }
-          });
-          resData = data;
-          fnError = error;
-        } catch (e) {
-          fnError = e;
+        if (error) {
+          throw new Error(error.message || 'Có lỗi khi gọi Edge Function admin-create-user');
         }
 
-        // 2. Dự phòng RPC nếu Edge Function chưa được deploy
-        if (fnError || !resData) {
-          const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_user', {
-            p_email: formData.email.trim(),
-            p_password: formData.password,
-            p_full_name: formData.fullName.trim(),
-            p_role: formData.role,
-            p_grade_level: parseInt(formData.gradeLevel),
-          });
-          if (rpcError) throw rpcError;
-          resData = rpcData;
-        }
-
-        if (!resData?.success) {
-          setErrorMsg(resData?.message || 'Không thể tạo tài khoản.');
+        if (!data?.success) {
+          setErrorMsg(data?.message || 'Không thể tạo tài khoản.');
           return;
         }
 
-        setSuccessMsg(resData.message || 'Thêm tài khoản mới thành công!');
+        setSuccessMsg(data.message || 'Thêm tài khoản mới thành công!');
         setTimeout(() => {
           onSaved();
           onClose();
@@ -163,7 +145,7 @@ export const UserFormModal = ({ isOpen, onClose, userToEdit, onSaved }) => {
                 {isEditMode ? 'Chỉnh Sửa Thông Tin Tài Khoản' : '+ Thêm Tài Khoản Mới'}
               </h3>
               <p className="text-xs text-purple-200 font-bold">
-                {isEditMode ? `Cập nhật thông tin cho (${userToEdit.email})` : 'Tạo mới Auth User qua Admin API + Profile'}
+                {isEditMode ? `Cập nhật thông tin cho (${userToEdit.email})` : 'Tạo mới qua Edge Function admin-create-user'}
               </p>
             </div>
           </div>
