@@ -163,7 +163,7 @@ export const StudentDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* BANNER NỀN BỐ CỤC CHUẨN ĐẸP NẰM Ở VÙNG DƯỚI BỘ LẠI BẦU TRỜI & CẦU VỒNG (TUYỆT ĐỐI KHÔNG CHE CẦU VỒNG, ROBOT HAY HỌC SINH) */}
+      {/* BANNER NỀN BỐ CỤC CHUẨN ĐẸP CÂN ĐỐI NẰM DƯỚI LỐI ĐI SÂN TRƯỜNG (bottom-3 sm:bottom-4 left-[46%]) */}
       <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
         <img
@@ -173,7 +173,7 @@ export const StudentDashboard = () => {
         />
 
         {/* 2. OVERLAY LỚP PHỦ MỊN */}
-        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/20 via-transparent to-slate-950/30 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/25 via-transparent to-slate-950/20 pointer-events-none" />
 
         {/* 3. KHUNG SAO THƯỞNG & XU TÍCH LŨY TRÊN BẦU TRỜI GÓC PHẢI */}
         <div className="absolute top-3 right-3 sm:top-4 sm:right-6 z-20 bg-white/95 backdrop-blur-md px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-2xl sm:rounded-3xl border-2 border-amber-300 shadow-2xl text-amber-950 flex items-center gap-2.5 sm:gap-3">
@@ -190,8 +190,8 @@ export const StudentDashboard = () => {
           </div>
         </div>
 
-        {/* 4. KHUNG THÔNG TIN HỌC SINH NẰM PHÍA DƯỚI BẦU TRỜI DỰA THEO YÊU CẦU (bottom-3 left-1/2 -translate-x-1/2 TUYỆT ĐỐI KHÔNG CHE CẦU VỒNG VÀ KHÔNG CHE TAY ROBOT) */}
-        <div className="absolute bottom-3 sm:bottom-4 left-1/2 -translate-x-1/2 z-20 w-max max-w-[85%]">
+        {/* 4. KHUNG THÔNG TIN HỌC SINH CÂN ĐỐI DỜI SANG TRÁI (bottom-3 sm:bottom-4 left-[46%] -translate-x-1/2) */}
+        <div className="absolute bottom-3 sm:bottom-4 left-[46%] -translate-x-1/2 z-20 w-max max-w-[85%]">
           <div className="flex items-center gap-2.5 bg-slate-900/85 backdrop-blur-md px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl border-2 border-amber-300/90 shadow-2xl">
             <img
               src={profile?.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
