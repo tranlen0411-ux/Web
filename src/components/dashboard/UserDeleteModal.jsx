@@ -35,19 +35,39 @@ export const UserDeleteModal = ({ isOpen, onClose, userToDelete, teachersList, o
 
   if (!isOpen || !userToDelete) return null;
 
-  // Xử lý Khóa tài khoản
+  // Xử lý Khóa / Mở khóa tài khoản via Edge Function admin-toggle-status (dùng Admin API updateUserById với ban_duration)
   const handleToggleLock = async () => {
     setLoading(true);
     setErrorMsg('');
     try {
-      const { data, error } = await supabase.rpc('admin_toggle_user_status', {
-        p_target_user_id: userToDelete.id,
-        p_is_disabled: !userToDelete.is_disabled
-      });
+      let resData = null;
+      let fnError = null;
 
-      if (error) throw error;
-      if (!data?.success) {
-        setErrorMsg(data?.message || 'Không thể thay đổi trạng thái khóa.');
+      try {
+        const { data, error } = await supabase.functions.invoke('admin-toggle-status', {
+          body: {
+            targetUserId: userToDelete.id,
+            isDisabled: !userToDelete.is_disabled
+          }
+        });
+        resData = data;
+        fnError = error;
+      } catch (e) {
+        fnError = e;
+      }
+
+      // Dự phòng RPC nếu Edge Function chưa được deploy
+      if (fnError || !resData) {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('admin_toggle_user_status', {
+          p_target_user_id: userToDelete.id,
+          p_is_disabled: !userToDelete.is_disabled
+        });
+        if (rpcError) throw rpcError;
+        resData = rpcData;
+      }
+
+      if (!resData?.success) {
+        setErrorMsg(resData?.message || 'Không thể thay đổi trạng thái khóa.');
         return;
       }
 
@@ -61,7 +81,7 @@ export const UserDeleteModal = ({ isOpen, onClose, userToDelete, teachersList, o
     }
   };
 
-  // Xử lý Xóa vĩnh viễn
+  // Xử lý Xóa vĩnh viễn via Edge Function admin-delete-user (dùng Admin API deleteUser)
   const handleDeletePermanent = async () => {
     if (ownedClassesCount > 0 && !selectedNewTeacher) {
       setErrorMsg('Vui lòng chọn Giáo viên mới để nhận chuyển giao lớp trước khi xóa.');
@@ -73,14 +93,34 @@ export const UserDeleteModal = ({ isOpen, onClose, userToDelete, teachersList, o
     setLoading(true);
     setErrorMsg('');
     try {
-      const { data, error } = await supabase.rpc('admin_delete_user', {
-        p_target_user_id: userToDelete.id,
-        p_reassign_teacher_id: selectedNewTeacher || null
-      });
+      let resData = null;
+      let fnError = null;
 
-      if (error) throw error;
-      if (!data?.success) {
-        setErrorMsg(data?.message || 'Không thể xóa tài khoản.');
+      try {
+        const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+          body: {
+            targetUserId: userToDelete.id,
+            reassignTeacherId: selectedNewTeacher || null
+          }
+        });
+        resData = data;
+        fnError = error;
+      } catch (e) {
+        fnError = e;
+      }
+
+      // Dự phòng RPC nếu Edge Function chưa được deploy
+      if (fnError || !resData) {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('admin_delete_user', {
+          p_target_user_id: userToDelete.id,
+          p_reassign_teacher_id: selectedNewTeacher || null
+        });
+        if (rpcError) throw rpcError;
+        resData = rpcData;
+      }
+
+      if (!resData?.success) {
+        setErrorMsg(resData?.message || 'Không thể xóa tài khoản.');
         return;
       }
 
@@ -94,7 +134,6 @@ export const UserDeleteModal = ({ isOpen, onClose, userToDelete, teachersList, o
     }
   };
 
-  // Danh sách các giáo viên khác có thể nhận chuyển giao lớp
   const availableTeachers = teachersList.filter(t => t.id !== userToDelete.id && !t.is_disabled);
 
   return (

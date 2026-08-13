@@ -77,7 +77,7 @@ export const UserFormModal = ({ isOpen, onClose, userToEdit, onSaved }) => {
           onClose();
         }, 800);
       } else {
-        // Mode THÊM MỚI TÀI KHOẢN (gọi RPC admin_create_user server-side)
+        // Mode THÊM MỚI TÀI KHOẢN
         if (!formData.fullName.trim()) {
           setErrorMsg('Vui lòng nhập Họ và Tên.');
           setLoading(false);
@@ -96,21 +96,45 @@ export const UserFormModal = ({ isOpen, onClose, userToEdit, onSaved }) => {
           return;
         }
 
-        const { data, error } = await supabase.rpc('admin_create_user', {
-          p_email: formData.email.trim(),
-          p_password: formData.password,
-          p_full_name: formData.fullName.trim(),
-          p_role: formData.role,
-          p_grade_level: parseInt(formData.gradeLevel),
-        });
+        // 1. Ưu tiên gọi Supabase Edge Function admin-create-user (dùng Admin API createUser)
+        let resData = null;
+        let fnError = null;
 
-        if (error) throw error;
-        if (!data?.success) {
-          setErrorMsg(data?.message || 'Không thể tạo tài khoản.');
+        try {
+          const { data, error } = await supabase.functions.invoke('admin-create-user', {
+            body: {
+              email: formData.email.trim(),
+              password: formData.password,
+              fullName: formData.fullName.trim(),
+              role: formData.role,
+              gradeLevel: parseInt(formData.gradeLevel),
+            }
+          });
+          resData = data;
+          fnError = error;
+        } catch (e) {
+          fnError = e;
+        }
+
+        // 2. Dự phòng RPC nếu Edge Function chưa được deploy
+        if (fnError || !resData) {
+          const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_user', {
+            p_email: formData.email.trim(),
+            p_password: formData.password,
+            p_full_name: formData.fullName.trim(),
+            p_role: formData.role,
+            p_grade_level: parseInt(formData.gradeLevel),
+          });
+          if (rpcError) throw rpcError;
+          resData = rpcData;
+        }
+
+        if (!resData?.success) {
+          setErrorMsg(resData?.message || 'Không thể tạo tài khoản.');
           return;
         }
 
-        setSuccessMsg(data.message || 'Thêm tài khoản mới thành công!');
+        setSuccessMsg(resData.message || 'Thêm tài khoản mới thành công!');
         setTimeout(() => {
           onSaved();
           onClose();
@@ -139,7 +163,7 @@ export const UserFormModal = ({ isOpen, onClose, userToEdit, onSaved }) => {
                 {isEditMode ? 'Chỉnh Sửa Thông Tin Tài Khoản' : '+ Thêm Tài Khoản Mới'}
               </h3>
               <p className="text-xs text-purple-200 font-bold">
-                {isEditMode ? `Cập nhật thông tin cho (${userToEdit.email})` : 'Tạo mới đồng bộ Auth User và Profile'}
+                {isEditMode ? `Cập nhật thông tin cho (${userToEdit.email})` : 'Tạo mới Auth User qua Admin API + Profile'}
               </p>
             </div>
           </div>
