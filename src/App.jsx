@@ -52,17 +52,12 @@ const HomeDispatcher = () => {
     );
   }
 
-  if (!user || !profile) {
+  if (!user) {
     return <Navigate to="/auth" replace />;
   }
 
-  if (profile.role === 'admin') {
-    return <Navigate to="/admin" replace />;
-  }
-  if (profile.role === 'teacher') {
-    return <Navigate to="/teacher" replace />;
-  }
-  return <Navigate to="/student" replace />;
+  // Người dùng đã đăng nhập (Học sinh, Giáo viên, Admin) truy cập '/' đều xem Kho Trò Chơi (Catalog Game)
+  return <StudentDashboard />;
 };
 
 function AppRoutes() {

@@ -176,11 +176,11 @@ export const StudentDashboard = () => {
             <div className="flex items-center gap-2">
               <h1 className="text-2xl sm:text-3xl font-black">{profile?.full_name || 'Học Sinh Vui Học'}</h1>
               <span className="px-3 py-1 bg-amber-950 text-amber-200 text-xs font-black rounded-xl uppercase">
-                Khối {profile?.grade_level || 1}
+                {profile?.role === 'admin' ? '🛡️ Quản trị viên' : profile?.role === 'teacher' ? '👩‍🏫 Giáo viên' : `Khối ${profile?.grade_level || 1}`}
               </span>
             </div>
             <p className="text-xs sm:text-sm font-bold text-amber-900 mt-1">
-              🎒 Góc Học Tập Cá Nhân — Tích lũy Sao Thưởng để mở khóa Huy Hiệu!
+              🎮 Kho Trò Chơi Học Tập Tiểu Học — Khám phá và trải nghiệm các trò chơi học vui!
             </p>
           </div>
         </div>
