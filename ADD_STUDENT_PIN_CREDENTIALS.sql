@@ -75,9 +75,9 @@ BEGIN
     END IF;
   END IF;
 
-  -- 5. Kiểm tra độ dài PIN tối thiểu 4 ký tự
-  IF p_pin IS NULL OR length(trim(p_pin)) < 4 THEN
-    RAISE EXCEPTION 'Mã PIN phải có độ dài tối thiểu 4 ký tự.';
+  -- 5. Kiểm tra định dạng PIN gồm 4 đến 6 chữ số
+  IF p_pin IS NULL OR trim(p_pin) !~ '^[0-9]{4,6}$' THEN
+    RAISE EXCEPTION 'Mã PIN phải gồm 4 đến 6 chữ số.';
   END IF;
 
   -- 6. Hash mã PIN 1 chiều bằng extensions.crypt & extensions.gen_salt

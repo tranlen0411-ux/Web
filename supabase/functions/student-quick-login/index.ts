@@ -70,7 +70,7 @@ serve(async (req) => {
     const cleanCode = studentCode.trim().toUpperCase();
     const cleanPin = pin.trim();
 
-    if (!cleanCode || !cleanPin) {
+    if (!cleanCode || !cleanPin || !/^[0-9]{4,6}$/.test(cleanPin)) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
