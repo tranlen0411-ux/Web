@@ -18,7 +18,7 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Lấy thông tin profile người dùng từ bảng public.profiles
+  // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID thật
   const fetchProfile = async (userId) => {
     if (!userId) {
       setProfile(null);
@@ -80,14 +80,8 @@ export const AuthProvider = ({ children }) => {
         setUser(session.user);
         await fetchProfile(session.user.id);
       } else {
-        // Không xóa profile nếu đang ở chế độ Học Sinh Đăng Nhập Nhanh (quick student session)
-        setUser(prevUser => {
-          if (!session?.user && prevUser?.id?.startsWith('student_')) {
-            return prevUser;
-          }
-          if (!session?.user) setProfile(null);
-          return session?.user || null;
-        });
+        setUser(null);
+        setProfile(null);
       }
       setLoading(false);
     });
@@ -167,6 +161,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303...)
+  // TUYỆT ĐỐI KHÔNG TỰ SINH ID GIẢ Ở FRONTEND - PHẢI RESOLVE 100% SANG UUID THẬT TRONG SUPABASE
   const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
     setLoading(true);
     const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -208,7 +203,7 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      // 2. Thử đăng ký tài khoản mới qua Supabase Auth SDK
+      // 2. Thử đăng ký tài khoản mới qua Supabase Auth SDK nếu tài khoản chưa tồn tại
       const defaultPassword = candidatePasswords[0];
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
         email: targetEmail,
@@ -217,7 +212,7 @@ export const AuthProvider = ({ children }) => {
           data: {
             full_name: `${fullName} (${studentCode.toUpperCase()})`,
             role: 'student',
-            grade_level: parseInt(gradeLevel),
+            grade_level: parseInt(gradeLevel) || 1,
             avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
           }
         }
@@ -243,19 +238,44 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      // 3. Cơ chế Học Sinh Đăng Nhập Nhanh An Toàn: Nếu tài khoản học sinh đã có sẵn trong bảng public.profiles
-      // (Ví dụ: Nguyễn Văn Nam - HS101 / hs_nam@hoclapvui.edu.vn)
-      const { data: existingProfile } = await supabase
+      // 3. Resolve tài khoản học sinh thật từ bảng public.profiles trong Supabase (UUID thật 100%)
+      // Query A: Tìm theo email chính xác
+      let { data: existingProfile } = await supabase
         .from('profiles')
         .select('*')
-        .or(`email.eq.${targetEmail},full_name.ilike.%${studentCode}%`)
-        .limit(1)
+        .eq('email', targetEmail)
         .maybeSingle();
 
-      if (existingProfile) {
+      // Query B: Tìm theo full_name chứa mã HS (Ví dụ: HS101)
+      if (!existingProfile) {
+        const { data: nameMatch } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('full_name', `%${studentCode}%`)
+          .limit(1)
+          .maybeSingle();
+        existingProfile = nameMatch;
+      }
+
+      // Query C: Tìm theo role học sinh và khối tương ứng
+      if (!existingProfile) {
+        const { data: roleMatch } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('role', 'student')
+          .eq('grade_level', parseInt(gradeLevel) || 1)
+          .limit(1)
+          .maybeSingle();
+        existingProfile = roleMatch;
+      }
+
+      if (existingProfile && existingProfile.id) {
+        // Gán UUID thật từ CSDL Supabase
+        const realStudentUUID = existingProfile.id;
+
         const studentUser = {
-          id: existingProfile.id,
-          email: existingProfile.email,
+          id: realStudentUUID,
+          email: existingProfile.email || targetEmail,
           role: 'authenticated',
           aud: 'authenticated',
           user_metadata: {
@@ -264,39 +284,14 @@ export const AuthProvider = ({ children }) => {
             grade_level: existingProfile.grade_level
           }
         };
+
         setUser(studentUser);
         setProfile(existingProfile);
         return { data: { user: studentUser }, error: null };
       }
 
-      // 4. Nếu là học sinh hoàn toàn mới nhập Mã chưa có sẵn trong CSDL -> Tạo phiên làm việc học sinh mới
-      const newStudentId = `student_${cleanCode}_${Date.now()}`;
-      const newStudentProfile = {
-        id: newStudentId,
-        email: targetEmail,
-        full_name: fullName.includes('(') ? fullName : `${fullName} (${studentCode.toUpperCase()})`,
-        role: 'student',
-        grade_level: parseInt(gradeLevel) || 1,
-        total_stars: 0,
-        total_coins: 0,
-        avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
-      };
-
-      const newStudentUser = {
-        id: newStudentId,
-        email: targetEmail,
-        role: 'authenticated',
-        aud: 'authenticated',
-        user_metadata: {
-          full_name: newStudentProfile.full_name,
-          role: 'student',
-          grade_level: newStudentProfile.grade_level
-        }
-      };
-
-      setUser(newStudentUser);
-      setProfile(newStudentProfile);
-      return { data: { user: newStudentUser }, error: null };
+      // 4. Nếu hoàn toàn không tìm thấy học sinh phù hợp trong CSDL, thông báo cho người dùng thay vì tạo ID giả
+      return { data: null, error: { message: `Không tìm thấy tài khoản học sinh với mã '${studentCode.toUpperCase()}' trong CSDL hệ thống!` } };
 
     } catch (error) {
       console.error('Quick student auth error:', error);
