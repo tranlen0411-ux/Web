@@ -59,7 +59,7 @@ serve(async (req) => {
 
     const { studentCode, pin } = body;
 
-    // Yêu cầu cả studentCode lẫn PIN
+    // Yêu cầu bắt buộc cả studentCode lẫn PIN
     if (!studentCode || typeof studentCode !== 'string' || !pin || typeof pin !== 'string') {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
@@ -67,7 +67,7 @@ serve(async (req) => {
       );
     }
 
-    const cleanCode = studentCode.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanCode = studentCode.trim().toUpperCase();
     const cleanPin = pin.trim();
 
     if (!cleanCode || !cleanPin) {
@@ -87,87 +87,62 @@ serve(async (req) => {
       );
     }
 
-    // Khởi tạo Supabase Admin Client bằng Service Role Key (Server-side)
+    // Khởi tạo Supabase Admin Client bằng Service Role Key (Bảo mật 100% ở Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. Map mã học sinh sang email tương ứng
-    const sampleEmails: Record<string, string> = {
-      'hs101': 'hs_nam@hoclapvui.edu.vn',
-      'nam': 'hs_nam@hoclapvui.edu.vn',
-      'hs202': 'hs_an@hoclapvui.edu.vn',
-      'an': 'hs_an@hoclapvui.edu.vn',
-      'hs303': 'hs_duc@hoclapvui.edu.vn',
-      'duc': 'hs_duc@hoclapvui.edu.vn',
-      'hs404': 'hs_bao@hoclapvui.edu.vn',
-      'bao': 'hs_bao@hoclapvui.edu.vn',
-      'hs505': 'hs_mai@hoclapvui.edu.vn',
-      'mai': 'hs_mai@hoclapvui.edu.vn',
-    };
+    // 4. Tìm kiếm học sinh trong public.profiles theo student_code hoặc email mẫu
+    let { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, full_name, role')
+      .eq('student_code', cleanCode)
+      .eq('role', 'student')
+      .maybeSingle();
 
-    let targetEmail = sampleEmails[cleanCode];
-    let studentProfileId: string | null = null;
-
-    // Tìm thông tin profile của học sinh bằng Admin Client
-    if (targetEmail) {
-      const { data: profile } = await supabaseAdmin
-        .from('profiles')
-        .select('id, email')
-        .eq('email', targetEmail)
-        .maybeSingle();
-      if (profile) studentProfileId = profile.id;
-    } else {
-      const { data: profile } = await supabaseAdmin
-        .from('profiles')
-        .select('id, email, full_name')
-        .or(`email.ilike.%${cleanCode}%,full_name.ilike.%${cleanCode}%`)
-        .eq('role', 'student')
-        .limit(1)
-        .maybeSingle();
-
-      if (profile) {
-        studentProfileId = profile.id;
-        targetEmail = profile.email || `hs_${cleanCode}@hoclapvui.edu.vn`;
+    // Dự phòng tra cứu email mẫu nếu chưa chạy migration cột student_code
+    if (!profile) {
+      const sampleEmails: Record<string, string> = {
+        'HS101': 'hs_nam@hoclapvui.edu.vn',
+        'HS202': 'hs_an@hoclapvui.edu.vn',
+        'HS303': 'hs_duc@hoclapvui.edu.vn',
+        'HS404': 'hs_bao@hoclapvui.edu.vn',
+        'HS505': 'hs_mai@hoclapvui.edu.vn',
+      };
+      const fallbackEmail = sampleEmails[cleanCode];
+      if (fallbackEmail) {
+        const { data: p } = await supabaseAdmin
+          .from('profiles')
+          .select('id, email, full_name, role')
+          .eq('email', fallbackEmail)
+          .maybeSingle();
+        profile = p;
       }
     }
 
-    // Nếu không tìm thấy tài khoản học sinh -> Trả lỗi chung đồng nhất (Không tiết lộ chi tiết)
-    if (!targetEmail || !studentProfileId) {
+    // Nếu KHÔNG tìm thấy học sinh -> Trả thông báo lỗi đồng nhất (KHÔNG tự tạo user)
+    if (!profile || !profile.email) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 5. Xác minh Mã PIN Server-side bằng RPC verify_student_pin hoặc fallback
-    let isPinValid = false;
-    try {
-      const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin', {
-        p_student_id: studentProfileId,
-        p_pin: cleanPin,
-      });
+    // 5. Xác minh Mã PIN Server-side bằng RPC verify_student_pin (TUYỆT ĐỐI KHÔNG FALLBACK)
+    const { data: isPinValid, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin', {
+      p_student_id: profile.id,
+      p_pin: cleanPin,
+    });
 
-      if (!rpcErr && typeof rpcResult === 'boolean') {
-        isPinValid = rpcResult;
-      } else {
-        // Fallback kiểm tra PIN mặc định '1234' nếu RPC chưa được tạo trong CSDL
-        isPinValid = (cleanPin === '1234');
-      }
-    } catch (_err) {
-      isPinValid = (cleanPin === '1234');
-    }
-
-    // Nếu PIN sai -> Trả lỗi chung đồng nhất
-    if (!isPinValid) {
+    if (rpcErr || isPinValid !== true) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Admin API
+    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Supabase Auth Admin API
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
-      email: targetEmail,
+      email: profile.email,
     });
 
     if (linkErr || !linkData?.properties?.hashed_token) {
@@ -180,11 +155,11 @@ serve(async (req) => {
 
     const hashedToken = linkData.properties.hashed_token;
 
-    // 7. Trả về DUY NHẤT token_hash & email (KHÔNG trả email_otp, KHÔNG trả service_role)
+    // 7. Trả về DUY NHẤT token_hash & email (KHÔNG trả email_otp, KHÔNG trả service_role_key)
     return new Response(
       JSON.stringify({
         success: true,
-        email: targetEmail,
+        email: profile.email,
         token_hash: hashedToken,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
