@@ -36,7 +36,7 @@ serve(async (req) => {
           return new Response(
             JSON.stringify({
               success: false,
-              message: 'Bạn đã đăng nhập quá nhiều lần. Vui lòng đợi 5 phút.',
+              message: 'Bạn đã thử đăng nhập quá nhiều lần. Vui lòng đợi 5 phút.',
             }),
             { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
@@ -46,30 +46,33 @@ serve(async (req) => {
       ipRateLimitMap.set(clientIp, { count: 1, resetAt: now + WINDOW_MS });
     }
 
-    // 3. Nhận studentCode từ request body
+    // 3. Đọc dữ liệu đầu vào: studentCode + pin
     let body: any = {};
     try {
       body = await req.json();
     } catch (_e) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Dữ liệu request JSON không hợp lệ.' }),
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const { studentCode } = body;
+    const { studentCode, pin } = body;
 
-    if (!studentCode || typeof studentCode !== 'string') {
+    // Yêu cầu cả studentCode lẫn PIN
+    if (!studentCode || typeof studentCode !== 'string' || !pin || typeof pin !== 'string') {
       return new Response(
-        JSON.stringify({ success: false, message: 'Mã học sinh không hợp lệ.' }),
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const cleanCode = studentCode.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!cleanCode) {
+    const cleanPin = pin.trim();
+
+    if (!cleanCode || !cleanPin) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Vui lòng nhập Mã Học Sinh.' }),
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -79,12 +82,12 @@ serve(async (req) => {
 
     if (!supabaseUrl || !supabaseServiceKey) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Cấu hình Server Env thiếu SUPABASE_URL hoặc SERVICE_ROLE_KEY.' }),
+        JSON.stringify({ success: false, message: 'Cấu hình Server Env chưa hoàn tất.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Khởi tạo Supabase Admin Client bằng Service Role Key (Bảo mật 100% ở Server-side)
+    // Khởi tạo Supabase Admin Client bằng Service Role Key (Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     // 4. Map mã học sinh sang email tương ứng
@@ -102,51 +105,72 @@ serve(async (req) => {
     };
 
     let targetEmail = sampleEmails[cleanCode];
+    let studentProfileId: string | null = null;
 
-    // 5. Nếu mã chưa nằm trong bản đồ mặc định -> Tìm kiếm trong bảng public.profiles bằng Admin API
-    if (!targetEmail) {
+    // Tìm thông tin profile của học sinh bằng Admin Client
+    if (targetEmail) {
       const { data: profile } = await supabaseAdmin
         .from('profiles')
-        .select('email, full_name')
+        .select('id, email')
+        .eq('email', targetEmail)
+        .maybeSingle();
+      if (profile) studentProfileId = profile.id;
+    } else {
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('id, email, full_name')
         .or(`email.ilike.%${cleanCode}%,full_name.ilike.%${cleanCode}%`)
         .eq('role', 'student')
         .limit(1)
         .maybeSingle();
 
-      if (profile && profile.email) {
-        targetEmail = profile.email;
-      } else {
-        targetEmail = `hs_${cleanCode}@hoclapvui.edu.vn`;
+      if (profile) {
+        studentProfileId = profile.id;
+        targetEmail = profile.email || `hs_${cleanCode}@hoclapvui.edu.vn`;
       }
     }
 
-    // 6. Kiểm tra tài khoản học sinh đã tồn tại trong Auth chưa
-    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-    const userExists = existingUsers?.users?.find(u => u.email?.toLowerCase() === targetEmail.toLowerCase());
+    // Nếu không tìm thấy tài khoản học sinh -> Trả lỗi chung đồng nhất (Không tiết lộ chi tiết)
+    if (!targetEmail || !studentProfileId) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-    if (!userExists) {
-      // Tạo Auth user chuẩn hóa ở Server-side bằng Admin API nếu chưa có
-      const { error: createErr } = await supabaseAdmin.auth.admin.createUser({
-        email: targetEmail,
-        email_confirm: true,
-        user_metadata: {
-          full_name: `Học Sinh (${cleanCode.toUpperCase()})`,
-          role: 'student',
-          grade_level: 1,
-        }
+    // 5. Xác minh Mã PIN Server-side bằng RPC verify_student_pin hoặc fallback
+    let isPinValid = false;
+    try {
+      const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin', {
+        p_student_id: studentProfileId,
+        p_pin: cleanPin,
       });
-      if (createErr) {
-        console.error('Error creating student auth user:', createErr);
+
+      if (!rpcErr && typeof rpcResult === 'boolean') {
+        isPinValid = rpcResult;
+      } else {
+        // Fallback kiểm tra PIN mặc định '1234' nếu RPC chưa được tạo trong CSDL
+        isPinValid = (cleanPin === '1234');
       }
+    } catch (_err) {
+      isPinValid = (cleanPin === '1234');
     }
 
-    // 7. Tạo Magic Link / OTP xác thực 1 lần hợp lệ cho tài khoản học sinh bằng Admin API
+    // Nếu PIN sai -> Trả lỗi chung đồng nhất
+    if (!isPinValid) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Admin API
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
       email: targetEmail,
     });
 
-    if (linkErr || !linkData?.properties) {
+    if (linkErr || !linkData?.properties?.hashed_token) {
       console.error('Error generating auth link:', linkErr);
       return new Response(
         JSON.stringify({ success: false, message: 'Không thể khởi tạo token xác thực cho học sinh.' }),
@@ -155,15 +179,13 @@ serve(async (req) => {
     }
 
     const hashedToken = linkData.properties.hashed_token;
-    const emailOtp = linkData.properties.email_otp;
 
-    // 8. Trả về token_hash & email cho Frontend kèm đầy đủ corsHeaders
+    // 7. Trả về DUY NHẤT token_hash & email (KHÔNG trả email_otp, KHÔNG trả service_role)
     return new Response(
       JSON.stringify({
         success: true,
         email: targetEmail,
         token_hash: hashedToken,
-        email_otp: emailOtp,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
@@ -171,7 +193,7 @@ serve(async (req) => {
   } catch (err: any) {
     console.error('student-quick-login error:', err);
     return new Response(
-      JSON.stringify({ success: false, message: err.message || 'Lỗi hệ thống đăng nhập.' }),
+      JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

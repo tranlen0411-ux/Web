@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock } from 'lucide-react';
+import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock, KeyRound } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../context/SoundContext';
 import { ParentReportModal } from '../components/parent/ParentReportModal';
@@ -17,6 +17,7 @@ export const AuthPage = () => {
   const [fullName, setFullName] = useState('');
   const [gradeLevel, setGradeLevel] = useState(1);
   const [studentCode, setStudentCode] = useState('');
+  const [pin, setPin] = useState('1234');
 
   const [isParentModalOpen, setIsParentModalOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -30,12 +31,12 @@ export const AuthPage = () => {
 
     try {
       if (mode === 'student_quick') {
-        if (!studentCode.trim()) {
-          setErrorMsg('Bé vui lòng nhập Mã Học Sinh hoặc Tên Đăng Nhập!');
+        if (!studentCode.trim() || !pin.trim()) {
+          setErrorMsg('Bé vui lòng nhập đủ Mã Học Sinh và Mã PIN!');
           setLoading(false);
           return;
         }
-        const res = await quickStudentSignIn(studentCode.trim(), fullName || 'Học Sinh Tiểu Học', gradeLevel);
+        const res = await quickStudentSignIn(studentCode.trim(), pin.trim());
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/student');
@@ -52,7 +53,7 @@ export const AuthPage = () => {
       }
     } catch (err) {
       console.error('Auth error:', err);
-      setErrorMsg(err.message || 'Có lỗi xảy ra trong quá trình xác thực.');
+      setErrorMsg(err.message || 'Mã học sinh hoặc PIN không hợp lệ.');
     } finally {
       setLoading(false);
     }
@@ -150,21 +151,41 @@ export const AuthPage = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           
-          {/* LUỒNG ĐĂNG NHẬP NHANH CHO HỌC SINH THẬT */}
+          {/* LUỒNG ĐĂNG NHẬP NHANH CHO HỌC SINH THẬT KÈM MÃ PIN BẢO MẬT */}
           {mode === 'student_quick' && (
-            <div>
-              <label className="block text-xs font-black text-slate-700 mb-1.5">
-                Mã Học Sinh / Tên Đăng Nhập Nhanh:
-              </label>
-              <input
-                type="text"
-                placeholder="Nhập Mã Học Sinh của bé (Ví dụ: HS101)..."
-                value={studentCode}
-                onChange={(e) => setStudentCode(e.target.value)}
-                className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner"
-                required
-              />
-            </div>
+            <>
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1.5">
+                  Mã Học Sinh / Tên Đăng Nhập:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Nhập Mã Học Sinh (Ví dụ: HS101)..."
+                  value={studentCode}
+                  onChange={(e) => setStudentCode(e.target.value)}
+                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Mã PIN Bí Mật Của Bé:
+                  </span>
+                  <span className="text-[10px] font-extrabold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-md">Mặc định: 1234</span>
+                </label>
+                <input
+                  type="password"
+                  maxLength={6}
+                  placeholder="Nhập Mã PIN (Ví dụ: 1234)..."
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner tracking-widest"
+                  required
+                />
+              </div>
+            </>
           )}
 
           {/* LUỒNG EMAIL PASS FOR TEACHER / ADMIN / PARENTS */}

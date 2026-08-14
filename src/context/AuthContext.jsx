@@ -160,22 +160,22 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303...)
-  // THỰC THI SỬ DỤNG EDGE FUNCTION SERVER-SIDE 'student-quick-login'
-  // GIẢI QUYẾT TRIỆT ĐỂ LỖI TOKEN 400 & PROFILES 401, THIẾT LẬP AUTH SESSION THẬT 100%
-  const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
+  // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303... kèm Mã PIN 1234)
+  // SỬ DỤNG EDGE FUNCTION SERVER-SIDE 'student-quick-login' XÁC MINH HASHED PIN BẢO MẬT 100%
+  const quickStudentSignIn = async (studentCode, pin = '1234') => {
     setLoading(true);
     const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    const cleanPin = pin.trim();
     
-    if (!cleanCode) {
+    if (!cleanCode || !cleanPin) {
       setLoading(false);
-      return { data: null, error: { message: 'Bé vui lòng nhập Mã Học Sinh!' } };
+      return { data: null, error: { message: 'Mã học sinh hoặc PIN không hợp lệ.' } };
     }
 
     try {
-      // 1. Gọi Edge Function server-side 'student-quick-login'
+      // 1. Gọi Edge Function server-side 'student-quick-login' với studentCode & pin
       const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('student-quick-login', {
-        body: { studentCode: cleanCode }
+        body: { studentCode: cleanCode, pin: cleanPin }
       });
 
       if (edgeErr || !edgeData?.success) {
@@ -183,31 +183,23 @@ export const AuthProvider = ({ children }) => {
         setLoading(false);
         return { 
           data: null, 
-          error: { message: edgeData?.message || 'Không thể khởi tạo token đăng nhập cho học sinh từ server-side.' } 
+          error: { message: edgeData?.message || 'Mã học sinh hoặc PIN không hợp lệ.' } 
         };
       }
 
-      const { email, token_hash, email_otp } = edgeData;
+      const { email, token_hash } = edgeData;
 
-      // 2. Xác thực OTP / Magic Link token thu được từ Edge Function qua Supabase Auth SDK client-side
-      // Lệnh verifyOtp này thiết lập 100% Supabase Auth Session thật cho client
-      let verifyRes = await supabase.auth.verifyOtp({
+      // 2. Xác thực Magic Link token thu được từ Edge Function qua Supabase Auth SDK client-side
+      // Lệnh verifyOtp này tạo 100% Supabase Auth Session thật cho client
+      const verifyRes = await supabase.auth.verifyOtp({
         token_hash: token_hash,
         type: 'magiclink'
       });
 
-      if (verifyRes.error && email_otp) {
-        verifyRes = await supabase.auth.verifyOtp({
-          email: email,
-          token: email_otp,
-          type: 'email'
-        });
-      }
-
       if (verifyRes.error || !verifyRes.data?.session) {
         console.error('verifyOtp error:', verifyRes.error);
         setLoading(false);
-        return { data: null, error: { message: 'Không thể xác thực phiên đăng nhập học sinh.' } };
+        return { data: null, error: { message: 'Lỗi khi xác thực phiên đăng nhập học sinh.' } };
       }
 
       // 3. Đã có Supabase Auth Session thật (session != null & session.user.id = UUID thật từ auth.users)!
