@@ -10,13 +10,15 @@ import {
   Edit2, 
   Lock, 
   UserPlus,
-  Info
+  Info,
+  KeyRound
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
 import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
+import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 
@@ -42,6 +44,12 @@ export const AdminDashboard = () => {
   const [usersList, setUsersList] = useState([]);
   const [gamesList, setGamesList] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
+  const [pinStatusMap, setPinStatusMap] = useState({});
+  const [userForPin, setUserForPin] = useState(null);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
 
   // Modals state
   const [isAddGameOpen, setIsAddGameOpen] = useState(false);
@@ -74,13 +82,30 @@ export const AdminDashboard = () => {
         .from('classes')
         .select('*', { count: 'exact', head: true });
 
-      setUsersList(usersData || []);
+      const allUsers = usersData || [];
+      setUsersList(allUsers);
       setGamesList(gamesData || []);
       setStats({
         users: userCount || 0,
         games: gameCount || 0,
         classes: classCount || 0
       });
+
+      // 4. Kiểm tra trạng thái PIN của học sinh qua RPC has_student_pin (Không expose pin_hash)
+      const studentUsers = allUsers.filter(u => u.role === 'student');
+      const pMap = {};
+      await Promise.all(
+        studentUsers.map(async (st) => {
+          try {
+            const { data } = await supabase.rpc('has_student_pin', { p_student_id: st.id });
+            pMap[st.id] = (data === true);
+          } catch (err) {
+            pMap[st.id] = false;
+          }
+        })
+      );
+      setPinStatusMap(pMap);
+
     } catch (err) {
       console.error('Fetch admin data error:', err);
     } finally {
@@ -104,6 +129,13 @@ export const AdminDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
+      {/* TOAST FEEDBACK NOTIFICATION */}
+      {toastMsg && (
+        <div className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
+          <span>✨ {toastMsg}</span>
+        </div>
+      )}
+
       {/* HEADER ADMIN BANNER */}
       <div className="bg-gradient-to-r from-purple-600 to-indigo-700 rounded-3xl border-4 border-purple-800 p-6 sm:p-8 text-white shadow-lg mb-8 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
@@ -221,7 +253,7 @@ export const AdminDashboard = () => {
           <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
             <Info className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              <strong>Mã Tra Cứu Phụ Huynh:</strong> Chỉ gửi mã này cho phụ huynh của học sinh. Không chia sẻ công khai.
+              <strong>Mã Tra Cứu Phụ Huynh & Mã PIN Học Sinh:</strong> Quản trị viên và Giáo viên có thể đặt hoặc reset Mã PIN cho học sinh để các bé đăng nhập nhanh.
             </span>
           </div>
 
@@ -243,6 +275,7 @@ export const AdminDashboard = () => {
                 {usersList.map((u) => {
                   const isSelf = u.id === profile?.id;
                   const isStudent = u.role === 'student';
+                  const hasPin = pinStatusMap[u.id] === true;
 
                   return (
                     <tr key={u.id} className="hover:bg-amber-50">
@@ -268,7 +301,7 @@ export const AdminDashboard = () => {
                         )}
                       </td>
 
-                      {/* CỘT MÃ TRA CỨU PHỤ HUYNH (CHỈ HIỂN THỊ CHO RÔL HỌC SINH) */}
+                      {/* CỘT MÃ TRA CỨU PHỤ HUYNH (CHỈ HIỂN THỊ CHO ROLE HỌC SINH) */}
                       <td className="p-3">
                         {isStudent ? (
                           <ParentCodeCell code={u.parent_access_code} />
@@ -292,6 +325,26 @@ export const AdminDashboard = () => {
                       </td>
                       <td className="p-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          
+                          {/* NÚT ĐẶT / RESET MÃ PIN DÀNH RIÊNG CHO HỌC SINH */}
+                          {isStudent && (
+                            <button
+                              onClick={() => {
+                                setUserForPin(u);
+                                setIsPinModalOpen(true);
+                                triggerSound('click');
+                              }}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                hasPin
+                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                              }`}
+                              title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                            >
+                              <KeyRound className="w-4 h-4" />
+                            </button>
+                          )}
+
                           {/* NÚT SỬA */}
                           <button
                             onClick={() => {
@@ -426,6 +479,19 @@ export const AdminDashboard = () => {
         userToDelete={userToDelete}
         teachersList={teachersList}
         onActionCompleted={() => fetchAdminData()}
+      />
+
+      {/* MODAL ĐẶT / RESET MÃ PIN DÀNH CHO HỌC SINH */}
+      <StudentPinModal
+        isOpen={isPinModalOpen}
+        onClose={() => setIsPinModalOpen(false)}
+        student={userForPin}
+        onSuccess={(studentId) => {
+          setPinStatusMap(prev => ({ ...prev, [studentId]: true }));
+          const isReset = pinStatusMap[studentId] === true;
+          setToastMsg(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
+          setTimeout(() => setToastMsg(''), 3500);
+        }}
       />
 
     </div>

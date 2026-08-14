@@ -8,13 +8,15 @@ import {
   BarChart2, 
   BookOpen,
   Info,
-  ShieldCheck
+  ShieldCheck,
+  KeyRound
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { ClassManageModal } from '../components/dashboard/ClassManageModal';
 import { AssignGameModal } from '../components/dashboard/AssignGameModal';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
+import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 
@@ -31,6 +33,12 @@ export const TeacherDashboard = () => {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isAddGameModalOpen, setIsAddGameModalOpen] = useState(false);
   const [selectedGameForAssign, setSelectedGameForAssign] = useState(null);
+
+  // Trạng thái PIN dành cho Giáo viên quản lý
+  const [pinStatusMap, setPinStatusMap] = useState({});
+  const [userForPin, setUserForPin] = useState(null);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
   
   const [loading, setLoading] = useState(true);
 
@@ -53,7 +61,7 @@ export const TeacherDashboard = () => {
 
       const classIds = (classData || []).map(c => c.id);
 
-      // 2. Lấy danh sách Học sinh thuộc các Lớp học do Giáo viên này quản lý (Phân quyền RLS chặt chẽ)
+      // 2. Lấy danh sách Học sinh thuộc các Lớp học do Giáo viên này quản lý
       let studentsInMyClasses = [];
       if (classIds.length > 0) {
         const { data: memberData } = await supabase
@@ -61,7 +69,7 @@ export const TeacherDashboard = () => {
           .select(`
             student_id,
             classes:class_id(name, grade_level),
-            profiles:student_id(id, full_name, email, grade_level, total_stars, parent_access_code)
+            profiles:student_id(id, full_name, email, grade_level, total_stars, parent_access_code, student_code)
           `)
           .in('class_id', classIds);
 
@@ -74,6 +82,20 @@ export const TeacherDashboard = () => {
           .filter(s => s && s.id);
       }
       setManagedStudents(studentsInMyClasses);
+
+      // Kiểm tra trạng thái PIN học sinh thuộc lớp quản lý qua RPC has_student_pin
+      const pMap = {};
+      await Promise.all(
+        studentsInMyClasses.map(async (st) => {
+          try {
+            const { data } = await supabase.rpc('has_student_pin', { p_student_id: st.id });
+            pMap[st.id] = (data === true);
+          } catch (err) {
+            pMap[st.id] = false;
+          }
+        })
+      );
+      setPinStatusMap(pMap);
 
       // 3. Lấy kho game công khai và game do GV đóng góp
       const { data: gameData } = await supabase
@@ -111,6 +133,13 @@ export const TeacherDashboard = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
+      {/* TOAST FEEDBACK NOTIFICATION */}
+      {toastMsg && (
+        <div className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
+          <span>✨ {toastMsg}</span>
+        </div>
+      )}
+
       {/* HEADER BANNER GIÁO VIÊN */}
       <div className="bg-gradient-to-r from-emerald-500 to-green-600 rounded-3xl border-4 border-emerald-700 p-6 sm:p-8 text-white shadow-lg mb-8 flex flex-col md:flex-row items-center justify-between gap-6">
         <div>
@@ -121,7 +150,7 @@ export const TeacherDashboard = () => {
           </div>
           <h1 className="text-2xl sm:text-3xl font-black">{profile?.full_name || 'Giáo Viên Tiểu Học'}</h1>
           <p className="text-xs sm:text-sm font-bold text-emerald-100 mt-1">
-            Quản lý Lớp học, cấp Mã Tra Cứu Phụ Huynh cho học sinh trong lớp và xem báo cáo tiến độ.
+            Quản lý Lớp học, đặt Mã PIN đăng nhập cho học sinh trong lớp và xem báo cáo tiến độ.
           </p>
         </div>
 
@@ -191,14 +220,14 @@ export const TeacherDashboard = () => {
       {/* DỰ ÁN HỌC SINH TRONG LỚP & MÃ TRA CỨU PHỤ HUYNH (CHỈ CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN) */}
       <div className="mb-10">
         <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
-          <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Mã Tra Cứu Phụ Huynh ({managedStudents.length})
+          <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Đặt Mã PIN ({managedStudents.length})
         </h3>
 
         {/* GHI CHÚ BẢO MẬT MÃ PHÚ HUYNH GIÁO VIÊN */}
         <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
           <Info className="w-4 h-4 text-amber-600 shrink-0" />
           <span>
-            <strong>Mã Tra Cứu Phụ Huynh:</strong> Chỉ gửi mã này cho phụ huynh của học sinh. Không chia sẻ công khai.
+            <strong>Mã Tra Cứu Phụ Huynh & Mã PIN:</strong> Thầy/Cô có thể tạo Mã PIN đăng nhập cho học sinh trong lớp để các bé vào học ngay.
           </span>
         </div>
 
@@ -212,23 +241,44 @@ export const TeacherDashboard = () => {
                   <th className="p-3">Khối</th>
                   <th className="p-3">Tổng Sao</th>
                   <th className="p-3">Mã Tra Cứu PH</th>
+                  <th className="p-3 text-right">Thao Tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-amber-100 text-slate-700">
-                {managedStudents.map((st) => (
-                  <tr key={st.id} className="hover:bg-amber-50">
-                    <td className="p-3 font-black text-slate-800 flex items-center gap-2">
-                      <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
-                      <span>{st.full_name}</span>
-                    </td>
-                    <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
-                    <td className="p-3">Khối {st.grade_level || 1}</td>
-                    <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
-                    <td className="p-3">
-                      <ParentCodeCell code={st.parent_access_code} />
-                    </td>
-                  </tr>
-                ))}
+                {managedStudents.map((st) => {
+                  const hasPin = pinStatusMap[st.id] === true;
+                  return (
+                    <tr key={st.id} className="hover:bg-amber-50">
+                      <td className="p-3 font-black text-slate-800 flex items-center gap-2">
+                        <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
+                        <span>{st.full_name}</span>
+                      </td>
+                      <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
+                      <td className="p-3">Khối {st.grade_level || 1}</td>
+                      <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
+                      <td className="p-3">
+                        <ParentCodeCell code={st.parent_access_code} />
+                      </td>
+                      <td className="p-3 text-right">
+                        <button
+                          onClick={() => {
+                            setUserForPin(st);
+                            setIsPinModalOpen(true);
+                            triggerSound('click');
+                          }}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            hasPin
+                              ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                              : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                          }`}
+                          title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
@@ -328,6 +378,19 @@ export const TeacherDashboard = () => {
         isOpen={isAddGameModalOpen}
         onClose={() => setIsAddGameModalOpen(false)}
         onAdded={() => fetchTeacherData()}
+      />
+
+      {/* MODAL ĐẶT / RESET MÃ PIN DÀNH CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN */}
+      <StudentPinModal
+        isOpen={isPinModalOpen}
+        onClose={() => setIsPinModalOpen(false)}
+        student={userForPin}
+        onSuccess={(studentId) => {
+          setPinStatusMap(prev => ({ ...prev, [studentId]: true }));
+          const isReset = pinStatusMap[studentId] === true;
+          setToastMsg(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
+          setTimeout(() => setToastMsg(''), 3500);
+        }}
       />
 
     </div>
