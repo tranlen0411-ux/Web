@@ -17,7 +17,7 @@ export const AuthPage = () => {
   const [fullName, setFullName] = useState('');
   const [gradeLevel, setGradeLevel] = useState(1);
   const [studentCode, setStudentCode] = useState('');
-  const [pin, setPin] = useState('1234');
+  const [pin, setPin] = useState('');
 
   const [isParentModalOpen, setIsParentModalOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -32,11 +32,12 @@ export const AuthPage = () => {
     try {
       if (mode === 'student_quick') {
         if (!studentCode.trim() || !pin.trim()) {
-          setErrorMsg('Bé vui lòng nhập đủ Mã Học Sinh và Mã PIN!');
+          setErrorMsg('Vui lòng nhập đủ Mã Học Sinh và Mã PIN!');
           setLoading(false);
           return;
         }
         const res = await quickStudentSignIn(studentCode.trim(), pin.trim());
+        setPin(''); // Xóa PIN khỏi state ngay sau khi xử lý
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/student');
@@ -54,6 +55,7 @@ export const AuthPage = () => {
     } catch (err) {
       console.error('Auth error:', err);
       setErrorMsg(err.message || 'Mã học sinh hoặc PIN không hợp lệ.');
+      setPin('');
     } finally {
       setLoading(false);
     }
@@ -160,25 +162,22 @@ export const AuthPage = () => {
                 </label>
                 <input
                   type="text"
-                  placeholder="Nhập Mã Học Sinh (Ví dụ: HS101)..."
+                  placeholder="Nhập Mã Học Sinh..."
                   value={studentCode}
                   onChange={(e) => setStudentCode(e.target.value)}
-                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner"
+                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner uppercase"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center justify-between">
-                  <span className="flex items-center gap-1">
-                    <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Mã PIN Bí Mật Của Bé:
-                  </span>
-                  <span className="text-[10px] font-extrabold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-md">Mặc định: 1234</span>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Mã PIN Bí Mật:
                 </label>
                 <input
                   type="password"
                   maxLength={6}
-                  placeholder="Nhập Mã PIN (Ví dụ: 1234)..."
+                  placeholder="Nhập mã PIN..."
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
                   className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner tracking-widest"

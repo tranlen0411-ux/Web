@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Rate Limiter phòng vệ tầng Edge Worker (Tối đa 15 lượt đăng nhập / 5 phút per IP)
+// Rate Limiter phòng vệ tầng Edge Worker (Best-effort trên từng instance)
 const ipRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_LOGIN_ATTEMPTS = 15;
 const WINDOW_MS = 5 * 60 * 1000;
@@ -22,7 +22,7 @@ serve(async (req) => {
   }
 
   try {
-    // 2. Kiểm tra Rate Limiting phòng vệ brute-force theo IP
+    // 2. Kiểm tra Rate Limiting phòng vệ brute-force theo IP (Best-effort)
     const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown_client';
     const now = Date.now();
     const rateData = ipRateLimitMap.get(clientIp);
@@ -90,35 +90,15 @@ serve(async (req) => {
     // Khởi tạo Supabase Admin Client bằng Service Role Key (Bảo mật 100% ở Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. Tìm kiếm học sinh trong public.profiles theo student_code hoặc email mẫu
-    let { data: profile } = await supabaseAdmin
+    // 4. Tìm kiếm học sinh trong public.profiles theo student_code chính thức
+    const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('id, email, full_name, role')
       .eq('student_code', cleanCode)
       .eq('role', 'student')
       .maybeSingle();
 
-    // Dự phòng tra cứu email mẫu nếu chưa chạy migration cột student_code
-    if (!profile) {
-      const sampleEmails: Record<string, string> = {
-        'HS101': 'hs_nam@hoclapvui.edu.vn',
-        'HS202': 'hs_an@hoclapvui.edu.vn',
-        'HS303': 'hs_duc@hoclapvui.edu.vn',
-        'HS404': 'hs_bao@hoclapvui.edu.vn',
-        'HS505': 'hs_mai@hoclapvui.edu.vn',
-      };
-      const fallbackEmail = sampleEmails[cleanCode];
-      if (fallbackEmail) {
-        const { data: p } = await supabaseAdmin
-          .from('profiles')
-          .select('id, email, full_name, role')
-          .eq('email', fallbackEmail)
-          .maybeSingle();
-        profile = p;
-      }
-    }
-
-    // Nếu KHÔNG tìm thấy học sinh -> Trả thông báo lỗi đồng nhất (KHÔNG tự tạo user)
+    // Nếu KHÔNG tìm thấy học sinh -> Trả thông báo lỗi chung đồng nhất (KHÔNG tự tạo user)
     if (!profile || !profile.email) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
@@ -126,7 +106,22 @@ serve(async (req) => {
       );
     }
 
-    // 5. Xác minh Mã PIN Server-side bằng RPC verify_student_pin (TUYỆT ĐỐI KHÔNG FALLBACK)
+    // 5. Kiểm tra Auth User hiện có trong auth.users bằng Admin API
+    const { data: authUserData, error: authUserErr } = await supabaseAdmin.auth.admin.getUserById(profile.id);
+
+    if (
+      authUserErr ||
+      !authUserData?.user ||
+      authUserData.user.id !== profile.id ||
+      authUserData.user.email?.toLowerCase() !== profile.email.toLowerCase()
+    ) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 6. Xác minh Mã PIN Server-side bằng RPC public.verify_student_pin (TUYỆT ĐỐI KHÔNG FALLBACK)
     const { data: isPinValid, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin', {
       p_student_id: profile.id,
       p_pin: cleanPin,
@@ -139,7 +134,7 @@ serve(async (req) => {
       );
     }
 
-    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Supabase Auth Admin API
+    // 7. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Supabase Auth Admin API
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
       email: profile.email,
@@ -155,11 +150,10 @@ serve(async (req) => {
 
     const hashedToken = linkData.properties.hashed_token;
 
-    // 7. Trả về DUY NHẤT token_hash & email (KHÔNG trả email_otp, KHÔNG trả service_role_key)
+    // 8. Phản hồi thành công CHỈ TRẢ VỀ token_hash (KHÔNG trả email, KHÔNG trả email_otp, KHÔNG trả PIN/service_role)
     return new Response(
       JSON.stringify({
         success: true,
-        email: profile.email,
         token_hash: hashedToken,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -160,12 +160,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303... kèm Mã PIN 1234)
+  // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh & Mã PIN)
   // SỬ DỤNG EDGE FUNCTION SERVER-SIDE 'student-quick-login' XÁC MINH HASHED PIN BẢO MẬT 100%
-  const quickStudentSignIn = async (studentCode, pin = '1234') => {
+  const quickStudentSignIn = async (studentCode, pin) => {
     setLoading(true);
-    const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-    const cleanPin = pin.trim();
+    const cleanCode = studentCode ? studentCode.trim().toUpperCase() : '';
+    const cleanPin = pin ? pin.trim() : '';
     
     if (!cleanCode || !cleanPin) {
       setLoading(false);
@@ -178,7 +178,7 @@ export const AuthProvider = ({ children }) => {
         body: { studentCode: cleanCode, pin: cleanPin }
       });
 
-      if (edgeErr || !edgeData?.success) {
+      if (edgeErr || !edgeData?.success || !edgeData?.token_hash) {
         console.error('Edge function invocation error:', edgeErr || edgeData?.message);
         setLoading(false);
         return { 
@@ -187,10 +187,10 @@ export const AuthProvider = ({ children }) => {
         };
       }
 
-      const { email, token_hash } = edgeData;
+      const { token_hash } = edgeData;
 
       // 2. Xác thực Magic Link token thu được từ Edge Function qua Supabase Auth SDK client-side
-      // Lệnh verifyOtp này tạo 100% Supabase Auth Session thật cho client
+      // Lệnh verifyOtp này khởi tạo 100% Supabase Auth Session thật cho client
       const verifyRes = await supabase.auth.verifyOtp({
         token_hash: token_hash,
         type: 'magiclink'
