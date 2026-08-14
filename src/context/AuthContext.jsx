@@ -18,7 +18,7 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID thật
+  // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID Auth thật sau khi có session
   const fetchProfile = async (userId) => {
     if (!userId) {
       setProfile(null);
@@ -57,7 +57,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // 1. Kiểm tra session hiện tại
+    // 1. Kiểm tra session hiện tại từ Supabase Auth SDK
     const initAuth = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -161,7 +161,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303...)
-  // TUYỆT ĐỐI KHÔNG TỰ SINH ID GIẢ Ở FRONTEND - PHẢI RESOLVE 100% SANG UUID THẬT TRONG SUPABASE
+  // THỰC THI SUPABASE AUTH SESSION THẬT 100% - KHÔNG QUERY PROFILES KHI CHƯA AUTHENTICATED
   const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
     setLoading(true);
     const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -186,31 +186,42 @@ export const AuthProvider = ({ children }) => {
     };
 
     const targetEmail = sampleEmails[cleanCode] || `hs_${cleanCode}@hoclapvui.edu.vn`;
-    const candidatePasswords = ['123456', '12345678', `hs_${cleanCode}_123456`, `${cleanCode}123456`].filter((v, i, a) => a.indexOf(v) === i);
+    
+    // Danh sách mật khẩu ứng viên chuẩn xác (bao gồm mật khẩu khởi tạo 123456)
+    const candidatePasswords = [
+      '123456', 
+      '12345678', 
+      '123456789', 
+      'password', 
+      `hs_${cleanCode}_123456`, 
+      `${cleanCode}123456`, 
+      cleanCode
+    ].filter((v, i, a) => a.indexOf(v) === i);
 
     try {
-      // 1. Thử đăng nhập qua Auth SDK bằng các mật khẩu mặc định
+      // 1. Thử đăng nhập qua Supabase Auth SDK bằng các mật khẩu ứng viên để thiết lập Auth Session thật
       for (const pass of candidatePasswords) {
         const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
           email: targetEmail,
           password: pass
         });
 
-        if (!signInErr && signInData?.user) {
-          setUser(signInData.user);
-          await fetchProfile(signInData.user.id);
+        if (!signInErr && signInData?.session?.user) {
+          setUser(signInData.session.user);
+          await fetchProfile(signInData.session.user.id);
           return { data: signInData, error: null };
         }
       }
 
-      // 2. Thử đăng ký tài khoản mới qua Supabase Auth SDK nếu tài khoản chưa tồn tại
-      const defaultPassword = candidatePasswords[0];
+      // 2. Nếu đăng nhập chưa thành công (ví dụ tài khoản học sinh chưa được khởi tạo trên Auth instance):
+      // Tiến hành tạo tài khoản mới qua Supabase Auth SDK
+      const defaultPassword = candidatePasswords[0]; // '123456'
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
         email: targetEmail,
         password: defaultPassword,
         options: {
           data: {
-            full_name: `${fullName} (${studentCode.toUpperCase()})`,
+            full_name: fullName.includes('(') ? fullName : `${fullName} (${studentCode.toUpperCase()})`,
             role: 'student',
             grade_level: parseInt(gradeLevel) || 1,
             avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
@@ -219,79 +230,31 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (!signUpErr && signUpData?.user) {
+        // Nếu Auth instance trả về Session ngay
         if (signUpData.session) {
-          setUser(signUpData.user);
-          await fetchProfile(signUpData.user.id);
+          setUser(signUpData.session.user);
+          await fetchProfile(signUpData.session.user.id);
           return { data: signUpData, error: null };
         }
 
-        // Nếu Supabase Auth yêu cầu Email Confirm -> Thử đăng nhập ngay
+        // Nếu Supabase Auth yêu cầu confirm -> Thực hiện signInWithPassword với mật khẩu đã đăng ký
         const { data: secondSignIn, error: secondErr } = await supabase.auth.signInWithPassword({
           email: targetEmail,
           password: defaultPassword
         });
 
-        if (!secondErr && secondSignIn?.user) {
-          setUser(secondSignIn.user);
-          await fetchProfile(secondSignIn.user.id);
+        if (!secondErr && secondSignIn?.session?.user) {
+          setUser(secondSignIn.session.user);
+          await fetchProfile(secondSignIn.session.user.id);
           return { data: secondSignIn, error: null };
         }
       }
 
-      // 3. Resolve tài khoản học sinh thật từ bảng public.profiles trong Supabase (UUID thật 100%)
-      // Query A: Tìm theo email chính xác
-      let { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('email', targetEmail)
-        .maybeSingle();
-
-      // Query B: Tìm theo full_name chứa mã HS (Ví dụ: HS101)
-      if (!existingProfile) {
-        const { data: nameMatch } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('full_name', `%${studentCode}%`)
-          .limit(1)
-          .maybeSingle();
-        existingProfile = nameMatch;
-      }
-
-      // Query C: Tìm theo role học sinh và khối tương ứng
-      if (!existingProfile) {
-        const { data: roleMatch } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('role', 'student')
-          .eq('grade_level', parseInt(gradeLevel) || 1)
-          .limit(1)
-          .maybeSingle();
-        existingProfile = roleMatch;
-      }
-
-      if (existingProfile && existingProfile.id) {
-        // Gán UUID thật từ CSDL Supabase
-        const realStudentUUID = existingProfile.id;
-
-        const studentUser = {
-          id: realStudentUUID,
-          email: existingProfile.email || targetEmail,
-          role: 'authenticated',
-          aud: 'authenticated',
-          user_metadata: {
-            full_name: existingProfile.full_name,
-            role: 'student',
-            grade_level: existingProfile.grade_level
-          }
-        };
-
-        setUser(studentUser);
-        setProfile(existingProfile);
-        return { data: { user: studentUser }, error: null };
-      }
-
-      // 4. Nếu hoàn toàn không tìm thấy học sinh phù hợp trong CSDL, thông báo cho người dùng thay vì tạo ID giả
-      return { data: null, error: { message: `Không tìm thấy tài khoản học sinh với mã '${studentCode.toUpperCase()}' trong CSDL hệ thống!` } };
+      // 3. Nếu không thể tạo session Auth thành công, trả về lỗi rõ ràng thay vì query profiles unauthenticated hay tự sinh ID giả
+      return { 
+        data: null, 
+        error: { message: `Không thể khởi tạo Auth Session cho mã học sinh '${studentCode.toUpperCase()}'. Vui lòng kiểm tra lại!` } 
+      };
 
     } catch (error) {
       console.error('Quick student auth error:', error);
