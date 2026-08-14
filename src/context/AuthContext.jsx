@@ -161,7 +161,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh như HS101, HS202, HS303...)
-  // THỰC THI SUPABASE AUTH SESSION THẬT 100% - KHÔNG QUERY PROFILES KHI CHƯA AUTHENTICATED
+  // THỰC THI SỬ DỤNG EDGE FUNCTION SERVER-SIDE 'student-quick-login'
+  // GIẢI QUYẾT TRIỆT ĐỂ LỖI TOKEN 400 & PROFILES 401, THIẾT LẬP AUTH SESSION THẬT 100%
   const quickStudentSignIn = async (studentCode, fullName = 'Học Sinh Tiểu Học', gradeLevel = 1) => {
     setLoading(true);
     const cleanCode = studentCode.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -171,90 +172,52 @@ export const AuthProvider = ({ children }) => {
       return { data: null, error: { message: 'Bé vui lòng nhập Mã Học Sinh!' } };
     }
 
-    // Bản đồ tài khoản học sinh mẫu
-    const sampleEmails = {
-      'hs101': 'hs_nam@hoclapvui.edu.vn',
-      'nam': 'hs_nam@hoclapvui.edu.vn',
-      'hs202': 'hs_an@hoclapvui.edu.vn',
-      'an': 'hs_an@hoclapvui.edu.vn',
-      'hs303': 'hs_duc@hoclapvui.edu.vn',
-      'duc': 'hs_duc@hoclapvui.edu.vn',
-      'hs404': 'hs_bao@hoclapvui.edu.vn',
-      'bao': 'hs_bao@hoclapvui.edu.vn',
-      'hs505': 'hs_mai@hoclapvui.edu.vn',
-      'mai': 'hs_mai@hoclapvui.edu.vn',
-    };
-
-    const targetEmail = sampleEmails[cleanCode] || `hs_${cleanCode}@hoclapvui.edu.vn`;
-    
-    // Danh sách mật khẩu ứng viên chuẩn xác (bao gồm mật khẩu khởi tạo 123456)
-    const candidatePasswords = [
-      '123456', 
-      '12345678', 
-      '123456789', 
-      'password', 
-      `hs_${cleanCode}_123456`, 
-      `${cleanCode}123456`, 
-      cleanCode
-    ].filter((v, i, a) => a.indexOf(v) === i);
-
     try {
-      // 1. Thử đăng nhập qua Supabase Auth SDK bằng các mật khẩu ứng viên để thiết lập Auth Session thật
-      for (const pass of candidatePasswords) {
-        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-          email: targetEmail,
-          password: pass
-        });
-
-        if (!signInErr && signInData?.session?.user) {
-          setUser(signInData.session.user);
-          await fetchProfile(signInData.session.user.id);
-          return { data: signInData, error: null };
-        }
-      }
-
-      // 2. Nếu đăng nhập chưa thành công (ví dụ tài khoản học sinh chưa được khởi tạo trên Auth instance):
-      // Tiến hành tạo tài khoản mới qua Supabase Auth SDK
-      const defaultPassword = candidatePasswords[0]; // '123456'
-      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-        email: targetEmail,
-        password: defaultPassword,
-        options: {
-          data: {
-            full_name: fullName.includes('(') ? fullName : `${fullName} (${studentCode.toUpperCase()})`,
-            role: 'student',
-            grade_level: parseInt(gradeLevel) || 1,
-            avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanCode}`
-          }
-        }
+      // 1. Gọi Edge Function server-side 'student-quick-login'
+      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('student-quick-login', {
+        body: { studentCode: cleanCode }
       });
 
-      if (!signUpErr && signUpData?.user) {
-        // Nếu Auth instance trả về Session ngay
-        if (signUpData.session) {
-          setUser(signUpData.session.user);
-          await fetchProfile(signUpData.session.user.id);
-          return { data: signUpData, error: null };
-        }
-
-        // Nếu Supabase Auth yêu cầu confirm -> Thực hiện signInWithPassword với mật khẩu đã đăng ký
-        const { data: secondSignIn, error: secondErr } = await supabase.auth.signInWithPassword({
-          email: targetEmail,
-          password: defaultPassword
-        });
-
-        if (!secondErr && secondSignIn?.session?.user) {
-          setUser(secondSignIn.session.user);
-          await fetchProfile(secondSignIn.session.user.id);
-          return { data: secondSignIn, error: null };
-        }
+      if (edgeErr || !edgeData?.success) {
+        console.error('Edge function invocation error:', edgeErr || edgeData?.message);
+        setLoading(false);
+        return { 
+          data: null, 
+          error: { message: edgeData?.message || 'Không thể khởi tạo token đăng nhập cho học sinh từ server-side.' } 
+        };
       }
 
-      // 3. Nếu không thể tạo session Auth thành công, trả về lỗi rõ ràng thay vì query profiles unauthenticated hay tự sinh ID giả
-      return { 
-        data: null, 
-        error: { message: `Không thể khởi tạo Auth Session cho mã học sinh '${studentCode.toUpperCase()}'. Vui lòng kiểm tra lại!` } 
-      };
+      const { email, token_hash, email_otp } = edgeData;
+
+      // 2. Xác thực OTP / Magic Link token thu được từ Edge Function qua Supabase Auth SDK client-side
+      // Lệnh verifyOtp này thiết lập 100% Supabase Auth Session thật cho client
+      let verifyRes = await supabase.auth.verifyOtp({
+        token_hash: token_hash,
+        type: 'magiclink'
+      });
+
+      if (verifyRes.error && email_otp) {
+        verifyRes = await supabase.auth.verifyOtp({
+          email: email,
+          token: email_otp,
+          type: 'email'
+        });
+      }
+
+      if (verifyRes.error || !verifyRes.data?.session) {
+        console.error('verifyOtp error:', verifyRes.error);
+        setLoading(false);
+        return { data: null, error: { message: 'Không thể xác thực phiên đăng nhập học sinh.' } };
+      }
+
+      // 3. Đã có Supabase Auth Session thật (session != null & session.user.id = UUID thật từ auth.users)!
+      const sessionUser = verifyRes.data.session.user;
+      setUser(sessionUser);
+
+      // 4. Truy vấn thông tin profile theo session.user.id (Lúc này đã authenticated nên RLS trả về HTTP 200 OK!)
+      await fetchProfile(sessionUser.id);
+
+      return { data: verifyRes.data, error: null };
 
     } catch (error) {
       console.error('Quick student auth error:', error);
