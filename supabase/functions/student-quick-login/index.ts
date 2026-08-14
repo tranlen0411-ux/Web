@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 // Rate Limiter phòng vệ tầng Edge Worker (Tối đa 15 lượt đăng nhập / 5 phút per IP)
@@ -12,12 +13,16 @@ const MAX_LOGIN_ATTEMPTS = 15;
 const WINDOW_MS = 5 * 60 * 1000;
 
 serve(async (req) => {
+  // 1. Xử lý preflight CORS OPTIONS ngay đầu function với status 200 & full corsHeaders
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', {
+      status: 200,
+      headers: corsHeaders,
+    });
   }
 
   try {
-    // 1. Kiểm tra Rate Limiting phòng vệ brute-force theo IP
+    // 2. Kiểm tra Rate Limiting phòng vệ brute-force theo IP
     const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown_client';
     const now = Date.now();
     const rateData = ipRateLimitMap.get(clientIp);
@@ -41,8 +46,18 @@ serve(async (req) => {
       ipRateLimitMap.set(clientIp, { count: 1, resetAt: now + WINDOW_MS });
     }
 
-    // 2. Nhận studentCode từ request body
-    const { studentCode } = await req.json();
+    // 3. Nhận studentCode từ request body
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch (_e) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Dữ liệu request JSON không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { studentCode } = body;
 
     if (!studentCode || typeof studentCode !== 'string') {
       return new Response(
@@ -62,10 +77,17 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Cấu hình Server Env thiếu SUPABASE_URL hoặc SERVICE_ROLE_KEY.' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Khởi tạo Supabase Admin Client bằng Service Role Key (Bảo mật 100% ở Server-side)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 3. Map mã học sinh sang email tương ứng
+    // 4. Map mã học sinh sang email tương ứng
     const sampleEmails: Record<string, string> = {
       'hs101': 'hs_nam@hoclapvui.edu.vn',
       'nam': 'hs_nam@hoclapvui.edu.vn',
@@ -81,7 +103,7 @@ serve(async (req) => {
 
     let targetEmail = sampleEmails[cleanCode];
 
-    // 4. Nếu mã chưa nằm trong bản đồ mặc định -> Tìm kiếm trong bảng public.profiles bằng Admin API
+    // 5. Nếu mã chưa nằm trong bản đồ mặc định -> Tìm kiếm trong bảng public.profiles bằng Admin API
     if (!targetEmail) {
       const { data: profile } = await supabaseAdmin
         .from('profiles')
@@ -98,13 +120,12 @@ serve(async (req) => {
       }
     }
 
-    // 5. Kiểm tra tài khoản học sinh đã tồn tại trong Auth chưa
-    // Nếu chưa tồn tại -> Tạo mới bằng Admin API (email_confirm: true)
+    // 6. Kiểm tra tài khoản học sinh đã tồn tại trong Auth chưa
     const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
     const userExists = existingUsers?.users?.find(u => u.email?.toLowerCase() === targetEmail.toLowerCase());
 
     if (!userExists) {
-      // Tạo Auth user chuẩn hóa ở Server-side bằng Admin API
+      // Tạo Auth user chuẩn hóa ở Server-side bằng Admin API nếu chưa có
       const { error: createErr } = await supabaseAdmin.auth.admin.createUser({
         email: targetEmail,
         email_confirm: true,
@@ -119,7 +140,7 @@ serve(async (req) => {
       }
     }
 
-    // 6. Tạo Magic Link / OTP xác thực 1 lần hợp lệ cho tài khoản học sinh bằng Admin API
+    // 7. Tạo Magic Link / OTP xác thực 1 lần hợp lệ cho tài khoản học sinh bằng Admin API
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
       email: targetEmail,
@@ -136,7 +157,7 @@ serve(async (req) => {
     const hashedToken = linkData.properties.hashed_token;
     const emailOtp = linkData.properties.email_otp;
 
-    // 7. Trả về token_hash & email cho Frontend để xác thực Client-side qua Auth SDK (verifyOtp)
+    // 8. Trả về token_hash & email cho Frontend kèm đầy đủ corsHeaders
     return new Response(
       JSON.stringify({
         success: true,
