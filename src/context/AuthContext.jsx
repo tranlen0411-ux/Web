@@ -18,18 +18,19 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID Auth thật sau khi có session
-  const fetchProfile = async (userId) => {
+  // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID Auth hoặc email sau khi có session
+  const fetchProfile = async (userId, userEmail = null) => {
     if (!userId) {
       setProfile(null);
       return;
     }
     try {
+      // 1. Tìm profile theo id UUID trong public.profiles
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (!error && data) {
         if (data.is_disabled) {
@@ -40,16 +41,29 @@ export const AuthProvider = ({ children }) => {
         }
         setProfile(data);
       } else {
-        // Dự phòng nếu DB trigger chưa nạp profile
-        setProfile(prev => prev || {
-          id: userId,
-          full_name: 'Học Sinh Vui Học',
-          role: 'student',
-          grade_level: 1,
-          total_stars: 0,
-          total_coins: 0,
-          avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${userId}`
-        });
+        // 2. Nếu chưa thấy theo ID (ví dụ tài khoản Google OAuth lần đầu), tra cứu theo email trong public.profiles
+        const targetEmail = userEmail || (await supabase.auth.getUser())?.data?.user?.email;
+        if (targetEmail) {
+          const { data: profileByEmail } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', targetEmail.toLowerCase().trim())
+            .maybeSingle();
+
+          if (profileByEmail) {
+            if (profileByEmail.is_disabled) {
+              await supabase.auth.signOut();
+              setUser(null);
+              setProfile(null);
+              return;
+            }
+            setProfile(profileByEmail);
+            return;
+          }
+        }
+
+        // 3. Nếu Gmail KHÔNG được cấp quyền trong public.profiles -> Không tự động gán quyền Giáo viên/Admin
+        setProfile(null);
       }
     } catch (err) {
       console.error('Error fetching profile:', err);
@@ -63,7 +77,7 @@ export const AuthProvider = ({ children }) => {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
           setUser(session.user);
-          await fetchProfile(session.user.id);
+          await fetchProfile(session.user.id, session.user.email);
         }
       } catch (err) {
         console.error('Session init error:', err);
@@ -78,7 +92,7 @@ export const AuthProvider = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user);
-        await fetchProfile(session.user.id);
+        await fetchProfile(session.user.id, session.user.email);
       } else {
         setUser(null);
         setProfile(null);
@@ -132,23 +146,7 @@ export const AuthProvider = ({ children }) => {
       }
 
       if (data?.user?.id) {
-        const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-
-        if (profileError) {
-          console.error('❌ Query public.profiles Failed:', profileError.message);
-        } else if (profileData) {
-          if (profileData.is_disabled) {
-            await supabase.auth.signOut();
-            setUser(null);
-            setProfile(null);
-            return { data: null, error: { message: 'Tài khoản của bạn đã bị khóa bởi Quản trị viên. Vui lòng liên hệ Admin.' } };
-          }
-          setProfile(profileData);
-        }
+        await fetchProfile(data.user.id, data.user.email);
       }
 
       return { data, error: null };
@@ -190,7 +188,6 @@ export const AuthProvider = ({ children }) => {
       const { token_hash } = edgeData;
 
       // 2. Xác thực Magic Link token thu được từ Edge Function qua Supabase Auth SDK client-side
-      // Lệnh verifyOtp này khởi tạo 100% Supabase Auth Session thật cho client
       const verifyRes = await supabase.auth.verifyOtp({
         token_hash: token_hash,
         type: 'magiclink'
@@ -206,8 +203,8 @@ export const AuthProvider = ({ children }) => {
       const sessionUser = verifyRes.data.session.user;
       setUser(sessionUser);
 
-      // 4. Truy vấn thông tin profile theo session.user.id (Lúc này đã authenticated nên RLS trả về HTTP 200 OK!)
-      await fetchProfile(sessionUser.id);
+      // 4. Lấy profile theo session.user.id
+      await fetchProfile(sessionUser.id, sessionUser.email);
 
       return { data: verifyRes.data, error: null };
 
@@ -266,18 +263,23 @@ export const AuthProvider = ({ children }) => {
 
   const refreshProfile = async () => {
     if (user?.id) {
-      await fetchProfile(user.id);
+      await fetchProfile(user.id, user.email);
     }
   };
 
   // Đăng nhập bằng Google OAuth cho Admin / Giáo viên (AUTH-02)
+  // BẮT BUỘC queryParams: { prompt: 'select_account' } ĐỂ LUÔN HIỂN THỊ MÀN HÌNH CHỌN TÀI KHOẢN GOOGLE
   const signInWithGoogle = async () => {
     setLoading(true);
     try {
+      const redirectUrl = typeof window !== 'undefined' ? window.location.origin : 'https://web-len9.vercel.app';
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: redirectUrl,
+          queryParams: {
+            prompt: 'select_account'
+          }
         }
       });
       if (error) throw error;
