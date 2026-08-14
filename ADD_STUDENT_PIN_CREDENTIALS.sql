@@ -53,7 +53,7 @@ BEGIN
     RAISE EXCEPTION 'Unauthorized';
   END IF;
 
-  -- 3. Xác nhận target user tồn tại và có vai trò 'student'
+  -- 3. Xác nhận target user tồn tại và có vai trò 'student' (Không cho đặt PIN cho admin/teacher)
   SELECT role INTO v_target_role
   FROM public.profiles
   WHERE id = p_student_id;
@@ -95,8 +95,8 @@ BEGIN
 END;
 $$;
 
--- Phân quyền cho public.set_student_pin (Chỉ GRANT cho authenticated)
-REVOKE ALL ON FUNCTION public.set_student_pin(UUID, TEXT) FROM PUBLIC;
+-- REVOKE từ PUBLIC trước khi GRANT chọn lọc cho authenticated
+REVOKE ALL ON FUNCTION public.set_student_pin(UUID, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_student_pin(UUID, TEXT) TO authenticated;
 
 -- 7. HÀM PUBLIC SECURITY DEFINER: verify_student_pin (Dành cho service_role từ Edge Function)
@@ -127,6 +127,61 @@ BEGIN
 END;
 $$;
 
--- Phân quyền cho public.verify_student_pin (Chỉ GRANT cho service_role)
+-- REVOKE từ PUBLIC, anon, authenticated trước khi GRANT chọn lọc cho service_role
 REVOKE ALL ON FUNCTION public.verify_student_pin(UUID, TEXT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.verify_student_pin(UUID, TEXT) TO service_role;
+
+-- 8. HÀM PUBLIC SECURITY DEFINER: has_student_pin (Kiểm tra Học sinh đã có PIN hay chưa)
+-- Dành cho Admin & Giáo viên (Chỉ kiểm tra học sinh thuộc lớp quản lý)
+CREATE OR REPLACE FUNCTION public.has_student_pin(
+  p_student_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_is_my_student BOOLEAN;
+BEGIN
+  -- 1. Xác thực caller đã authenticated
+  v_caller_id := (SELECT auth.uid());
+  IF v_caller_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  -- 2. Lấy vai trò của caller từ public.profiles
+  SELECT role INTO v_caller_role
+  FROM public.profiles
+  WHERE id = v_caller_id;
+
+  IF v_caller_role IS NULL OR v_caller_role NOT IN ('admin', 'teacher') THEN
+    RETURN FALSE;
+  END IF;
+
+  -- 3. Nếu caller là Giáo viên: Kiểm tra học sinh thuộc lớp do Giáo viên sở hữu
+  IF v_caller_role = 'teacher' THEN
+    SELECT EXISTS (
+      SELECT 1 FROM public.classes c
+      JOIN public.class_members cm ON c.id = cm.class_id
+      WHERE c.teacher_id = v_caller_id AND cm.student_id = p_student_id
+    ) INTO v_is_my_student;
+
+    IF NOT v_is_my_student THEN
+      RETURN FALSE;
+    END IF;
+  END IF;
+
+  -- 4. Trả về true nếu học sinh đã có bản ghi PIN trong app_private.student_login_credentials
+  RETURN EXISTS (
+    SELECT 1 FROM app_private.student_login_credentials
+    WHERE student_id = p_student_id AND pin_hash IS NOT NULL
+  );
+END;
+$$;
+
+-- Phân quyền cho public.has_student_pin (Chỉ GRANT cho authenticated)
+REVOKE ALL ON FUNCTION public.has_student_pin(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.has_student_pin(UUID) TO authenticated;
