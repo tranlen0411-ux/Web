@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Award, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload } from 'lucide-react';
+import { X, Send, Award, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload, FileCheck, Save, Eye } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -10,6 +10,9 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const [submission, setSubmission] = useState(null);
   const [answers, setAnswers] = useState({});
   const [fileUrls, setFileUrls] = useState({});
+  const [signedUrlsMap, setSignedUrlsMap] = useState({});
+  const [uploadingQId, setUploadingQId] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -21,7 +24,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const fetchQuestionsAndSubmission = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách câu hỏi (chỉ chứa câu hỏi công khai, không có đáp án đúng)
+      // 1. Lấy danh sách câu hỏi công khai (không lộ đáp án bí mật app_private)
       const { data: qData } = await supabase
         .from('academic_exercise_questions')
         .select('*')
@@ -40,17 +43,33 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       if (subData) {
         setSubmission(subData);
-        // Nạp các câu trả lời cũ nếu có
         const ansMap = {};
         const fileMap = {};
+        const signedMap = {};
+
         if (subData.academic_submission_answers) {
-          subData.academic_submission_answers.forEach(a => {
+          for (const a of subData.academic_submission_answers) {
             ansMap[a.question_id] = a.student_answer_json;
-            if (a.file_url) fileMap[a.question_id] = a.file_url;
-          });
+            if (a.file_url) {
+              fileMap[a.question_id] = a.file_url;
+              // Tạo Signed URL xem file trong bucket private 15 phút
+              try {
+                const { data: signedData } = await supabase.storage
+                  .from('exercise-submissions')
+                  .createSignedUrl(a.file_url, 900);
+                if (signedData?.signedUrl) {
+                  signedMap[a.question_id] = signedData.signedUrl;
+                }
+              } catch (e) {
+                console.error('Error creating signed url:', e);
+              }
+            }
+          }
         }
+
         setAnswers(ansMap);
         setFileUrls(fileMap);
+        setSignedUrlsMap(signedMap);
       }
     } catch (err) {
       console.error('Fetch questions error:', err);
@@ -59,8 +78,54 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     }
   };
 
-  // Nộp bài làm qua RPC submit_academic_exercise
-  const handleSubmitExercise = async () => {
+  // Upload file bài làm lên bucket private exercise-submissions
+  const handleFileUpload = async (questionId, file) => {
+    if (!file) return;
+
+    // Kiểm tra định dạng file cấm SVG & File thực thi
+    const bannedExts = ['.svg', '.exe', '.bat', '.sh', '.js', '.html'];
+    const fileName = file.name.toLowerCase();
+    if (bannedExts.some(ext => fileName.endsWith(ext))) {
+      alert('❌ Hệ thống từ chối file SVG và file thực thi vì lý do bảo mật.');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      alert('❌ File nộp vượt quá dung lượng tối đa 10MB.');
+      return;
+    }
+
+    setUploadingQId(questionId);
+    try {
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = `${profile.id}/${submission?.id || 'draft'}/${crypto.randomUUID()}_${cleanName}`;
+
+      const { data, error } = await supabase.storage
+        .from('exercise-submissions')
+        .upload(filePath, file, { upsert: true });
+
+      if (error) {
+        alert('Lỗi upload file: ' + error.message);
+      } else {
+        setFileUrls(prev => ({ ...prev, [questionId]: filePath }));
+        // Tạo Signed URL hiển thị ngay
+        const { data: signedData } = await supabase.storage
+          .from('exercise-submissions')
+          .createSignedUrl(filePath, 900);
+        if (signedData?.signedUrl) {
+          setSignedUrlsMap(prev => ({ ...prev, [questionId]: signedData.signedUrl }));
+        }
+      }
+    } catch (err) {
+      console.error('File upload exception:', err);
+      alert('Đã xảy ra lỗi khi tải file bài làm.');
+    } finally {
+      setUploadingQId(null);
+    }
+  };
+
+  // Nộp bài làm hoặc Lưu bản nháp qua RPC submit_academic_exercise
+  const handleSubmitExercise = async (isDraft = false) => {
     setIsSubmitting(true);
     setSubmitResult(null);
 
@@ -73,7 +138,8 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('submit_academic_exercise', {
         p_exercise_id: exercise.id,
-        p_answers: answersPayload
+        p_answers: answersPayload,
+        p_is_draft: isDraft
       });
 
       if (rpcErr || !rpcRes?.success) {
@@ -98,6 +164,8 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
   const isGraded = submission?.status === 'graded';
   const isSubmitted = submission?.status === 'submitted' || submission?.status === 'pending_manual_grade';
+  const isRevisionRequested = submission?.status === 'revision_requested';
+  const canEdit = !submission || submission.status === 'draft' || isRevisionRequested;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -107,7 +175,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div>
             <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg">
-              Môn {exercise.subject} - {exercise.class_name}
+              Môn {exercise.subject}
             </span>
             <h2 className="text-xl font-black text-slate-800 mt-1">{exercise.title}</h2>
           </div>
@@ -133,12 +201,22 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             </div>
           )}
 
-          {/* KẾT QUẢ ĐÃ CHẤM NẾU CÓ */}
-          {isGraded && (
+          {/* HIỂN THỊ THÔNG BÁO YÊU CẦU LÀM LẠI */}
+          {isRevisionRequested && (
+            <div className="bg-rose-50 p-4 rounded-2xl border-2 border-rose-300 text-rose-950 space-y-1">
+              <h4 className="font-black text-sm text-rose-900 flex items-center gap-1.5">
+                <AlertCircle className="w-5 h-5 text-rose-600" /> Giáo viên yêu cầu sửa và làm lại bài:
+              </h4>
+              <p className="text-xs font-bold text-slate-700">{submission.teacher_feedback || 'Bé hãy sửa lại bài làm nhé.'}</p>
+            </div>
+          )}
+
+          {/* KẾT QUẢ NẾU CÓ */}
+          {isGraded && exercise.show_score_after_submit && (
             <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-300 text-emerald-950 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-black text-base flex items-center gap-1.5">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" /> Kết Quả Điểm Số:
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" /> Điểm Số Bài Làm:
                 </span>
                 <span className="text-2xl font-black text-emerald-600">
                   {submission.total_score} / {submission.max_score}
@@ -152,19 +230,19 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             </div>
           )}
 
-          {/* HƯỚNG DẪN BÀI TẬP */}
+          {/* HƯỚNG DẪN */}
           <div className="bg-amber-50/80 p-4 rounded-2xl border border-amber-200">
-            <h4 className="text-xs font-black text-amber-900 uppercase mb-1">Hướng dẫn làm bài:</h4>
+            <h4 className="text-xs font-black text-amber-900 uppercase mb-1">Hướng dẫn bài tập:</h4>
             <p className="text-xs font-bold text-slate-700">{exercise.description || 'Không có mô tả chi tiết.'}</p>
           </div>
 
-          {/* CÂU HỎI */}
+          {/* HIỂN THỊ RENDER NGUYÊN BẢN CẢ 8 DẠNG CÂU HỎI */}
           {loading ? (
             <div className="p-8 text-center text-xs font-bold text-slate-400">Đang tải danh sách câu hỏi...</div>
           ) : (
             <div className="space-y-6">
               {questions.map((q, idx) => {
-                const isSelected = (opt) => answers[q.id] === opt;
+                const currentAnswer = answers[q.id];
 
                 return (
                   <div key={q.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
@@ -177,17 +255,17 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       </span>
                     </div>
 
-                    {/* DẠNG TRẮC NGHIỆM 1 ĐÁP ÁN */}
+                    {/* 1. TRẮC NGHIỆM 1 ĐÁP ÁN */}
                     {q.question_type === 'single_choice' && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {(q.options_json || []).map((opt, oIdx) => (
                           <button
                             key={oIdx}
                             type="button"
-                            disabled={isGraded || isSubmitted}
+                            disabled={!canEdit}
                             onClick={() => setAnswers(prev => ({ ...prev, [q.id]: opt }))}
                             className={`p-3 rounded-xl font-bold text-xs text-left border-2 transition-all ${
-                              isSelected(opt)
+                              currentAnswer === opt
                                 ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
                                 : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
                             }`}
@@ -198,13 +276,48 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       </div>
                     )}
 
-                    {/* DẠNG ĐIỀN TỪ / SỐ */}
-                    {q.question_type === 'fill_blank' && (
+                    {/* 2. TRẮC NGHIỆM NHIỀU ĐÁP ÁN */}
+                    {q.question_type === 'multiple_choice' && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {(q.options_json || []).map((opt, oIdx) => {
+                          const currentArr = Array.isArray(currentAnswer) ? currentAnswer : [];
+                          const isChecked = currentArr.includes(opt);
+
+                          return (
+                            <button
+                              key={oIdx}
+                              type="button"
+                              disabled={!canEdit}
+                              onClick={() => {
+                                let newArr;
+                                if (isChecked) {
+                                  newArr = currentArr.filter(item => item !== opt);
+                                } else {
+                                  newArr = [...currentArr, opt];
+                                }
+                                setAnswers(prev => ({ ...prev, [q.id]: newArr }));
+                              }}
+                              className={`p-3 rounded-xl font-bold text-xs text-left border-2 transition-all flex items-center justify-between ${
+                                isChecked
+                                  ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                              }`}
+                            >
+                              <span>{opt}</span>
+                              <span className="text-xs font-black">{isChecked ? '✓' : ''}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* 3 & 4. ĐIỀN TỪ HOẶC TRẢ LỜI NGẮN */}
+                    {(q.question_type === 'fill_blank' || q.question_type === 'short_answer') && (
                       <input
                         type="text"
-                        disabled={isGraded || isSubmitted}
+                        disabled={!canEdit}
                         placeholder="Nhập câu trả lời của bé..."
-                        value={answers[q.id] || ''}
+                        value={currentAnswer || ''}
                         onChange={(e) => {
                           const val = e.target.value;
                           setAnswers(prev => ({ ...prev, [q.id]: val }));
@@ -213,13 +326,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       />
                     )}
 
-                    {/* DẠNG TỰ LUẬN */}
+                    {/* 5. TỰ LUẬN */}
                     {q.question_type === 'essay' && (
                       <textarea
                         rows="3"
-                        disabled={isGraded || isSubmitted}
+                        disabled={!canEdit}
                         placeholder="Viết bài làm tự luận của bé tại đây..."
-                        value={answers[q.id] || ''}
+                        value={currentAnswer || ''}
                         onChange={(e) => {
                           const val = e.target.value;
                           setAnswers(prev => ({ ...prev, [q.id]: val }));
@@ -227,6 +340,49 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                         className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800"
                       ></textarea>
                     )}
+
+                    {/* 6 & 7. NỘP ẢNH / FILE BÀI LÀM LÊN PRIVATE BUCKET EXERCISE-SUBMISSIONS */}
+                    {(q.question_type === 'image_upload' || q.question_type === 'file_upload') && (
+                      <div className="space-y-2">
+                        {canEdit && (
+                          <div className="flex items-center gap-2">
+                            <label className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 font-extrabold text-xs rounded-xl border border-amber-300 cursor-pointer flex items-center gap-1.5">
+                              <Upload className="w-4 h-4" /> Tải Lên File Bài Làm (JPG, PNG, PDF, DOCX)
+                              <input
+                                type="file"
+                                accept={q.question_type === 'image_upload' ? 'image/*' : '.pdf,.doc,.docx,image/*'}
+                                onChange={(e) => handleFileUpload(q.id, e.target.files[0])}
+                                className="hidden"
+                              />
+                            </label>
+                            {uploadingQId === q.id && (
+                              <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang tải file lên...
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {fileUrls[q.id] && (
+                          <div className="p-3 bg-white rounded-xl border border-amber-200 flex items-center justify-between text-xs">
+                            <span className="font-bold text-slate-700 truncate max-w-[240px]">
+                              📁 File đã nộp: {fileUrls[q.id]}
+                            </span>
+                            {signedUrlsMap[q.id] && (
+                              <a
+                                href={signedUrlsMap[q.id]}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1 bg-sky-600 text-white font-bold text-[11px] rounded-lg flex items-center gap-1"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Xem File Private
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                   </div>
                 );
               })}
@@ -235,19 +391,20 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
         </div>
 
-        {/* FOOTER ACTION */}
-        {!isGraded && !isSubmitted && (
+        {/* FOOTER ACTIONS */}
+        {canEdit && (
           <div className="pt-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
             <button
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
+              onClick={() => handleSubmitExercise(true)}
+              disabled={isSubmitting}
+              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold text-xs rounded-xl flex items-center gap-1"
             >
-              Hủy
+              <Save className="w-4 h-4" /> Lưu Bản Nháp
             </button>
             <button
-              onClick={handleSubmitExercise}
+              onClick={() => handleSubmitExercise(false)}
               disabled={isSubmitting}
-              className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
+              className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               {isSubmitting ? 'Đang Nộp Bài...' : 'Nộp Bài Tập'}

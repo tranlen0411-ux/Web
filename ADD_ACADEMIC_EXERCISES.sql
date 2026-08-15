@@ -1,51 +1,59 @@
 -- ============================================================================
--- FILE MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES)
--- TÁCH HOÀN TOÀN ĐÁP ÁN TRẮC NGHIỆM SANG SCHEMA PRIVACY APP_PRIVATE
--- QUẢN LÝ BÀI TẬP 8 DẠNG CÂU HỎI, TỰ CHẤM TRẮC NGHIỆM VÀ GIÁO VIÊN CHẤM TỰ LUẬN
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 2.0 AN TOÀN
+-- BẢO VỆ ĐÁP ÁN TRẮC NGHIỆM TẠI SCHEMA PRIVATE APP_PRIVATE
+-- PHÂN QUYỀN THEO BẢNG CLASSES VÀ CLASS_MEMBERS (LOẠI BỎ HOÀN TOÀN CLASS_NAME TEXT)
+-- KHÓA CHỐNG HỌC SINH TỰ SỬA ĐIỂM, CHỐNG RACE CONDITION VÀ STORAGE BUCKET PRIVATE
 -- ============================================================================
 
 BEGIN;
 
--- 1. TẠO PRIVATE SCHEMA ĐỂ BẢO VỆ ĐÁP ÁN BÍ MẬT KHÔNG BỊ HỌC SINH SELECT
+-- 1. TẠO SCHEMA PRIVACY NẾU CHƯA CÓ
 CREATE SCHEMA IF NOT EXISTS app_private;
 
 -- 2. BẢNG QUẢN LÝ BÀI TẬP HỌC THUẬT (PUBLIC.ACADEMIC_EXERCISES)
 CREATE TABLE IF NOT EXISTS public.academic_exercises (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   teacher_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-  class_name TEXT NOT NULL, -- Ví dụ: "Lớp 1A", "Lớp 2B" hoặc "ALL"
-  grade_level INT NOT NULL DEFAULT 1,
+  class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE, -- Khóa ngoại UUID chuẩn tới bảng classes
+  is_global BOOLEAN DEFAULT FALSE,
+  grade_level INT NOT NULL DEFAULT 1 CHECK (grade_level BETWEEN 1 AND 5),
   subject TEXT NOT NULL DEFAULT 'Toán',
-  title TEXT NOT NULL,
+  title TEXT NOT NULL CHECK (length(trim(title)) > 0),
   description TEXT,
-  exercise_type TEXT NOT NULL DEFAULT 'mixed', -- single_choice, multiple_choice, fill_blank, short_answer, essay, image_upload, file_upload, mixed
-  status TEXT NOT NULL DEFAULT 'draft', -- draft, published, closed, archived
+  exercise_type TEXT NOT NULL DEFAULT 'mixed' CHECK (exercise_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload', 'mixed')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed', 'archived')),
   due_date TIMESTAMPTZ,
-  max_attempts INT DEFAULT 1,
-  reward_stars INT DEFAULT 10,
+  max_attempts INT DEFAULT 1 CHECK (max_attempts >= 1),
+  reward_stars INT DEFAULT 10 CHECK (reward_stars >= 0),
   show_score_after_submit BOOLEAN DEFAULT TRUE,
   show_correct_answers BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. BẢNG CÂU HỎI BÀI TẬP (PUBLIC.ACADEMIC_EXERCISE_QUESTIONS) - CHỈ CHỨA CÂU HỎI & CÁC LỰA CHỌN CÔNG KHAI
+-- Index tra cứu bài tập theo class_id và status
+CREATE INDEX IF NOT EXISTS idx_academic_exercises_class_status ON public.academic_exercises(class_id, status);
+CREATE INDEX IF NOT EXISTS idx_academic_exercises_teacher ON public.academic_exercises(teacher_id);
+
+-- 3. BẢNG CÂU HỎI BÀI TẬP (PUBLIC.ACADEMIC_EXERCISE_QUESTIONS)
 CREATE TABLE IF NOT EXISTS public.academic_exercise_questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   exercise_id UUID NOT NULL REFERENCES public.academic_exercises(id) ON DELETE CASCADE,
-  question_number INT NOT NULL,
-  question_type TEXT NOT NULL, -- single_choice, multiple_choice, fill_blank, short_answer, essay, image_upload, file_upload
-  prompt TEXT NOT NULL,
-  options_json JSONB DEFAULT '[]'::jsonb, -- Danh sách các lựa chọn trắc nghiệm (không chứa cờ đáp án đúng)
-  points INT DEFAULT 10,
+  question_number INT NOT NULL CHECK (question_number >= 1),
+  question_type TEXT NOT NULL CHECK (question_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload')),
+  prompt TEXT NOT NULL CHECK (length(trim(prompt)) > 0),
+  options_json JSONB DEFAULT '[]'::jsonb,
+  points INT DEFAULT 10 CHECK (points > 0),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. BẢNG BÍ MẬT LƯU ĐÁP ÁN ĐÚNG TRONG SCHEMA PRIVATE (APP_PRIVATE.ACADEMIC_ANSWER_KEYS)
+CREATE INDEX IF NOT EXISTS idx_academic_questions_exercise ON public.academic_exercise_questions(exercise_id, question_number);
+
+-- 4. BẢNG LƯU ĐÁP ÁN BÍ MẬT BẢO VỆ TRONG SCHEMA PRIVACY (APP_PRIVATE.ACADEMIC_ANSWER_KEYS)
 CREATE TABLE IF NOT EXISTS app_private.academic_answer_keys (
   question_id UUID PRIMARY KEY REFERENCES public.academic_exercise_questions(id) ON DELETE CASCADE,
-  correct_answer JSONB NOT NULL, -- Đáp án đúng: "A", ["A", "C"], "15", "con mèo"
-  accepted_answers JSONB DEFAULT '[]'::jsonb, -- Danh sách các từ chấp nhận được cho điền từ/trả lời ngắn
+  correct_answer JSONB NOT NULL,
+  accepted_answers JSONB DEFAULT '[]'::jsonb,
   case_sensitive BOOLEAN DEFAULT FALSE,
   grading_config JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -57,70 +65,136 @@ CREATE TABLE IF NOT EXISTS public.academic_submissions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   exercise_id UUID NOT NULL REFERENCES public.academic_exercises(id) ON DELETE CASCADE,
   student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  attempt_number INT NOT NULL DEFAULT 1,
-  status TEXT NOT NULL DEFAULT 'submitted', -- draft, submitted, pending_manual_grade, graded, revision_requested
-  objective_score INT DEFAULT 0,
-  manual_score INT DEFAULT 0,
-  total_score INT DEFAULT 0,
-  max_score INT DEFAULT 100,
+  attempt_number INT NOT NULL DEFAULT 1 CHECK (attempt_number >= 1),
+  status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('draft', 'submitted', 'pending_manual_grade', 'graded', 'revision_requested')),
+  objective_score INT DEFAULT 0 CHECK (objective_score >= 0),
+  manual_score INT DEFAULT 0 CHECK (manual_score >= 0),
+  total_score INT DEFAULT 0 CHECK (total_score >= 0),
+  max_score INT DEFAULT 100 CHECK (max_score > 0),
   teacher_feedback TEXT,
   revision_notes TEXT,
   submitted_at TIMESTAMPTZ DEFAULT NOW(),
   graded_at TIMESTAMPTZ,
   graded_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-  reward_stars_awarded INT DEFAULT 0,
+  reward_stars_awarded INT DEFAULT 0 CHECK (reward_stars_awarded >= 0),
   reward_applied_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Khóa UNIQUE chống nộp trùng lượt làm bài
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'academic_submissions_exercise_student_attempt_key'
+  ) THEN
+    ALTER TABLE public.academic_submissions 
+    ADD CONSTRAINT academic_submissions_exercise_student_attempt_key UNIQUE (exercise_id, student_id, attempt_number);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_academic_submissions_student ON public.academic_submissions(student_id, exercise_id);
 
 -- 6. BẢNG CÂU TRẢ LỜI CHI TIẾT CỦA BÀI NỘP (PUBLIC.ACADEMIC_SUBMISSION_ANSWERS)
 CREATE TABLE IF NOT EXISTS public.academic_submission_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   submission_id UUID NOT NULL REFERENCES public.academic_submissions(id) ON DELETE CASCADE,
   question_id UUID NOT NULL REFERENCES public.academic_exercise_questions(id) ON DELETE CASCADE,
-  student_answer_json JSONB, -- Câu trả lời của học sinh
-  file_url TEXT, -- Đường dẫn file PDF/DOCX/Ảnh nộp
-  points_earned INT DEFAULT 0,
+  student_answer_json JSONB,
+  file_url TEXT,
+  points_earned INT DEFAULT 0 CHECK (points_earned >= 0),
   is_correct BOOLEAN DEFAULT FALSE,
   teacher_comment TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'academic_submission_answers_sub_q_key'
+  ) THEN
+    ALTER TABLE public.academic_submission_answers 
+    ADD CONSTRAINT academic_submission_answers_sub_q_key UNIQUE (submission_id, question_id);
+  END IF;
+END $$;
+
 -- ============================================================================
--- PHÂN QUYỀN VÀ BẢO MẬT RLS (ROW LEVEL SECURITY)
+-- KHÓA HOÀN TOÀN SCHEMA APP_PRIVATE KHỎI PUBLIC / ANONYMOUS / AUTHENTICATED
+-- ============================================================================
+REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM PUBLIC, anon, authenticated;
+
+-- ============================================================================
+-- CẤU HÌNH BUCKET STORAGE PRIVATE EXERCISE-SUBMISSIONS
+-- ============================================================================
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'exercise-submissions',
+  'exercise-submissions',
+  false,
+  10485760, -- 10MB limit
+  ARRAY[
+    'image/jpeg', 'image/png', 'image/webp',
+    'application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ]
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = false,
+  file_size_limit = 10485760,
+  allowed_mime_types = ARRAY[
+    'image/jpeg', 'image/png', 'image/webp',
+    'application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
+
+-- ============================================================================
+-- PHÂN QUYỀN BẢO MẬT BẰNG RLS (ROW LEVEL SECURITY)
 -- ============================================================================
 
--- BẬT RLS CHO CÁC BẢNG PUBLIC
 ALTER TABLE public.academic_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_exercise_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_submission_answers ENABLE ROW LEVEL SECURITY;
 
--- KHÓA HOÀN TOÀN BẢNG APP_PRIVATE NÓI KHÔNG VỚI CHẶN HỌC SINH/ANON SELECT ĐÁP ÁN
-REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM PUBLIC, anon, authenticated;
+-- DROP ALL EXISTING POLICIES UNTIL CLEAN MIGRATION
+DROP POLICY IF EXISTS "Academic exercises select policy" ON public.academic_exercises;
+DROP POLICY IF EXISTS "Academic exercises write policy" ON public.academic_exercises;
 
--- RLS POLICIES CHO PUBLIC.ACADEMIC_EXERCISES
+DROP POLICY IF EXISTS "Academic questions select policy" ON public.academic_exercise_questions;
+DROP POLICY IF EXISTS "Academic questions write policy" ON public.academic_exercise_questions;
+
+DROP POLICY IF EXISTS "Academic submissions select policy" ON public.academic_submissions;
+DROP POLICY IF EXISTS "Academic submissions student no direct write" ON public.academic_submissions;
+
+DROP POLICY IF EXISTS "Academic submission answers select policy" ON public.academic_submission_answers;
+DROP POLICY IF EXISTS "Academic submission answers student no direct write" ON public.academic_submission_answers;
+
+-- 1. POLICIES CHO ACADEMIC_EXERCISES
 CREATE POLICY "Academic exercises select policy" ON public.academic_exercises
 FOR SELECT USING (
   EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR (teacher_id = auth.uid())
+  OR teacher_id = auth.uid()
+  OR EXISTS (SELECT 1 FROM public.classes c WHERE c.id = class_id AND c.teacher_id = auth.uid())
   OR (
-    status = 'published' AND EXISTS (
-      SELECT 1 FROM public.profiles 
-      WHERE id = auth.uid() AND (class_name = academic_exercises.class_name OR academic_exercises.class_name = 'ALL')
+    status = 'published' AND (
+      is_global = true
+      OR EXISTS (
+        SELECT 1 FROM public.class_members cm 
+        WHERE cm.class_id = academic_exercises.class_id AND cm.student_id = auth.uid()
+      )
     )
   )
 );
 
-CREATE POLICY "Academic exercises insert/update/delete policy" ON public.academic_exercises
+CREATE POLICY "Academic exercises write policy" ON public.academic_exercises
 FOR ALL USING (
   EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR (teacher_id = auth.uid())
+  OR teacher_id = auth.uid()
+  OR EXISTS (SELECT 1 FROM public.classes c WHERE c.id = class_id AND c.teacher_id = auth.uid())
 );
 
--- RLS POLICIES CHO PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
+-- 2. POLICIES CHO ACADEMIC_EXERCISE_QUESTIONS
 CREATE POLICY "Academic questions select policy" ON public.academic_exercise_questions
 FOR SELECT USING (
   EXISTS (
@@ -128,7 +202,16 @@ FOR SELECT USING (
     WHERE e.id = exercise_id AND (
       EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
       OR e.teacher_id = auth.uid()
-      OR (e.status = 'published')
+      OR EXISTS (SELECT 1 FROM public.classes c WHERE c.id = e.class_id AND c.teacher_id = auth.uid())
+      OR (
+        e.status = 'published' AND (
+          e.is_global = true 
+          OR EXISTS (
+            SELECT 1 FROM public.class_members cm 
+            WHERE cm.class_id = e.class_id AND cm.student_id = auth.uid()
+          )
+        )
+      )
     )
   )
 );
@@ -140,61 +223,76 @@ FOR ALL USING (
     WHERE e.id = exercise_id AND (
       EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
       OR e.teacher_id = auth.uid()
+      OR EXISTS (SELECT 1 FROM public.classes c WHERE c.id = e.class_id AND c.teacher_id = auth.uid())
     )
   )
 );
 
--- RLS POLICIES CHO PUBLIC.ACADEMIC_SUBMISSIONS
+-- 3. POLICIES CHO ACADEMIC_SUBMISSIONS (HỌC SINH CHỈ ĐƯỢC SELECT BÀI CỦA CHÍNH MÌNH; KHÔNG ĐƯỢC DIRECT INSERT/UPDATE GHI ĐIỂM)
 CREATE POLICY "Academic submissions select policy" ON public.academic_submissions
 FOR SELECT USING (
   EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR (student_id = auth.uid())
+  OR student_id = auth.uid()
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e 
-    WHERE e.id = exercise_id AND (e.teacher_id = auth.uid())
+    JOIN public.classes c ON c.id = e.class_id
+    WHERE e.id = exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
   )
 );
 
-CREATE POLICY "Academic submissions insert/update policy" ON public.academic_submissions
-FOR ALL USING (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR (student_id = auth.uid())
-  OR EXISTS (
-    SELECT 1 FROM public.academic_exercises e 
-    WHERE e.id = exercise_id AND (e.teacher_id = auth.uid())
-  )
-);
-
--- RLS POLICIES CHO PUBLIC.ACADEMIC_SUBMISSION_ANSWERS
+-- 4. POLICIES CHO ACADEMIC_SUBMISSION_ANSWERS
 CREATE POLICY "Academic submission answers select policy" ON public.academic_submission_answers
 FOR SELECT USING (
   EXISTS (
-    SELECT 1 FROM public.academic_submissions s 
+    SELECT 1 FROM public.academic_submissions s
     WHERE s.id = submission_id AND (
       EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
       OR s.student_id = auth.uid()
-      OR EXISTS (SELECT 1 FROM public.academic_exercises e WHERE e.id = s.exercise_id AND e.teacher_id = auth.uid())
-    )
-  )
-);
-
-CREATE POLICY "Academic submission answers write policy" ON public.academic_submission_answers
-FOR ALL USING (
-  EXISTS (
-    SELECT 1 FROM public.academic_submissions s 
-    WHERE s.id = submission_id AND (
-      EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-      OR s.student_id = auth.uid()
-      OR EXISTS (SELECT 1 FROM public.academic_exercises e WHERE e.id = s.exercise_id AND e.teacher_id = auth.uid())
+      OR EXISTS (
+        SELECT 1 FROM public.academic_exercises e 
+        JOIN public.classes c ON c.id = e.class_id
+        WHERE e.id = s.exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
+      )
     )
   )
 );
 
 -- ============================================================================
--- CÁC RPC SECURITY DEFINER AN TOÀN ĐỂ THỰC THI CHẤM ĐIỂM & QUẢN LÝ ĐÁP ÁN PRIVATE
+-- POLICIES AN TOÀN CHO STORAGE BUCKET EXERCISE-SUBMISSIONS
+-- ============================================================================
+DROP POLICY IF EXISTS "Exercise submissions student insert policy" ON storage.objects;
+DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
+
+CREATE POLICY "Exercise submissions student insert policy" ON storage.objects
+FOR INSERT WITH CHECK (
+  bucket_id = 'exercise-submissions'
+  AND (storage.foldername(name))[1] = auth.uid()::text
+  AND (
+    name NOT ILIKE '%.svg' AND name NOT ILIKE '%.exe' AND name NOT ILIKE '%.html'
+    AND name NOT ILIKE '%.js' AND name NOT ILIKE '%.sh' AND name NOT ILIKE '%.bat'
+  )
+);
+
+CREATE POLICY "Exercise submissions select policy" ON storage.objects
+FOR SELECT USING (
+  bucket_id = 'exercise-submissions' AND (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
+    OR (storage.foldername(name))[1] = auth.uid()::text
+    OR EXISTS (
+      SELECT 1 FROM public.academic_submissions s
+      JOIN public.academic_exercises e ON e.id = s.exercise_id
+      JOIN public.classes c ON c.id = e.class_id
+      WHERE s.id::text = (storage.foldername(name))[2]
+        AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
+    )
+  )
+);
+
+-- ============================================================================
+-- CÁC RPC SECURITY DEFINER CHẤM ĐIỂM NGUYÊN TỬ VÀ AN TOÀN VỚI SET SEARCH_PATH = ''
 -- ============================================================================
 
--- 1. RPC LƯU BÀI TẬP, CÂU HỎI VÀ ĐÁP ÁN BÍ MẬT (DÀNH CHO GIÁO VIÊN / ADMIN)
+-- 1. RPC LƯU BÀI TẬP VÀ ĐÁP ÁN BÍ MẬT (SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS)
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -205,83 +303,132 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_user_id UUID;
-  v_user_role TEXT;
+  v_caller_id UUID;
+  v_caller_role TEXT;
   v_exercise_id UUID;
-  v_q RECORD;
-  v_q_id UUID;
+  v_class_id UUID;
+  v_class_exists BOOLEAN := FALSE;
+  v_class_teacher UUID;
+  v_existing_ex RECORD;
   v_q_json JSONB;
+  v_q_id UUID;
   v_key_json JSONB;
+  v_updated_rows INT;
 BEGIN
-  v_user_id := auth.uid();
-  IF v_user_id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chưa đăng nhập.');
   END IF;
 
-  SELECT role INTO v_user_role FROM public.profiles WHERE id = v_user_id;
-
-  -- Kiểm tra quyền Admin / Giáo viên
-  IF v_user_role NOT IN ('admin', 'teacher') THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Không có quyền tạo bài tập.');
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+  IF v_caller_role NOT IN ('admin', 'teacher') THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không có quyền quản lý bài tập.');
   END IF;
 
-  -- Tạo hoặc cập nhật Bài tập
+  -- Validate class_id
+  IF (p_exercise->>'class_id') IS NOT NULL AND (p_exercise->>'class_id') != '' THEN
+    v_class_id := (p_exercise->>'class_id')::UUID;
+    SELECT teacher_id INTO v_class_teacher FROM public.classes WHERE id = v_class_id;
+    IF v_class_teacher IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Lớp học được chọn không tồn tại.');
+    END IF;
+
+    IF v_caller_role != 'admin' AND v_class_teacher != v_caller_id THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chỉ được tạo bài tập cho lớp mình phụ trách.');
+    END IF;
+  ELSE
+    IF (p_exercise->>'is_global')::BOOLEAN IS NOT TRUE THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập phải gán cho một Lớp học cụ thể.');
+    END IF;
+  END IF;
+
+  -- Validate title
+  IF (p_exercise->>'title') IS NULL OR length(trim(p_exercise->>'title')) = 0 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được để trống.');
+  END IF;
+
+  -- Xử lý UPDATE hoặc INSERT bài tập
   IF (p_exercise->>'id') IS NOT NULL AND (p_exercise->>'id') != '' THEN
     v_exercise_id := (p_exercise->>'id')::UUID;
+
+    -- KHÓA BẢN GHI DÙNG SELECT FOR UPDATE CHỐNG SUY HAO / OVERWRITE RACES
+    SELECT * INTO v_existing_ex FROM public.academic_exercises WHERE id = v_exercise_id FOR UPDATE;
+
+    IF v_existing_ex.id IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập không tồn tại.');
+    END IF;
+
+    IF v_caller_role != 'admin' AND v_existing_ex.teacher_id != v_caller_id THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không sở hữu bài tập này.');
+    END IF;
+
     UPDATE public.academic_exercises
     SET
-      title = p_exercise->>'title',
+      title = trim(p_exercise->>'title'),
       description = p_exercise->>'description',
-      class_name = p_exercise->>'class_name',
-      grade_level = (p_exercise->>'grade_level')::INT,
-      subject = p_exercise->>'subject',
+      class_id = v_class_id,
+      is_global = COALESCE((p_exercise->>'is_global')::BOOLEAN, false),
+      grade_level = GREATEST(1, LEAST(5, COALESCE((p_exercise->>'grade_level')::INT, 1))),
+      subject = COALESCE(p_exercise->>'subject', 'Toán'),
       exercise_type = COALESCE(p_exercise->>'exercise_type', 'mixed'),
       status = COALESCE(p_exercise->>'status', 'draft'),
       due_date = CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
-      max_attempts = COALESCE((p_exercise->>'max_attempts')::INT, 1),
-      reward_stars = COALESCE((p_exercise->>'reward_stars')::INT, 10),
+      max_attempts = GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
+      reward_stars = GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
       show_score_after_submit = COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, TRUE),
       show_correct_answers = COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, FALSE),
       updated_at = NOW()
-    WHERE id = v_exercise_id AND (v_user_role = 'admin' OR teacher_id = v_user_id);
+    WHERE id = v_exercise_id;
+
+    GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+    IF v_updated_rows != 1 THEN
+      RAISE EXCEPTION 'UPDATE bài tập thất bại: Không tác động đúng 1 dòng.';
+    END IF;
+
   ELSE
     INSERT INTO public.academic_exercises (
-      teacher_id, class_name, grade_level, subject, title, description, exercise_type, status, due_date, max_attempts, reward_stars, show_score_after_submit, show_correct_answers
+      teacher_id, class_id, is_global, grade_level, subject, title, description,
+      exercise_type, status, due_date, max_attempts, reward_stars,
+      show_score_after_submit, show_correct_answers
     ) VALUES (
-      v_user_id,
-      p_exercise->>'class_name',
-      COALESCE((p_exercise->>'grade_level')::INT, 1),
+      v_caller_id,
+      v_class_id,
+      COALESCE((p_exercise->>'is_global')::BOOLEAN, false),
+      GREATEST(1, LEAST(5, COALESCE((p_exercise->>'grade_level')::INT, 1))),
       COALESCE(p_exercise->>'subject', 'Toán'),
-      p_exercise->>'title',
+      trim(p_exercise->>'title'),
       p_exercise->>'description',
       COALESCE(p_exercise->>'exercise_type', 'mixed'),
       COALESCE(p_exercise->>'status', 'draft'),
       CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
-      COALESCE((p_exercise->>'max_attempts')::INT, 1),
-      COALESCE((p_exercise->>'reward_stars')::INT, 10),
+      GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
+      GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
       COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, TRUE),
       COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, FALSE)
     ) RETURNING id INTO v_exercise_id;
   END IF;
 
-  -- Xóa câu hỏi cũ và đáp án cũ để nạp lại mảng mới
+  -- CHỈ XÓA CÂU HỎI KHI NGƯỜI GỌI SỞ HỮU BÀI TẬP VÀ ĐÃ XÁC NHẬN SỞ HỮU AN TOÀN
   DELETE FROM public.academic_exercise_questions WHERE exercise_id = v_exercise_id;
 
-  -- Nạp từng câu hỏi và đáp án bí mật sang app_private.academic_answer_keys
+  -- LƯU CÂU HỎI VÀ ĐÁP ÁN BÍ MẬT PRIVATE SCHEMA NGUYÊN TỬ
   FOR v_q_json IN SELECT * FROM jsonb_array_elements(p_questions)
   LOOP
+    IF (v_q_json->>'prompt') IS NULL OR length(trim(v_q_json->>'prompt')) = 0 THEN
+      RAISE EXCEPTION 'Nội dung câu hỏi không được để trống.';
+    END IF;
+
     INSERT INTO public.academic_exercise_questions (
       exercise_id, question_number, question_type, prompt, options_json, points
     ) VALUES (
       v_exercise_id,
-      COALESCE((v_q_json->>'question_number')::INT, 1),
-      v_q_json->>'question_type',
-      v_q_json->>'prompt',
+      GREATEST(1, COALESCE((v_q_json->>'question_number')::INT, 1)),
+      COALESCE(v_q_json->>'question_type', 'single_choice'),
+      trim(v_q_json->>'prompt'),
       COALESCE(v_q_json->'options_json', '[]'::jsonb),
-      COALESCE((v_q_json->>'points')::INT, 10)
+      GREATEST(1, COALESCE((v_q_json->>'points')::INT, 10))
     ) RETURNING id INTO v_q_id;
 
-    -- Lưu đáp án bí mật vào app_private.academic_answer_keys nếu có
     v_key_json := v_q_json->'correct_answer_key';
     IF v_key_json IS NOT NULL THEN
       INSERT INTO app_private.academic_answer_keys (
@@ -295,15 +442,16 @@ BEGIN
     END IF;
   END LOOP;
 
-  RETURN jsonb_build_object('success', true, 'exercise_id', v_exercise_id, 'message', 'Lưu bài tập và đáp án an toàn thành công.');
+  RETURN jsonb_build_object('success', true, 'exercise_id', v_exercise_id, 'message', 'Lưu bài tập và đáp án bí mật an toàn thành công!');
 END;
 $$;
 
 
--- 2. RPC NỘP BÀI TẬP VÀ TỰ ĐỘNG CHẤM TRẮC NGHIỆM SERVER-SIDE
+-- 2. RPC NỘP BÀI TẬP (SUBMIT_ACADEMIC_EXERCISE) - TỰ ĐỘNG CHẤM TRẮC NGHIỆM VÀ CỘNG SAO IDEMPOTENT
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
-  p_answers JSONB
+  p_answers JSONB,
+  p_is_draft BOOLEAN DEFAULT FALSE
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -313,7 +461,9 @@ AS $$
 DECLARE
   v_student_id UUID;
   v_ex RECORD;
-  v_existing_attempts INT;
+  v_is_member BOOLEAN := FALSE;
+  v_existing_attempts INT := 0;
+  v_attempt_num INT := 1;
   v_submission_id UUID;
   v_q RECORD;
   v_key RECORD;
@@ -326,70 +476,99 @@ DECLARE
   v_max_score INT := 0;
   v_has_subjective BOOLEAN := FALSE;
   v_status TEXT;
+  v_ratio FLOAT := 0.0;
   v_reward_stars INT := 0;
 BEGIN
   v_student_id := auth.uid();
   IF v_student_id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chưa đăng nhập.');
   END IF;
 
-  -- 1. Lấy thông tin bài tập
+  -- 1. Khóa và lấy thông tin bài tập
   SELECT * INTO v_ex FROM public.academic_exercises WHERE id = p_exercise_id;
   IF v_ex.id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bài tập không tồn tại.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập không tồn tại.');
   END IF;
 
   IF v_ex.status != 'published' THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bài tập này hiện không mở nộp bài.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập này chưa xuất bản hoặc đã đóng.');
   END IF;
 
-  -- 2. Kiểm tra số lượt nộp max_attempts
-  SELECT COUNT(*) INTO v_existing_attempts 
-  FROM public.academic_submissions 
-  WHERE exercise_id = p_exercise_id AND student_id = v_student_id AND status != 'draft';
+  IF v_ex.due_date IS NOT NULL AND NOW() > v_ex.due_date THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đã quá hạn nộp bài tập này.');
+  END IF;
+
+  -- 2. Kiểm tra tư cách thuộc Lớp học của học sinh
+  IF v_ex.is_global IS NOT TRUE THEN
+    SELECT EXISTS (
+      SELECT 1 FROM public.class_members WHERE class_id = v_ex.class_id AND student_id = v_student_id
+    ) INTO v_is_member;
+
+    IF NOT v_is_member THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bé không thuộc lớp học được giao bài tập này.');
+    END IF;
+  END IF;
+
+  -- 3. Khóa và kiểm tra số lượt nộp bài CHỐNG CONCURRENT RACE CONDITIONS
+  SELECT COUNT(*) INTO v_existing_attempts
+  FROM public.academic_submissions
+  WHERE exercise_id = p_exercise_id AND student_id = v_student_id AND status != 'draft'
+  FOR UPDATE;
 
   IF v_existing_attempts >= COALESCE(v_ex.max_attempts, 1) THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bé đã dùng hết số lượt nộp bài cho phép.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bé đã dùng hết số lượt nộp bài cho phép.');
   END IF;
 
-  -- 3. Tạo bản ghi Submission mới
+  v_attempt_num := v_existing_attempts + 1;
+
+  -- 4. Tạo bản ghi Submission mới
+  IF p_is_draft THEN
+    v_status := 'draft';
+  ELSE
+    v_status := 'submitted';
+  END IF;
+
   INSERT INTO public.academic_submissions (
     exercise_id, student_id, attempt_number, status, max_score
   ) VALUES (
-    p_exercise_id, v_student_id, v_existing_attempts + 1, 'submitted', 100
+    p_exercise_id, v_student_id, v_attempt_num, v_status, 100
   ) RETURNING id INTO v_submission_id;
 
-  -- 4. Duyệt qua từng câu hỏi của bài tập để tự động chấm trắc nghiệm
+  -- 5. Duyệt qua từng câu hỏi để kiểm tra và tự động chấm trắc nghiệm
   FOR v_q IN SELECT * FROM public.academic_exercise_questions WHERE exercise_id = p_exercise_id ORDER BY question_number ASC
   LOOP
     v_max_score := v_max_score + COALESCE(v_q.points, 10);
     
-    -- Lấy câu trả lời của học sinh từ p_answers
-    SELECT value INTO v_ans_item FROM jsonb_array_elements(p_answers) WHERE (value->>'question_id')::UUID = v_q.id;
+    SELECT value INTO v_ans_item 
+    FROM jsonb_array_elements(p_answers) 
+    WHERE (value->>'question_id')::UUID = v_q.id;
+
     v_student_ans := v_ans_item->'answer';
     v_file_url := v_ans_item->>'file_url';
 
     v_is_correct := FALSE;
     v_points_earned := 0;
 
-    -- Nếu là dạng câu hỏi trắc nghiệm / điền từ tự chấm
+    -- TỰ ĐỘNG CHẤM NẾU LÀ CÂU KHÁCH QUAN (SINGLE, MULTIPLE, FILL_BLANK)
     IF v_q.question_type IN ('single_choice', 'multiple_choice', 'fill_blank') THEN
       SELECT * INTO v_key FROM app_private.academic_answer_keys WHERE question_id = v_q.id;
 
-      IF v_key.question_id IS NOT NULL THEN
+      IF v_key.question_id IS NOT NULL AND v_student_ans IS NOT NULL THEN
         IF v_q.question_type = 'single_choice' THEN
           IF (v_student_ans#>>'{}') = (v_key.correct_answer#>>'{}') THEN
             v_is_correct := TRUE;
           END IF;
+
         ELSIF v_q.question_type = 'multiple_choice' THEN
-          -- Kiểm tra mảng đáp án không phụ thuộc thứ tự
+          -- So sánh tập hợp đáp án không phụ thuộc thứ tự
           IF (SELECT jsonb_agg(elem ORDER BY elem) FROM jsonb_array_elements_text(v_student_ans) elem) =
              (SELECT jsonb_agg(elem ORDER BY elem) FROM jsonb_array_elements_text(v_key.correct_answer) elem) THEN
             v_is_correct := TRUE;
           END IF;
+
         ELSIF v_q.question_type = 'fill_blank' THEN
           IF v_key.case_sensitive THEN
-            IF LOWER(TRIM(v_student_ans#>>'{}')) = LOWER(TRIM(v_key.correct_answer#>>'{}')) THEN
+            IF TRIM(v_student_ans#>>'{}') = TRIM(v_key.correct_answer#>>'{}') THEN
               v_is_correct := TRUE;
             END IF;
           ELSE
@@ -406,11 +585,10 @@ BEGIN
       END IF;
 
     ELSE
-      -- Là dạng câu tự luận / nộp file -> Cần Giáo viên chấm thủ công
       v_has_subjective := TRUE;
     END IF;
 
-    -- Lưu chi tiết câu trả lời vào public.academic_submission_answers
+    -- Ghi câu trả lời vào public.academic_submission_answers
     INSERT INTO public.academic_submission_answers (
       submission_id, question_id, student_answer_json, file_url, points_earned, is_correct
     ) VALUES (
@@ -418,15 +596,22 @@ BEGIN
     );
   END LOOP;
 
-  -- 5. Đánh giá trạng thái bài nộp
-  IF v_has_subjective THEN
-    v_status := 'pending_manual_grade';
-  ELSE
-    v_status := 'graded';
-    v_reward_stars := COALESCE(v_ex.reward_stars, 10);
+  -- 6. Xác định trạng thái nộp bài & Tính sao thưởng theo tỷ lệ điểm
+  IF NOT p_is_draft THEN
+    IF v_has_subjective THEN
+      v_status := 'pending_manual_grade';
+    ELSE
+      v_status := 'graded';
+      -- Tính sao theo tỷ lệ điểm đạt được
+      IF v_max_score > 0 AND v_obj_score > 0 THEN
+        v_ratio := (v_obj_score::FLOAT / v_max_score::FLOAT);
+        v_reward_stars := FLOOR(COALESCE(v_ex.reward_stars, 10) * v_ratio);
+      ELSE
+        v_reward_stars := 0; -- ĐIỂM 0 HỌẶC KHÔNG ĐẠT KHÔNG CỘNG SAO
+      END IF;
+    END IF;
   END IF;
 
-  -- Cập nhật tổng điểm bài nộp
   UPDATE public.academic_submissions
   SET
     status = v_status,
@@ -435,10 +620,10 @@ BEGIN
     max_score = GREATEST(v_max_score, 10),
     graded_at = CASE WHEN v_status = 'graded' THEN NOW() ELSE NULL END,
     reward_stars_awarded = CASE WHEN v_status = 'graded' THEN v_reward_stars ELSE 0 END,
-    reward_applied_at = CASE WHEN v_status = 'graded' THEN NOW() ELSE NULL END
+    reward_applied_at = CASE WHEN v_status = 'graded' AND v_reward_stars > 0 THEN NOW() ELSE NULL END
   WHERE id = v_submission_id;
 
-  -- Nếu bài hoàn toàn tự động đã graded -> Cộng sao vào profile học sinh server-side
+  -- 7. CỘNG SAO IDEMPOTENT VÀO BẢNG PROFILES NẾU TỰ ĐỘNG GRADED
   IF v_status = 'graded' AND v_reward_stars > 0 THEN
     UPDATE public.profiles
     SET total_stars = COALESCE(total_stars, 0) + v_reward_stars
@@ -452,16 +637,16 @@ BEGIN
     'objective_score', v_obj_score,
     'max_score', v_max_score,
     'reward_stars_awarded', CASE WHEN v_status = 'graded' THEN v_reward_stars ELSE 0 END,
-    'message', CASE WHEN v_status = 'graded' THEN 'Nộp bài và tự động chấm điểm thành công!' ELSE 'Đã nộp bài thành công! Bài làm đang chờ Giáo viên chấm phần tự luận.' END
+    'message', CASE WHEN p_is_draft THEN 'Đã lưu bản nháp thành công!' WHEN v_status = 'graded' THEN 'Nộp bài và tự động chấm điểm thành công!' ELSE 'Đã nộp bài thành công! Bài tập đang chờ Giáo viên chấm tự luận.' END
   );
 END;
 $$;
 
 
--- 3. RPC GIÁO VIÊN CHẤM ĐIỂM THỦ CÔNG & DUYỆT BÀI NỘP (CỘNG SAO AN TOÀN)
+-- 3. RPC GIÁO VIÊN CHẤM BÀI (GRADE_ACADEMIC_SUBMISSION)
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
-  p_manual_grades JSONB, -- Mảng [{question_id, points_earned, teacher_comment}]
+  p_manual_grades JSONB,
   p_teacher_feedback TEXT,
   p_request_revision BOOLEAN DEFAULT FALSE
 )
@@ -476,66 +661,73 @@ DECLARE
   v_sub RECORD;
   v_ex RECORD;
   v_grade_item JSONB;
+  v_q_points INT;
+  v_item_points INT;
   v_total_manual INT := 0;
   v_new_status TEXT;
+  v_final_total INT := 0;
+  v_ratio FLOAT := 0.0;
   v_stars_to_award INT := 0;
 BEGIN
   v_teacher_id := auth.uid();
   IF v_teacher_id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chưa đăng nhập.');
   END IF;
 
   SELECT role INTO v_role FROM public.profiles WHERE id = v_teacher_id;
 
-  -- 1. Lấy thông tin submission
-  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id;
+  -- Khóa bản ghi Submission FOR UPDATE chống chấm đồng thời
+  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id FOR UPDATE;
   IF v_sub.id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bài nộp không tồn tại.');
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
   END IF;
 
   SELECT * INTO v_ex FROM public.academic_exercises WHERE id = v_sub.exercise_id;
 
-  -- Kiểm tra quyền Giáo viên / Admin
-  IF v_role != 'admin' AND (v_ex.teacher_id != v_teacher_id) THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Không có quyền chấm bài nộp này.');
+  IF v_role != 'admin' AND v_ex.teacher_id != v_teacher_id THEN
+    -- Kiểm tra nếu là giáo viên của Lớp
+    IF NOT EXISTS (SELECT 1 FROM public.classes WHERE id = v_ex.class_id AND teacher_id = v_teacher_id) THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không có quyền chấm bài nộp này.');
+    END IF;
   END IF;
 
-  -- 2. Cập nhật điểm thủ công cho từng câu hỏi
+  -- Cập nhật điểm thủ công từng câu tự luận
   IF p_manual_grades IS NOT NULL AND jsonb_array_length(p_manual_grades) > 0 THEN
     FOR v_grade_item IN SELECT * FROM jsonb_array_elements(p_manual_grades)
     LOOP
+      SELECT points INTO v_q_points FROM public.academic_exercise_questions WHERE id = (v_grade_item->>'question_id')::UUID;
+      v_item_points := GREATEST(0, LEAST(COALESCE(v_q_points, 10), COALESCE((v_grade_item->>'points_earned')::INT, 0)));
+
       UPDATE public.academic_submission_answers
       SET
-        points_earned = (v_grade_item->>'points_earned')::INT,
+        points_earned = v_item_points,
         teacher_comment = v_grade_item->>'teacher_comment'
       WHERE submission_id = p_submission_id AND question_id = (v_grade_item->>'question_id')::UUID;
 
-      v_total_manual := v_total_manual + COALESCE((v_grade_item->>'points_earned')::INT, 0);
+      v_total_manual := v_total_manual + v_item_points;
     END LOOP;
-  ELSE
-    SELECT COALESCE(SUM(points_earned), 0) INTO v_total_manual 
-    FROM public.academic_submission_answers 
-    WHERE submission_id = p_submission_id;
   END IF;
 
-  -- 3. Xác định trạng thái mới
+  v_final_total := LEAST(COALESCE(v_sub.objective_score, 0) + v_total_manual, COALESCE(v_sub.max_score, 100));
+
+  -- Xác định trạng thái mới
   IF p_request_revision THEN
     v_new_status := 'revision_requested';
   ELSE
     v_new_status := 'graded';
   END IF;
 
-  -- Kiểm tra cộng sao lần đầu khi chuyển sang graded
-  IF v_new_status = 'graded' AND v_sub.reward_applied_at IS NULL THEN
-    v_stars_to_award := COALESCE(v_ex.reward_stars, 10);
+  -- CHỈ CỘNG SAO KHI GRADED VÀ CHƯA CỘNG LẦN NÀO TRƯỚC ĐÓ (REWARD_APPLIED_AT IS NULL)
+  IF v_new_status = 'graded' AND v_sub.reward_applied_at IS NULL AND v_final_total > 0 THEN
+    v_ratio := (v_final_total::FLOAT / COALESCE(v_sub.max_score, 100)::FLOAT);
+    v_stars_to_award := FLOOR(COALESCE(v_ex.reward_stars, 10) * v_ratio);
   END IF;
 
-  -- 4. Cập nhật bài nộp
   UPDATE public.academic_submissions
   SET
     status = v_new_status,
     manual_score = v_total_manual,
-    total_score = COALESCE(objective_score, 0) + v_total_manual,
+    total_score = v_final_total,
     teacher_feedback = p_teacher_feedback,
     graded_at = NOW(),
     graded_by = v_teacher_id,
@@ -543,7 +735,6 @@ BEGIN
     reward_applied_at = CASE WHEN v_stars_to_award > 0 THEN NOW() ELSE reward_applied_at END
   WHERE id = p_submission_id;
 
-  -- 5. Cộng sao vào profile học sinh nếu vừa hoàn tất chấm lần đầu
   IF v_stars_to_award > 0 THEN
     UPDATE public.profiles
     SET total_stars = COALESCE(total_stars, 0) + v_stars_to_award
@@ -553,11 +744,20 @@ BEGIN
   RETURN jsonb_build_object(
     'success', true,
     'status', v_new_status,
-    'total_score', COALESCE(v_sub.objective_score, 0) + v_total_manual,
+    'total_score', v_final_total,
     'stars_awarded', v_stars_to_award,
-    'message', CASE WHEN p_request_revision THEN 'Đã gửi yêu cầu học sinh làm lại bài.' ELSE 'Đã lưu điểm và nhận xét bài nộp thành công!' END
+    'message', CASE WHEN p_request_revision THEN 'Đã yêu cầu học sinh làm lại bài tập.' ELSE 'Đã lưu điểm và nhận xét thành công!' END
   );
 END;
 $$;
+
+-- PHÂN QUYỀN EXECUTE RPC AN TOÀN
+REVOKE EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.submit_academic_exercise FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.grade_academic_submission FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys TO authenticated;
+GRANT EXECUTE ON FUNCTION public.submit_academic_exercise TO authenticated;
+GRANT EXECUTE ON FUNCTION public.grade_academic_submission TO authenticated;
 
 COMMIT;

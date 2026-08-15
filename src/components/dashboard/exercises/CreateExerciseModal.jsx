@@ -1,22 +1,27 @@
-import React, { useState } from 'react';
-import { X, Plus, Trash2, CheckCircle2, Save, HelpCircle, FileText, AlertCircle, Loader2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
 export const CreateExerciseModal = ({ isOpen, onClose }) => {
   const { profile } = useAuth();
 
+  const [classesList, setClassesList] = useState([]);
+  const [selectedClassId, setSelectedClassId] = useState('');
+  const [isGlobal, setIsGlobal] = useState(false);
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [className, setClassName] = useState('Lớp 1A');
   const [gradeLevel, setGradeLevel] = useState(1);
   const [subject, setSubject] = useState('Toán');
+  const [exerciseType, setExerciseType] = useState('mixed');
   const [rewardStars, setRewardStars] = useState(10);
   const [dueDate, setDueDate] = useState('');
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [showScoreAfterSubmit, setShowScoreAfterSubmit] = useState(true);
+  const [showCorrectAnswers, setShowCorrectAnswers] = useState(false);
 
-  // Mảng danh sách câu hỏi
+  // Mảng danh sách câu hỏi hỗ trợ 8 dạng câu hỏi
   const [questions, setQuestions] = useState([
     {
       id: 1,
@@ -32,6 +37,26 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  useEffect(() => {
+    fetchTeacherClasses();
+  }, [profile?.id]);
+
+  const fetchTeacherClasses = async () => {
+    try {
+      let query = supabase.from('classes').select('id, name, grade_level');
+      if (profile?.role === 'teacher') {
+        query = query.eq('teacher_id', profile.id);
+      }
+      const { data } = await query.order('grade_level');
+      if (data && data.length > 0) {
+        setClassesList(data);
+        setSelectedClassId(data[0].id);
+      }
+    } catch (err) {
+      console.error('Fetch classes error:', err);
+    }
+  };
+
   if (!isOpen) return null;
 
   // Thêm câu hỏi mới
@@ -43,8 +68,8 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
         question_number: prev.length + 1,
         question_type: 'single_choice',
         prompt: '',
-        options: ['ĐÁP ÁN A', 'ĐÁP ÁN B', 'ĐÁP ÁN C', 'ĐÁP ÁN D'],
-        correct_answer: 'ĐÁP ÁN A',
+        options: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
+        correct_answer: 'Lựa chọn A',
         points: 10
       }
     ]);
@@ -64,33 +89,40 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
       return;
     }
 
+    if (!selectedClassId && !isGlobal) {
+      setErrorMsg('Vui lòng chọn Lớp học phụ trách bài tập.');
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg('');
 
     try {
       const exercisePayload = {
-        title,
-        description,
-        class_name: className,
+        title: title.trim(),
+        description: description.trim(),
+        class_id: selectedClassId || null,
+        is_global: isGlobal,
         grade_level: parseInt(gradeLevel),
         subject,
-        exercise_type: 'mixed',
+        exercise_type: exerciseType,
         status: 'published',
         due_date: dueDate || null,
         max_attempts: parseInt(maxAttempts),
         reward_stars: parseInt(rewardStars),
-        show_score_after_submit: showScoreAfterSubmit
+        show_score_after_submit: showScoreAfterSubmit,
+        show_correct_answers: showCorrectAnswers
       };
 
       const questionsPayload = questions.map((q, idx) => ({
         question_number: idx + 1,
         question_type: q.question_type,
-        prompt: q.prompt,
+        prompt: q.prompt.trim(),
         options_json: q.options || [],
         points: parseInt(q.points || 10),
         correct_answer_key: {
           correct_answer: q.correct_answer,
-          accepted_answers: [q.correct_answer],
+          accepted_answers: Array.isArray(q.correct_answer) ? q.correct_answer : [q.correct_answer],
           case_sensitive: false
         }
       }));
@@ -131,7 +163,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
           </button>
         </div>
 
-        {/* CONTENT FORM */}
+        {/* FORM THÔNG TIN CHUNG */}
         <form onSubmit={handleSubmit} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
           
           {errorMsg && (
@@ -141,7 +173,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* THÔNG TIN CHUNG BÀI TẬP */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-amber-50/60 p-4 rounded-2xl border border-amber-200">
             <div className="sm:col-span-2">
               <label className="block text-xs font-black text-amber-950 mb-1">Tiêu Đề Bài Tập *</label>
@@ -155,14 +186,21 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
               />
             </div>
 
+            {/* CHỌN LỚP HỌC THEO QUYỀN (DROPDOWN KHÓA NGOẠI CLASS_ID) */}
             <div>
-              <label className="block text-xs font-black text-amber-950 mb-1">Lớp Học Phụ Trách</label>
-              <input
-                type="text"
-                value={className}
-                onChange={(e) => setClassName(e.target.value)}
+              <label className="block text-xs font-black text-amber-950 mb-1">Gán Cho Lớp Học *</label>
+              <select
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                disabled={isGlobal}
                 className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
-              />
+              >
+                {classesList.map(c => (
+                  <option key={c.id} value={c.id}>
+                    🏫 Lớp {c.name} (Khối {c.grade_level})
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -178,11 +216,26 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
               </select>
             </div>
 
+            {profile?.role === 'admin' && (
+              <div className="sm:col-span-2 flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="isGlobalCheck"
+                  checked={isGlobal}
+                  onChange={(e) => setIsGlobal(e.target.checked)}
+                  className="w-4 h-4 text-amber-500 rounded"
+                />
+                <label htmlFor="isGlobalCheck" className="text-xs font-black text-amber-900">
+                  🌐 Bài tập chung toàn trường (is_global - Chỉ Admin tạo)
+                </label>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-black text-amber-950 mb-1">Sao Thưởng Hoàn Thành</label>
               <input
                 type="number"
-                min="1"
+                min="0"
                 max="100"
                 value={rewardStars}
                 onChange={(e) => setRewardStars(e.target.value)}
@@ -201,10 +254,10 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-xs font-black text-amber-950 mb-1">Hướng Dẫn Bài Tập</label>
+              <label className="block text-xs font-black text-amber-950 mb-1">Hướng Dẫn Làm Bài</label>
               <textarea
                 rows="2"
-                placeholder="Nhập hướng dẫn làm bài cho các bé..."
+                placeholder="Nhập hướng dẫn chi tiết cho các bé..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
@@ -212,7 +265,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          {/* CÁC CÂU HỎI */}
+          {/* DANH SÁCH 8 DẠNG CÂU HỎI */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-black text-slate-800">Danh Sách Câu Hỏi ({questions.length} câu)</h3>
@@ -226,7 +279,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
 
             {questions.map((q, idx) => (
-              <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3 relative">
+              <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="px-2.5 py-0.5 bg-slate-800 text-white font-black text-xs rounded-lg">
                     Câu {idx + 1}
@@ -242,9 +295,11 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                     >
                       <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                       <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
-                      <option value="fill_blank">Điền từ/số</option>
-                      <option value="essay">Tự luận (GV chấm)</option>
-                      <option value="file_upload">Nộp File/Ảnh</option>
+                      <option value="fill_blank">Điền từ / điền số</option>
+                      <option value="short_answer">Trả lời ngắn</option>
+                      <option value="essay">Tự luận</option>
+                      <option value="image_upload">Nộp Ảnh bài làm</option>
+                      <option value="file_upload">Nộp File PDF/DOCX</option>
                     </select>
                     
                     {questions.length > 1 && (
@@ -263,7 +318,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   <input
                     type="text"
                     required
-                    placeholder="Nhập câu hỏi..."
+                    placeholder="Nhập nội dung câu hỏi..."
                     value={q.prompt}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -273,6 +328,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   />
                 </div>
 
+                {/* DẠNG TRẮC NGHIỆM */}
                 {q.question_type === 'single_choice' && (
                   <div className="grid grid-cols-2 gap-2">
                     {q.options.map((opt, oIdx) => (
@@ -307,12 +363,13 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   </div>
                 )}
 
-                {q.question_type === 'fill_blank' && (
+                {/* DẠNG ĐIỀN TỪ / TRẢ LỜI NGẮN */}
+                {(q.question_type === 'fill_blank' || q.question_type === 'short_answer') && (
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Đáp án đúng tự động chấm:</label>
                     <input
                       type="text"
-                      placeholder="Nhập từ/số đúng..."
+                      placeholder="Nhập từ hoặc số đúng..."
                       value={q.correct_answer}
                       onChange={(e) => {
                         const val = e.target.value;

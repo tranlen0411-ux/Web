@@ -15,7 +15,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   const [exercises, setExercises] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('ALL'); // ALL, pending, submitted, graded, revision
+  const [activeFilter, setActiveFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Modals
@@ -30,10 +30,10 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách bài tập
+      // 1. Lấy danh sách bài tập kết nối với bảng classes (class_id UUID)
       let query = supabase
         .from('academic_exercises')
-        .select('*')
+        .select('*, classes:class_id(id, name, grade_level)')
         .order('created_at', { ascending: false });
 
       if (role === 'student') {
@@ -47,10 +47,10 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         setExercises(exData);
       }
 
-      // 2. Lấy danh sách bài nộp
+      // 2. Lấy danh sách bài nộp của học sinh
       let subQuery = supabase
         .from('academic_submissions')
-        .select('*, academic_exercises(*), profiles!student_id(full_name, avatar_url, class_name)')
+        .select('*, academic_exercises(*), profiles!student_id(full_name, avatar_url)')
         .order('updated_at', { ascending: false });
 
       if (role === 'student') {
@@ -68,12 +68,10 @@ export const ExerciseListTab = ({ role = 'student' }) => {
     }
   };
 
-  // Helper tìm submission của học sinh theo exercise_id
   const getStudentSubmission = (exerciseId) => {
     return submissions.find(s => s.exercise_id === exerciseId);
   };
 
-  // Lọc danh sách bài tập
   const filteredExercises = exercises.filter(ex => {
     const matchesSearch = ex.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           ex.subject.toLowerCase().includes(searchTerm.toLowerCase());
@@ -94,14 +92,14 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   return (
     <div className="space-y-6">
       
-      {/* BANNER HEADER & NÚT TẠO BÀI TẬP */}
+      {/* HEADER BANNER */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-gradient-to-r from-amber-50 to-orange-50 p-6 rounded-3xl border-2 border-amber-200 shadow-sm">
         <div>
           <h2 className="text-xl font-black text-amber-950 flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-amber-600" /> Hệ Thống Bài Tập Học Thuật
           </h2>
           <p className="text-xs font-bold text-amber-800/80 mt-1">
-            {role === 'student' ? 'Làm bài trắc nghiệm, điền từ và nộp bài tự luận được giáo viên giao.' : 'Quản lý, tạo mới bài tập và chấm điểm bài nộp của học sinh.'}
+            {role === 'student' ? 'Làm bài tập trắc nghiệm, điền từ, tự luận và nộp file do Thầy/Cô giao.' : 'Quản lý, xuất bản bài tập và chấm điểm bài nộp của học sinh.'}
           </p>
         </div>
 
@@ -115,7 +113,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         )}
       </div>
 
-      {/* THANH TÌM KIẾM VÀ BỘ LỌC SUB-TABS */}
+      {/* THANH TÌM KIẾM VÀ SUB-TABS BỘ LỌC */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative w-full sm:w-72">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -159,8 +157,8 @@ export const ExerciseListTab = ({ role = 'student' }) => {
       ) : filteredExercises.length === 0 ? (
         <div className="bg-white p-8 rounded-3xl border-2 border-dashed border-amber-200 text-center">
           <FileText className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-          <h3 className="text-sm font-black text-slate-700">Chưa Có Bài Tập Phù Hợp</h3>
-          <p className="text-xs font-bold text-slate-400 mt-1">Danh sách bài tập hiện đang trống hoặc không tìm thấy bài khớp bộ lọc.</p>
+          <h3 className="text-sm font-black text-slate-700">Chưa Có Bài Tập Nào</h3>
+          <p className="text-xs font-bold text-slate-400 mt-1">Danh sách bài tập hiện đang trống hoặc không khớp bộ lọc.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -175,7 +173,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-[11px] rounded-lg border border-amber-300">
-                      Môn {ex.subject} - {ex.class_name}
+                      Môn {ex.subject} - {ex.classes?.name ? `Lớp ${ex.classes.name}` : (ex.is_global ? 'Toàn trường' : 'Lớp học')}
                     </span>
                     <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5" /> Hạn: {ex.due_date ? new Date(ex.due_date).toLocaleDateString('vi-VN') : 'Không giới hạn'}
@@ -195,7 +193,6 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                   </div>
                 </div>
 
-                {/* THAO TÁC THEO VAI TRÒ */}
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                   {role === 'student' ? (
                     isGraded ? (
@@ -231,7 +228,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                       </button>
                     ) : (
                       <div className="w-full flex items-center justify-between bg-amber-50 p-2.5 rounded-2xl border border-amber-200 text-amber-900">
-                        <span className="text-xs font-bold">Đã nộp - Đang chờ GV chấm</span>
+                        <span className="text-xs font-bold">Đã nộp - Chờ GV chấm</span>
                         <button
                           onClick={() => setSelectedExerciseToPlay(ex)}
                           className="px-3 py-1 bg-slate-800 text-white font-black text-xs rounded-xl"
@@ -260,7 +257,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         </div>
       )}
 
-      {/* MODAL TẠO BÀI TẬP MỚI */}
+      {/* MODAL TẠO BÀI TẬP */}
       {isCreateModalOpen && (
         <CreateExerciseModal
           isOpen={isCreateModalOpen}
@@ -268,7 +265,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         />
       )}
 
-      {/* MODAL LÀM BÀI VÀ XEM KẾT QUẢ CHO HỌC SINH */}
+      {/* MODAL LÀM BÀI HỌC SINH */}
       {selectedExerciseToPlay && (
         <ExercisePlayModal
           exercise={selectedExerciseToPlay}
@@ -276,7 +273,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         />
       )}
 
-      {/* MODAL CHẤM BÀI CHO GIÁO VIÊN / ADMIN */}
+      {/* MODAL CHẤM BÀI GIÁO VIÊN / ADMIN */}
       {selectedSubmissionToGrade && (
         <SubmissionGradingModal
           exercise={selectedSubmissionToGrade}
