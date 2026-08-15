@@ -16,6 +16,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
+import { EditGameModal } from '../components/dashboard/EditGameModal';
 import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
@@ -53,6 +54,9 @@ export const AdminDashboard = () => {
 
   // Modals state
   const [isAddGameOpen, setIsAddGameOpen] = useState(false);
+  const [isEditGameOpen, setIsEditGameOpen] = useState(false);
+  const [gameToEdit, setGameToEdit] = useState(null);
+
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [userToEdit, setUserToEdit] = useState(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -65,34 +69,24 @@ export const AdminDashboard = () => {
   const fetchAdminData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch Users
-      const { data: usersData, count: userCount } = await supabase
+      // 1. Thống kê tổng số
+      const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
+      const { count: gCount } = await supabase.from('games').select('id', { count: 'exact', head: true });
+      const { count: cCount } = await supabase.from('classes').select('id', { count: 'exact', head: true });
+
+      setStats({ users: uCount || 0, games: gCount || 0, classes: cCount || 0 });
+
+      // 2. Lấy danh sách người dùng
+      const { data: uData } = await supabase
         .from('profiles')
-        .select('*', { count: 'exact' })
+        .select('*')
         .order('created_at', { ascending: false });
 
-      // 2. Fetch Games
-      const { data: gamesData, count: gameCount } = await supabase
-        .from('games')
-        .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false });
+      const sortedUsers = uData || [];
+      setUsersList(sortedUsers);
 
-      // 3. Fetch Classes
-      const { count: classCount } = await supabase
-        .from('classes')
-        .select('*', { count: 'exact', head: true });
-
-      const allUsers = usersData || [];
-      setUsersList(allUsers);
-      setGamesList(gamesData || []);
-      setStats({
-        users: userCount || 0,
-        games: gameCount || 0,
-        classes: classCount || 0
-      });
-
-      // 4. Kiểm tra trạng thái PIN của học sinh qua RPC has_student_pin (Không expose pin_hash)
-      const studentUsers = allUsers.filter(u => u.role === 'student');
+      // Kiểm tra trạng thái PIN học sinh qua RPC has_student_pin
+      const studentUsers = sortedUsers.filter(u => u.role === 'student');
       const pMap = {};
       await Promise.all(
         studentUsers.map(async (st) => {
@@ -106,6 +100,13 @@ export const AdminDashboard = () => {
       );
       setPinStatusMap(pMap);
 
+      // 3. Lấy danh sách trò chơi
+      const { data: gData } = await supabase
+        .from('games')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      setGamesList(gData || []);
     } catch (err) {
       console.error('Fetch admin data error:', err);
     } finally {
@@ -114,13 +115,15 @@ export const AdminDashboard = () => {
   };
 
   const handleDeleteGame = async (gameId) => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa game này khỏi kho không?')) return;
+    if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
+    
     triggerSound('click');
     try {
-      await supabase.from('games').delete().eq('id', gameId);
+      const { error } = await supabase.from('games').delete().eq('id', gameId);
+      if (error) throw error;
       fetchAdminData();
     } catch (err) {
-      console.error('Delete game error:', err);
+      alert('Lỗi khi xóa game: ' + err.message);
     }
   };
 
@@ -136,92 +139,55 @@ export const AdminDashboard = () => {
         </div>
       )}
 
-      {/* HEADER ADMIN BANNER */}
-      <div className="bg-gradient-to-r from-purple-600 to-indigo-700 rounded-3xl border-4 border-purple-800 p-6 sm:p-8 text-white shadow-lg mb-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+      {/* HEADER BANNER ADMIN */}
+      <div className="bg-gradient-to-r from-slate-900 via-amber-950 to-slate-900 rounded-3xl border-4 border-amber-400 p-6 sm:p-8 text-white shadow-xl mb-8 flex flex-col md:flex-row items-center justify-between gap-6">
         <div>
-          <span className="px-3 py-1 bg-purple-900 text-purple-200 text-xs font-black rounded-xl uppercase">
-            🛡️ Bảng Quản Trị Hệ Thống
-          </span>
-          <h1 className="text-2xl sm:text-3xl font-black mt-1">
-            {activeAdminTab === 'games' ? 'Quản Lý Kho Trò Chơi' : 'Quản Lý Hệ Thống & Người Dùng'}
-          </h1>
-          <p className="text-xs sm:text-sm font-bold text-purple-100 mt-0.5">
-            Hệ thống Quản trị tổng thể Kho Trò Chơi Học Vui Tiểu Học.
+          <div className="flex items-center gap-2 mb-1">
+            <span className="px-3 py-1 bg-amber-400 text-amber-950 text-xs font-black rounded-xl uppercase flex items-center gap-1">
+              <ShieldCheck className="w-3.5 h-3.5" /> Bảng Quản Trị Hệ Thống High-Security
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-black">Học Vui System Administration</h1>
+          <p className="text-xs sm:text-sm font-bold text-amber-200 mt-1">
+            Quản lý tài khoản, nâng quyền Giáo viên, đặt PIN học sinh, chỉnh sửa trò chơi và theo dõi toàn bộ hệ thống.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              setUserToEdit(null);
-              setIsFormModalOpen(true);
-              triggerSound('click');
-            }}
-            className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-amber-950 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-600 shadow-md flex items-center gap-2 active:translate-y-0.5"
-          >
-            <UserPlus className="w-4 h-4" /> + Thêm Tài Khoản
-          </button>
-
-          <button
-            onClick={() => { setIsAddGameOpen(true); triggerSound('click'); }}
-            className="px-4 py-2.5 bg-sky-400 hover:bg-sky-300 text-sky-950 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-600 shadow-md flex items-center gap-2 active:translate-y-0.5"
-          >
-            <Plus className="w-4 h-4" /> + Thêm Game Mới
-          </button>
-        </div>
-      </div>
-
-      {/* THỐNG KÊ TỔNG THỂ */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex items-center gap-4">
-          <div className="w-14 h-14 bg-sky-100 rounded-2xl border-2 border-sky-300 flex items-center justify-center text-sky-600">
-            <Users className="w-8 h-8" />
+        {/* THỐNG KÊ NHANH */}
+        <div className="flex gap-3 text-center">
+          <div className="bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-amber-300/30">
+            <span className="text-xl font-black text-amber-300 block">{stats.users}</span>
+            <span className="text-[10px] font-black text-slate-300 uppercase">Tài Khoản</span>
           </div>
-          <div>
-            <p className="text-2xl font-black text-slate-800">{stats.users}</p>
-            <span className="text-xs font-bold text-slate-500 uppercase">Tổng Người Dùng</span>
+          <div className="bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-amber-300/30">
+            <span className="text-xl font-black text-amber-300 block">{stats.games}</span>
+            <span className="text-[10px] font-black text-slate-300 uppercase">Trò Chơi</span>
           </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex items-center gap-4">
-          <div className="w-14 h-14 bg-emerald-100 rounded-2xl border-2 border-emerald-300 flex items-center justify-center text-emerald-600">
-            <Gamepad2 className="w-8 h-8" />
-          </div>
-          <div>
-            <p className="text-2xl font-black text-slate-800">{stats.games}</p>
-            <span className="text-xs font-bold text-slate-500 uppercase">Trò Chơi Trong Kho</span>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex items-center gap-4">
-          <div className="w-14 h-14 bg-amber-100 rounded-2xl border-2 border-amber-300 flex items-center justify-center text-amber-600">
-            <GraduationCap className="w-8 h-8" />
-          </div>
-          <div>
-            <p className="text-2xl font-black text-slate-800">{stats.classes}</p>
-            <span className="text-xs font-bold text-slate-500 uppercase">Lớp Học Đã Tạo</span>
+          <div className="bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-amber-300/30">
+            <span className="text-xl font-black text-amber-300 block">{stats.classes}</span>
+            <span className="text-[10px] font-black text-slate-300 uppercase">Lớp Học</span>
           </div>
         </div>
       </div>
 
-      {/* TAB CHUYỂN ĐỔI CHỨC NĂNG QUẢN TRỊ */}
-      <div className="flex bg-white p-2 rounded-2xl border-4 border-amber-200 mb-8 gap-2">
+      {/* TAB NAVIGATION CHÍNH DÀNH CHO ADMIN */}
+      <div className="flex flex-wrap bg-white p-2 rounded-2xl border-4 border-amber-200 mb-8 gap-2">
         <button
           onClick={() => { setActiveAdminTab('users'); triggerSound('click'); }}
-          className={`flex-1 py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'users'
-              ? 'bg-purple-600 text-white shadow-md border-b-4 border-purple-800'
+              ? 'bg-amber-500 text-white shadow-md border-b-4 border-amber-700'
               : 'text-slate-600 hover:bg-amber-50'
           }`}
         >
-          <Users className="w-4 h-4" /> Quản Lý Tài Khoản Người Dùng ({usersList.length})
+          <Users className="w-4 h-4" /> Quản Lý Người Dùng ({usersList.length})
         </button>
 
         <button
           onClick={() => { setActiveAdminTab('games'); triggerSound('click'); }}
-          className={`flex-1 py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'games'
-              ? 'bg-sky-600 text-white shadow-md border-b-4 border-sky-800'
+              ? 'bg-sky-500 text-white shadow-md border-b-4 border-sky-700'
               : 'text-slate-600 hover:bg-amber-50'
           }`}
         >
@@ -232,9 +198,9 @@ export const AdminDashboard = () => {
       {/* TAB 1: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG */}
       {activeAdminTab === 'users' && (
         <div className="mb-10 animate-fadeIn">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-3">
+          <div className="flex items-center justify-between gap-4 mb-4">
             <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              <Users className="w-6 h-6 text-emerald-600" /> Danh Sách Tài Khoản Người Dùng ({usersList.length})
+              <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({usersList.length})
             </h3>
 
             <button
@@ -243,18 +209,10 @@ export const AdminDashboard = () => {
                 setIsFormModalOpen(true);
                 triggerSound('click');
               }}
-              className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-purple-800 shadow-md flex items-center gap-2 active:translate-y-0.5 self-start sm:self-auto"
+              className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
             >
-              <UserPlus className="w-4 h-4" /> + Thêm Tài Khoản
+              <UserPlus className="w-4 h-4" /> + Tạo Tài Khoản Mới
             </button>
-          </div>
-
-          {/* GHI CHÚ BẢO MẬT MÃ TRACỨU PHỤ HUYNH */}
-          <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
-            <Info className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              <strong>Mã Tra Cứu Phụ Huynh & Mã PIN Học Sinh:</strong> Quản trị viên và Giáo viên có thể đặt hoặc reset Mã PIN cho học sinh để các bé đăng nhập nhanh.
-            </span>
           </div>
 
           <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
@@ -262,7 +220,7 @@ export const AdminDashboard = () => {
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                 <tr>
                   <th className="p-3">Họ và Tên</th>
-                  <th className="p-3">Email / Đăng Nhập</th>
+                  <th className="p-3">Email</th>
                   <th className="p-3">Vai Trò</th>
                   <th className="p-3">Mã Tra Cứu PH</th>
                   <th className="p-3">Khối</th>
@@ -279,14 +237,12 @@ export const AdminDashboard = () => {
 
                   return (
                     <tr key={u.id} className="hover:bg-amber-50">
-                      <td className="p-3 font-black text-slate-800 flex items-center gap-2">
-                        <img src={u.avatar_url} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
-                        <div>
+                      <td className="p-3 font-black text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <img src={u.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
                           <span>{u.full_name}</span>
                           {isSelf && (
-                            <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-black rounded">
-                              (Bạn)
-                            </span>
+                            <span className="px-1.5 py-0.5 bg-amber-400 text-amber-950 text-[9px] font-black rounded uppercase">Bạn</span>
                           )}
                         </div>
                       </td>
@@ -301,7 +257,6 @@ export const AdminDashboard = () => {
                         )}
                       </td>
 
-                      {/* CỘT MÃ TRA CỨU PHỤ HUYNH (CHỈ HIỂN THỊ CHO ROLE HỌC SINH) */}
                       <td className="p-3">
                         {isStudent ? (
                           <ParentCodeCell code={u.parent_access_code} />
@@ -325,8 +280,6 @@ export const AdminDashboard = () => {
                       </td>
                       <td className="p-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          
-                          {/* NÚT ĐẶT / RESET MÃ PIN DÀNH RIÊNG CHO HỌC SINH */}
                           {isStudent && (
                             <button
                               onClick={() => {
@@ -345,7 +298,6 @@ export const AdminDashboard = () => {
                             </button>
                           )}
 
-                          {/* NÚT SỬA */}
                           <button
                             onClick={() => {
                               setUserToEdit(u);
@@ -358,7 +310,6 @@ export const AdminDashboard = () => {
                             <Edit2 className="w-4 h-4" />
                           </button>
 
-                          {/* NÚT KHÓA / MỞ KHÓA */}
                           <button
                             disabled={isSelf}
                             onClick={() => {
@@ -378,7 +329,6 @@ export const AdminDashboard = () => {
                             <Lock className="w-4 h-4" />
                           </button>
 
-                          {/* NÚT XÓA */}
                           <button
                             disabled={isSelf}
                             onClick={() => {
@@ -426,7 +376,7 @@ export const AdminDashboard = () => {
             <table className="w-full text-left text-xs font-bold">
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                 <tr>
-                  <th className="p-3">Tên Trò Chơi</th>
+                  <th className="p-3">Hình Ảnh & Tên Trò Chơi</th>
                   <th className="p-3">Loại Game</th>
                   <th className="p-3">Khối</th>
                   <th className="p-3">Môn Học</th>
@@ -437,19 +387,40 @@ export const AdminDashboard = () => {
               <tbody className="divide-y divide-amber-100 text-slate-700">
                 {gamesList.map((g) => (
                   <tr key={g.id} className="hover:bg-amber-50">
-                    <td className="p-3 font-black text-amber-900">{g.title}</td>
+                    <td className="p-3 font-black text-amber-900 flex items-center gap-3">
+                      <img
+                        src={g.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
+                        alt=""
+                        className="w-10 h-10 rounded-xl object-cover border border-amber-300 shrink-0"
+                      />
+                      <span>{g.title}</span>
+                    </td>
                     <td className="p-3 uppercase text-sky-600">{g.game_type}</td>
                     <td className="p-3">Khối {g.grade_level}</td>
                     <td className="p-3">{g.subject}</td>
-                    <td className="p-3 text-amber-600">{g.play_count} lượt</td>
+                    <td className="p-3 text-amber-600">{g.play_count || 0} lượt</td>
                     <td className="p-3 text-right">
-                      <button
-                        onClick={() => handleDeleteGame(g.id)}
-                        className="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg"
-                        title="Xóa game"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => {
+                            setGameToEdit(g);
+                            setIsEditGameOpen(true);
+                            triggerSound('click');
+                          }}
+                          className="p-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-lg transition-colors"
+                          title="Sửa trò chơi & thay ảnh"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteGame(g.id)}
+                          className="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg transition-colors"
+                          title="Xóa game"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -464,6 +435,13 @@ export const AdminDashboard = () => {
         isOpen={isAddGameOpen}
         onClose={() => setIsAddGameOpen(false)}
         onAdded={() => fetchAdminData()}
+      />
+
+      <EditGameModal
+        isOpen={isEditGameOpen}
+        onClose={() => setIsEditGameOpen(false)}
+        gameToEdit={gameToEdit}
+        onSaved={() => fetchAdminData()}
       />
 
       <UserFormModal
@@ -481,7 +459,6 @@ export const AdminDashboard = () => {
         onActionCompleted={() => fetchAdminData()}
       />
 
-      {/* MODAL ĐẶT / RESET MÃ PIN DÀNH CHO HỌC SINH */}
       <StudentPinModal
         isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}

@@ -1,13 +1,19 @@
 import React from 'react';
-import { Play, Sparkles, Trophy, Users, BookOpen } from 'lucide-react';
+import { Play, Sparkles, Trophy, Users, BookOpen, Edit2 } from 'lucide-react';
 import { useSound } from '../../context/SoundContext';
 
-export const GameCard = ({ game, onPlay }) => {
+export const GameCard = ({ game, onPlay, onEdit, canEdit = false }) => {
   const { triggerSound } = useSound();
 
   const handlePlayClick = () => {
     triggerSound('click');
-    onPlay(game);
+    if (onPlay) onPlay(game);
+  };
+
+  const handleEditClick = (e) => {
+    e.stopPropagation();
+    triggerSound('click');
+    if (onEdit) onEdit(game);
   };
 
   const getSubjectColor = (subject) => {
@@ -41,6 +47,17 @@ export const GameCard = ({ game, onPlay }) => {
               {game.subject}
             </span>
           </div>
+
+          {/* NÚT CHỈNH SỬA TRÒ CHƠI CHO ADMIN VÀ GIÁO VIÊN NGUỒN */}
+          {(canEdit || onEdit) && (
+            <button
+              onClick={handleEditClick}
+              className="absolute top-2 right-2 p-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-md border border-amber-600 z-10 transition-transform active:scale-95"
+              title="Sửa trò chơi"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           <div className="absolute bottom-2 right-2 bg-slate-900/70 text-white text-[10px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 backdrop-blur-sm">
             <Users className="w-3 h-3 text-amber-300" /> {game.play_count || 0} lượt chơi

@@ -10,13 +10,19 @@ import {
   BookOpen,
   Info,
   ShieldCheck,
-  KeyRound
+  KeyRound,
+  Edit2,
+  RefreshCw,
+  Calendar,
+  Clock
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { ClassManageModal } from '../components/dashboard/ClassManageModal';
 import { AssignGameModal } from '../components/dashboard/AssignGameModal';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
+import { EditGameModal } from '../components/dashboard/EditGameModal';
+import { EditAssignmentModal } from '../components/dashboard/EditAssignmentModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
@@ -45,6 +51,7 @@ export const TeacherDashboard = () => {
 
   const [classes, setClasses] = useState([]);
   const [games, setGames] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [studentProgressList, setStudentProgressList] = useState([]);
   const [managedStudents, setManagedStudents] = useState([]);
   
@@ -52,6 +59,14 @@ export const TeacherDashboard = () => {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isAddGameModalOpen, setIsAddGameModalOpen] = useState(false);
   const [selectedGameForAssign, setSelectedGameForAssign] = useState(null);
+
+  // Modal Sửa Trò Chơi
+  const [isEditGameOpen, setIsEditGameOpen] = useState(false);
+  const [gameToEdit, setGameToEdit] = useState(null);
+
+  // Modal Sửa / Thay Bài Giao
+  const [isEditAssignOpen, setIsEditAssignOpen] = useState(false);
+  const [assignmentToEdit, setAssignmentToEdit] = useState(null);
 
   // Trạng thái PIN dành cho Giáo viên quản lý
   const [pinStatusMap, setPinStatusMap] = useState({});
@@ -124,7 +139,24 @@ export const TeacherDashboard = () => {
       
       setGames(gameData || []);
 
-      // 4. Lấy tiến độ làm bài của học sinh
+      // 4. Lấy danh sách lượt giao bài của các lớp do Giáo viên này phụ trách
+      if (classIds.length > 0) {
+        const { data: assignData } = await supabase
+          .from('assignments')
+          .select(`
+            *,
+            games:game_id (title, subject, grade_level, thumbnail_url),
+            classes:class_id (name, grade_level)
+          `)
+          .in('class_id', classIds)
+          .order('created_at', { ascending: false });
+
+        setAssignments(assignData || []);
+      } else {
+        setAssignments([]);
+      }
+
+      // 5. Lấy tiến độ làm bài của học sinh
       const { data: progressData } = await supabase
         .from('student_progress')
         .select(`
@@ -149,6 +181,11 @@ export const TeacherDashboard = () => {
     setIsAssignModalOpen(true);
   };
 
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3500);
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
@@ -169,7 +206,7 @@ export const TeacherDashboard = () => {
           </div>
           <h1 className="text-2xl sm:text-3xl font-black">{profile?.full_name || 'Giáo Viên Tiểu Học'}</h1>
           <p className="text-xs sm:text-sm font-bold text-emerald-100 mt-1">
-            Quản lý Lớp học, đặt Mã PIN đăng nhập cho học sinh trong lớp và xem báo cáo tiến độ.
+            Quản lý Lớp học, giao bài tập, thay bài giao, chỉnh sửa trò chơi nguồn và quản lý mã PIN học sinh.
           </p>
         </div>
 
@@ -345,38 +382,120 @@ export const TeacherDashboard = () => {
         </>
       )}
 
-      {/* KHU VỰC 2: KHO TRÒ CHƠI & BÁO CÁO TIẾN ĐỘ (tab=games) */}
+      {/* KHU VỰC 2: KHO TRÒ CHƠI, THAY BÀI GIAO & BÁO CÁO TIẾN ĐỘ (tab=games) */}
       {activeTab === 'games' && (
         <>
+          {/* QUẢN LÝ CÁC LƯỢT GIAO BÀI CHO LỚP CỦA GIÁO VIÊN */}
+          <div className="mb-10">
+            <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
+              <RefreshCw className="w-6 h-6 text-amber-600" /> Danh Sách Lượt Giao Bài & Thay Trò Chơi Đã Giao ({assignments.length})
+            </h3>
+            
+            <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
+              {assignments.length > 0 ? (
+                <table className="w-full text-left text-xs font-bold whitespace-nowrap">
+                  <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
+                    <tr>
+                      <th className="p-3">Tên Trò Chơi Đã Giao</th>
+                      <th className="p-3">Lớp Nhận Bài</th>
+                      <th className="p-3">Sao Thưởng</th>
+                      <th className="p-3">Hạn Hoàn Thành</th>
+                      <th className="p-3 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-100 text-slate-700">
+                    {assignments.map((asg) => (
+                      <tr key={asg.id} className="hover:bg-amber-50">
+                        <td className="p-3 font-black text-amber-950 flex items-center gap-2.5">
+                          <img
+                            src={asg.games?.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
+                            alt=""
+                            className="w-8 h-8 rounded-lg object-cover border border-amber-300"
+                          />
+                          <span>{asg.games?.title || 'Trò chơi'}</span>
+                        </td>
+                        <td className="p-3 text-sky-700 font-black">Lớp {asg.classes?.name}</td>
+                        <td className="p-3 text-amber-600 font-black">+{asg.reward_stars} 🌟</td>
+                        <td className="p-3 text-slate-500">
+                          {asg.due_date ? new Date(asg.due_date).toLocaleDateString('vi-VN') : 'Không hạn'}
+                        </td>
+                        <td className="p-3 text-right">
+                          <button
+                            onClick={() => {
+                              setAssignmentToEdit(asg);
+                              setIsEditAssignOpen(true);
+                              triggerSound('click');
+                            }}
+                            className="px-3 py-1.5 bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs rounded-xl flex items-center gap-1 ml-auto"
+                            title="Thay trò chơi hoặc sửa hạn bài giao"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" /> Thay / Sửa Bài Giao
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-6 text-center text-slate-500 font-bold">
+                  Thầy/Cô chưa giao trò chơi nào cho các lớp học. Thử chọn game bên dưới để giao ngay nhé!
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* KHO GAME & GIAO BÀI TẬP */}
           <div className="mb-10">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                <Gamepad2 className="w-6 h-6 text-sky-600" /> Kho Trò Chơi — Giao Bài Cho Học Sinh
+                <Gamepad2 className="w-6 h-6 text-sky-600" /> Kho Trò Chơi — Giao Bài Cho Học Sinh ({games.length})
               </h3>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {games.map((game) => (
-                <div key={game.id} className="bg-white p-4 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <img
-                      src={game.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
-                      alt={game.title}
-                      className="w-full h-36 object-cover rounded-2xl border-2 border-amber-100 mb-3"
-                    />
-                    <h4 className="text-sm font-black text-slate-800 line-clamp-1">{game.title}</h4>
-                    <p className="text-[11px] font-bold text-slate-500 mt-0.5 mb-3">Khối {game.grade_level} • Môn {game.subject}</p>
-                  </div>
+              {games.map((game) => {
+                // Phân quyền: Giáo viên CHỈ ĐƯỢC SỬA trò chơi do chính mình tạo (author_id = profile.id)
+                const isAuthor = game.author_id === profile?.id;
 
-                  <button
-                    onClick={() => handleOpenAssignModal(game)}
-                    className="w-full py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-xs rounded-xl border-b-2 border-amber-600 shadow-sm flex items-center justify-center gap-1"
-                  >
-                    <BookOpen className="w-3.5 h-3.5" /> Giao Bài Ngay
-                  </button>
-                </div>
-              ))}
+                return (
+                  <div key={game.id} className="bg-white p-4 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between relative group">
+                    
+                    {/* NÚT SỬA TRÒ CHƠI NGUỒN CHO GIÁO VIÊN TẠO GAME */}
+                    {isAuthor && (
+                      <button
+                        onClick={() => {
+                          setGameToEdit(game);
+                          setIsEditGameOpen(true);
+                          triggerSound('click');
+                        }}
+                        className="absolute top-2 right-2 p-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-md border border-amber-600 z-10 transition-transform active:scale-95"
+                        title="Sửa trò chơi do Thầy/Cô tạo"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    <div>
+                      <img
+                        src={game.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
+                        alt={game.title}
+                        className="w-full h-36 object-cover rounded-2xl border-2 border-amber-100 mb-3"
+                      />
+                      <h4 className="text-sm font-black text-slate-800 line-clamp-1">{game.title}</h4>
+                      <p className="text-[11px] font-bold text-slate-500 mt-0.5 mb-3">
+                        Khối {game.grade_level} • Môn {game.subject} {isAuthor && <span className="text-emerald-600 font-black">(Của tôi)</span>}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleOpenAssignModal(game)}
+                      className="w-full py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-xs rounded-xl border-b-2 border-amber-600 shadow-sm flex items-center justify-center gap-1"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" /> Giao Bài Ngay
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -433,12 +552,37 @@ export const TeacherDashboard = () => {
         isOpen={isAssignModalOpen}
         onClose={() => setIsAssignModalOpen(false)}
         game={selectedGameForAssign}
+        onAssigned={() => fetchTeacherData()}
       />
 
       <AddGameModal
         isOpen={isAddGameModalOpen}
         onClose={() => setIsAddGameModalOpen(false)}
         onAdded={() => fetchTeacherData()}
+      />
+
+      {/* MODAL SỬA TRÒ CHƠI DÀNH CHO GIÁO VIÊN TẠO GAME */}
+      <EditGameModal
+        isOpen={isEditGameOpen}
+        onClose={() => setIsEditGameOpen(false)}
+        gameToEdit={gameToEdit}
+        onSaved={() => fetchTeacherData()}
+      />
+
+      {/* MODAL SỬA / THAY BÀI GIAO DÀNH CHO LỚP CỦA GIÁO VIÊN */}
+      <EditAssignmentModal
+        isOpen={isEditAssignOpen}
+        onClose={() => setIsEditAssignOpen(false)}
+        assignmentToEdit={assignmentToEdit}
+        availableGames={games}
+        onSaved={() => {
+          fetchTeacherData();
+          showToast('Đã cập nhật bài giao thành công!');
+        }}
+        onDeleted={() => {
+          fetchTeacherData();
+          showToast('Đã hủy lượt giao bài thành công!');
+        }}
       />
 
       {/* MODAL ĐẶT / RESET MÃ PIN DÀNH CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN */}
@@ -449,8 +593,7 @@ export const TeacherDashboard = () => {
         onSuccess={(studentId) => {
           setPinStatusMap(prev => ({ ...prev, [studentId]: true }));
           const isReset = pinStatusMap[studentId] === true;
-          setToastMsg(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
-          setTimeout(() => setToastMsg(''), 3500);
+          showToast(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
         }}
       />
 
