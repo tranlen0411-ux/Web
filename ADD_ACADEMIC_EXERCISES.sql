@@ -1,9 +1,9 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.4 CHUẨN HÓA MIGRATION NÂNG CẤP & IDEMPOTENT WORKER RPCs
--- 1. XÓA VÀ THU HỒI HOÀN TOÀN CÁC OVERLOAD CHỮ KÝ RPC CŨ (15.1, 15.2, 15.3) ĐỂ TRÁNH MƠ HỒ
--- 2. BẮT BỘC P_REQUESTING_USER_ID KHÔNG DEFAULT NULL VÀ XÁC MINH PROFILE TỒN TẠI
--- 3. THÊM RPC RECONCILE_EXERCISE_FILE_CLEANUP_JOB XỬ LÝ ĐỐI SOÁT NGUYÊN TỬ IDEMPOTENT
--- 4. BẢO VỆ 100% CẤU TRÚC VÀ BÀI NỘP HỌC SINH CÙNG PHÂN QUYỀN WORKER DÀNH RIÊNG CHO SERVICE_ROLE
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.5 FULLY IDEMPOTENT MIGRATION & EXACT WORKER RPCs
+-- 1. CHỈ DÙNG DROP FUNCTION IF EXISTS VỚI MỌI CHỮ KÝ OVERLOAD CŨ VÀ MỚI (KHÔNG GỌI REVOKE TRƯỚC DROP ĐỂ TRÁNH LỖI MIGRATION)
+-- 2. CREATE FUNCTION LẠI SẠCH SẼ RỒI MỚI CHẠY REVOKE / GRANT TRÊN CHỮ KÝ HIỆN HÀNH DÀNH RIÊNG CHO SERVICE_ROLE
+-- 3. ĐỐI SOÁT P_EXPECTED_ATTEMPT CHUẨN XÁC TRONG RECONCILE_EXERCISE_FILE_CLEANUP_JOB
+-- 4. BỔ SUNG RPC ADMIN_RETRY_PENDING_CLEANUP_JOBS CHO PHÉP QUẢN TRỊ VIÊN CHẠY BÁCH THỦ THỦ CÔNG/CRON HÀNG ĐỢI FILE RÁC
 -- ============================================================================
 
 BEGIN;
@@ -11,22 +11,13 @@ BEGIN;
 -- 1. SCHEMA PRIVACY APP_PRIVATE
 CREATE SCHEMA IF NOT EXISTS app_private;
 
--- DROP CÁC CHỮ KÝ OVERLOAD RPC CLEANUP WORKER CŨ ĐỂ TRÁNH XUNG ĐỘT KHI NÂNG CẤP TỪ 15.1/15.2/15.3
-REVOKE ALL ON FUNCTION public.claim_exercise_file_cleanup_job(UUID) FROM PUBLIC, anon, authenticated, service_role;
+-- DROP FUNCTION IF EXISTS VỚI MỌI CHỮ KÝ RPC CŨ VÀ MỚI MÀ KHÔNG GỌI REVOKE TRƯỚC ĐÓ
 DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID);
-
-REVOKE ALL ON FUNCTION public.claim_exercise_file_cleanup_job(UUID, UUID) FROM PUBLIC, anon, authenticated, service_role;
 DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID, UUID);
-
-REVOKE ALL ON FUNCTION public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT) FROM PUBLIC, anon, authenticated, service_role;
 DROP FUNCTION IF EXISTS public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT);
-
-REVOKE ALL ON FUNCTION public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT, UUID) FROM PUBLIC, anon, authenticated, service_role;
 DROP FUNCTION IF EXISTS public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT, UUID);
-
-REVOKE ALL ON FUNCTION public.reconcile_exercise_file_cleanup_job(UUID, INT, UUID) FROM PUBLIC, anon, authenticated, service_role;
 DROP FUNCTION IF EXISTS public.reconcile_exercise_file_cleanup_job(UUID, INT, UUID);
-
+DROP FUNCTION IF EXISTS public.admin_retry_pending_cleanup_jobs(INT);
 DROP FUNCTION IF EXISTS public.delete_unreferenced_submission_files(TEXT[]);
 
 -- 2. BẢNG HÀNG ĐỢI CLEANUP FILE BẢO MẬT
@@ -305,7 +296,7 @@ FOR SELECT USING (
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e 
     JOIN public.classes c ON c.id = e.class_id
-    WHERE e.id = exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
+    WHERE e.id = s.exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
   )
 );
 
@@ -640,7 +631,7 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'reason', 'missing_profile', 'message', 'Profile không tồn tại.');
   END IF;
 
-  SELECT * INTO v_job FROM public.exercise_file_cleanup_jobs WHERE id = p_job_id;
+  SELECT * INTO v_job FROM public.exercise_file_cleanup_jobs WHERE id = p_job_id FOR UPDATE;
   IF v_job.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'reason', 'missing_job', 'message', 'Job không tồn tại.');
   END IF;
@@ -654,12 +645,57 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'already_finished', true, 'status', 'deleted');
   END IF;
 
+  -- Nếu attempt không phù hợp và status không phải deleted -> Báo stale worker attempt
+  IF v_job.attempts != p_expected_attempt THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'stale_worker_attempt', 'message', 'Lượt thử worker đã bị thay thế bởi lượt mới.');
+  END IF;
+
   RETURN jsonb_build_object('success', true, 'already_finished', false, 'status', v_job.status, 'attempts', v_job.attempts);
 END;
 $$;
 
 
--- 5. GET_EXERCISE_FOR_EDIT
+-- 5. RPC ADMIN_RETRY_PENDING_CLEANUP_JOBS CHO PHÉP CHẠY LẠI CÁC JOB PENDING/FAILED CHỜ XỬ LÝ BẰNG BÁCH THỦ TRONG CSDL
+CREATE OR REPLACE FUNCTION public.admin_retry_pending_cleanup_jobs(
+  p_limit INT DEFAULT 50
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_updated_count INT := 0;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NOT NULL THEN
+    SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+  END IF;
+
+  -- Cho phép Admin hoặc Service Role thực thi
+  IF COALESCE(auth.jwt()->>'role', '') != 'service_role' AND COALESCE(v_caller_role, '') != 'admin' THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền thực thi chức năng này.');
+  END IF;
+
+  UPDATE public.exercise_file_cleanup_jobs
+  SET status = 'pending', processed_at = NULL, last_error = NULL
+  WHERE id IN (
+    SELECT id FROM public.exercise_file_cleanup_jobs
+    WHERE status IN ('failed', 'storage_deleted_job_update_failed')
+       OR (status = 'processing' AND processed_at < NOW() - INTERVAL '15 minutes')
+    ORDER BY created_at ASC
+    LIMIT LEAST(GREATEST(COALESCE(p_limit, 50), 1), 100)
+  );
+
+  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+  RETURN jsonb_build_object('success', true, 'reset_count', v_updated_count);
+END;
+$$;
+
+
+-- 6. GET_EXERCISE_FOR_EDIT
 CREATE OR REPLACE FUNCTION public.get_exercise_for_edit(
   p_exercise_id UUID
 )
@@ -727,7 +763,7 @@ END;
 $$;
 
 
--- 6. CREATE_OR_GET_SUBMISSION_DRAFT
+-- 7. CREATE_OR_GET_SUBMISSION_DRAFT
 CREATE OR REPLACE FUNCTION public.create_or_get_submission_draft(
   p_exercise_id UUID
 )
@@ -803,7 +839,7 @@ END;
 $$;
 
 
--- 7. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN MỌI TRƯỜNG VÀ DÙNG BIẾN TYPED
+-- 8. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN MỌI TRƯỜNG VÀ DÙNG BIẾN TYPED
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -1282,7 +1318,7 @@ END;
 $$;
 
 
--- 8. SUBMIT_ACADEMIC_EXERCISE
+-- 9. SUBMIT_ACADEMIC_EXERCISE
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
   p_answers JSONB,
@@ -1651,7 +1687,7 @@ END;
 $$;
 
 
--- 9. GRADE_ACADEMIC_SUBMISSION VỚI VALIDATION KIỂU INT CHO POINTS_EARNED DÙNG NUMERIC TRUNC
+-- 10. GRADE_ACADEMIC_SUBMISSION VỚI VALIDATION KIỂU INT CHO POINTS_EARNED DÙNG NUMERIC TRUNC
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -1864,11 +1900,12 @@ BEGIN
 END;
 $$;
 
--- GRANT / REVOKE PERMISSIONS DÀNH RIÊNG CHO SERVICE_ROLE
+-- GRANT / REVOKE PERMISSIONS DÀNH RIÊNG CHO SERVICE_ROLE CHO CÁC RPC WORKER NỘI BỘ
 REVOKE ALL ON FUNCTION public.queue_file_cleanup FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.claim_exercise_file_cleanup_job(UUID, UUID) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT, UUID) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.reconcile_exercise_file_cleanup_job(UUID, INT, UUID) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.admin_retry_pending_cleanup_jobs(INT) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.get_exercise_for_edit FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.create_or_get_submission_draft FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.save_exercise_with_questions_and_keys FROM PUBLIC, anon;
@@ -1878,6 +1915,7 @@ REVOKE ALL ON FUNCTION public.grade_academic_submission FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_exercise_file_cleanup_job(UUID, UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.finish_exercise_file_cleanup_job(UUID, INT, TEXT, TEXT, UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.reconcile_exercise_file_cleanup_job(UUID, INT, UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.admin_retry_pending_cleanup_jobs(INT) TO service_role, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.queue_file_cleanup TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_exercise_for_edit TO authenticated;

@@ -290,6 +290,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 edgeErr ||
                 !edgeRes?.success ||
                 edgeRes?.partial_success ||
+                (edgeRes?.unresolved_count && edgeRes.unresolved_count > 0) ||
                 (edgeRes?.failed && edgeRes.failed.length > 0) ||
                 (edgeRes?.missing_job_ids && edgeRes.missing_job_ids.length > 0) ||
                 (edgeRes?.invalid_job_ids && edgeRes.invalid_job_ids.length > 0) ||

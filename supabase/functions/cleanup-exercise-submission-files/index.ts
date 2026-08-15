@@ -76,7 +76,19 @@ serve(async (req) => {
     const jobIds = body?.job_ids;
     if (!Array.isArray(jobIds) || jobIds.length === 0) {
       return new Response(
-        JSON.stringify({ success: true, partial_success: false, deleted: [], still_referenced: [], failed: [], already_claimed: [], invalid_job_ids: [], missing_job_ids: [] }),
+        JSON.stringify({
+          success: true,
+          partial_success: false,
+          requested_count: 0,
+          completed_count: 0,
+          unresolved_count: 0,
+          deleted: [],
+          still_referenced: [],
+          failed: [],
+          already_claimed: [],
+          invalid_job_ids: [],
+          missing_job_ids: []
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -222,13 +234,20 @@ serve(async (req) => {
       }
     }
 
-    const overallSuccess = failed.length === 0 && invalid_job_ids.length === 0;
-    const partialSuccess = deleted.length > 0 && failed.length > 0;
+    const requested_count = uniqueJobIds.length;
+    const completed_count = deleted.length + still_referenced.length;
+    const unresolved_count = failed.length + missing_job_ids.length + invalid_job_ids.length + already_claimed.length;
+
+    const overallSuccess = unresolved_count === 0;
+    const partialSuccess = completed_count > 0 && unresolved_count > 0;
 
     return new Response(
       JSON.stringify({
         success: overallSuccess,
         partial_success: partialSuccess,
+        requested_count,
+        completed_count,
+        unresolved_count,
         deleted,
         still_referenced,
         already_claimed,
