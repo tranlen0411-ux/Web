@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle2, RotateCcw, Save, FileText, AlertCircle, Loader2, Star, User } from 'lucide-react';
+import { X, CheckCircle2, RotateCcw, Save, FileText, AlertCircle, Loader2, Star, Eye } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 
 export const SubmissionGradingModal = ({ exercise, onClose }) => {
@@ -7,8 +7,8 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   const [selectedSub, setSelectedSub] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [signedUrlsMap, setSignedUrlsMap] = useState({});
 
-  // Điểm thủ công và nhận xét
   const [manualGrades, setManualGrades] = useState({});
   const [feedback, setFeedback] = useState('');
   const [requestRevision, setRequestRevision] = useState(false);
@@ -23,7 +23,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     try {
       const { data, error } = await supabase
         .from('academic_submissions')
-        .select('*, profiles!student_id(full_name, avatar_url, class_name), academic_submission_answers(*, academic_exercise_questions(*))')
+        .select('*, profiles!student_id(full_name, avatar_url), academic_submission_answers(*, academic_exercise_questions(*))')
         .eq('exercise_id', exercise.id)
         .order('submitted_at', { ascending: false });
 
@@ -40,20 +40,37 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     }
   };
 
-  const selectSubmissionForGrading = (sub) => {
+  const selectSubmissionForGrading = async (sub) => {
     setSelectedSub(sub);
     setFeedback(sub.teacher_feedback || '');
     setRequestRevision(sub.status === 'revision_requested');
     const grades = {};
+    const signedMap = {};
+
     if (sub.academic_submission_answers) {
-      sub.academic_submission_answers.forEach(a => {
+      for (const a of sub.academic_submission_answers) {
         grades[a.question_id] = {
           points_earned: a.points_earned || 0,
           teacher_comment: a.teacher_comment || ''
         };
-      });
+
+        if (a.file_url) {
+          try {
+            const { data: signedData } = await supabase.storage
+              .from('exercise-submissions')
+              .createSignedUrl(a.file_url, 900);
+            if (signedData?.signedUrl) {
+              signedMap[a.question_id] = signedData.signedUrl;
+            }
+          } catch (e) {
+            console.error('Signed URL error:', e);
+          }
+        }
+      }
     }
+
     setManualGrades(grades);
+    setSignedUrlsMap(signedMap);
   };
 
   const handleSaveGrade = async () => {
@@ -93,11 +110,11 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-4xl rounded-3xl border-4 border-amber-300 shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] flex flex-col">
         
-        {/* HEADER */}
+        {/* HEADER - KHÔNG CÒN DÙNG EXERCISE.CLASS_NAME */}
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div>
             <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg">
-              {exercise.class_name} - Môn {exercise.subject}
+              {exercise.classes?.name ? `Lớp ${exercise.classes.name}` : (exercise.is_global ? 'Toàn trường' : 'Lớp học')} - Môn {exercise.subject}
             </span>
             <h2 className="text-xl font-black text-slate-800 mt-1">Quản Lý & Chấm Bài: {exercise.title}</h2>
           </div>
@@ -112,7 +129,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         {/* BODY */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-4 overflow-y-auto flex-1">
           
-          {/* DANH SÁCH BÀI NỘP CỦA HỌC SINH */}
+          {/* DANH SÁCH HỌC SINH NỘP BÀI */}
           <div className="md:col-span-1 border-r border-slate-200 pr-3 space-y-2">
             <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2">
               Danh sách nộp bài ({submissions.length})
@@ -147,7 +164,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
             )}
           </div>
 
-          {/* CHI TIẾT VÀ BẢNG CHẤM ĐIỂM */}
+          {/* CHẤM BÀI CHI TIẾT */}
           <div className="md:col-span-2 space-y-4">
             {selectedSub ? (
               <>
@@ -171,15 +188,17 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                   </div>
                 </div>
 
-                {/* DANH SÁCH CÂU TRẢ LỜI */}
+                {/* DANH SÁCH CÂU HỎI VÀ BÀI LÀM */}
                 <div className="space-y-3">
                   {(selectedSub.academic_submission_answers || []).map((ans, idx) => {
                     const q = ans.academic_exercise_questions;
+                    const isSubjective = ['essay', 'image_upload', 'file_upload'].includes(q?.question_type);
+
                     return (
                       <div key={ans.id} className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-black text-xs text-slate-800">
-                            Câu {idx + 1}: {q?.prompt}
+                            Câu {idx + 1} [{q?.question_type}]: {q?.prompt}
                           </span>
                           <span className="text-xs font-bold text-sky-600">
                             Tối đa {q?.points} điểm
@@ -187,29 +206,57 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                         </div>
 
                         <div className="bg-slate-50 p-2.5 rounded-xl text-xs font-bold text-slate-700">
-                          <strong>Bài làm:</strong> {JSON.stringify(ans.student_answer_json || ans.file_url || 'Chưa trả lời')}
+                          <strong>Bài làm:</strong> {JSON.stringify(ans.student_answer_json || 'Chưa có văn bản')}
                         </div>
 
-                        <div className="flex items-center gap-2 pt-1">
-                          <label className="text-[11px] font-black text-slate-600">Điểm chấm:</label>
-                          <input
-                            type="number"
-                            min="0"
-                            max={q?.points || 10}
-                            value={manualGrades[ans.question_id]?.points_earned ?? ans.points_earned}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setManualGrades(prev => ({
-                                ...prev,
-                                [ans.question_id]: {
-                                  ...prev[ans.question_id],
-                                  points_earned: val
-                                }
-                              }));
-                            }}
-                            className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold"
-                          />
-                        </div>
+                        {/* HIỂN THỊ SIGNED URL 15 PHÚT MỞ FILE PRIVATE CHO GIÁO VIÊN */}
+                        {ans.file_url && (
+                          <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-xl text-xs flex items-center justify-between">
+                            <span className="font-bold text-sky-900 truncate max-w-[240px]">
+                              📁 File bài làm nộp: {ans.file_url}
+                            </span>
+                            {signedUrlsMap[ans.question_id] ? (
+                              <a
+                                href={signedUrlsMap[ans.question_id]}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1 bg-sky-600 hover:bg-sky-700 text-white font-black text-[11px] rounded-lg flex items-center gap-1 shadow-sm"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Mở Xem File Private (Signed URL)
+                              </a>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">Đang tạo link bảo mật...</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* CHỈ CHO PHÉP NHẬP ĐIỂM THỦ CÔNG KHI LÀ CÂU TỰ LUẬN / NỘP FILE */}
+                        {isSubjective ? (
+                          <div className="flex items-center gap-2 pt-1">
+                            <label className="text-[11px] font-black text-slate-600">Điểm tự luận:</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max={q?.points || 10}
+                              value={manualGrades[ans.question_id]?.points_earned ?? ans.points_earned}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setManualGrades(prev => ({
+                                  ...prev,
+                                  [ans.question_id]: {
+                                    ...prev[ans.question_id],
+                                    points_earned: val
+                                  }
+                                }));
+                              }}
+                              className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold"
+                            />
+                          </div>
+                        ) : (
+                          <div className="text-[11px] font-extrabold text-slate-500">
+                            🤖 Điểm tự động chấm trắc nghiệm: {ans.points_earned} điểm {ans.is_correct ? '✅ (Đúng)' : '❌ (Sai)'}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -235,12 +282,12 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                       className="w-4 h-4 text-amber-500 rounded"
                     />
                     <label htmlFor="revisionReq" className="text-xs font-bold text-rose-700">
-                      Yêu cầu học sinh làm lại bài tập này
+                      Yêu cầu học sinh sửa và làm lại bài tập này
                     </label>
                   </div>
                 </div>
 
-                {/* NÚT LƯU BÀI CHẤM */}
+                {/* NÚT HOÀN TẤT */}
                 <div className="pt-2 flex justify-end">
                   <button
                     onClick={handleSaveGrade}

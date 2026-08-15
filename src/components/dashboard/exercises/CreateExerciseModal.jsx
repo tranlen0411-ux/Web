@@ -21,7 +21,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
   const [showScoreAfterSubmit, setShowScoreAfterSubmit] = useState(true);
   const [showCorrectAnswers, setShowCorrectAnswers] = useState(false);
 
-  // Mảng danh sách câu hỏi hỗ trợ 8 dạng câu hỏi
   const [questions, setQuestions] = useState([
     {
       id: 1,
@@ -59,7 +58,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
-  // Thêm câu hỏi mới
   const handleAddQuestion = () => {
     setQuestions(prev => [
       ...prev,
@@ -75,13 +73,11 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
     ]);
   };
 
-  // Xóa câu hỏi
   const handleRemoveQuestion = (idx) => {
     if (questions.length <= 1) return;
     setQuestions(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // Lưu bài tập qua RPC nguyên tử save_exercise_with_questions_and_keys
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -149,7 +145,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-3xl rounded-3xl border-4 border-amber-300 shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] flex flex-col">
         
-        {/* MODAL HEADER */}
+        {/* HEADER */}
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div className="flex items-center gap-2">
             <FileText className="w-6 h-6 text-amber-500" />
@@ -163,7 +159,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
           </button>
         </div>
 
-        {/* FORM THÔNG TIN CHUNG */}
+        {/* FORM */}
         <form onSubmit={handleSubmit} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
           
           {errorMsg && (
@@ -186,7 +182,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
               />
             </div>
 
-            {/* CHỌN LỚP HỌC THEO QUYỀN (DROPDOWN KHÓA NGOẠI CLASS_ID) */}
             <div>
               <label className="block text-xs font-black text-amber-950 mb-1">Gán Cho Lớp Học *</label>
               <select
@@ -265,7 +260,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          {/* DANH SÁCH 8 DẠNG CÂU HỎI */}
+          {/* CÂU HỎI & ĐÁP ÁN NGUYÊN BẢN */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-black text-slate-800">Danh Sách Câu Hỏi ({questions.length} câu)</h3>
@@ -289,7 +284,14 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                       value={q.question_type}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, question_type: val } : item));
+                        setQuestions(prev => prev.map((item, i) => {
+                          if (i === idx) {
+                            let initCorrect = 'Lựa chọn A';
+                            if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
+                            return { ...item, question_type: val, correct_answer: initCorrect };
+                          }
+                          return item;
+                        }));
                       }}
                       className="px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold"
                     >
@@ -328,7 +330,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   />
                 </div>
 
-                {/* DẠNG TRẮC NGHIỆM */}
+                {/* 1. TRẮC NGHIỆM 1 ĐÁP ÁN */}
                 {q.question_type === 'single_choice' && (
                   <div className="grid grid-cols-2 gap-2">
                     {q.options.map((opt, oIdx) => (
@@ -363,7 +365,56 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   </div>
                 )}
 
-                {/* DẠNG ĐIỀN TỪ / TRẢ LỜI NGẮN */}
+                {/* 2. TRẮC NGHIỆM NHIỀU ĐÁP ÁN (MULTIPLE CHOICE UI CHỌN NƠI ĐÁNH DẤU MULTIPLE CORRECT ANSWERS) */}
+                {q.question_type === 'multiple_choice' && (
+                  <div className="space-y-2">
+                    <label className="block text-[11px] font-bold text-slate-600">Đánh dấu các đáp án đúng (Mảng JSON):</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {q.options.map((opt, oIdx) => {
+                        const currentCorrectArr = Array.isArray(q.correct_answer) ? q.correct_answer : [];
+                        const isChecked = currentCorrectArr.includes(opt);
+
+                        return (
+                          <div key={oIdx} className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={opt}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setQuestions(prev => prev.map((item, i) => {
+                                  if (i === idx) {
+                                    const newOpts = [...item.options];
+                                    newOpts[oIdx] = val;
+                                    return { ...item, options: newOpts };
+                                  }
+                                  return item;
+                                }));
+                              }}
+                              className="w-full px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                let newArr;
+                                if (isChecked) {
+                                  newArr = currentCorrectArr.filter(x => x !== opt);
+                                } else {
+                                  newArr = [...currentCorrectArr, opt];
+                                }
+                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: newArr } : item));
+                              }}
+                              className={`px-2 py-1 text-[11px] font-bold rounded-lg ${isChecked ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}
+                            >
+                              {isChecked ? '✓ Đúng' : 'Chọn'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3 & 4. ĐIỀN TỪ / TRẢ LỜI NGẮN */}
                 {(q.question_type === 'fill_blank' || q.question_type === 'short_answer') && (
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Đáp án đúng tự động chấm:</label>
@@ -379,11 +430,12 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                     />
                   </div>
                 )}
+
               </div>
             ))}
           </div>
 
-          {/* FOOTER BUTTONS */}
+          {/* BUTTONS */}
           <div className="pt-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
             <button
               type="button"

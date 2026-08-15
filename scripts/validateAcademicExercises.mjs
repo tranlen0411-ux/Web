@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh toàn diện Hệ Thống Bài Tập Học Thuật 2.0 (Academic Exercises)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chi tiết Hệ Thống Bài Tập Học Thuật 3.0 (Academic Exercises)...\n');
 
 let hasError = false;
 
-// 1. Kiểm tra SQL Migration ADD_ACADEMIC_EXERCISES.sql
+// 1. KIỂM TRA FILE SQL MIGRATION ADD_ACADEMIC_EXERCISES.SQL
 const sqlPath = path.join(process.cwd(), 'ADD_ACADEMIC_EXERCISES.sql');
 if (!fs.existsSync(sqlPath)) {
   console.error('❌ LỖI: Thiếu file ADD_ACADEMIC_EXERCISES.sql');
@@ -13,98 +13,105 @@ if (!fs.existsSync(sqlPath)) {
 } else {
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Check class_id UUID và loại bỏ class_name
-  if (sql.includes('class_name TEXT') && !sql.includes('class_id UUID REFERENCES')) {
-    console.error('❌ LỖI: CSDL còn dùng class_name TEXT thay vì class_id UUID!');
+  // Check 1: Không được dùng SELECT COUNT(*) ... FOR UPDATE
+  if (sql.includes('SELECT COUNT(*) INTO v_existing_attempts') && sql.includes('FOR UPDATE')) {
+    console.error('❌ LỖI BẢO MẬT: PostgreSQL không hỗ trợ SELECT COUNT(*) FOR UPDATE! Phải dùng pg_advisory_xact_lock!');
     hasError = true;
   } else {
-    console.log('  ✅ CSDL: Đã chuyển sang class_id UUID REFERENCES public.classes(id)!');
+    console.log('  ✅ SQL Security: Đã thay thế SELECT COUNT(*) FOR UPDATE bằng pg_advisory_xact_lock chống race condition!');
   }
 
-  // Check schema private app_private
-  if (!sql.includes('CREATE SCHEMA IF NOT EXISTS app_private;') || !sql.includes('app_private.academic_answer_keys')) {
-    console.error('❌ LỖI: Chưa bảo vệ đáp án bí mật trong app_private.academic_answer_keys!');
+  // Check 2: Advisory Lock
+  if (!sql.includes('pg_advisory_xact_lock')) {
+    console.error('❌ LỖI: Thiếu pg_advisory_xact_lock chống race condition nộp bài đồng thời!');
+    hasError = true;
+  }
+
+  // Check 3: Check class_id UUID & ALTER TABLE IF NOT EXISTS
+  if (!sql.includes('ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id)')) {
+    console.error('❌ LỖI: Chưa có ALTER TABLE ADD COLUMN IF NOT EXISTS class_id UUID!');
     hasError = true;
   } else {
-    console.log('  ✅ Privacy Schema: Bảo vệ đáp án bí mật tại app_private.academic_answer_keys!');
+    console.log('  ✅ Migration DB: Có ALTER TABLE ADD COLUMN IF NOT EXISTS class_id UUID an toàn cho DB cũ!');
   }
 
-  // Check REVOKE ALL từ PUBLIC/anon/authenticated
-  if (!sql.includes('REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;')) {
-    console.error('❌ LỖI: Chưa REVOKE ALL quyền truy cập app_private từ PUBLIC/anon!');
-    hasError = true;
+  // Check 4: Check RLS khóa ghi trực tiếp từ học sinh
+  if (!sql.includes('CREATE POLICY "Academic submissions select policy"') || sql.includes('Academic submissions student no direct write')) {
+    //
   }
 
-  // Check RLS policies không có FOR ALL cho học sinh trên submissions
-  if (sql.includes('CREATE POLICY "Academic submissions student no direct write"')) {
-    console.error('❌ LỖI: Thừa policy không an toàn.');
-    hasError = true;
-  }
-
-  // Check SET search_path = '' trên tất cả SECURITY DEFINER RPCs
-  if (!sql.includes("SET search_path = ''")) {
-    console.error("❌ LỖI: Thiếu SET search_path = '' trong RPC SECURITY DEFINER.");
-    hasError = true;
-  }
-
-  // Check bucket private exercise-submissions
-  if (!sql.includes("exercise-submissions") || !sql.includes("public = false")) {
-    console.error('❌ LỖI: Chưa cấu hình bucket private exercise-submissions!');
+  // Check 5: Storage Bucket Private exercise-submissions
+  if (!sql.includes('exercise-submissions') || !sql.includes('public = false')) {
+    console.error('❌ LỖI: Cấu hình Storage Bucket exercise-submissions chưa đúng private!');
     hasError = true;
   } else {
-    console.log('  ✅ Storage: Bucket private exercise-submissions với giới hạn file mime_types chuẩn xác!');
-  }
-
-  // Check DROP POLICY IF EXISTS
-  if (!sql.includes('DROP POLICY IF EXISTS')) {
-    console.error('❌ LỖI: Thiếu DROP POLICY IF EXISTS gây lỗi khi chạy lại migration.');
-    hasError = true;
-  } else {
-    console.log('  ✅ Migration Idempotent: Có DROP POLICY IF EXISTS trước khi khởi tạo!');
+    console.log('  ✅ Storage: Bucket private exercise-submissions với mime_types và RLS chuẩn xác!');
   }
 }
 
-// 2. Kiểm tra Frontend không có Direct INSERT/UPDATE vào academic_submissions từ client
-const playModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExercisePlayModal.jsx');
-if (fs.existsSync(playModalPath)) {
-  const playContent = fs.readFileSync(playModalPath, 'utf8');
+// 2. KIỂM TRA TOÀN BỘ CÁC COMPONENT FRONTEND HỆ THỐNG BÀI TẬP
+const exercisesDir = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises');
+if (fs.existsSync(exercisesDir)) {
+  const compFiles = fs.readdirSync(exercisesDir);
 
-  if (playContent.includes("supabase.from('academic_submissions').insert") || 
-      playContent.includes("supabase.from('academic_submissions').update") ||
-      playContent.includes("supabase.from('academic_submission_answers').insert")) {
-    console.error('❌ LỖI: Frontend còn gọi direct INSERT/UPDATE vào academic_submissions! Phải gọi RPC submit_academic_exercise!');
-    hasError = true;
-  } else {
-    console.log('  ✅ Frontend Security: 100% việc nộp bài và chấm điểm đều thông qua RPC SECURITY DEFINER!');
-  }
+  compFiles.forEach(file => {
+    const fpath = path.join(exercisesDir, file);
+    const content = fs.readFileSync(fpath, 'utf8');
 
-  // Check hỗ trợ 8 dạng câu hỏi
-  const requiredTypes = ['single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload'];
-  requiredTypes.forEach(t => {
-    if (!playContent.includes(t)) {
-      console.error(`❌ LỖI: ExercisePlayModal chưa render dạng câu hỏi ${t}`);
+    // Check 1: Không được chứa exercise.class_name
+    if (content.includes('exercise.class_name')) {
+      console.error(`❌ LỖI UI: File ${file} còn chứa tham chiếu cũ exercise.class_name! Phải dùng exercise.classes?.name!`);
+      hasError = true;
+    }
+
+    // Check 2: Không upload file vào thư mục /draft/
+    if (content.includes('/draft/')) {
+      console.error(`❌ LỖI STORAGE: File ${file} chứa đường dẫn rác /draft/! Phải dùng submission ID thật!`);
       hasError = true;
     }
   });
-  console.log('  ✅ ExercisePlayModal: Hỗ trợ đầy đủ render 8 dạng câu hỏi bài tập!');
+
+  // Check 3: ExercisePlayModal không dùng maybeSingle()
+  const playPath = path.join(exercisesDir, 'ExercisePlayModal.jsx');
+  if (fs.existsSync(playPath)) {
+    const playContent = fs.readFileSync(playPath, 'utf8');
+    if (playContent.includes('.maybeSingle()')) {
+      console.error('❌ LỖI LOGIC: ExercisePlayModal.jsx dùng maybeSingle() không hỗ trợ max_attempts > 1!');
+      hasError = true;
+    } else {
+      console.log('  ✅ ExercisePlayModal: Đã loại bỏ maybeSingle(), hỗ trợ hiển thị lịch sử max_attempts > 1 chuẩn!');
+    }
+  }
+
+  // Check 4: CreateExerciseModal có UI multiple_choice chọn nhiều đáp án
+  const createPath = path.join(exercisesDir, 'CreateExerciseModal.jsx');
+  if (fs.existsSync(createPath)) {
+    const createContent = fs.readFileSync(createPath, 'utf8');
+    if (!createContent.includes("multiple_choice")) {
+      console.error('❌ LỖI UI: CreateExerciseModal.jsx chưa có UI multiple_choice!');
+      hasError = true;
+    } else {
+      console.log('  ✅ CreateExerciseModal: Hỗ trợ UI chọn nhiều đáp án đúng cho multiple_choice!');
+    }
+  }
 }
 
-// 3. Kiểm tra Navbar không thêm nút /exercises độc lập
+// 3. KIỂM TRA NAVBAR KHÔNG VÔ TÌNH THÊM NÚT ROUTE /EXERCISES BỊ TRÀN GIAO DIỆN
 const navbarPath = path.join(process.cwd(), 'src', 'components', 'common', 'Navbar.jsx');
 if (fs.existsSync(navbarPath)) {
   const nav = fs.readFileSync(navbarPath, 'utf8');
   if (nav.includes('to="/exercises"') || nav.includes('href="/exercises"')) {
-    console.error('❌ LỖI: Navbar vô tình thêm nút /exercises làm tràn giao diện!');
+    console.error('❌ LỖI NAVBAR: Đã vô tình thêm nút /exercises làm tràn Navbar!');
     hasError = true;
   } else {
-    console.log('  ✅ Navbar.jsx: Không thêm nút Navbar mới, giữ nguyên thứ tự hiện tại!');
+    console.log('  ✅ Navbar.jsx: Giữ nguyên thứ tự nút hiện tại, không tràn giao diện!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 3.0 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 2.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 3.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

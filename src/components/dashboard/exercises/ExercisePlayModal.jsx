@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Award, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload, FileCheck, Save, Eye } from 'lucide-react';
+import { X, Send, Award, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload, Save, Eye, History } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -7,10 +7,12 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const { profile, refreshProfile } = useAuth();
 
   const [questions, setQuestions] = useState([]);
+  const [submissionsList, setSubmissionsList] = useState([]);
   const [submission, setSubmission] = useState(null);
   const [answers, setAnswers] = useState({});
   const [fileUrls, setFileUrls] = useState({});
   const [signedUrlsMap, setSignedUrlsMap] = useState({});
+  const [correctAnswersMap, setCorrectAnswersMap] = useState({});
   const [uploadingQId, setUploadingQId] = useState(null);
 
   const [loading, setLoading] = useState(true);
@@ -18,13 +20,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const [submitResult, setSubmitResult] = useState(null);
 
   useEffect(() => {
-    fetchQuestionsAndSubmission();
+    fetchQuestionsAndSubmissions();
   }, [exercise.id]);
 
-  const fetchQuestionsAndSubmission = async () => {
+  const fetchQuestionsAndSubmissions = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách câu hỏi công khai (không lộ đáp án bí mật app_private)
+      // 1. Lấy danh sách câu hỏi công khai (khôngSELECT app_private)
       const { data: qData } = await supabase
         .from('academic_exercise_questions')
         .select('*')
@@ -33,26 +35,30 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       if (qData) setQuestions(qData);
 
-      // 2. Lấy bản ghi bài nộp của học sinh
+      // 2. Lấy tất cả các lượt nộp bài của học sinh (HỖ TRỢ MAX_ATTEMPTS > 1, KHÔNG DÙNG MAYBESINGLE)
       const { data: subData } = await supabase
         .from('academic_submissions')
         .select('*, academic_submission_answers(*)')
         .eq('exercise_id', exercise.id)
         .eq('student_id', profile?.id)
-        .maybeSingle();
+        .order('attempt_number', { ascending: false });
 
-      if (subData) {
-        setSubmission(subData);
+      if (subData && subData.length > 0) {
+        setSubmissionsList(subData);
+
+        // Lấy lượt nháp hoặc lượt mới nhất
+        const activeSub = subData.find(s => s.status === 'draft' || s.status === 'revision_requested') || subData[0];
+        setSubmission(activeSub);
+
         const ansMap = {};
         const fileMap = {};
         const signedMap = {};
 
-        if (subData.academic_submission_answers) {
-          for (const a of subData.academic_submission_answers) {
+        if (activeSub.academic_submission_answers) {
+          for (const a of activeSub.academic_submission_answers) {
             ansMap[a.question_id] = a.student_answer_json;
             if (a.file_url) {
               fileMap[a.question_id] = a.file_url;
-              // Tạo Signed URL xem file trong bucket private 15 phút
               try {
                 const { data: signedData } = await supabase.storage
                   .from('exercise-submissions')
@@ -61,7 +67,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                   signedMap[a.question_id] = signedData.signedUrl;
                 }
               } catch (e) {
-                console.error('Error creating signed url:', e);
+                console.error('Signed URL error:', e);
               }
             }
           }
@@ -70,19 +76,33 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         setAnswers(ansMap);
         setFileUrls(fileMap);
         setSignedUrlsMap(signedMap);
+
+        // Nếu được phép xem đáp án đúng sau khi nộp -> gọi RPC an toàn get_submission_correct_answers
+        if (exercise.show_correct_answers && ['submitted', 'pending_manual_grade', 'graded'].includes(activeSub.status)) {
+          const { data: keyRes } = await supabase.rpc('get_submission_correct_answers', {
+            p_submission_id: activeSub.id
+          });
+
+          if (keyRes?.success && keyRes.answers) {
+            const keyMap = {};
+            keyRes.answers.forEach(k => {
+              keyMap[k.question_id] = k.correct_answer;
+            });
+            setCorrectAnswersMap(keyMap);
+          }
+        }
       }
     } catch (err) {
-      console.error('Fetch questions error:', err);
+      console.error('Fetch submission error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Upload file bài làm lên bucket private exercise-submissions
+  // Upload file bài làm vào PATH CHUẨN: {student_id}/{submission_id}/{uuid}_{clean_filename}
   const handleFileUpload = async (questionId, file) => {
     if (!file) return;
 
-    // Kiểm tra định dạng file cấm SVG & File thực thi
     const bannedExts = ['.svg', '.exe', '.bat', '.sh', '.js', '.html'];
     const fileName = file.name.toLowerCase();
     if (bannedExts.some(ext => fileName.endsWith(ext))) {
@@ -97,8 +117,25 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
     setUploadingQId(questionId);
     try {
+      // 1. TẠO HOẶC LẤY DRAFT SUBMISSION ID AN TOÀN TRƯỚC KHI UPLOAD STORAGE
+      let currentSubId = submission?.id;
+      if (!currentSubId) {
+        const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
+          p_exercise_id: exercise.id
+        });
+
+        if (draftErr || !draftRes?.success) {
+          alert('Không thể tạo bản nháp bài làm: ' + (draftErr?.message || draftRes?.message));
+          setUploadingQId(null);
+          return;
+        }
+
+        currentSubId = draftRes.submission_id;
+      }
+
+      // 2. PATH CHUẨN STORAGE RLS: {student_id}/{submission_id}/{uuid}_{clean_filename}
       const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const filePath = `${profile.id}/${submission?.id || 'draft'}/${crypto.randomUUID()}_${cleanName}`;
+      const filePath = `${profile.id}/${currentSubId}/${crypto.randomUUID()}_${cleanName}`;
 
       const { data, error } = await supabase.storage
         .from('exercise-submissions')
@@ -108,7 +145,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         alert('Lỗi upload file: ' + error.message);
       } else {
         setFileUrls(prev => ({ ...prev, [questionId]: filePath }));
-        // Tạo Signed URL hiển thị ngay
         const { data: signedData } = await supabase.storage
           .from('exercise-submissions')
           .createSignedUrl(filePath, 900);
@@ -150,7 +186,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
       } else {
         setSubmitResult(rpcRes);
         if (refreshProfile) await refreshProfile();
-        fetchQuestionsAndSubmission();
+        fetchQuestionsAndSubmissions();
       }
     } catch (err) {
       console.error('Submit exercise error:', err);
@@ -171,7 +207,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-3xl rounded-3xl border-4 border-amber-300 shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] flex flex-col">
         
-        {/* MODAL HEADER */}
+        {/* HEADER */}
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div>
             <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg">
@@ -187,7 +223,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
           </button>
         </div>
 
-        {/* CONTENT AREA */}
+        {/* BODY */}
         <div className="overflow-y-auto py-4 space-y-6 flex-1">
           
           {submitResult && (
@@ -201,7 +237,27 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             </div>
           )}
 
-          {/* HIỂN THỊ THÔNG BÁO YÊU CẦU LÀM LẠI */}
+          {/* LỊCH SỬ CÁC LẦN LÀM BÀI NẾU MAX_ATTEMPTS > 1 */}
+          {submissionsList.length > 1 && (
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs">
+              <span className="font-black text-slate-700 flex items-center gap-1">
+                <History className="w-4 h-4 text-amber-600" /> Lịch sử nộp bài ({submissionsList.length} lượt):
+              </span>
+              <div className="flex gap-1.5">
+                {submissionsList.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSubmission(s)}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] ${submission?.id === s.id ? 'bg-amber-500 text-white' : 'bg-white text-slate-600 border border-slate-300'}`}
+                  >
+                    Lượt {s.attempt_number} ({s.status})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* CẦN LÀM LẠI BÀI */}
           {isRevisionRequested && (
             <div className="bg-rose-50 p-4 rounded-2xl border-2 border-rose-300 text-rose-950 space-y-1">
               <h4 className="font-black text-sm text-rose-900 flex items-center gap-1.5">
@@ -211,7 +267,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             </div>
           )}
 
-          {/* KẾT QUẢ NẾU CÓ */}
+          {/* KẾT QUẢ VỚI SHOW_SCORE_AFTER_SUBMIT */}
           {isGraded && exercise.show_score_after_submit && (
             <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-300 text-emerald-950 space-y-2">
               <div className="flex items-center justify-between">
@@ -236,13 +292,14 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             <p className="text-xs font-bold text-slate-700">{exercise.description || 'Không có mô tả chi tiết.'}</p>
           </div>
 
-          {/* HIỂN THỊ RENDER NGUYÊN BẢN CẢ 8 DẠNG CÂU HỎI */}
+          {/* RENDER CÂU HỎI */}
           {loading ? (
             <div className="p-8 text-center text-xs font-bold text-slate-400">Đang tải danh sách câu hỏi...</div>
           ) : (
             <div className="space-y-6">
               {questions.map((q, idx) => {
                 const currentAnswer = answers[q.id];
+                const correctAnswerKey = correctAnswersMap[q.id];
 
                 return (
                   <div key={q.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
@@ -254,6 +311,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                         {q.points} điểm
                       </span>
                     </div>
+
+                    {/* SHOW CORRECT ANSWER NẾU CÓ CỜ SHOW_CORRECT_ANSWERS SAU KHI NỘP */}
+                    {correctAnswerKey && (
+                      <div className="p-2.5 bg-emerald-100/70 border border-emerald-300 rounded-xl text-xs font-bold text-emerald-900">
+                        ✅ Đáp án đúng của hệ thống: <strong>{JSON.stringify(correctAnswerKey)}</strong>
+                      </div>
+                    )}
 
                     {/* 1. TRẮC NGHIỆM 1 ĐÁP ÁN */}
                     {q.question_type === 'single_choice' && (
@@ -341,7 +405,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       ></textarea>
                     )}
 
-                    {/* 6 & 7. NỘP ẢNH / FILE BÀI LÀM LÊN PRIVATE BUCKET EXERCISE-SUBMISSIONS */}
+                    {/* 6 & 7. NỘP FILE BÀI LÀM VỚI PATH AN TOÀN */}
                     {(q.question_type === 'image_upload' || q.question_type === 'file_upload') && (
                       <div className="space-y-2">
                         {canEdit && (
@@ -375,7 +439,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                                 rel="noreferrer"
                                 className="px-3 py-1 bg-sky-600 text-white font-bold text-[11px] rounded-lg flex items-center gap-1"
                               >
-                                <Eye className="w-3.5 h-3.5" /> Xem File Private
+                                <Eye className="w-3.5 h-3.5" /> Xem File Private (Signed URL)
                               </a>
                             )}
                           </div>
@@ -391,7 +455,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
         </div>
 
-        {/* FOOTER ACTIONS */}
+        {/* BUTTONS */}
         {canEdit && (
           <div className="pt-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
             <button
