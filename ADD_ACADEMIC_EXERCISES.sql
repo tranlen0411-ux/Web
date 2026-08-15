@@ -1,10 +1,10 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 13.0 CHUẨN KIẾN TRÚC STORAGE API
--- 1. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG SQL (TRÁNH LỖI METADATA MỒ CÔI THUỘC TÀI LIỆU CHÍNH THỨC SUPABASE)
--- 2. TẠO BẢNG HÀNG ĐỜI PUBLIC.EXERCISE_FILE_CLEANUP_JOBS VÀ RPC PUBLIC.QUEUE_FILE_CLEANUP
--- 3. CHÍNH THỨC SỬ DỤNG EDGE FUNCTION CLEANUP-EXERCISE-SUBMISSION-FILES VỚI SUPABASE.STORAGE.REMOVE() API
--- 4. VALIDATE INT THỰC TẾ CHO POINTS_EARNED (TRUNC(NUMERIC) = NUMERIC KHÔNG CHO PHÉP SỐ THẬP PHÂN NHƯ 1.5 HOẶC CHUỖI "ABC")
--- 5. PHÂN TÁCH MẠNH VÀ HOÀN THIỆN ZERO-DML VALIDATION PHASE TRONG MỌI RPC
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 14.0 HOÀN THIỆN CHÍNH THỨC
+-- 1. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG CÁC SCRIPT SQL (TUÂN THỦ TÀI LIỆU SUPABASE)
+-- 2. TẠO BẢNG HÀNG ĐỢI PUBLIC.EXERCISE_FILE_CLEANUP_JOBS VÀ RPC PUBLIC.QUEUE_FILE_CLEANUP
+-- 3. EDGE FUNCTION SUPABASE/FUNCTIONS/CLEANUP-EXERCISE-SUBMISSION-FILES DÙNG STORAGE API REMOVE() CHÍNH THỨC
+-- 4. VALIDATION ZERO-DML NGHIÊM NGẶT TOÀN BỘ CÂU HỎI & ĐÁP ÁN BÍ MẬT TRƯỚC KHI XÓA/GHI ĐÈ CSDL
+-- 5. VALIDATE SỐ NGUYÊN AN TOÀN TRUNC(NUMERIC) = NUMERIC VÀ LENGTH TRONG SUBMIT VÀ SAVE EXERCISE
 -- ============================================================================
 
 BEGIN;
@@ -216,9 +216,7 @@ END $$;
 REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM PUBLIC, anon, authenticated;
 
--- ============================================================================
 -- STORAGE BUCKET PRIVATE EXERCISE-SUBMISSIONS
--- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'exercise-submissions',
@@ -325,7 +323,6 @@ FOR SELECT USING (
 
 -- STORAGE POLICIES
 DROP POLICY IF EXISTS "Exercise submissions student insert policy" ON storage.objects;
-DROP POLICY IF EXISTS "Exercise submissions student delete policy" ON storage.objects;
 DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
 
 CREATE POLICY "Exercise submissions student insert policy" ON storage.objects
@@ -363,7 +360,7 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
--- 1. RPC AN TOÀN ĐƯA FILE VÀO HÀNG ĐỢI CLEANUP BẢO MẬT (KHÔNG DÙNG DELETE SQL TRÊN STORAGE.OBJECTS)
+-- 1. RPC QUEUE_FILE_CLEANUP (KHÔNG DÙNG DELETE SQL TRÊN STORAGE.OBJECTS METADATA)
 CREATE OR REPLACE FUNCTION public.queue_file_cleanup(
   p_paths TEXT[]
 )
@@ -413,11 +410,7 @@ BEGIN
     v_queued := array_append(v_queued, v_path);
   END LOOP;
 
-  RETURN jsonb_build_object(
-    'success', true,
-    'queued', to_jsonb(v_queued),
-    'rejected', to_jsonb(v_rejected)
-  );
+  RETURN jsonb_build_object('success', true, 'queued', to_jsonb(v_queued), 'rejected', to_jsonb(v_rejected));
 END;
 $$;
 
@@ -566,7 +559,7 @@ END;
 $$;
 
 
--- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS
+-- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN CÂU HỎI TRƯỚC DELETE
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -592,7 +585,17 @@ DECLARE
   v_incoming_questions_json JSONB;
   v_new_status TEXT;
   v_q_type TEXT;
+  v_q_num_seen INT[] := ARRAY[]::INT[];
+  v_q_num INT;
+  v_opts_arr JSONB;
+  v_correct_ans JSONB;
+  v_opt_item TEXT;
+  v_opt_match BOOLEAN;
+  v_distinct_opts INT;
 BEGIN
+  -- =========================================================================
+  -- PHASE 1: ZERO-DML VALIDATION PHASE
+  -- =========================================================================
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chưa đăng nhập.');
@@ -605,6 +608,12 @@ BEGIN
 
   IF jsonb_typeof(p_questions) != 'array' THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Cấu trúc câu hỏi p_questions phải là một mảng JSON.');
+  END IF;
+
+  v_new_status := COALESCE(p_exercise->>'status', 'draft');
+
+  IF v_new_status = 'published' AND jsonb_array_length(p_questions) = 0 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập trạng thái Xuất bản (published) phải chứa ít nhất 1 câu hỏi.');
   END IF;
 
   v_is_global := COALESCE((p_exercise->>'is_global')::BOOLEAN, FALSE);
@@ -633,11 +642,24 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được để trống.');
   END IF;
 
-  v_new_status := COALESCE(p_exercise->>'status', 'draft');
-
   -- VALIDATE TOÀN BỘ MẢNG CÂU HỎI TRƯỚC KHI XÓA/SỬA BẤT KỲ DỮ LIỆU NÀO
   FOR v_q_json IN SELECT * FROM jsonb_array_elements(p_questions)
   LOOP
+    v_q_num := (v_q_json->>'question_number')::INT;
+    IF v_q_num IS NULL OR v_q_num <= 0 THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ question_number phải là số nguyên dương.');
+    END IF;
+
+    IF v_q_num = ANY(v_q_num_seen) THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số thứ tự câu hỏi question_number bị trùng lặp.');
+    END IF;
+    v_q_num_seen := array_append(v_q_num_seen, v_q_num);
+
+    v_q_type := v_q_json->>'question_type';
+    IF v_q_type NOT IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload') THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Dạng câu hỏi question_type không hợp lệ.');
+    END IF;
+
     IF (v_q_json->>'prompt') IS NULL OR length(trim(v_q_json->>'prompt')) = 0 THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Nội dung câu hỏi không được để trống.');
     END IF;
@@ -645,8 +667,64 @@ BEGIN
     IF (v_q_json->>'points') IS NOT NULL AND (v_q_json->>'points')::INT <= 0 THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi phải lớn hơn 0.');
     END IF;
+
+    v_opts_arr := v_q_json->'options_json';
+    IF v_q_type IN ('single_choice', 'multiple_choice') THEN
+      IF v_opts_arr IS NULL OR jsonb_typeof(v_opts_arr) != 'array' OR jsonb_array_length(v_opts_arr) < 2 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Câu hỏi trắc nghiệm phải có ít nhất 2 lựa chọn trong options_json.');
+      END IF;
+
+      SELECT COUNT(DISTINCT opt) INTO v_distinct_opts FROM jsonb_array_elements_text(v_opts_arr) opt;
+      IF v_distinct_opts != jsonb_array_length(v_opts_arr) THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Danh sách lựa chọn options_json không được chứa các phần tử trùng lặp.');
+      END IF;
+
+      v_key_json := v_q_json->'correct_answer_key';
+      IF v_key_json IS NULL OR (v_key_json->'correct_answer') IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thiếu đáp án đúng correct_answer_key cho câu hỏi trắc nghiệm.');
+      END IF;
+
+      v_correct_ans := v_key_json->'correct_answer';
+
+      IF v_q_type = 'single_choice' THEN
+        IF jsonb_typeof(v_correct_ans) != 'string' OR length(trim(v_correct_ans#>>'{}')) = 0 THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án đúng cho câu hỏi trắc nghiệm đơn phải là một chuỗi chữ.');
+        END IF;
+
+        SELECT EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(v_opts_arr) opt WHERE opt = (v_correct_ans#>>'{}')
+        ) INTO v_opt_match;
+        IF NOT v_opt_match THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án đúng được chọn không thuộc danh sách lựa chọn options_json của câu hỏi.');
+        END IF;
+
+      ELSIF v_q_type = 'multiple_choice' THEN
+        IF jsonb_typeof(v_correct_ans) != 'array' OR jsonb_array_length(v_correct_ans) = 0 THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án đúng cho câu hỏi trắc nghiệm nhiều lựa chọn phải là một mảng JSON không rỗng.');
+        END IF;
+
+        SELECT NOT EXISTS (
+          SELECT elem FROM jsonb_array_elements_text(v_correct_ans) elem
+          WHERE elem NOT IN (SELECT jsonb_array_elements_text(v_opts_arr))
+        ) INTO v_opt_match;
+        IF NOT v_opt_match THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Phát hiện đáp án đúng không thuộc danh sách lựa chọn options_json của câu hỏi.');
+        END IF;
+      END IF;
+    END IF;
+
+    IF v_q_type IN ('fill_blank', 'short_answer') THEN
+      v_key_json := v_q_json->'correct_answer_key';
+      IF v_key_json IS NULL OR (v_key_json->'correct_answer') IS NULL OR jsonb_typeof(v_key_json->'correct_answer') != 'string' OR length(trim(v_key_json->'correct_answer'#>>'{}')) = 0 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thiếu đáp án đúng hợp lệ cho câu hỏi điền đáp án / trả lời ngắn.');
+      END IF;
+    END IF;
+
   END LOOP;
 
+  -- =========================================================================
+  -- PHASE 2: DML EXECUTION PHASE
+  -- =========================================================================
   IF (p_exercise->>'id') IS NOT NULL AND (p_exercise->>'id') != '' THEN
     v_exercise_id := (p_exercise->>'id')::UUID;
 
@@ -957,6 +1035,10 @@ BEGIN
 
     -- Đánh giá theo loại câu hỏi và ĐỐI CHIẾU THỰC TẾ VỚI OPTIONS_JSON TRONG CSDL
     IF v_q.question_type = 'single_choice' THEN
+      IF jsonb_typeof(v_q.options_json) != 'array' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Cấu trúc options_json câu hỏi trắc nghiệm trong CSDL không phải mảng JSON.');
+      END IF;
+
       IF NOT p_is_draft AND (v_student_ans IS NULL OR jsonb_typeof(v_student_ans) = 'null') THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa chọn đáp án trắc nghiệm.');
       END IF;
@@ -973,6 +1055,10 @@ BEGIN
       END IF;
 
     ELSIF v_q.question_type = 'multiple_choice' THEN
+      IF jsonb_typeof(v_q.options_json) != 'array' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Cấu trúc options_json câu hỏi trắc nghiệm trong CSDL không phải mảng JSON.');
+      END IF;
+
       IF NOT p_is_draft AND (v_student_ans IS NULL OR jsonb_typeof(v_student_ans) != 'array' OR jsonb_array_length(v_student_ans) = 0) THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa chọn đáp án cho câu hỏi trắc nghiệm nhiều lựa chọn.');
       END IF;
@@ -992,6 +1078,32 @@ BEGIN
         IF NOT v_opt_match THEN
           RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Phát hiện lựa chọn trong câu trắc nghiệm không thuộc danh sách lựa chọn hợp lệ.');
         END IF;
+      END IF;
+
+    ELSIF v_q.question_type IN ('fill_blank', 'short_answer') THEN
+      IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) != 'string' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Câu trả lời ngắn phải là một chuỗi chữ.');
+      END IF;
+      IF NOT p_is_draft THEN
+        IF v_student_ans IS NULL OR jsonb_typeof(v_student_ans) != 'string' OR length(trim(v_student_ans#>>'{}')) = 0 THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa nhập câu trả lời điền đáp án.');
+        END IF;
+      END IF;
+      IF v_student_ans IS NOT NULL AND length(v_student_ans#>>'{}') > 2000 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Câu trả lời ngắn vượt quá giới hạn 2.000 ký tự.');
+      END IF;
+
+    ELSIF v_q.question_type = 'essay' THEN
+      IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) != 'string' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài làm tự luận phải là một chuỗi văn bản.');
+      END IF;
+      IF NOT p_is_draft THEN
+        IF v_student_ans IS NULL OR jsonb_typeof(v_student_ans) != 'string' OR length(trim(v_student_ans#>>'{}')) = 0 THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa viết bài làm tự luận.');
+        END IF;
+      END IF;
+      IF v_student_ans IS NOT NULL AND length(v_student_ans#>>'{}') > 20000 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài làm tự luận vượt quá giới hạn 20.000 ký tự.');
       END IF;
     END IF;
 
