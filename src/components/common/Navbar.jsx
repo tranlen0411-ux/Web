@@ -66,13 +66,27 @@ export const Navbar = () => {
     fetchHeaderClasses();
   }, [user, profile?.id, role]);
 
+  // Tự động đưa globalClassFilter về 'ALL' nếu UUID lớp hiện tại không còn nằm trong headerClasses
+  useEffect(() => {
+    if (globalClassFilter !== 'ALL' && globalClassFilter !== 'NO_CLASS') {
+      if (headerClasses.length > 0) {
+        const isValid = headerClasses.some(c => c.id === globalClassFilter);
+        if (!isValid) {
+          setGlobalClassFilter('ALL');
+        }
+      }
+    }
+  }, [headerClasses, globalClassFilter, setGlobalClassFilter]);
+
   const handleNavClick = (path) => {
     triggerSound('click');
+    setIsMenuOpen(false);
     navigate(path);
   };
 
   const handleGamesNavClick = () => {
     triggerSound('click');
+    setIsMenuOpen(false);
     if (role === 'admin') {
       navigate('/admin?tab=games');
     } else if (role === 'teacher') {
@@ -84,6 +98,7 @@ export const Navbar = () => {
 
   const handleDashboardNavClick = () => {
     triggerSound('click');
+    setIsMenuOpen(false);
     if (role === 'admin') {
       navigate('/admin?tab=users');
     } else if (role === 'teacher') {
@@ -95,6 +110,8 @@ export const Navbar = () => {
 
   const handleLogout = async () => {
     triggerSound('click');
+    setIsMenuOpen(false);
+    setHeaderClasses([]);
     await signOut();
     navigate('/auth');
   };
@@ -135,14 +152,14 @@ export const Navbar = () => {
           </div>
         </a>
 
-        {/* ĐIỀU HƯỚNG CHÍNH CHUẨN ROLE & BỘ LỌC LỚP HEADER TOÀN CỤC */}
+        {/* ĐIỀU HƯỚNG CHÍNH MÀN HÌNH MÁY TÍNH (DESKTOP >= lg) */}
         <nav className="hidden lg:flex items-center gap-2">
           
-          {/* BỘ LỌC LỚP DÙNG CHUNG TRÊN HEADER (GLOBAL CLASS FILTER) */}
+          {/* BỘ LỌC LỚP HEADER TOÀN CỤC MÁY TÍNH */}
           {user && (
-            <div className="flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-2xl border-2 border-amber-200 mr-1">
+            <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-2xl border-2 border-amber-200 mr-1">
               <Filter className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-              <span className="text-xs font-black text-amber-950 shrink-0">Lớp:</span>
+              <span className="text-xs font-black text-amber-950 shrink-0">🏫 Lớp:</span>
               <select
                 value={globalClassFilter}
                 onChange={(e) => {
@@ -253,9 +270,9 @@ export const Navbar = () => {
                 <ChevronDown className="w-4 h-4 text-amber-700" />
               </button>
 
-              {/* DROPDOWN MENU */}
+              {/* DROPDOWN MENU USER & ĐIỀU HƯỚNG MOBILE */}
               {isMenuOpen && (
-                <div className="absolute right-0 mt-2 w-56 bg-white rounded-3xl border-4 border-amber-200 shadow-xl py-2 z-50 animate-fadeIn">
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-3xl border-4 border-amber-200 shadow-xl py-2 z-50 animate-fadeIn">
                   <div className="px-4 py-2 border-b-2 border-slate-100 mb-1">
                     <p className="text-xs text-slate-500 font-bold">Tài khoản vai trò</p>
                     <p className="text-sm font-black text-amber-900 capitalize">
@@ -263,21 +280,32 @@ export const Navbar = () => {
                     </p>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      handleNavClick('/materials');
-                    }}
-                    className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
-                  >
-                    <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
-                  </button>
+                  {/* NÚT ĐIỀU HƯỚNG MOBILE/TABLET */}
+                  <div className="lg:hidden border-b-2 border-slate-100 pb-1 mb-1">
+                    <button
+                      onClick={handleGamesNavClick}
+                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                    >
+                      <Gamepad2 className="w-4 h-4 text-sky-500" /> Kho Trò Chơi
+                    </button>
+
+                    <button
+                      onClick={() => handleNavClick('/materials')}
+                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                    >
+                      <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
+                    </button>
+
+                    <button
+                      onClick={() => handleNavClick('/leaderboard')}
+                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                    >
+                      <Trophy className="w-4 h-4 text-amber-500" /> Bảng Xếp Hạng
+                    </button>
+                  </div>
 
                   <button
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      handleDashboardNavClick();
-                    }}
+                    onClick={handleDashboardNavClick}
                     className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
                   >
                     <User className="w-4 h-4 text-amber-500" /> Hồ Sơ & Bảng Quản Lý
@@ -314,6 +342,32 @@ export const Navbar = () => {
         </div>
 
       </div>
+
+      {/* THANH BỘ LỌC LỚP HEADER DÀNH RIÊNG CHO MÀN HÌNH NHỎ ĐIỆN THOẠI & MÁY TÍNH BẢNG (< lg) */}
+      {user && (
+        <div className="lg:hidden bg-amber-100/80 border-t-2 border-amber-200 px-3 py-2 flex items-center justify-center">
+          <div className="flex items-center gap-2 w-full max-w-sm">
+            <Filter className="w-4 h-4 text-amber-800 shrink-0" />
+            <span className="text-xs font-black text-amber-950 shrink-0">🏫 Lớp:</span>
+            <select
+              value={globalClassFilter}
+              onChange={(e) => {
+                setGlobalClassFilter(e.target.value);
+                triggerSound('click');
+              }}
+              className="w-full bg-white border-2 border-amber-300 rounded-xl px-2.5 py-1 text-xs font-bold text-amber-950 focus:outline-none focus:border-amber-500 shadow-sm truncate"
+            >
+              <option value="ALL">🌐 Tất cả các lớp</option>
+              <option value="NO_CLASS">📌 Bài giảng chung</option>
+              {headerClasses.map(c => (
+                <option key={c.id} value={c.id}>
+                  🏫 Lớp {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
 
       <ChangePasswordModal
         isOpen={isChangePassOpen}
