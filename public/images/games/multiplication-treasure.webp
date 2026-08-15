@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="500" y="380" width="600" height="350" rx="30" fill="#78350F" stroke="#FEF08A" stroke-width="12"/>
+  <circle cx="800" cy="550" r="50" fill="#FDE047" stroke="#78350F" stroke-width="8"/>
+  <text x="800" y="480" font-family="Arial, sans-serif" font-weight="900" font-size="70" fill="#FEF08A" text-anchor="middle">2 x 5 = 10</text>
+  <rect x="350" y="80" width="900" height="130" rx="30" fill="#FFFFFF" opacity="0.95" stroke="#F59E0B" stroke-width="8"/>
+  <text x="800" y="165" font-family="Arial, sans-serif" font-weight="900" font-size="60" fill="#78350F" text-anchor="middle">🏴‍☠️ THÁM HIỂM BẢNG NHÂN</text>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FEF08A"/>
+      <stop offset="100%" stop-color="#FDE047"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="400" cy="500" r="140" fill="#F43F5E" />
+  <circle cx="400" cy="500" r="40" fill="#FEF08A" />
+  <circle cx="1200" cy="500" r="140" fill="#3B82F6" />
+  <circle cx="1200" cy="500" r="40" fill="#FEF08A" />
+  <!-- BEE -->
+  <g transform="translate(720, 380)">
+    <ellipse cx="80" cy="80" rx="90" ry="70" fill="#F59E0B" stroke="#78350F" stroke-width="8"/>
+    <path d="M 50 15 L 50 145 M 80 10 L 80 150 M 110 15 L 110 145" stroke="#1E293B" stroke-width="16"/>
+    <circle cx="150" cy="60" r="12" fill="#1E293B"/>
+    <ellipse cx="60" cy="-20" rx="35" ry="55" fill="#E0F2FE" opacity="0.8" stroke="#0284C7" stroke-width="5"/>
+    <ellipse cx="110" cy="-20" rx="35" ry="55" fill="#E0F2FE" opacity="0.8" stroke="#0284C7" stroke-width="5"/>
+  </g>
+  <rect x="350" y="80" width="900" height="130" rx="30" fill="#FFFFFF" opacity="0.95" stroke="#F59E0B" stroke-width="8"/>
+  <text x="800" y="165" font-family="Arial, sans-serif" font-weight="900" font-size="65" fill="#78350F" text-anchor="middle">🐝 ONG TÌM PHÉP TÍNH</text>
+</svg>

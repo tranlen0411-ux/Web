@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDBA74"/>
+      <stop offset="100%" stop-color="#F97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="400" y="380" width="800" height="350" rx="30" fill="#FFFFFF" stroke="#C2410C" stroke-width="8"/>
+  <text x="800" y="480" font-family="Arial, sans-serif" font-weight="900" font-size="50" fill="#9A3412" text-anchor="middle">🐿️ Bé Sóc Thích Đọc Sách</text>
+  <text x="800" y="580" font-family="Arial, sans-serif" font-weight="700" font-size="35" fill="#431407" text-anchor="middle">"Mỗi ngày một câu chuyện nhỏ sinh động!"</text>
+  <rect x="350" y="80" width="900" height="130" rx="30" fill="#FFFFFF" opacity="0.95" stroke="#F97316" stroke-width="8"/>
+  <text x="800" y="165" font-family="Arial, sans-serif" font-weight="900" font-size="65" fill="#9A3412" text-anchor="middle">🐿️ SÓC CON ĐỌC HIỂU</text>
+</svg>

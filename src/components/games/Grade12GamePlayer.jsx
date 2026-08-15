@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Trophy, RotateCcw, ArrowLeft, Volume2, VolumeX, Sparkles, 
-  CheckCircle2, XCircle, Play, Star, HelpCircle, Check, MoveRight
+  CheckCircle2, XCircle, Play, Star, HelpCircle, AlertCircle, Loader2, MoveRight
 } from 'lucide-react';
 import { useSound } from '../../context/SoundContext';
 import { LEARNING_GAMES_DATA, getGameQuestions, shuffleArray } from '../../data/learningGamesData';
@@ -10,7 +10,7 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
   const { triggerSound, isMuted, toggleSound } = useSound();
   const gameConfig = LEARNING_GAMES_DATA[gameKey] || LEARNING_GAMES_DATA['train-numbers'];
 
-  const [gameState, setGameState] = useState('start'); // 'start' | 'playing' | 'result'
+  const [gameState, setGameState] = useState('start'); // 'start' | 'playing' | 'saving' | 'result'
   const [questions, setQuestions] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [score, setScore] = useState(0);
@@ -20,6 +20,10 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
   const [isAnswered, setIsAnswered] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [isCorrect, setIsCorrect] = useState(false);
+
+  // Trạng thái lưu kết quả từ RPC
+  const [saveResult, setSaveResult] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Thao tác ghép từ cho game Nhà Máy Câu Văn
   const [assembledWords, setAssembledWords] = useState([]);
@@ -40,6 +44,8 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
     setIsAnswered(false);
     setFeedbackMsg('');
     setIsCorrect(false);
+    setSaveResult(null);
+    setIsSubmitting(false);
     completedRef.current = false;
     startTimeRef.current = Date.now();
     setGameState('playing');
@@ -82,14 +88,14 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
       triggerSound('correct');
       setScore((s) => s + 10);
       setCorrectCount((c) => c + 1);
-      setFeedbackMsg('🎉 Giỏi lắm! Bé đã trả lời rất chính xác!');
+      setFeedbackMsg('🎉 Giỏi lắm! Trả lời rất chính xác!');
     } else {
       triggerSound('wrong');
       setFeedbackMsg(`💡 Chưa đúng rồi! Đáp án đúng là: ${currentQ.answer || currentQ.correctCount}`);
     }
   };
 
-  // Trắc nghiệm kiểm tra ghép câu cho Nhà Máy Câu Văn
+  // Ghép câu cho Nhà Máy Câu Văn
   const handleWordClick = (word, indexInAvailable) => {
     if (isAnswered) return;
     triggerSound('click');
@@ -140,20 +146,70 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
     }
   };
 
-  // Hoàn tất lượt chơi
-  const finishGame = () => {
+  // Hoàn tất lượt chơi và gọi RPC lưu kết quả
+  const finishGame = async () => {
     if (completedRef.current) return;
     completedRef.current = true;
 
-    setGameState('result');
-    triggerSound('victory');
+    setGameState('saving');
+    setIsSubmitting(true);
 
     const totalSec = Math.max(10, Math.floor((Date.now() - (startTimeRef.current || Date.now())) / 1000));
     const finalScore = Math.round((correctCount / Math.max(1, questions.length)) * 100);
 
     if (onComplete) {
-      onComplete(finalScore, totalSec, assignmentId);
+      const res = await onComplete(finalScore, totalSec, assignmentId);
+      setIsSubmitting(false);
+
+      if (res && res.success) {
+        setSaveResult(res);
+        setGameState('result');
+      } else {
+        setSaveResult({
+          success: false,
+          message: res?.message || 'Không thể kết nối CSDL để lưu kết quả.'
+        });
+        setGameState('result');
+      }
+    } else {
+      setIsSubmitting(false);
+      setGameState('result');
     }
+  };
+
+  // Thử lưu kết quả lại khi bị lỗi mạng/RPC
+  const handleRetrySave = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setSaveResult(null);
+
+    const totalSec = Math.max(10, Math.floor((Date.now() - (startTimeRef.current || Date.now())) / 1000));
+    const finalScore = Math.round((correctCount / Math.max(1, questions.length)) * 100);
+
+    if (onComplete) {
+      const res = await onComplete(finalScore, totalSec, assignmentId);
+      setIsSubmitting(false);
+      if (res && res.success) {
+        setSaveResult(res);
+      } else {
+        setSaveResult({
+          success: false,
+          message: res?.message || 'Không thể kết nối CSDL để lưu kết quả.'
+        });
+      }
+    } else {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Xử lý khi chọn chơi lại
+  const handleReplayClick = () => {
+    if (saveResult && saveResult.success === false) {
+      if (!window.confirm('Kết quả lượt chơi chưa được lưu vào CSDL. Thầy/Cô hoặc bé có chắc chắn muốn bỏ qua kết quả này để chơi lại không?')) {
+        return;
+      }
+    }
+    startNewGame();
   };
 
   const progressPercent = Math.min(100, Math.round(((currentIdx + (isAnswered ? 1 : 0)) / Math.max(1, questions.length)) * 100));
@@ -210,20 +266,69 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
   }
 
   // ==========================================================================
-  // 2. MÀN HÌNH KẾT QUẢ (RESULT SCREEN)
+  // 2. MÀN HÌNH ĐANG LƯU KẾT QUẢ (SAVING SCREEN)
+  // ==========================================================================
+  if (gameState === 'saving') {
+    return (
+      <div className="w-full max-w-md mx-auto bg-white rounded-3xl border-4 border-amber-300 p-8 shadow-2xl text-center animate-fadeIn">
+        <Loader2 className="w-12 h-12 text-sky-600 animate-spin mx-auto mb-4" />
+        <h3 className="text-xl font-black text-slate-800 mb-1">Đang Lưu Kết Quả Bài Làm...</h3>
+        <p className="text-xs font-bold text-slate-500">
+          Vui lòng đợi trong giây lát, hệ thống đang kết nối CSDL an toàn.
+        </p>
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // 3. MÀN HÌNH KẾT QUẢ (RESULT SCREEN)
   // ==========================================================================
   if (gameState === 'result') {
     const accuracy = Math.round((correctCount / Math.max(1, questions.length)) * 100);
-    const starsEarned = accuracy >= 80 ? 10 : (accuracy >= 50 ? 7 : 5);
+    const isSaveSuccess = saveResult && saveResult.success === true;
+    const isPreview = saveResult?.is_preview === true;
+    const isAlreadyCompleted = saveResult?.already_completed === true;
 
     return (
       <div className="w-full max-w-xl mx-auto bg-gradient-to-b from-amber-400 to-yellow-500 text-amber-950 rounded-3xl border-4 border-amber-600 p-8 shadow-2xl text-center animate-fadeIn">
         <Trophy className="w-20 h-20 mx-auto mb-3 text-amber-900 animate-bounce" />
         <h2 className="text-3xl font-black mb-1">Hoàn Thành Tuyệt Vời!</h2>
-        <p className="text-sm font-extrabold text-amber-900/80 mb-6">
+        <p className="text-sm font-extrabold text-amber-900/80 mb-4">
           Bé đã hoàn tất thử thách: <span className="underline">{gameConfig.title}</span>
         </p>
 
+        {/* CẢNH BÁO / THÔNG BÁO TRẠNG THÁI LƯU RPC */}
+        {isPreview && (
+          <div className="mb-4 p-3 bg-sky-100 border-2 border-sky-300 rounded-2xl text-sky-900 font-bold text-xs">
+            💡 <strong>Chế độ xem thử:</strong> Thầy/Cô đang mở game ở quyền Quản trị/Giáo viên nên kết quả không tính điểm thưởng.
+          </div>
+        )}
+
+        {isAlreadyCompleted && (
+          <div className="mb-4 p-3 bg-amber-100 border-2 border-amber-400 rounded-2xl text-amber-950 font-bold text-xs">
+            ℹ️ <strong>Đã hoàn thành trước đó:</strong> Bài giao này đã được ghi nhận hoàn thành trong CSDL.
+          </div>
+        )}
+
+        {saveResult && saveResult.success === false && (
+          <div className="mb-4 p-4 bg-rose-100 border-2 border-rose-400 rounded-2xl text-rose-950 font-bold text-xs text-left">
+            <div className="flex items-center gap-2 mb-2 text-rose-700 font-black">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>Chưa thể lưu kết quả bài làm:</span>
+            </div>
+            <p className="mb-3 text-slate-700">{saveResult.message}</p>
+            <button
+              onClick={handleRetrySave}
+              disabled={isSubmitting}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl shadow flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            >
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              {isSubmitting ? 'Đang Thử Lại...' : 'Thử Lưu Kết Quả Lại'}
+            </button>
+          </div>
+        )}
+
+        {/* THỐNG KÊ ĐIỂM VÀ SAO */}
         <div className="grid grid-cols-3 gap-3 mb-6 bg-white/90 p-4 rounded-2xl border-2 border-amber-600 shadow-inner">
           <div className="text-center">
             <p className="text-[11px] font-black text-slate-500">Số Câu Đúng</p>
@@ -234,16 +339,16 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
             <p className="text-2xl font-black text-sky-600">{accuracy}%</p>
           </div>
           <div className="text-center">
-            <p className="text-[11px] font-black text-slate-500">Sao Thưởng</p>
+            <p className="text-[11px] font-black text-slate-500">Sao Thực Nhận</p>
             <p className="text-2xl font-black text-amber-500 flex items-center justify-center gap-1">
-              +{starsEarned} <Star className="w-5 h-5 fill-amber-500" />
+              +{isSaveSuccess ? (saveResult.stars_earned || 0) : 0} <Star className="w-5 h-5 fill-amber-500" />
             </p>
           </div>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3">
           <button
-            onClick={startNewGame}
+            onClick={handleReplayClick}
             className="flex-1 py-3 bg-slate-900 hover:bg-slate-950 text-white font-black text-sm rounded-2xl border-b-4 border-black shadow-md flex items-center justify-center gap-2 active:translate-y-0.5 transition-all"
           >
             <RotateCcw className="w-4 h-4" /> Chơi Lại Vòng Khác
@@ -254,7 +359,7 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
   }
 
   // ==========================================================================
-  // 3. MÀN HÌNH CHƠI GAME ĐANG DIỄN RA (PLAYING SCREEN)
+  // 4. MÀN HÌNH CHƠI GAME ĐANG DIỄN RA (PLAYING SCREEN)
   // ==========================================================================
   const currentQ = questions[currentIdx];
 
@@ -274,6 +379,7 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
 
         <button
           onClick={toggleSound}
+          aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
           className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl border border-amber-300 transition-colors"
           title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
         >
@@ -304,7 +410,7 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
           <div className="bg-amber-50 p-6 rounded-2xl border-2 border-amber-200 mb-6 flex flex-wrap items-center justify-center gap-3 min-h-[100px]">
             {currentQ.items && currentQ.items.length > 0 ? (
               currentQ.items.map((it, idx) => (
-                <span key={idx} className="text-4xl animate-bounce" style={{ animationDelay: `${idx * 0.1}s` }}>
+                <span key={idx} className="text-4xl">
                   {it}
                 </span>
               ))
@@ -348,7 +454,7 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
       {gameKey === 'bee-math' && (
         <div className="text-center">
           <div className="bg-amber-50 p-4 rounded-2xl border-2 border-amber-200 mb-4 flex items-center justify-center gap-3">
-            <span className="text-4xl animate-pulse">🐝</span>
+            <span className="text-4xl">🐝</span>
             <h3 className="text-base sm:text-lg font-black text-slate-800">
               {currentQ.question}
             </h3>
@@ -619,48 +725,50 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
         </div>
       )}
 
-      {/* GAME 8: ĐỒNG HỒ THÔNG MINH (SMART CLOCK - DYNAMIC SVG ANALOG CLOCK) */}
+      {/* GAME 8: ĐỒNG HỒ THÔNG MINH (SMART CLOCK - DYNAMIC HTML/CSS ANALOG CLOCK FACE - NO SVG) */}
       {gameKey === 'smart-clock' && (
         <div className="text-center">
           <h3 className="text-base sm:text-lg font-black text-slate-800 mb-3">
-            Quan sát đồng hồ kim và chọn thời gian đúng:
+            Quan sát mặt đồng hồ kim và chọn thời gian đúng:
           </h3>
 
-          {/* DYNAMIC SVG CLOCK FACE */}
+          {/* DYNAMIC HTML/CSS ANALOG CLOCK FACE (BẰNG HTML/CSS NGUYÊN KHỐI, KHÔNG DÙNG THẺ SVG) */}
           <div className="flex justify-center mb-6">
             <div className="relative w-48 h-48 bg-amber-50 rounded-full border-8 border-amber-400 shadow-xl flex items-center justify-center">
-              <svg viewBox="0 0 100 100" className="w-full h-full">
-                {/* CLOCK DIAL MARKS */}
-                <circle cx="50" cy="50" r="45" fill="#FFFBEB" stroke="#F59E0B" strokeWidth="3" />
-                {[...Array(12)].map((_, i) => {
-                  const angle = (i * 30 - 90) * (Math.PI / 180);
-                  const x = 50 + 36 * Math.cos(angle);
-                  const y = 50 + 36 * Math.sin(angle);
-                  return (
-                    <text key={i} x={x} y={y + 3} fontSize="8" fontWeight="bold" textAnchor="middle" fill="#78350F">
-                      {i === 0 ? 12 : i}
-                    </text>
-                  );
-                })}
-                {/* HOUR HAND */}
-                {(() => {
-                  const hourAngle = ((currentQ.hour % 12) + currentQ.minute / 60) * 30 - 90;
-                  const rad = hourAngle * (Math.PI / 180);
-                  const x2 = 50 + 22 * Math.cos(rad);
-                  const y2 = 50 + 22 * Math.sin(rad);
-                  return <line x1="50" y1="50" x2={x2} y2={y2} stroke="#1E293B" strokeWidth="4" strokeLinecap="round" />;
-                })()}
-                {/* MINUTE HAND */}
-                {(() => {
-                  const minAngle = (currentQ.minute / 60) * 360 - 90;
-                  const rad = minAngle * (Math.PI / 180);
-                  const x2 = 50 + 32 * Math.cos(rad);
-                  const y2 = 50 + 32 * Math.sin(rad);
-                  return <line x1="50" y1="50" x2={x2} y2={y2} stroke="#E11D48" strokeWidth="2.5" strokeLinecap="round" />;
-                })()}
-                {/* CENTER PIN */}
-                <circle cx="50" cy="50" r="3" fill="#F59E0B" />
-              </svg>
+              {/* CÁC CON SỐ TRÊN MẶT ĐỒNG HỒ 1-12 */}
+              {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((num, i) => {
+                const angle = i * 30;
+                return (
+                  <span
+                    key={num}
+                    className="absolute font-black text-amber-950 text-sm select-none"
+                    style={{
+                      transform: `rotate(${angle}deg) translateY(-72px) rotate(-${angle}deg)`
+                    }}
+                  >
+                    {num}
+                  </span>
+                );
+              })}
+
+              {/* KIM GIỜ (SLATE COLOR) */}
+              <div
+                className="absolute top-1/2 left-1/2 w-1.5 h-14 bg-slate-900 rounded-full origin-bottom shadow-md"
+                style={{
+                  transform: `translate(-50%, -100%) rotate(${((currentQ.hour % 12) + currentQ.minute / 60) * 30}deg)`
+                }}
+              />
+
+              {/* KIM PHÚT (ROSE RED COLOR) */}
+              <div
+                className="absolute top-1/2 left-1/2 w-1 h-20 bg-rose-600 rounded-full origin-bottom shadow-md"
+                style={{
+                  transform: `translate(-50%, -100%) rotate(${currentQ.minute * 6}deg)`
+                }}
+              />
+
+              {/* CHỐT GIỮA MẶT ĐỒNG HỒ */}
+              <div className="w-4 h-4 bg-amber-500 rounded-full z-10 border-2 border-amber-700 shadow-sm" />
             </div>
           </div>
 

@@ -1,7 +1,7 @@
 // ============================================================================
 // DỮ LIỆU CÂU HỎI NGUYÊN BẢN CHO 10 TRÒ CHƠI HỌC TẬP LỚP 1 VÀ LỚP 2
 // Định hướng theo mạch kiến thức bộ sách Kết nối tri thức với cuộc sống
-// Tự biên soạn 100%, không sao chép nguyên văn SGK
+// Tự biên soạn 100%, không sao chép nguyên văn SGK, chuẩn chính tả Tiếng Việt
 // ============================================================================
 
 export const LEARNING_GAMES_DATA = {
@@ -14,26 +14,26 @@ export const LEARNING_GAMES_DATA = {
     subject: 'Toán',
     instruction: 'Quan sát số lượng đồ vật/con vật và chọn toa tàu mang số đúng!',
     questions: [
-      { id: 1, prompt: 'Có bao nhiêu quả quả táo chín đỏ trên cây?', items: ['🍎','🍎','🍎'], correctCount: 3, options: [2, 3, 4, 5] },
+      { id: 1, prompt: 'Có bao nhiêu quả táo chín đỏ trên cây?', items: ['🍎','🍎','🍎'], correctCount: 3, options: [2, 3, 4, 5] },
       { id: 2, prompt: 'Đếm số con thỏ trắng đang nhảy trên cỏ:', items: ['🐇','🐇','🐇','🐇','🐇'], correctCount: 5, options: [4, 5, 6, 7] },
       { id: 3, prompt: 'Đếm số ngôi sao vàng lấp lánh:', items: ['⭐️','⭐️','⭐️','⭐️','⭐️','⭐️','⭐️'], correctCount: 7, options: [6, 7, 8, 9] },
       { id: 4, prompt: 'Có bao nhiêu con cá vàng đang bơi?', items: ['🐟','🐟'], correctCount: 2, options: [1, 2, 3, 4] },
-      { id: 5, prompt: 'Đếm số bông hoa cúc vàng:', items: ['🌻','🌻','🌻','🌻','🌻','🌻'], correctCount: 6, options: [5, 6, 7, 8] },
+      { id: 5, prompt: 'Đếm số bông hoa cúc vàng rực rỡ:', items: ['🌻','🌻','🌻','🌻','🌻','🌻'], correctCount: 6, options: [5, 6, 7, 8] },
       { id: 6, prompt: 'Có bao nhiêu quả dâu tây ngọt ngào?', items: ['🍓','🍓','🍓','🍓'], correctCount: 4, options: [3, 4, 5, 6] },
-      { id: 7, prompt: 'Đếm số con bướm rực rỡ:', items: ['🦋','🦋','🦋','🦋','🦋','🦋','🦋','🦋'], correctCount: 8, options: [7, 8, 9, 10] },
+      { id: 7, prompt: 'Đếm số con bướm rực rỡ sắc màu:', items: ['🦋','🦋','🦋','🦋','🦋','🦋','🦋','🦋'], correctCount: 8, options: [7, 8, 9, 10] },
       { id: 8, prompt: 'Có bao nhiêu chiếc xe ô tô?', items: ['🚗'], correctCount: 1, options: [0, 1, 2, 3] },
       { id: 9, prompt: 'Đếm số quả cam tròn xoe:', items: ['🍊','🍊','🍊','🍊','🍊','🍊','🍊','🍊','🍊'], correctCount: 9, options: [8, 9, 10, 7] },
-      { id: 10, prompt: 'Có bao nhiêu chiếc bánh ngọt?', items: ['🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰'], correctCount: 10, options: [9, 10, 8, 7] },
+      { id: 10, prompt: 'Có bao nhiêu chiếc bánh ngọt thơm ngon?', items: ['🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰','🍰'], correctCount: 10, options: [9, 10, 8, 7] },
       { id: 11, prompt: 'Trong giỏ không có quả bóng nào cả. Số thích hợp là:', items: [], correctCount: 0, options: [0, 1, 2, 3] },
-      { id: 12, prompt: 'Đếm số con ong chăm chỉ:', items: ['🐝','🐝','🐝','🐝','🐝'], correctCount: 5, options: [3, 4, 5, 6] },
-      { id: 13, prompt: 'Đếm số nấm nhỏ trong rừng:', items: ['🍄','🍄','🍄','🍄','🍄','🍄','🍄'], correctCount: 7, options: [6, 7, 8, 9] },
-      { id: 14, prompt: 'Có bao nhiêu chú gà con?', items: ['🐥','🐥','🐥','🐥','🐥','🐥'], correctCount: 6, options: [5, 6, 7, 4] },
+      { id: 12, prompt: 'Đếm số con ong chăm chỉ đi hút mật:', items: ['🐝','🐝','🐝','🐝','🐝'], correctCount: 5, options: [3, 4, 5, 6] },
+      { id: 13, prompt: 'Đếm số nấm nhỏ trong rừng xanh:', items: ['🍄','🍄','🍄','🍄','🍄','🍄','🍄'], correctCount: 7, options: [6, 7, 8, 9] },
+      { id: 14, prompt: 'Có bao nhiêu chú gà con lông vàng?', items: ['🐥','🐥','🐥','🐥','🐥','🐥'], correctCount: 6, options: [5, 6, 7, 4] },
       { id: 15, prompt: 'Có bao nhiêu chiếc kẹo mút?', items: ['🍭','🍭','🍭'], correctCount: 3, options: [2, 3, 4, 5] },
-      { id: 16, prompt: 'Đếm số chùm nho tím:', items: ['🍇','🍇','🍇','🍇','🍇','🍇','🍇','🍇','🍇'], correctCount: 9, options: [8, 9, 10, 7] },
-      { id: 17, prompt: 'Có bao nhiêu cái đĩa?', items: ['🍽️','🍽️'], correctCount: 2, options: [1, 2, 3, 4] },
+      { id: 16, prompt: 'Đếm số chùm nho tím mọng nước:', items: ['🍇','🍇','🍇','🍇','🍇','🍇','🍇','🍇','🍇'], correctCount: 9, options: [8, 9, 10, 7] },
+      { id: 17, prompt: 'Có bao nhiêu cái đĩa ăn cơm?', items: ['🍽️','🍽️'], correctCount: 2, options: [1, 2, 3, 4] },
       { id: 18, prompt: 'Đếm số chiếc ô che mưa:', items: ['☂️','☂️','☂️','☂️'], correctCount: 4, options: [3, 4, 5, 6] },
-      { id: 19, prompt: 'Có bao nhiêu chiếc bút mầu?', items: ['✏️','✏️','✏️','✏️','✏️','✏️','✏️','✏️'], correctCount: 8, options: [7, 8, 9, 6] },
-      { id: 20, prompt: 'Đếm số quả dưa hấu:', items: ['🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉'], correctCount: 10, options: [10, 9, 8, 7] }
+      { id: 19, prompt: 'Có bao nhiêu chiếc bút màu học tập?', items: ['✏️','✏️','✏️','✏️','✏️','✏️','✏️','✏️'], correctCount: 8, options: [7, 8, 9, 6] },
+      { id: 20, prompt: 'Đếm số quả dưa hấu ngọt mát:', items: ['🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉','🍉'], correctCount: 10, options: [10, 9, 8, 7] }
     ]
   },
 
@@ -126,14 +126,14 @@ export const LEARNING_GAMES_DATA = {
       { id: 9, prompt: 'Ghép âm "m" với vần "ây" ta được từ gì?', consonant: 'm', rhyme: 'ây', answer: 'mây', options: ['mây', 'mấy', 'mầy', 'mẩy'] },
       { id: 10, prompt: 'Ghép âm "x" với vần "anh" ta được tiếng gì?', consonant: 'x', rhyme: 'anh', answer: 'xanh', options: ['xanh', 'sanh', 'xánh', 'xạnh'] },
       { id: 11, prompt: 'Ghép âm "đ" với vần "èn" ta được từ gì?', consonant: 'đ', rhyme: 'èn', answer: 'đèn', options: ['đèn', 'đén', 'đẻn', 'đẹn'] },
-      { id: 12, prompt: 'Ghép âm "b" với vần "úp" ta được tiếng gì?', consonant: 'b', rhyme: 'úp', answer: 'búp', options: ['búp', 'búp búp', 'bụp', 'bùp'] },
+      { id: 12, prompt: 'Ghép âm "b" với vần "úp" ta được tiếng gì?', consonant: 'b', rhyme: 'úp', answer: 'búp', options: ['búp', 'búp bê', 'bụp', 'bùp'] },
       { id: 13, prompt: 'Ghép âm "c" với vần "ây" ta được từ gì?', consonant: 'c', rhyme: 'ây', answer: 'cây', options: ['cây', 'cấy', 'cầy', 'cẩy'] },
       { id: 14, prompt: 'Ghép âm "l" với vần "á" ta được tiếng gì?', consonant: 'l', rhyme: 'á', answer: 'lá', options: ['lá', 'là', 'lả', 'lạ'] },
       { id: 15, prompt: 'Ghép âm "nh" với vần "à" ta được tiếng gì?', consonant: 'nh', rhyme: 'à', answer: 'nhà', options: ['nhà', 'nhá', 'nhả', 'nhạ'] },
       { id: 16, prompt: 'Ghép âm "tr" với vần "ăng" ta được từ gì?', consonant: 'tr', rhyme: 'ăng', answer: 'trăng', options: ['trăng', 'chăng', 'trắng', 'trặng'] },
       { id: 17, prompt: 'Ghép âm "s" với vần "ao" ta được tiếng gì?', consonant: 's', rhyme: 'ao', answer: 'sao', options: ['sao', 'xao', 'sào', 'sáo'] },
       { id: 18, prompt: 'Ghép âm "v" với vần "oi" ta được từ gì?', consonant: 'v', rhyme: 'oi', answer: 'voi', options: ['voi', 'vói', 'vòi', 'vỏi'] },
-      { id: 19, prompt: 'Ghép âm "t" meo với vần "áo" ta được tiếng gì?', consonant: 't', rhyme: 'áo', answer: 'táo', options: ['táo', 'tào', 'tảo', 'tạo'] },
+      { id: 19, prompt: 'Ghép âm "t" với vần "áo" ta được tiếng gì?', consonant: 't', rhyme: 'áo', answer: 'táo', options: ['táo', 'tào', 'tảo', 'tạo'] },
       { id: 20, prompt: 'Ghép âm "ch" với vần "ó" ta được từ gì?', consonant: 'ch', rhyme: 'ó', answer: 'chó', options: ['chó', 'chò', 'chỏ', 'chọ'] }
     ]
   },
@@ -170,8 +170,8 @@ export const LEARNING_GAMES_DATA = {
       },
       {
         id: 4,
-        passage: 'Mùa xuân đến, cây cối đâm chồi nổ lộc. Những bông hoa cúc nở vàng rực cả góc vườn.',
-        question: 'Mùa nào cây cối đâm chồi nổ lộc?',
+        passage: 'Mùa xuân đến, cây cối đâm chồi nẩy lộc. Những bông hoa cúc nở vàng rực cả góc vườn.',
+        question: 'Mùa nào cây cối đâm chồi nẩy lộc?',
         options: ['Mùa xuân', 'Mùa hạ', 'Mùa thu', 'Mùa đông'],
         answer: 'Mùa xuân'
       },
@@ -240,7 +240,7 @@ export const LEARNING_GAMES_DATA = {
       },
       {
         id: 14,
-        passage: 'Trên bầu trời đêm, Mặt Trăng tròn vạch sáng rực rỡ bên cạnh những ngôi sao nhỏ lấp lánh.',
+        passage: 'Trên bầu trời đêm, mặt trăng tròn vạch sáng rực rỡ bên cạnh những ngôi sao nhỏ lấp lánh.',
         question: 'Vật nào sáng rực rỡ trên bầu trời đêm?',
         options: ['Mặt Trời', 'Mặt Trăng', 'Đèn đường', 'Cánh máy bay'],
         answer: 'Mặt Trăng'
@@ -407,31 +407,31 @@ export const LEARNING_GAMES_DATA = {
     subject: 'Tự nhiên & Xã hội',
     instruction: 'Phân loại các loài động vật và thực vật vào đúng nhóm thích hợp!',
     questions: [
-      { id: 1, item: 'Con Chim Sẻ', prompt: 'Con Chim Sẻ thuộc nhóm nào?', options: ['Loài Chim (Bay trên trời)', 'Loài Cá (Sống dưới nước)', 'Thực vật lấy gỗ'], answer: 'Loài Chim (Bay trên trời)' },
-      { id: 2, item: 'Cây Bàng', prompt: 'Cây Bàng thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Cây lấy củ', 'Loài động vật dưới nước'], answer: 'Cây cho bóng mát' },
-      { id: 3, item: 'Con Cá Chép', prompt: 'Con Cá Chép thuộc nhóm nào?', options: ['Động vật sống dưới nước', 'Động vật bay trên trời', 'Thực vật lấy quả'], answer: 'Động vật sống dưới nước' },
-      { id: 4, item: 'Cây Dưa Hấu', prompt: 'Cây Dưa Hấu thuộc nhóm thực vật nào?', options: ['Cây ăn quả', 'Cây lấy gỗ', 'Côn trùng'], answer: 'Cây ăn quả' },
-      { id: 5, item: 'Con Hổ', prompt: 'Con Hổ thuộc nhóm động vật nào?', options: ['Thú ăn thịt (Động vật trên bơi/rừng)', 'Loài chim bay', 'Loài cá dưới nước'], answer: 'Thú ăn thịt (Động vật trên bơi/rừng)' },
-      { id: 6, item: 'Hoa Hồng', prompt: 'Hoa Hồng thuộc nhóm nào?', options: ['Thực vật (Cây hoa trang trí)', 'Loài thú rừng', 'Côn trùng hút mật'], answer: 'Thực vật (Cây hoa trang trí)' },
-      { id: 7, item: 'Con Ong', prompt: 'Con Ong thuộc nhóm nào?', options: ['Côn trùng (Hút mật hoa)', 'Loài cá dưới biển', 'Thực vật ăn quả'], answer: 'Côn trùng (Hút mật hoa)' },
-      { id: 8, item: 'Cây Lúa', prompt: 'Cây Lúa cung cấp lương thực nào?', options: ['Hạt Gạo', 'Củ Cà Rốt', 'Quả Cam'], answer: 'Hạt Gạo' },
-      { id: 9, item: 'Con Voi', prompt: 'Con Voi thuộc nhóm động vật nào?', options: ['Động vật ăn thực vật (Thú lớn)', 'Loài chim', 'Loài bò sát dưới nước'], answer: 'Động vật ăn thực vật (Thú lớn)' },
-      { id: 10, item: 'Cây Xoài', prompt: 'Cây Xoài thuộc nhóm nào?', options: ['Thực vật (Cây ăn quả)', 'Động vật bay', 'Côn trùng'], answer: 'Thực vật (Cây ăn quả)' },
-      { id: 11, item: 'Con Én', prompt: 'Con Én là loài chim hay báo hiệu mùa nào?', options: ['Mùa Xuân', 'Mùa Đông', 'Mùa Thu'], answer: 'Mùa Xuân' },
+      { id: 1, item: 'Con Chim Sẻ', prompt: 'Con Chim Sẻ thuộc nhóm nào?', options: ['Loài chim (Bay trên trời)', 'Loài cá (Sống dưới nước)', 'Cây cho bóng mát'], answer: 'Loài chim (Bay trên trời)' },
+      { id: 2, item: 'Cây Bàng', prompt: 'Cây Bàng thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Rau ăn lá', 'Loài cá dưới nước'], answer: 'Cây cho bóng mát' },
+      { id: 3, item: 'Con Cá Chép', prompt: 'Con Cá Chép thuộc nhóm nào?', options: ['Loài cá (Sống dưới nước)', 'Loài chim (Bay trên trời)', 'Cây ăn quả'], answer: 'Loài cá (Sống dưới nước)' },
+      { id: 4, item: 'Cây Dưa Hấu', prompt: 'Cây Dưa Hấu thuộc nhóm thực vật nào?', options: ['Cây ăn quả', 'Cây cho bóng mát', 'Côn trùng'], answer: 'Cây ăn quả' },
+      { id: 5, item: 'Con Hổ', prompt: 'Con Hổ thuộc nhóm động vật nào?', options: ['Thú ăn thịt (Động vật sống trên cạn)', 'Loài chim', 'Loài cá dưới nước'], answer: 'Thú ăn thịt (Động vật sống trên cạn)' },
+      { id: 6, item: 'Hoa Hồng', prompt: 'Hoa Hồng thuộc nhóm nào?', options: ['Thực vật (Cây hoa trang trí)', 'Thú ăn thịt', 'Côn trùng hút mật'], answer: 'Thực vật (Cây hoa trang trí)' },
+      { id: 7, item: 'Con Ong', prompt: 'Con Ong thuộc nhóm nào?', options: ['Côn trùng', 'Loài cá dưới nước', 'Cây ăn quả'], answer: 'Côn trùng' },
+      { id: 8, item: 'Cây Lúa', prompt: 'Cây Lúa cung cấp lương thực nào?', options: ['Hạt gạo', 'Củ cà rốt', 'Quả cam'], answer: 'Hạt gạo' },
+      { id: 9, item: 'Con Voi', prompt: 'Con Voi thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài chim', 'Loài cá dưới nước'], answer: 'Động vật sống trên cạn' },
+      { id: 10, item: 'Cây Xoài', prompt: 'Cây Xoài thuộc nhóm nào?', options: ['Cây ăn quả', 'Loài chim', 'Côn trùng'], answer: 'Cây ăn quả' },
+      { id: 11, item: 'Con Én', prompt: 'Con Én là loài chim thường báo hiệu mùa nào?', options: ['Mùa xuân', 'Mùa đông', 'Mùa thu'], answer: 'Mùa xuân' },
       { id: 12, item: 'Củ Cà Rốt', prompt: 'Củ Cà Rốt là bộ phận nào của cây?', options: ['Rễ củ (Thực vật)', 'Lá cây', 'Hoa cây'], answer: 'Rễ củ (Thực vật)' },
-      { id: 13, item: 'Con Thỏ', prompt: 'Con Thỏ thuộc nhóm động vật nào?', options: ['Thú hiền lành (Ăn cỏ/củ)', 'Loài cá biển', 'Loài bò sát độc'], answer: 'Thú hiền lành (Ăn cỏ/củ)' },
-      { id: 14, item: 'Cây Phượng', prompt: 'Cây Phượng thường nở hoa đỏ rực vào mùa nào?', options: ['Mùa Hè', 'Mùa Đông', 'Mùa Xuân'], answer: 'Mùa Hè' },
-      { id: 15, item: 'Con Tôm', prompt: 'Con Tôm thuộc nhóm động vật nào?', options: ['Động vật sống dưới nước', 'Động vật bay trên trời', 'Thú rừng'], answer: 'Động vật sống dưới nước' },
-      { id: 16, item: 'Cây Thông', prompt: 'Cây Thông thuộc nhóm thực vật nào?', options: ['Cây lấy gỗ / Bóng mát', 'Cây ăn quả mọng', 'Rau ăn lá'], answer: 'Cây lấy gỗ / Bóng mát' },
-      { id: 17, item: 'Con Bướm', prompt: 'Con Bướm thuộc nhóm nào?', options: ['Côn trùng có cánh', 'Loài cá bơi', 'Thú bốn chân'], answer: 'Côn trùng có cánh' },
-      { id: 18, item: 'Cây Cà staple', prompt: 'Rau Muống thuộc nhóm thực vật nào?', options: ['Rau ăn lá', 'Cây lấy gỗ', 'Cây bóng mát'], answer: 'Rau ăn lá' },
-      { id: 19, item: 'Con Rùa', prompt: 'Con Rùa thuộc nhóm động vật nào?', options: ['Bò sát (Sống cả dưới nước & trên bờ)', 'Loài chim', 'Côn trùng'], answer: 'Bò sát (Sống cả dưới nước & trên bờ)' },
-      { id: 20, item: 'Cây Chuối', prompt: 'Cây Chuối cho chúng ta sản phẩm nào?', options: ['Quả Chuối ngọt lịm', 'Củ cải', 'Hạt lúa'], answer: 'Quả Chuối ngọt lịm' }
+      { id: 13, item: 'Con Thỏ', prompt: 'Con Thỏ thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài cá dưới nước', 'Côn trùng'], answer: 'Động vật sống trên cạn' },
+      { id: 14, item: 'Cây Phượng', prompt: 'Cây Phượng thường nở hoa đỏ rực vào mùa nào?', options: ['Mùa hạ', 'Mùa đông', 'Mùa xuân'], answer: 'Mùa hạ' },
+      { id: 15, item: 'Con Tôm', prompt: 'Con Tôm thuộc nhóm động vật nào?', options: ['Loài cá (Sống dưới nước)', 'Loài chim (Bay trên trời)', 'Động vật sống trên cạn'], answer: 'Loài cá (Sống dưới nước)' },
+      { id: 16, item: 'Cây Thông', prompt: 'Cây Thông thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Cây ăn quả', 'Rau ăn lá'], answer: 'Cây cho bóng mát' },
+      { id: 17, item: 'Con Bướm', prompt: 'Con Bướm thuộc nhóm nào?', options: ['Côn trùng', 'Loài cá dưới nước', 'Động vật sống trên cạn'], answer: 'Côn trùng' },
+      { id: 18, item: 'Rau Muống', prompt: 'Rau Muống thuộc nhóm thực vật nào?', options: ['Rau ăn lá', 'Cây cho bóng mát', 'Cây ăn quả'], answer: 'Rau ăn lá' },
+      { id: 19, item: 'Con Rùa', prompt: 'Con Rùa thuộc nhóm động vật nào?', options: ['Bò sát (Động vật)', 'Loài chim', 'Côn trùng'], answer: 'Bò sát (Động vật)' },
+      { id: 20, item: 'Cây Chuối', prompt: 'Cây Chuối cho chúng ta sản phẩm nào?', options: ['Quả chuối ngọt lịm', 'Củ cải', 'Hạt gạo'], answer: 'Quả chuối ngọt lịm' }
     ]
   }
 };
 
-// Hàm xáo trộn mảng ngẫu nhiên (Fisher-Yates Shuffle)
+// Hàm xáo trộn mảng ngẫu nhiên (Fisher-Yates Shuffle) - không làm biến đổi mảng gốc
 export function shuffleArray(array) {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {

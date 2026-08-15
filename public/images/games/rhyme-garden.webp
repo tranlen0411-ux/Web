@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A7F3D0"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="300" y="400" width="220" height="180" rx="25" fill="#FFFFFF" stroke="#047857" stroke-width="8"/>
+  <text x="410" y="520" font-family="Arial, sans-serif" font-weight="900" font-size="90" fill="#047857" text-anchor="middle">b</text>
+  <text x="650" y="520" font-family="Arial, sans-serif" font-weight="900" font-size="90" fill="#FFFFFF" text-anchor="middle">+</text>
+  <rect x="780" y="400" width="220" height="180" rx="25" fill="#FFFFFF" stroke="#047857" stroke-width="8"/>
+  <text x="890" y="520" font-family="Arial, sans-serif" font-weight="900" font-size="90" fill="#047857" text-anchor="middle">àn</text>
+  <text x="1130" y="520" font-family="Arial, sans-serif" font-weight="900" font-size="90" fill="#FFFFFF" text-anchor="middle">=</text>
+  <rect x="1250" y="400" width="240" height="180" rx="25" fill="#F43F5E" stroke="#9F1239" stroke-width="8"/>
+  <text x="1370" y="520" font-family="Arial, sans-serif" font-weight="900" font-size="90" fill="#FFFFFF" text-anchor="middle">bàn</text>
+  <rect x="350" y="80" width="900" height="130" rx="30" fill="#FFFFFF" opacity="0.95" stroke="#10B981" stroke-width="8"/>
+  <text x="800" y="165" font-family="Arial, sans-serif" font-weight="900" font-size="65" fill="#065F46" text-anchor="middle">🌸 KHU VƯỜN ÂM VẦN</text>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4ADE80"/>
+      <stop offset="100%" stop-color="#15803D"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="350" y="380" width="400" height="320" rx="30" fill="#FFFFFF" stroke="#166534" stroke-width="8"/>
+  <text x="550" y="470" font-family="Arial, sans-serif" font-weight="900" font-size="70" fill="#15803D" text-anchor="middle">🦁 🐘 🦜</text>
+  <text x="550" y="580" font-family="Arial, sans-serif" font-weight="900" font-size="45" fill="#166534" text-anchor="middle">Động Vật</text>
+  <rect x="850" y="380" width="400" height="320" rx="30" fill="#FFFFFF" stroke="#166534" stroke-width="8"/>
+  <text x="1050" y="470" font-family="Arial, sans-serif" font-weight="900" font-size="70" fill="#15803D" text-anchor="middle">🌳 🌴 🌸</text>
+  <text x="1050" y="580" font-family="Arial, sans-serif" font-weight="900" font-size="45" fill="#166534" text-anchor="middle">Thực Vật</text>
+  <rect x="350" y="80" width="900" height="130" rx="30" fill="#FFFFFF" opacity="0.95" stroke="#15803D" stroke-width="8"/>
+  <text x="800" y="165" font-family="Arial, sans-serif" font-weight="900" font-size="60" fill="#14532D" text-anchor="middle">🌳 RỪNG XANH KỲ THÚ</text>
+</svg>
