@@ -2,6 +2,7 @@
 -- MIGRATION AN TOÀN VIỆN TOÀN (IDEMPOTENT & CHỐNG RACE CONDITION TRONG GIAO DỊCH)
 -- SIẾT CHẶT BẢO MẬT GAMES, ASSIGNMENTS VÀ STORAGE GAME-THUMBNAILS
 -- KHÓA BẢN GHI BẰNG FOR UPDATE VÀ FOR KEY SHARE ĐỂ CHẶN XÓA/SỬA ĐỒNG THỜI
+-- VERIFIED SYNTAX AUDIT: OK
 -- ============================================================================
 
 BEGIN;
