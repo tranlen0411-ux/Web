@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2 } from 'lucide-react';
+import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Archive, Lock } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
-export const CreateExerciseModal = ({ isOpen, onClose }) => {
+export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) => {
   const { profile } = useAuth();
 
   const [classesList, setClassesList] = useState([]);
@@ -15,6 +15,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
   const [gradeLevel, setGradeLevel] = useState(1);
   const [subject, setSubject] = useState('Toán');
   const [exerciseType, setExerciseType] = useState('mixed');
+  const [status, setStatus] = useState('draft');
   const [rewardStars, setRewardStars] = useState(10);
   const [dueDate, setDueDate] = useState('');
   const [maxAttempts, setMaxAttempts] = useState(1);
@@ -40,6 +41,26 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
     fetchTeacherClasses();
   }, [profile?.id]);
 
+  useEffect(() => {
+    if (exerciseToEdit) {
+      setTitle(exerciseToEdit.title || '');
+      setDescription(exerciseToEdit.description || '');
+      setSelectedClassId(exerciseToEdit.class_id || '');
+      setIsGlobal(exerciseToEdit.is_global || false);
+      setGradeLevel(exerciseToEdit.grade_level || 1);
+      setSubject(exerciseToEdit.subject || 'Toán');
+      setExerciseType(exerciseToEdit.exercise_type || 'mixed');
+      setStatus(exerciseToEdit.status || 'draft');
+      setRewardStars(exerciseToEdit.reward_stars || 10);
+      setDueDate(exerciseToEdit.due_date ? new Date(exerciseToEdit.due_date).toISOString().slice(0, 16) : '');
+      setMaxAttempts(exerciseToEdit.max_attempts || 1);
+      setShowScoreAfterSubmit(exerciseToEdit.show_score_after_submit ?? true);
+      setShowCorrectAnswers(exerciseToEdit.show_correct_answers ?? false);
+
+      fetchExistingQuestions(exerciseToEdit.id);
+    }
+  }, [exerciseToEdit]);
+
   const fetchTeacherClasses = async () => {
     try {
       let query = supabase.from('classes').select('id, name, grade_level');
@@ -49,10 +70,34 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
       const { data } = await query.order('grade_level');
       if (data && data.length > 0) {
         setClassesList(data);
-        setSelectedClassId(data[0].id);
+        if (!selectedClassId) setSelectedClassId(data[0].id);
       }
     } catch (err) {
       console.error('Fetch classes error:', err);
+    }
+  };
+
+  const fetchExistingQuestions = async (exerciseId) => {
+    try {
+      const { data } = await supabase
+        .from('academic_exercise_questions')
+        .select('*')
+        .eq('exercise_id', exerciseId)
+        .order('question_number');
+      
+      if (data && data.length > 0) {
+        setQuestions(data.map(q => ({
+          id: q.id,
+          question_number: q.question_number,
+          question_type: q.question_type,
+          prompt: q.prompt,
+          options: q.options_json || [],
+          correct_answer: q.question_type === 'multiple_choice' ? (q.options_json?.slice(0, 1) || []) : (q.options_json?.[0] || ''),
+          points: q.points
+        })));
+      }
+    } catch (err) {
+      console.error('Fetch questions error:', err);
     }
   };
 
@@ -78,8 +123,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
     setQuestions(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (targetStatus = status) => {
     if (!title.trim()) {
       setErrorMsg('Vui lòng nhập tiêu đề bài tập.');
       return;
@@ -95,6 +139,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
 
     try {
       const exercisePayload = {
+        id: exerciseToEdit?.id || null,
         title: title.trim(),
         description: description.trim(),
         class_id: selectedClassId || null,
@@ -102,7 +147,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
         grade_level: parseInt(gradeLevel),
         subject,
         exercise_type: exerciseType,
-        status: 'published',
+        status: targetStatus,
         due_date: dueDate || null,
         max_attempts: parseInt(maxAttempts),
         reward_stars: parseInt(rewardStars),
@@ -129,12 +174,12 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
       });
 
       if (error || !data?.success) {
-        setErrorMsg(error?.message || data?.message || 'Lỗi khi tạo bài tập.');
+        setErrorMsg(error?.message || data?.message || 'Lỗi khi lưu bài tập.');
       } else {
         onClose();
       }
     } catch (err) {
-      console.error('Create exercise exception:', err);
+      console.error('Create/Update exercise exception:', err);
       setErrorMsg(err.message || 'Lỗi hệ thống khi lưu bài tập.');
     } finally {
       setIsSubmitting(false);
@@ -149,7 +194,9 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div className="flex items-center gap-2">
             <FileText className="w-6 h-6 text-amber-500" />
-            <h2 className="text-xl font-black text-slate-800">Tạo Bài Tập Học Thuật Mới</h2>
+            <h2 className="text-xl font-black text-slate-800">
+              {exerciseToEdit ? 'Chỉnh Sửa Bài Tập Học Thuật' : 'Tạo Bài Tập Học Thuật Mới'}
+            </h2>
           </div>
           <button
             onClick={onClose}
@@ -160,7 +207,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
         </div>
 
         {/* FORM */}
-        <form onSubmit={handleSubmit} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
+        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(status); }} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
           
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded-xl text-xs font-bold flex items-center gap-2">
@@ -199,15 +246,16 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
 
             <div>
-              <label className="block text-xs font-black text-amber-950 mb-1">Môn Học</label>
+              <label className="block text-xs font-black text-amber-950 mb-1">Trạng Thái Xuất Bản</label>
               <select
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
                 className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
               >
-                <option value="Toán">Toán</option>
-                <option value="Tiếng Việt">Tiếng Việt</option>
-                <option value="Tự nhiên & Xã hội">Tự nhiên & Xã hội</option>
+                <option value="draft">Bản nháp (draft)</option>
+                <option value="published">Đã xuất bản (published)</option>
+                <option value="closed">Đóng bài (closed)</option>
+                <option value="archived">Lưu trữ (archived)</option>
               </select>
             </div>
 
@@ -227,6 +275,19 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             )}
 
             <div>
+              <label className="block text-xs font-black text-amber-950 mb-1">Môn Học</label>
+              <select
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+              >
+                <option value="Toán">Toán</option>
+                <option value="Tiếng Việt">Tiếng Việt</option>
+                <option value="Tự nhiên & Xã hội">Tự nhiên & Xã hội</option>
+              </select>
+            </div>
+
+            <div>
               <label className="block text-xs font-black text-amber-950 mb-1">Sao Thưởng Hoàn Thành</label>
               <input
                 type="number"
@@ -234,16 +295,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                 max="100"
                 value={rewardStars}
                 onChange={(e) => setRewardStars(e.target.value)}
-                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-black text-amber-950 mb-1">Hạn Hoàn Thành</label>
-              <input
-                type="datetime-local"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
                 className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
               />
             </div>
@@ -260,7 +311,7 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          {/* CÂU HỎI & ĐÁP ÁN NGUYÊN BẢN */}
+          {/* DANH SÁCH CÂU HỎI */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-black text-slate-800">Danh Sách Câu Hỏi ({questions.length} câu)</h3>
@@ -330,7 +381,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   />
                 </div>
 
-                {/* 1. TRẮC NGHIỆM 1 ĐÁP ÁN */}
                 {q.question_type === 'single_choice' && (
                   <div className="grid grid-cols-2 gap-2">
                     {q.options.map((opt, oIdx) => (
@@ -365,10 +415,9 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   </div>
                 )}
 
-                {/* 2. TRẮC NGHIỆM NHIỀU ĐÁP ÁN (MULTIPLE CHOICE UI CHỌN NƠI ĐÁNH DẤU MULTIPLE CORRECT ANSWERS) */}
                 {q.question_type === 'multiple_choice' && (
                   <div className="space-y-2">
-                    <label className="block text-[11px] font-bold text-slate-600">Đánh dấu các đáp án đúng (Mảng JSON):</label>
+                    <label className="block text-[11px] font-bold text-slate-600">Đánh dấu các đáp án đúng:</label>
                     <div className="grid grid-cols-2 gap-2">
                       {q.options.map((opt, oIdx) => {
                         const currentCorrectArr = Array.isArray(q.correct_answer) ? q.correct_answer : [];
@@ -414,7 +463,6 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
                   </div>
                 )}
 
-                {/* 3 & 4. ĐIỀN TỪ / TRẢ LỜI NGẮN */}
                 {(q.question_type === 'fill_blank' || q.question_type === 'short_answer') && (
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Đáp án đúng tự động chấm:</label>
@@ -435,23 +483,48 @@ export const CreateExerciseModal = ({ isOpen, onClose }) => {
             ))}
           </div>
 
-          {/* BUTTONS */}
-          <div className="pt-4 border-t border-slate-200 flex justify-end gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
-            >
-              Hủy
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
-            >
-              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {isSubmitting ? 'Đang Xuất Bản...' : 'Xuất Bản Bài Tập'}
-            </button>
+          {/* ACTION BUTTONS */}
+          <div className="pt-4 border-t border-slate-200 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSubmit('draft')}
+                disabled={isSubmitting}
+                className="px-3.5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1"
+              >
+                <Save className="w-3.5 h-3.5" /> Lưu Nháp
+              </button>
+
+              {exerciseToEdit && (
+                <button
+                  type="button"
+                  onClick={() => handleSubmit('closed')}
+                  disabled={isSubmitting}
+                  className="px-3.5 py-2 bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-xs rounded-xl flex items-center gap-1"
+                >
+                  <Lock className="w-3.5 h-3.5" /> Đóng Bài Tập
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSubmit('published')}
+                disabled={isSubmitting}
+                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {isSubmitting ? 'Đang Xuất Bản...' : 'Xuất Bản Ngay'}
+              </button>
+            </div>
           </div>
 
         </form>
