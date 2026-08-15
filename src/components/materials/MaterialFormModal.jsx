@@ -28,7 +28,6 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
   const [allowDownload, setAllowDownload] = useState(true);
 
   const [file, setFile] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -45,6 +44,19 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     'Mỹ thuật',
     'Hoạt động trải nghiệm'
   ];
+
+  // Danh sách các MIME type và Extension được phép upload
+  const ALLOWED_MIME_TYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
+  ];
+
+  const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'webm', 'mov'];
 
   useEffect(() => {
     if (isOpen) {
@@ -69,28 +81,42 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         setAllowDownload(true);
         setFile(null);
       }
-      setUploadProgress(0);
       setErrorMsg('');
     }
   }, [isOpen, materialToEdit]);
 
   if (!isOpen) return null;
 
-  // Kiểm tra định dạng và dung lượng file
+  // Kiểm tra định dạng Extension và MIME Type thực tế của file
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     setErrorMsg('');
     if (!selectedFile) return;
 
-    // Giới hạn 50MB
+    // 1. Kiểm tra dung lượng (Tối đa 50MB)
     const MAX_SIZE = 50 * 1024 * 1024;
     if (selectedFile.size > MAX_SIZE) {
       setErrorMsg('Dung lượng tệp tin vượt quá 50MB. Vui lòng chọn tệp nhỏ hơn.');
+      e.target.value = '';
       return;
     }
 
-    // Tự động nhận diện file_type từ đuôi file
+    // 2. Kiểm tra Extension
     const ext = selectedFile.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      setErrorMsg(`Định dạng tệp .${ext} không được hỗ trợ. Chỉ chấp nhận PDF, Word, PowerPoint, Hình ảnh và Video.`);
+      e.target.value = '';
+      return;
+    }
+
+    // 3. Kiểm tra MIME Type thực tế
+    if (selectedFile.type && !ALLOWED_MIME_TYPES.includes(selectedFile.type)) {
+      setErrorMsg(`Loại tệp tin (${selectedFile.type}) không được hệ thống chấp nhận.`);
+      e.target.value = '';
+      return;
+    }
+
+    // Tự động gán fileType tương ứng
     if (['pdf'].includes(ext)) {
       setFileType('pdf');
     } else if (['doc', 'docx'].includes(ext)) {
@@ -99,11 +125,22 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       setFileType('powerpoint');
     } else if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
       setFileType('image');
-    } else if (['mp4', 'webm', 'ogg', 'mov', 'mkv'].includes(ext)) {
+    } else if (['mp4', 'webm', 'mov'].includes(ext)) {
       setFileType('video');
     }
 
     setFile(selectedFile);
+  };
+
+  // Validation đường liên kết HTTPS bên ngoài
+  const validateHttpsUrl = (urlStr) => {
+    if (!urlStr) return false;
+    try {
+      const parsed = new URL(urlStr);
+      return parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -115,9 +152,15 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       return;
     }
 
-    if (sourceType === 'link' && !externalUrl.trim()) {
-      setErrorMsg('Vui lòng nhập đường liên kết bài giảng bên ngoài.');
-      return;
+    if (sourceType === 'link') {
+      if (!externalUrl.trim()) {
+        setErrorMsg('Vui lòng nhập đường liên kết bài giảng bên ngoài.');
+        return;
+      }
+      if (!validateHttpsUrl(externalUrl.trim())) {
+        setErrorMsg('Đường liên kết bài giảng phải là địa chỉ HTTPS hợp lệ (ví dụ: https://...).');
+        return;
+      }
     }
 
     if (sourceType === 'file' && !file && !materialToEdit?.file_path) {
@@ -126,20 +169,20 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     }
 
     setLoading(true);
-    setUploadProgress(10);
+
+    let newlyUploadedPath = null;
+    const oldFilePath = materialToEdit?.file_path;
 
     try {
-      let finalFilePath = materialToEdit?.file_path || null;
+      let finalFilePath = oldFilePath || null;
       let finalFileName = materialToEdit?.file_name || null;
       let finalFileSize = materialToEdit?.file_size || 0;
 
-      // 1. UPLOAD FILE MỚI NẾU CÓ CHỌN FILE
+      // 1. NẾU CÓ CHỌN FILE MỚI -> UPLOAD FILE MỚI VÀO BUCKET PRIVATE THEO CẤU TRÚC {created_by}/{file}
       if (sourceType === 'file' && file) {
-        setUploadProgress(30);
-
-        // Tạo đường dẫn file an toàn tránh trùng lặp
         const cleanName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const storagePath = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${cleanName}`;
+        const userFolder = profile.id;
+        const storagePath = `${userFolder}/${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${cleanName}`;
 
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('learning-materials')
@@ -153,23 +196,11 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
           throw new Error('Lỗi khi tải file lên Storage: ' + uploadErr.message);
         }
 
-        setUploadProgress(70);
-
-        // Nếu là Sửa bài và đã có file cũ -> Xóa file cũ khỏi Storage tránh rác
-        if (materialToEdit?.file_path && materialToEdit.file_path !== storagePath) {
-          try {
-            await supabase.storage.from('learning-materials').remove([materialToEdit.file_path]);
-          } catch (removeErr) {
-            console.warn('Could not remove old file:', removeErr);
-          }
-        }
-
+        newlyUploadedPath = storagePath;
         finalFilePath = storagePath;
         finalFileName = file.name;
         finalFileSize = file.size;
       }
-
-      setUploadProgress(85);
 
       // 2. TẠO HOẶC CẬP NHẬT RECORD TRONG DATABASE
       const payload = {
@@ -187,29 +218,56 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       };
 
       if (materialToEdit) {
-        // Cập nhật tài liệu
         const { error: updateErr } = await supabase
           .from('learning_materials')
           .update(payload)
           .eq('id', materialToEdit.id);
 
-        if (updateErr) throw updateErr;
+        if (updateErr) {
+          throw updateErr;
+        }
       } else {
-        // Thêm tài liệu mới
         payload.created_by = profile.id;
         const { error: insertErr } = await supabase
           .from('learning_materials')
           .insert([payload]);
 
-        if (insertErr) throw insertErr;
+        if (insertErr) {
+          throw insertErr;
+        }
       }
 
-      setUploadProgress(100);
+      // 3. DATABASE UPDATE/INSERT THÀNH CÔNG -> TIẾN HÀNH DỌN DẸP FILE CŨ NẾU CÓ THAY THẾ FILE
+      if (oldFilePath && oldFilePath !== finalFilePath) {
+        const { error: removeErr } = await supabase.storage
+          .from('learning-materials')
+          .remove([oldFilePath]);
+
+        if (removeErr) {
+          console.warn('Cảnh báo: Không thể xóa file cũ trên Storage:', removeErr.message);
+        }
+      }
+
       onSaved?.();
       onClose();
 
     } catch (err) {
       console.error('Save material error:', err);
+
+      // ROLLBACK BẢO VỆ: Nếu Database thất bại và đã lỡ upload file mới -> Xóa file mới upload để không tạo rác!
+      if (newlyUploadedPath) {
+        try {
+          const { error: rollbackErr } = await supabase.storage
+            .from('learning-materials')
+            .remove([newlyUploadedPath]);
+          if (rollbackErr) {
+            console.error('Rollback remove file error:', rollbackErr);
+          }
+        } catch (rbException) {
+          console.error('Rollback exception:', rbException);
+        }
+      }
+
       setErrorMsg(err.message || 'Lỗi khi lưu thông tin tài liệu.');
     } finally {
       setLoading(false);
@@ -233,7 +291,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
           {materialToEdit ? 'Sửa Thông Tin Bài Giảng / Tài Liệu' : 'Thêm Bài Giảng / Tài Liệu Mới'}
         </h3>
         <p className="text-xs font-bold text-slate-500 mb-5">
-          Đăng bài giảng, tệp tài liệu hoặc liên kết trực tuyến cho học sinh học tập.
+          Đăng bài giảng, tệp tài liệu hoặc liên kết trực tuyến HTTPS cho học sinh.
         </p>
 
         {errorMsg && (
@@ -272,7 +330,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             />
           </div>
 
-          {/* MÔN HỌC & LỚP HỌC */}
+          {/* MÔ N HỌC & LỚP HỌC */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-black text-slate-700 mb-1">
@@ -332,7 +390,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
                   onChange={() => { setSourceType('link'); setFileType('link'); }}
                   className="w-4 h-4 text-sky-600"
                 />
-                <LinkIcon className="w-4 h-4 text-sky-600" /> Đường liên kết bài giảng (URL)
+                <LinkIcon className="w-4 h-4 text-sky-600" /> Đường liên kết bài giảng HTTPS
               </label>
             </div>
 
@@ -358,7 +416,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
                   <input
                     type="file"
                     onChange={handleFileChange}
-                    accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov"
+                    accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.svg,.mp4,.webm,.mov"
                     className="w-full text-xs font-bold text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-amber-400 file:text-amber-950 hover:file:bg-amber-500 cursor-pointer"
                   />
                   {materialToEdit?.file_name && !file && (
@@ -370,7 +428,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
               </div>
             ) : (
               <div className="pt-2">
-                <label className="block text-xs font-black text-slate-700 mb-1">Đường Liên Kết Bài Giảng (URL):</label>
+                <label className="block text-xs font-black text-slate-700 mb-1">Đường Liên Kết Bài Giảng (Bắt buộc HTTPS):</label>
                 <input
                   type="url"
                   placeholder="https://youtube.com/watch?... hoặc https://drive.google.com/..."
@@ -400,19 +458,13 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             />
           </div>
 
-          {/* TIẾN TRÌNH UPLOAD */}
+          {/* TRẠNG THÁI TẢI LÊN THẬT */}
           {loading && (
-            <div className="space-y-1">
-              <div className="flex justify-between text-xs font-bold text-amber-900">
-                <span>Đang xử lý & tải file lên Supabase Storage...</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="w-full h-3 bg-amber-100 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-amber-400 to-emerald-500 transition-all duration-300"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+            <div className="p-3 bg-amber-100 rounded-2xl border border-amber-300 flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-amber-700 animate-spin shrink-0" />
+              <p className="text-xs font-bold text-amber-950">
+                Đang xử lý tệp tin & lưu bài giảng vào hệ thống an toàn... Vui lòng chờ trong giây lát.
+              </p>
             </div>
           )}
 

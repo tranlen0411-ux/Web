@@ -1,8 +1,39 @@
 -- ============================================================================
--- SQL MIGRATION: GÓC TÀI LIỆU HỌC TẬP (LEARNING MATERIALS & STORAGE)
+-- SQL MIGRATION: KHẮC PHỤC BẢO MẬT GÓC TÀI LIỆU (PRIVATE BUCKET & RLS CHẶT CHẼ)
 -- ============================================================================
 
--- 1. BẢNG LEARNING_MATERIALS (Kho bài giảng & tài liệu học tập)
+-- 1. CHUYỂN BUCKET 'learning-materials' SANG PRIVATE (PUBLIC = FALSE)
+-- VÀ THIẾT LẬP GIỚI HẠN DUNG LƯỢNG 50MB & MIME TYPES
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'learning-materials',
+  'learning-materials',
+  false, -- BUCKET PRIVATE BẢO MẬT (KHÔNG CÓ PUBLIC URL)
+  52428800, -- Giới hạn 50 MB
+  ARRAY[
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
+  ]
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = false,
+  file_size_limit = 52428800,
+  allowed_mime_types = ARRAY[
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
+  ];
+
+-- 2. ĐẢM BẢO CẤU TRÚC BẢNG PUBLIC.LEARNING_MATERIALS
 CREATE TABLE IF NOT EXISTS public.learning_materials (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL,
@@ -20,20 +51,24 @@ CREATE TABLE IF NOT EXISTS public.learning_materials (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. KÍCH HOẠT ROW LEVEL SECURITY (RLS)
+-- KÍCH HOẠT ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.learning_materials ENABLE ROW LEVEL SECURITY;
 
+-- XÓA POLICY CŨ ĐỂ KHỞI TẠO LẠI CHÍNH XÁC
 DROP POLICY IF EXISTS "learning_materials_select_policy" ON public.learning_materials;
 DROP POLICY IF EXISTS "learning_materials_insert_policy" ON public.learning_materials;
 DROP POLICY IF EXISTS "learning_materials_update_policy" ON public.learning_materials;
 DROP POLICY IF EXISTS "learning_materials_delete_policy" ON public.learning_materials;
 
+-- DB POLICY 1: CHỌN / XEM TÀI LIỆU (SELECT)
 CREATE POLICY "learning_materials_select_policy"
 ON public.learning_materials FOR SELECT
 TO authenticated
 USING (
+  -- Admin được xem tất cả
   (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
   OR
+  -- Giáo viên được xem tài liệu do mình tạo hoặc thuộc lớp do mình quản lý
   (
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'teacher'
     AND (
@@ -46,6 +81,7 @@ USING (
     )
   )
   OR
+  -- Học sinh chỉ được xem tài liệu thuộc lớp mình đang học hoặc tài liệu chung
   (
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'student'
     AND (
@@ -58,12 +94,15 @@ USING (
   )
 );
 
+-- DB POLICY 2: THÊM TÀI LIỆU (INSERT)
 CREATE POLICY "learning_materials_insert_policy"
 ON public.learning_materials FOR INSERT
 TO authenticated
 WITH CHECK (
+  -- Admin được thêm cho mọi lớp
   (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
   OR
+  -- Giáo viên chỉ được thêm tài liệu do chính mình tạo cho lớp mình phụ trách
   (
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'teacher'
     AND created_by = auth.uid()
@@ -77,6 +116,8 @@ WITH CHECK (
   )
 );
 
+-- DB POLICY 3: CẬP NHẬT TÀI LIỆU (UPDATE)
+-- Siết chặt: Giáo viên KHÔNG ĐƯỢC đổi created_by và chỉ được gán vào lớp mình phụ trách
 CREATE POLICY "learning_materials_update_policy"
 ON public.learning_materials FOR UPDATE
 TO authenticated
@@ -104,6 +145,7 @@ WITH CHECK (
   )
 );
 
+-- DB POLICY 4: XÓA TÀI LIỆU (DELETE)
 CREATE POLICY "learning_materials_delete_policy"
 ON public.learning_materials FOR DELETE
 TO authenticated
@@ -116,41 +158,13 @@ USING (
   )
 );
 
--- 3. TẠO HOẶC CẬP NHẬT BUCKET STORAGE 'learning-materials' SANG PRIVATE (PUBLIC = FALSE)
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-  'learning-materials',
-  'learning-materials',
-  false,
-  52428800,
-  ARRAY[
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-powerpoint',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
-    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
-  ]
-)
-ON CONFLICT (id) DO UPDATE SET
-  public = false,
-  file_size_limit = 52428800,
-  allowed_mime_types = ARRAY[
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-powerpoint',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
-    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
-  ];
-
+-- 3. THIẾT LẬP STORAGE RLS CHẶT CHẼ THEO CẤU TRÚC THƯ MỤC {created_by}/{filename}
 DROP POLICY IF EXISTS "learning_materials_storage_select" ON storage.objects;
 DROP POLICY IF EXISTS "learning_materials_storage_insert" ON storage.objects;
 DROP POLICY IF EXISTS "learning_materials_storage_update" ON storage.objects;
 DROP POLICY IF EXISTS "learning_materials_storage_delete" ON storage.objects;
 
+-- STORAGE SELECT: Đọc file nếu người dùng có quyền xem record tài liệu tương ứng
 CREATE POLICY "learning_materials_storage_select"
 ON storage.objects FOR SELECT
 TO authenticated
@@ -166,6 +180,7 @@ USING (
   )
 );
 
+-- STORAGE INSERT: Giáo viên chỉ upload vào thư mục riêng trùng với auth.uid() của mình
 CREATE POLICY "learning_materials_storage_insert"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -180,6 +195,7 @@ WITH CHECK (
   )
 );
 
+-- STORAGE UPDATE: Giáo viên chỉ cập nhật file trong thư mục của mình
 CREATE POLICY "learning_materials_storage_update"
 ON storage.objects FOR UPDATE
 TO authenticated
@@ -194,6 +210,7 @@ USING (
   )
 );
 
+-- STORAGE DELETE: Giáo viên chỉ được xóa file trong thư mục do mình sở hữu
 CREATE POLICY "learning_materials_storage_delete"
 ON storage.objects FOR DELETE
 TO authenticated

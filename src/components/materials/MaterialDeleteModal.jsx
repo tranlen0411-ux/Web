@@ -12,22 +12,27 @@ export const MaterialDeleteModal = ({ isOpen, onClose, material, DELETED_CALLBAC
     setLoading(true);
     setErrorMsg('');
     try {
-      // 1. Xóa file khỏi Supabase Storage nếu có file_path
-      if (material.file_path) {
-        try {
-          await supabase.storage.from('learning-materials').remove([material.file_path]);
-        } catch (removeErr) {
-          console.warn('Storage file remove error:', removeErr);
-        }
-      }
-
-      // 2. Xóa record khỏi bảng public.learning_materials
+      // 1. Xóa bản ghi trong Database trước
       const { error: dbErr } = await supabase
         .from('learning_materials')
         .delete()
         .eq('id', material.id);
 
-      if (dbErr) throw dbErr;
+      if (dbErr) {
+        throw new Error('Lỗi khi xóa bản ghi tài liệu trong cơ sở dữ liệu: ' + dbErr.message);
+      }
+
+      // 2. Nếu Database xóa thành công và có file_path -> Xóa file tương ứng khỏi Storage
+      if (material.file_path) {
+        const { error: storageErr } = await supabase.storage
+          .from('learning-materials')
+          .remove([material.file_path]);
+
+        if (storageErr) {
+          console.error('Lỗi khi xóa tệp tin trong Storage:', storageErr);
+          // Ghi nhận log nhưng đã xóa DB thành công
+        }
+      }
 
       DELETED_CALLBACK?.();
       onClose();
@@ -59,7 +64,7 @@ export const MaterialDeleteModal = ({ isOpen, onClose, material, DELETED_CALLBAC
           Xác Nhận Xóa Bài Giảng / Tài Liệu?
         </h3>
         <p className="text-xs font-bold text-slate-500 text-center mb-4">
-          Bài giảng <span className="text-rose-700 font-extrabold">"{material.title}"</span> và toàn bộ tệp đính kèm sẽ bị xóa hoàn toàn khỏi hệ thống.
+          Bài giảng <span className="text-rose-700 font-extrabold">"{material.title}"</span> và tệp đính kèm sẽ bị xóa hoàn toàn khỏi hệ thống.
         </p>
 
         {errorMsg && (

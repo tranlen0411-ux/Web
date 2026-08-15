@@ -19,7 +19,8 @@ import {
   Calendar, 
   User, 
   HardDrive,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -57,6 +58,7 @@ export const MaterialsView = () => {
   const [materialToDelete, setMaterialToDelete] = useState(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
+  const [downloadingId, setDownloadingId] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
 
   const subjects = [
@@ -178,13 +180,46 @@ export const MaterialsView = () => {
     }
   };
 
-  const getMediaPublicUrl = (filePath, externalUrl) => {
-    if (externalUrl) return externalUrl;
-    if (filePath) {
-      const { data } = supabase.storage.from('learning-materials').getPublicUrl(filePath);
-      return data?.publicUrl;
+  // Xử lý tạo Signed URL ngắn hạn để Tải tệp tin về máy (chỉ khi allow_download !== false)
+  const handleDownloadMaterial = async (item) => {
+    if (item.allow_download === false) {
+      showToast('Tài liệu này không cho phép tải xuống.');
+      return;
     }
-    return null;
+
+    if (item.external_url) {
+      window.open(item.external_url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    if (!item.file_path) return;
+
+    setDownloadingId(item.id);
+    try {
+      // Đòi hỏi cấp Signed URL thời hạn 60s để download
+      const { data, error } = await supabase.storage
+        .from('learning-materials')
+        .createSignedUrl(item.file_path, 60);
+
+      if (error || !data?.signedUrl) {
+        throw new Error(error?.message || 'Không thể tạo đường dẫn tải xuống.');
+      }
+
+      // Mở đường dẫn signed URL trong tab mới để tải xuống
+      const link = document.createElement('a');
+      link.href = data.signedUrl;
+      link.download = item.file_name || item.title;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+    } catch (err) {
+      console.error('Download error:', err);
+      showToast('Lỗi khi khởi tạo liên kết tải xuống.');
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const showToast = (msg) => {
@@ -207,7 +242,7 @@ export const MaterialsView = () => {
         <div>
           <div className="flex items-center gap-2 mb-1.5">
             <span className="px-3 py-1 bg-amber-900/60 text-amber-100 text-xs font-black rounded-xl uppercase flex items-center gap-1">
-              📚 Kho Bài Giảng & Tài Liệu
+              📚 Kho Bài Giảng & Tài Liệu Private
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-black flex items-center gap-2">
@@ -319,7 +354,6 @@ export const MaterialsView = () => {
       ) : filteredMaterials.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredMaterials.map((item) => {
-            const url = getMediaPublicUrl(item.file_path, item.external_url);
             const canManage = isAdmin || (isTeacher && item.created_by === profile?.id);
 
             return (
@@ -380,21 +414,23 @@ export const MaterialsView = () => {
                     </button>
 
                     {/* NÚT TẢI XUỐNG (NẾU ALLOW_DOWNLOAD TRUE & CÓ FILE) */}
-                    {item.allow_download !== false && url ? (
-                      <a
-                        href={url}
-                        download={item.file_name || item.title}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-xl transition-colors"
-                        title="Tải xuống tài liệu"
+                    {item.allow_download !== false && (item.file_path || item.external_url) ? (
+                      <button
+                        onClick={() => handleDownloadMaterial(item)}
+                        disabled={downloadingId === item.id}
+                        className="p-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-xl transition-colors disabled:opacity-50"
+                        title="Tải xuống tài liệu qua Signed URL"
                       >
-                        <Download className="w-4 h-4" />
-                      </a>
+                        {downloadingId === item.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-emerald-700" />
+                        ) : (
+                          <Download className="w-4 h-4" />
+                        )}
+                      </button>
                     ) : (
                       <span 
                         className="p-2 bg-slate-100 text-slate-400 rounded-xl cursor-not-allowed"
-                        title="Tài liệu này chỉ cho phép xem trực tiếp"
+                        title="Tài liệu này chỉ cho phép xem trực tiếp (Không cho phép tải xuống)"
                       >
                         <Lock className="w-4 h-4" />
                       </span>
