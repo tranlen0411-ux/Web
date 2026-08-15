@@ -287,7 +287,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
               });
 
               const isCounterValid = edgeRes && typeof edgeRes.requested_count === 'number'
-                ? edgeRes.requested_count === (edgeRes.completed_count || 0) + (edgeRes.unresolved_count || 0)
+                ? edgeRes.requested_count === (edgeRes.completed_count || 0) + (edgeRes.unresolved_count || 0) + (edgeRes.skipped_count || 0)
                 : true;
 
               if (

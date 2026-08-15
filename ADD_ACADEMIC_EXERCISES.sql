@@ -1,8 +1,8 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.6 EXACT INVARIANTS & ATOMIC CTE RESET
--- 1. CHỈ DÙNG DROP FUNCTION IF EXISTS VỚI MỌI CHỮ KÝ OVERLOAD CŨ VÀ MỚI (KHÔNG GỌI REVOKE TRƯỚC DROP)
--- 2. NÂNG CẤP CONSTRAINT CHECK STATUS IDEMPOTENT TRÊN BẢNG EXERCISE_FILE_CLEANUP_JOBS
--- 3. ĐỔI TÊN & NÂNG CẤP RPC RESET_CLEANUP_JOBS_FOR_RETRY DÙNG CTE ATOMIC VỚI FOR UPDATE SKIP LOCKED VÀ RETURNING ID, FILE_PATH
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.7 FAIL-CLOSED MIGRATION & RECONCILIATION RETRY
+-- 1. LOẠI BỎ HOÀN TOÀN EXCEPTION WHEN OTHERS THEN NULL; KIỂM TRA & DUYỆT RÀNG BUỘC STATUS CHECK FAIL-CLOSED
+-- 2. ĐỔI MỚI RPC RESET_CLEANUP_JOBS_FOR_RETRY DÙNG CTE ATOMIC FOR UPDATE SKIP LOCKED VÀ RETURNING PREVIOUS_STATUS & NEW_STATUS ('reconciliation_pending')
+-- 3. ĐẢM BẢO MIGRATION ROLLBACK BẮT BỘC NẾU CÓ TRẠNG THÁI STATUS KHÔNG HỢP LỆ HOẶC CONSTRAINT KHÔNG ĐƯỢC TẠO
 -- 4. BỐ TRÍ DÀNH RIÊNG QUYỀN WORKER VÀ ADMIN TRÊN CÁC RPC SECURITY DEFINER CHUẨN XÁC
 -- ============================================================================
 
@@ -34,9 +34,21 @@ CREATE TABLE IF NOT EXISTS public.exercise_file_cleanup_jobs (
   processed_at TIMESTAMPTZ
 );
 
--- CẬP NHẬT RÀNG BUỘC CHECK STATUS IDEMPOTENT TRÊN BẢNG ĐÃ TỒN TẠI
+-- KHOẢNG KIỂM TRA DỮ LIỆU STATUS HIỆN CÓ VÀ CẬP NHẬT CONSTRAINT FAIL-CLOSED (KHÔNG NUỐT LỖI)
 DO $$
+DECLARE
+  v_invalid_count INT := 0;
+  v_invalid_statuses JSONB := '[]'::jsonb;
 BEGIN
+  SELECT COUNT(*), jsonb_agg(DISTINCT status)
+  INTO v_invalid_count, v_invalid_statuses
+  FROM public.exercise_file_cleanup_jobs
+  WHERE status NOT IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed', 'reconciliation_pending');
+
+  IF v_invalid_count > 0 THEN
+    RAISE EXCEPTION 'MIGRATION BỊ DỪNG FAIL-CLOSED: Phát hiện % bản ghi có status không hợp lệ: %', v_invalid_count, v_invalid_statuses;
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM pg_constraint c
     JOIN pg_class t ON c.conrelid = t.oid
@@ -48,9 +60,16 @@ BEGIN
 
   ALTER TABLE public.exercise_file_cleanup_jobs
   ADD CONSTRAINT exercise_file_cleanup_jobs_status_check
-  CHECK (status IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed'));
-EXCEPTION WHEN OTHERS THEN
-  NULL;
+  CHECK (status IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed', 'reconciliation_pending'));
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+    WHERE n.nspname = 'public' AND t.relname = 'exercise_file_cleanup_jobs' AND c.conname = 'exercise_file_cleanup_jobs_status_check'
+  ) THEN
+    RAISE EXCEPTION 'MIGRATION BỊ DỪNG FAIL-CLOSED: Constraint exercise_file_cleanup_jobs_status_check không tồn tại sau khi ADD.';
+  END IF;
 END $$;
 
 -- 3. BẢNG PUBLIC.ACADEMIC_EXERCISES
@@ -477,7 +496,7 @@ END;
 $$;
 
 
--- 2. RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB DÀNH RIÊNG CHO SERVICE_ROLE
+-- 2. RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB DÀNH RIÊNG CHO SERVICE_ROLE (HỖ TRỢ RECONCILIATION_PENDING)
 CREATE OR REPLACE FUNCTION public.claim_exercise_file_cleanup_job(
   p_job_id UUID,
   p_requesting_user_id UUID
@@ -519,7 +538,7 @@ BEGIN
       v_user_role = 'admin' OR requested_by = p_requesting_user_id
     )
     AND (
-      status IN ('pending', 'failed')
+      status IN ('pending', 'failed', 'reconciliation_pending')
       OR (status = 'processing' AND (processed_at IS NULL OR processed_at < NOW() - INTERVAL '15 minutes'))
     )
   RETURNING * INTO v_job;
@@ -590,7 +609,7 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'reason', 'missing_profile', 'message', 'Lỗi: Profile người dùng không tồn tại.');
   END IF;
 
-  IF p_status NOT IN ('deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed') THEN
+  IF p_status NOT IN ('deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed', 'reconciliation_pending') THEN
     RETURN jsonb_build_object('success', false, 'reason', 'invalid_status', 'message', 'Trạng thái đích không hợp lệ.');
   END IF;
 
@@ -675,7 +694,7 @@ END;
 $$;
 
 
--- 5. RPC RESET_CLEANUP_JOBS_FOR_RETRY NGUYÊN TỬ VỚI FOR UPDATE SKIP LOCKED VÀ RETURNING JOB_IDS THỰC TẾ
+-- 5. RPC RESET_CLEANUP_JOBS_FOR_RETRY PHÂN LOẠI RECONCILIATION_PENDING VỚI CTE FOR UPDATE SKIP LOCKED
 CREATE OR REPLACE FUNCTION public.reset_cleanup_jobs_for_retry(
   p_limit INT DEFAULT 50
 )
@@ -699,7 +718,7 @@ BEGIN
   END IF;
 
   WITH candidates AS (
-    SELECT id
+    SELECT id, status AS prev_status
     FROM public.exercise_file_cleanup_jobs
     WHERE status IN ('failed', 'storage_deleted_job_update_failed')
        OR (status = 'processing' AND (processed_at IS NULL OR processed_at < NOW() - INTERVAL '15 minutes'))
@@ -709,12 +728,23 @@ BEGIN
   ),
   updated AS (
     UPDATE public.exercise_file_cleanup_jobs j
-    SET status = 'pending', processed_at = NULL, last_error = NULL
+    SET 
+      status = CASE 
+        WHEN c.prev_status = 'storage_deleted_job_update_failed' THEN 'reconciliation_pending'
+        ELSE 'pending'
+      END,
+      processed_at = NULL,
+      last_error = NULL
     FROM candidates c
     WHERE j.id = c.id
-    RETURNING j.id, j.file_path, j.status
+    RETURNING j.id, j.file_path, c.prev_status AS previous_status, j.status AS new_status
   )
-  SELECT COALESCE(jsonb_agg(jsonb_build_object('id', id, 'file_path', file_path)), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'id', id,
+    'file_path', file_path,
+    'previous_status', previous_status,
+    'new_status', new_status
+  )), '[]'::jsonb)
   INTO v_jobs
   FROM updated;
 
@@ -1902,7 +1932,7 @@ BEGIN
 
   UPDATE public.academic_submissions
   SET
-    status = v_status,
+    status = v_new_status,
     manual_score = v_total_manual,
     total_score = v_final_total,
     teacher_feedback = p_teacher_feedback,
@@ -1915,7 +1945,7 @@ BEGIN
   IF v_stars_to_award > 0 AND v_sub.reward_applied_at IS NULL THEN
     UPDATE public.profiles
     SET total_stars = COALESCE(total_stars, 0) + v_reward_stars
-    WHERE id = v_sub.student_id;
+    WHERE id = v_student_id;
   END IF;
 
   RETURN jsonb_build_object(

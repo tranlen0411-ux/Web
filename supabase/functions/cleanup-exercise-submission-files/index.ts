@@ -84,12 +84,15 @@ serve(async (req) => {
           requested_count: 0,
           completed_count: 0,
           unresolved_count: 0,
+          skipped_count: 0,
+          duplicate_count: 0,
           deleted: [],
           still_referenced: [],
           failed: [],
           already_claimed: [],
           invalid_job_ids: [],
-          missing_job_ids: []
+          missing_job_ids: [],
+          duplicate_job_ids: []
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -102,19 +105,28 @@ serve(async (req) => {
       );
     }
 
-    const invalid_job_ids: string[] = [];
+    const invalid_job_ids: Array<{ index: number; value_type: string; value: string }> = [];
+    const duplicate_job_ids: string[] = [];
     const valid_requested_uuids: string[] = [];
-    const seen_raw_ids = new Set<string>();
+    const seen_uuids = new Set<string>();
 
-    for (const rawId of rawJobIds) {
-      const strId = String(rawId);
-      if (seen_raw_ids.has(strId)) continue;
-      seen_raw_ids.add(strId);
+    for (let i = 0; i < rawJobIds.length; i++) {
+      const rawVal = rawJobIds[i];
 
-      if (typeof rawId === 'string' && UUID_REGEX.test(rawId)) {
-        valid_requested_uuids.push(rawId);
+      if (typeof rawVal === 'string' && UUID_REGEX.test(rawVal)) {
+        const normalizedUuid = rawVal.toLowerCase();
+        if (seen_uuids.has(normalizedUuid)) {
+          duplicate_job_ids.push(rawVal);
+        } else {
+          seen_uuids.add(normalizedUuid);
+          valid_requested_uuids.push(normalizedUuid);
+        }
       } else {
-        invalid_job_ids.push(strId);
+        invalid_job_ids.push({
+          index: i,
+          value_type: rawVal === null ? 'null' : typeof rawVal,
+          value: String(rawVal)
+        });
       }
     }
 
@@ -185,6 +197,28 @@ serve(async (req) => {
         continue;
       }
 
+      // XỬ LÝ NHÁNH RECONCILIATION_PENDING (Kiểm tra xem object có còn tồn tại trên Storage hay không)
+      const folderParts = filePath.split('/');
+      const filename = folderParts.pop() || '';
+      const folderPath = folderParts.join('/');
+
+      const { data: objectList } = await supabaseAdmin.storage
+        .from('exercise-submissions')
+        .list(folderPath, { search: filename });
+
+      const objectExists = Array.isArray(objectList) && objectList.some((o: any) => o.name === filename);
+
+      if (!objectExists) {
+        // File đã thực sự bị xóa khỏi Storage -> Hoàn tất idempotent thành deleted
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
+        if (finRes.success) {
+          deleted.push(filePath);
+        } else {
+          failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'already_deleted_reconcile_failed' });
+        }
+        continue;
+      }
+
       // 5. CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API CHUẨN XÁC NGUYÊN TỬ
       const { error: removeErr } = await supabaseAdmin.storage
         .from('exercise-submissions')
@@ -229,13 +263,15 @@ serve(async (req) => {
 
     const completed_count = deleted.length + still_referenced.length;
     const unresolved_count = failed.length + missing_job_ids.length + invalid_job_ids.length + already_claimed.length;
+    const skipped_count = duplicate_job_ids.length;
+    const duplicate_count = duplicate_job_ids.length;
 
     let overallSuccess = unresolved_count === 0;
-    const partialSuccess = completed_count > 0 && unresolved_count > 0;
+    const partialSuccess = completed_count > 0 && (unresolved_count > 0 || skipped_count > 0);
 
-    // Kiểm tra bất biến số đếm trước khi trả response
-    if (requested_count !== completed_count + unresolved_count) {
-      console.error(`Invariant mismatch: requested (${requested_count}) != completed (${completed_count}) + unresolved (${unresolved_count})`);
+    // Kiểm tra bất biến số đếm tuyệt đối trước khi trả response
+    if (requested_count !== completed_count + unresolved_count + skipped_count) {
+      console.error(`Invariant mismatch: requested (${requested_count}) != completed (${completed_count}) + unresolved (${unresolved_count}) + skipped (${skipped_count})`);
       overallSuccess = false;
     }
 
@@ -246,12 +282,15 @@ serve(async (req) => {
         requested_count,
         completed_count,
         unresolved_count,
+        skipped_count,
+        duplicate_count,
         deleted,
         still_referenced,
         already_claimed,
         failed,
         invalid_job_ids,
         missing_job_ids,
+        duplicate_job_ids,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

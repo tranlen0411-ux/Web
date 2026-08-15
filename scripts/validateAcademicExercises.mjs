@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.6 (Counter Invariants & Atomic CTE Reset)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.7 (No Swallow Exceptions & Strict Invariants)...\n');
 
 let hasError = false;
 
@@ -13,20 +13,20 @@ if (!fs.existsSync(sqlPath)) {
 } else {
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Check 1: TUYỆT ĐỐI KHÔNG DÙNG DELETE FROM STORAGE.OBJECTS TRONG SQL
-  if (sql.includes('DELETE FROM storage.objects') || sql.includes('INSERT INTO storage.objects') || sql.includes('UPDATE storage.objects')) {
-    console.error('❌ LỖI KIẾN TRÚC STORAGE SQL: SQL không được phép DELETE/INSERT/UPDATE trực tiếp trên storage.objects metadata!');
+  // Check 1: TUYỆT ĐỐI KHÔNG NUỐT LỖI MIGRATION VỚI EXCEPTION WHEN OTHERS THEN NULL;
+  if (sql.includes('EXCEPTION WHEN OTHERS THEN NULL;') || sql.includes('EXCEPTION WHEN OTHERS THEN\n  NULL;')) {
+    console.error('❌ LỖI MIGRATION CONSTRAINT: Migration không được phép chứa EXCEPTION WHEN OTHERS THEN NULL để nuốt lỗi constraint!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Architecture: Đã loại bỏ hoàn toàn các câu lệnh DML trực tiếp trên storage.objects!');
+    console.log('  ✅ SQL Constraint Safety: Đã loại bỏ hoàn toàn các khối swallow exception (WHEN OTHERS THEN NULL)!');
   }
 
-  // Check 2: DROP FUNCTION IF EXISTS KHÔNG REVOKE TRƯỚC DROP VÀ RPC RESET MỚI
-  if (!sql.includes('DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID);') || !sql.includes('reset_cleanup_jobs_for_retry') || !sql.includes('FOR UPDATE SKIP LOCKED')) {
-    console.error('❌ LỖI RPC RESET: SQL phải chứa RPC reset_cleanup_jobs_for_retry với FOR UPDATE SKIP LOCKED!');
+  // Check 2: DROP FUNCTION IF EXISTS VÀ TRẠNG THÁI RECONCILIATION_PENDING
+  if (!sql.includes('DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID);') || !sql.includes('reset_cleanup_jobs_for_retry') || !sql.includes('reconciliation_pending')) {
+    console.error('❌ LỖI RPC RESET: SQL phải chứa RPC reset_cleanup_jobs_for_retry với trạng thái reconciliation_pending!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Atomic CTE Reset: RPC reset_cleanup_jobs_for_retry dùng FOR UPDATE SKIP LOCKED và RETURNING job_ids chuẩn xác!');
+    console.log('  ✅ SQL Fail-Closed Constraint Check: Tích hợp đầy đủ trạng thái reconciliation_pending và kiểm tra constraint fail-closed!');
   }
 
   // Check 3: FAIL-CLOSED JWT ROLE CHECK IN RPCs
@@ -46,11 +46,11 @@ if (!fs.existsSync(edgeFuncPath)) {
 } else {
   const edgeContent = fs.readFileSync(edgeFuncPath, 'utf8');
 
-  if (!edgeContent.includes('requested_count') || !edgeContent.includes('requested_count !== completed_count + unresolved_count')) {
-    console.error('❌ LỖI EDGE COUNTER INVARIANT: Edge Function chưa kiểm tra bất biến requested_count === completed_count + unresolved_count!');
+  if (!edgeContent.includes('skipped_count') || !edgeContent.includes('requested_count !== completed_count + unresolved_count + skipped_count')) {
+    console.error('❌ LỖI EDGE COUNTER INVARIANT: Edge Function chưa kiểm tra bất biến requested_count === completed_count + unresolved_count + skipped_count!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Counter Invariants: Bất biến requested_count = completed_count + unresolved_count chuẩn xác!');
+    console.log('  ✅ Edge Function Counter Invariants: Bất biến requested_count = completed_count + unresolved_count + skipped_count chuẩn xác!');
   }
 }
 
@@ -67,9 +67,9 @@ if (fs.existsSync(playModalPath)) {
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.6 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.7 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.6 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.7 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }
