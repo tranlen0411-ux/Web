@@ -1,0 +1,79 @@
+name: Academic Exercises 15.8 Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: academic-exercises-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Academic Exercises 15.8 on Local Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup Deno 2.9.5
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: '2.9.5'
+
+      - name: Setup Supabase CLI 2.114.0
+        uses: supabase/setup-cli@v1
+        with:
+          version: '2.114.0'
+
+      - name: Display Executable Versions
+        run: |
+          echo "=== RUNNER TOOL VERSIONS ==="
+          node --version
+          npm --version
+          deno --version
+          supabase --version
+
+      - name: Install Node Dependencies (No Package Lock)
+        run: |
+          npm install --no-package-lock
+
+      - name: Run Node Static Exercise Validator
+        run: |
+          npm run validate:exercises
+
+      - name: Run Vite Production Build
+        run: |
+          npm run build
+
+      - name: Run Deno Typecheck on Edge Function
+        run: |
+          deno check supabase/functions/cleanup-exercise-submission-files/index.ts
+
+      - name: Start Supabase Local Containers
+        run: |
+          supabase start
+
+      - name: Mask Connection Credentials in Logs
+        run: |
+          echo "::add-mask::postgres"
+          echo "::add-mask::127.0.0.1"
+
+      - name: Run SQL Migration Test A, Test B & Verification Assertions
+        run: |
+          chmod +x scripts/ci/verifyAcademicExercisesMigration.sh
+          ./scripts/ci/verifyAcademicExercisesMigration.sh
+
+      - name: Stop Local Supabase Containers
+        if: always()
+        run: |
+          supabase stop --no-backup
