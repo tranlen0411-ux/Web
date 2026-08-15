@@ -129,7 +129,7 @@ VALUES (
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-powerpoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
     'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
   ]
 )
@@ -142,7 +142,7 @@ ON CONFLICT (id) DO UPDATE SET
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-powerpoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
     'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
   ];
 

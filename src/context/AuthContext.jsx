@@ -5,6 +5,8 @@ const AuthContext = createContext({
   user: null,
   profile: null,
   loading: true,
+  globalClassFilter: 'ALL',
+  setGlobalClassFilter: () => {},
   signUp: async () => {},
   signIn: async () => {},
   quickStudentSignIn: async () => {},
@@ -17,6 +19,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [globalClassFilter, setGlobalClassFilter] = useState('ALL');
 
   // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID Auth hoặc email sau khi có session
   const fetchProfile = async (userId, userEmail = null) => {
@@ -37,6 +40,7 @@ export const AuthProvider = ({ children }) => {
           await supabase.auth.signOut();
           setUser(null);
           setProfile(null);
+          setGlobalClassFilter('ALL');
           return;
         }
         setProfile(data);
@@ -55,6 +59,7 @@ export const AuthProvider = ({ children }) => {
               await supabase.auth.signOut();
               setUser(null);
               setProfile(null);
+              setGlobalClassFilter('ALL');
               return;
             }
             setProfile(profileByEmail);
@@ -96,6 +101,7 @@ export const AuthProvider = ({ children }) => {
       } else {
         setUser(null);
         setProfile(null);
+        setGlobalClassFilter('ALL');
       }
       setLoading(false);
     });
@@ -159,7 +165,6 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Đăng nhập Nhanh dành cho Học sinh (Dùng Mã Học Sinh & Mã PIN)
-  // SỬ DỤNG EDGE FUNCTION SERVER-SIDE 'student-quick-login' XÁC MINH HASHED PIN BẢO MẬT 100%
   const quickStudentSignIn = async (studentCode, pin) => {
     setLoading(true);
     const cleanCode = studentCode ? studentCode.trim().toUpperCase() : '';
@@ -199,7 +204,7 @@ export const AuthProvider = ({ children }) => {
         return { data: null, error: { message: 'Lỗi khi xác thực phiên đăng nhập học sinh.' } };
       }
 
-      // 3. Đã có Supabase Auth Session thật (session != null & session.user.id = UUID thật từ auth.users)!
+      // 3. Đã có Supabase Auth Session thật
       const sessionUser = verifyRes.data.session.user;
       setUser(sessionUser);
 
@@ -216,7 +221,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng xuất
+  // Đăng xuất - Đưa toàn bộ trạng thái về mặc định
   const signOut = async () => {
     setLoading(true);
     try {
@@ -226,6 +231,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setUser(null);
       setProfile(null);
+      setGlobalClassFilter('ALL');
       setLoading(false);
     }
   };
@@ -236,18 +242,15 @@ export const AuthProvider = ({ children }) => {
     const updatedStars = (profile.total_stars || 0) + starsGained;
     const updatedCoins = (profile.total_coins || 0) + coinsGained;
 
-    // Cập nhật UI nhanh
     setProfile(prev => prev ? { ...prev, total_stars: updatedStars, total_coins: updatedCoins } : null);
 
     try {
-      // 1. Gọi RPC award_stars_and_coins
       const { error: rpcErr } = await supabase.rpc('award_stars_and_coins', {
         p_stars_gained: starsGained,
         p_coins_gained: coinsGained
       });
 
       if (rpcErr) {
-        // 2. Dự phòng trực tiếp nếu RPC chưa được khởi tạo
         await supabase
           .from('profiles')
           .update({
@@ -267,8 +270,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Đăng nhập bằng Google OAuth cho Admin / Giáo viên (AUTH-02)
-  // BẮT BUỘC queryParams: { prompt: 'select_account' } ĐỂ LUÔN HIỂN THỊ MÀN HÌNH CHỌN TÀI KHOẢN GOOGLE
+  // Đăng nhập bằng Google OAuth cho Admin / Giáo viên
   const signInWithGoogle = async () => {
     setLoading(true);
     try {
@@ -297,6 +299,8 @@ export const AuthProvider = ({ children }) => {
       user,
       profile,
       loading,
+      globalClassFilter,
+      setGlobalClassFilter,
       signUp,
       signIn,
       signInWithGoogle,

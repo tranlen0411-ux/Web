@@ -20,7 +20,8 @@ import {
   User, 
   HardDrive,
   RefreshCw,
-  Loader2
+  Loader2,
+  HardDriveUpload
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -29,9 +30,10 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { MaterialViewerModal } from '../components/materials/MaterialViewerModal';
 import { MaterialFormModal } from '../components/materials/MaterialFormModal';
 import { MaterialDeleteModal } from '../components/materials/MaterialDeleteModal';
+import { LegacyFilesMigrationTool } from '../components/materials/LegacyFilesMigrationTool';
 
 export const MaterialsView = () => {
-  const { profile } = useAuth();
+  const { profile, globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
 
   const userRole = profile?.role || 'student';
@@ -44,7 +46,6 @@ export const MaterialsView = () => {
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedClassId, setSelectedClassId] = useState('ALL');
   const [selectedSubject, setSelectedSubject] = useState('ALL');
   const [selectedFileType, setSelectedFileType] = useState('ALL');
 
@@ -60,6 +61,7 @@ export const MaterialsView = () => {
 
   const [downloadingId, setDownloadingId] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [showAdminMigrationTool, setShowAdminMigrationTool] = useState(false);
 
   const subjects = [
     'Toán',
@@ -129,23 +131,23 @@ export const MaterialsView = () => {
     }
   };
 
-  // Lọc danh sách tài liệu ở Frontend
+  // Lọc danh sách tài liệu ở Frontend theo cả Bộ lọc dùng chung (globalClassFilter) và bộ lọc riêng
   const filteredMaterials = materials.filter(item => {
-    // 1. Lọc theo tìm kiếm từ khóa
+    // 1. Đồng bộ Bộ Lọc Lớp Dùng Chung (globalClassFilter từ Header/AuthContext)
+    if (globalClassFilter !== 'ALL') {
+      if (globalClassFilter === 'NO_CLASS') {
+        if (item.class_id !== null) return false;
+      } else if (item.class_id !== globalClassFilter) {
+        return false;
+      }
+    }
+
+    // 2. Lọc theo tìm kiếm từ khóa
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const matchTitle = item.title?.toLowerCase().includes(q);
       const matchDesc = item.description?.toLowerCase().includes(q);
       if (!matchTitle && !matchDesc) return false;
-    }
-
-    // 2. Lọc theo Lớp Học
-    if (selectedClassId !== 'ALL') {
-      if (selectedClassId === 'NO_CLASS') {
-        if (item.class_id !== null) return false;
-      } else if (item.class_id !== selectedClassId) {
-        return false;
-      }
     }
 
     // 3. Lọc theo Môn Học
@@ -196,7 +198,6 @@ export const MaterialsView = () => {
 
     setDownloadingId(item.id);
     try {
-      // Đòi hỏi cấp Signed URL thời hạn 60s để download
       const { data, error } = await supabase.storage
         .from('learning-materials')
         .createSignedUrl(item.file_path, 60);
@@ -205,7 +206,6 @@ export const MaterialsView = () => {
         throw new Error(error?.message || 'Không thể tạo đường dẫn tải xuống.');
       }
 
-      // Mở đường dẫn signed URL trong tab mới để tải xuống
       const link = document.createElement('a');
       link.href = data.signedUrl;
       link.download = item.file_name || item.title;
@@ -238,7 +238,7 @@ export const MaterialsView = () => {
       )}
 
       {/* HEADER BANNER GÓC TÀI LIỆU */}
-      <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 rounded-3xl border-4 border-amber-700 p-6 sm:p-8 text-white shadow-lg mb-8 flex flex-col md:flex-row items-center justify-between gap-6">
+      <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 rounded-3xl border-4 border-amber-700 p-6 sm:p-8 text-white shadow-lg mb-6 flex flex-col md:flex-row items-center justify-between gap-6">
         <div>
           <div className="flex items-center gap-2 mb-1.5">
             <span className="px-3 py-1 bg-amber-900/60 text-amber-100 text-xs font-black rounded-xl uppercase flex items-center gap-1">
@@ -253,20 +253,39 @@ export const MaterialsView = () => {
           </p>
         </div>
 
-        {/* NÚT ĐĂNG TÀI LIỆU MỚI (CHỈ HIỂN THỊ CHO ADMIN & GIÁO VIÊN) */}
-        {(isAdmin || isTeacher) && (
-          <button
-            onClick={() => {
-              setMaterialToEdit(null);
-              setIsFormOpen(true);
-              triggerSound('click');
-            }}
-            className="px-6 py-3.5 bg-white text-amber-950 hover:bg-amber-50 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-200 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all shrink-0"
-          >
-            <Plus className="w-5 h-5 text-amber-600" /> + Đăng Bài Giảng / Tài Liệu
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* NÚT CHUYỂN ĐỔI TOOL DI CHUYỂN FILE CỦ CHO ADMIN */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowAdminMigrationTool(!showAdminMigrationTool)}
+              className="px-4 py-3 bg-amber-900/70 hover:bg-amber-900 text-amber-100 font-black text-xs rounded-2xl border border-amber-400 flex items-center gap-1.5"
+            >
+              <HardDriveUpload className="w-4 h-4 text-amber-300" /> Tool File Cũ
+            </button>
+          )}
+
+          {/* NÚT ĐĂNG TÀI LIỆU MỚI (CHỈ HIỂN THỊ CHO ADMIN & GIÁO VIÊN) */}
+          {(isAdmin || isTeacher) && (
+            <button
+              onClick={() => {
+                setMaterialToEdit(null);
+                setIsFormOpen(true);
+                triggerSound('click');
+              }}
+              className="px-6 py-3.5 bg-white text-amber-950 hover:bg-amber-50 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-200 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all shrink-0"
+            >
+              <Plus className="w-5 h-5 text-amber-600" /> + Đăng Bài Giảng / Tài Liệu
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* CÔNG CỤ DI CHUYỂN FILE CỦ CHO ADMIN (NẾU MỞ) */}
+      {isAdmin && showAdminMigrationTool && (
+        <div className="mb-6">
+          <LegacyFilesMigrationTool onMigrated={() => fetchClassesAndMaterials()} />
+        </div>
+      )}
 
       {/* KHU VỰC TÌM KIẾM & BỘ LỌC TÀI LIỆU */}
       <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm mb-8 space-y-4">
@@ -291,15 +310,20 @@ export const MaterialsView = () => {
           )}
         </div>
 
-        {/* CÁC BỘ LỌC CHI TIẾT */}
+        {/* CÁC BỘ LỌC CHI TIẾT DÙNG CHUNG VỚI HEADER */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           
-          {/* 1. LỌC THEO LỚP HỌC */}
+          {/* 1. LỌC THEO LỚP HỌC (ĐỒNG BỘ TRỰC TIẾP VỚI GLOBAL CLASS FILTER) */}
           <div>
-            <label className="block text-[11px] font-black text-slate-500 uppercase mb-1">Lớp học:</label>
+            <label className="block text-[11px] font-black text-slate-500 uppercase mb-1">
+              Lớp học (Header Filter):
+            </label>
             <select
-              value={selectedClassId}
-              onChange={(e) => { setSelectedClassId(e.target.value); triggerSound('click'); }}
+              value={globalClassFilter}
+              onChange={(e) => { 
+                setGlobalClassFilter(e.target.value); 
+                triggerSound('click'); 
+              }}
               className="w-full p-2.5 bg-amber-50/70 border-2 border-amber-200 rounded-xl font-bold text-xs text-slate-800"
             >
               <option value="ALL">🌐 Tất cả các lớp áp dụng</option>
@@ -355,6 +379,7 @@ export const MaterialsView = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredMaterials.map((item) => {
             const canManage = isAdmin || (isTeacher && item.created_by === profile?.id);
+            const isDownloadAllowed = item.allow_download !== false;
 
             return (
               <div 
@@ -414,7 +439,7 @@ export const MaterialsView = () => {
                     </button>
 
                     {/* NÚT TẢI XUỐNG (NẾU ALLOW_DOWNLOAD TRUE & CÓ FILE) */}
-                    {item.allow_download !== false && (item.file_path || item.external_url) ? (
+                    {isDownloadAllowed && (item.file_path || item.external_url) ? (
                       <button
                         onClick={() => handleDownloadMaterial(item)}
                         disabled={downloadingId === item.id}
@@ -478,7 +503,7 @@ export const MaterialsView = () => {
           </div>
           <h4 className="text-lg font-black text-amber-950 mb-1">Chưa tìm thấy bài giảng / tài liệu phù hợp</h4>
           <p className="text-xs font-bold text-slate-500 mb-4 max-w-sm mx-auto">
-            Thầy cô chưa tải bài giảng lên hoặc từ khóa tìm kiếm không khớp. Thử chọn lại bộ lọc xem nhé!
+            Thầy cô chưa tải bài giảng lên hoặc bộ lọc không khớp. Thử chọn lại xem nhé!
           </p>
 
           {(isAdmin || isTeacher) && (
