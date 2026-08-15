@@ -181,6 +181,7 @@ export const Navbar = () => {
         </a>
 
         {/* ĐIỀU HƯỚNG CHÍNH MÀN HÌNH MÁY TÍNH (DESKTOP >= lg) */}
+        {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Bảng Xếp Hạng ➔ Dashboard (Góc Học Tập/Lớp & Giao Bài/Quản Trị Hệ Thống) ➔ Góc Tài Liệu */}
         <nav className="hidden lg:flex items-center gap-2">
           
           {/* BỘ LỌC LỚP HEADER TOÀN CỤC MÁY TÍNH */}
@@ -207,7 +208,7 @@ export const Navbar = () => {
             </div>
           )}
 
-          {/* NÚT KHO TRÒ CHƠI */}
+          {/* 1. NÚT KHO TRÒ CHƠI */}
           <button
             onClick={handleGamesNavClick}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
@@ -219,21 +220,7 @@ export const Navbar = () => {
             <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
           </button>
 
-          {/* NÚT GÓC TÀI LIỆU */}
-          {user && (
-            <button
-              onClick={() => handleNavClick('/materials')}
-              className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
-                location.pathname === '/materials'
-                  ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
-                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
-              }`}
-            >
-              <BookOpen className="w-4 h-4 text-amber-400" /> Góc Tài Liệu
-            </button>
-          )}
-
-          {/* NÚT BẢNG XẾP HẠNG */}
+          {/* 2. NÚT BẢNG XẾP HẠNG */}
           <button
             onClick={() => handleNavClick('/leaderboard')}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
@@ -245,7 +232,7 @@ export const Navbar = () => {
             <Trophy className="w-4 h-4 text-amber-400" /> Bảng Xếp Hạng
           </button>
 
-          {/* DASHBOARD THEO ROLE */}
+          {/* 3. DASHBOARD THEO ROLE (GÓC HỌC TẬP / LỚP & GIAO BÀI / QUẢN TRỊ HỆ THỐNG) */}
           {user && (
             <button
               onClick={handleDashboardNavClick}
@@ -259,6 +246,20 @@ export const Navbar = () => {
               {role === 'teacher' && <GraduationCap className="w-4 h-4" />}
               {role === 'student' && <BookOpen className="w-4 h-4" />}
               {role === 'admin' ? 'Quản Trị Hệ Thống' : role === 'teacher' ? 'Lớp & Giao Bài' : 'Góc Học Tập'}
+            </button>
+          )}
+
+          {/* 4. NÚT GÓC TÀI LIỆU */}
+          {user && (
+            <button
+              onClick={() => handleNavClick('/materials')}
+              className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+                location.pathname === '/materials'
+                  ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
+              }`}
+            >
+              <BookOpen className="w-4 h-4 text-amber-400" /> Góc Tài Liệu
             </button>
           )}
         </nav>
@@ -308,8 +309,9 @@ export const Navbar = () => {
                     </p>
                   </div>
 
-                  {/* NÚT ĐIỀU HƯỚNG MOBILE/TABLET */}
+                  {/* NÚT ĐIỀU HƯỚNG MOBILE/TABLET (ĐỒNG BỘ THỨ TỰ VỚI DESKTOP) */}
                   <div className="lg:hidden border-b-2 border-slate-100 pb-1 mb-1">
+                    {/* 1. KHO TRÒ CHƠI */}
                     <button
                       onClick={handleGamesNavClick}
                       className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
@@ -317,18 +319,31 @@ export const Navbar = () => {
                       <Gamepad2 className="w-4 h-4 text-sky-500" /> Kho Trò Chơi
                     </button>
 
-                    <button
-                      onClick={() => handleNavClick('/materials')}
-                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
-                    >
-                      <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
-                    </button>
-
+                    {/* 2. BẢNG XẾP HẠNG */}
                     <button
                       onClick={() => handleNavClick('/leaderboard')}
                       className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
                     >
                       <Trophy className="w-4 h-4 text-amber-500" /> Bảng Xếp Hạng
+                    </button>
+
+                    {/* 3. DASHBOARD THEO ROLE (GÓC HỌC TẬP / LỚP & GIAO BÀI / QUẢN TRỊ HỆ THỐNG) */}
+                    <button
+                      onClick={handleDashboardNavClick}
+                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                    >
+                      {role === 'admin' && <ShieldCheck className="w-4 h-4 text-emerald-600" />}
+                      {role === 'teacher' && <GraduationCap className="w-4 h-4 text-emerald-600" />}
+                      {role === 'student' && <BookOpen className="w-4 h-4 text-emerald-600" />}
+                      {role === 'admin' ? 'Quản Trị Hệ Thống' : role === 'teacher' ? 'Lớp & Giao Bài' : 'Góc Học Tập'}
+                    </button>
+
+                    {/* 4. GÓC TÀI LIỆU */}
+                    <button
+                      onClick={() => handleNavClick('/materials')}
+                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                    >
+                      <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
                     </button>
                   </div>
 
