@@ -1,19 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { ArrowLeft, Sparkles, Trophy, Gamepad2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { MemoryGame } from '../components/games/MemoryGame';
 import { QuizRaceGame } from '../components/games/QuizRaceGame';
+import { Grade12GamePlayer } from '../components/games/Grade12GamePlayer';
 import { IframeGamePlayer } from '../components/games/IframeGamePlayer';
 import { BadgeModal } from '../components/common/BadgeModal';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
+import { LEARNING_GAMES_DATA } from '../data/learningGamesData';
 
 export const GamePlayView = () => {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const assignmentIdFromUrl = searchParams.get('assignment_id');
+
   const navigate = useNavigate();
-  const { profile, awardStars } = useAuth();
+  const { profile, awardStars, refreshProfile } = useAuth();
   const { triggerSound } = useSound();
 
   const [game, setGame] = useState(null);
@@ -35,15 +40,18 @@ export const GamePlayView = () => {
         .single();
 
       if (error || !data) {
-        // Fallback cho game mẫu nếu chưa gõ ID từ DB
+        // Kiểm tra xem ID có phải là slug 10 game hay fallback UUID không
+        const matchedKey = Object.keys(LEARNING_GAMES_DATA).find(k => k === id) || 'train-numbers';
+        const fallbackConfig = LEARNING_GAMES_DATA[matchedKey] || LEARNING_GAMES_DATA['train-numbers'];
+
         setGame({
           id,
-          title: 'Thử Thách Trò Chơi Học Vui',
-          description: 'Rèn luyện tư duy toán học và từ vựng sinh động.',
-          game_type: id === '22222222-2222-2222-2222-222222222222' ? 'builtin' : 'builtin',
-          game_url: id === '22222222-2222-2222-2222-222222222222' ? 'quiz-race' : 'memory-game',
-          grade_level: 1,
-          subject: 'Toán'
+          title: fallbackConfig.title,
+          description: fallbackConfig.instruction,
+          game_type: 'builtin',
+          game_url: matchedKey,
+          grade_level: fallbackConfig.grade,
+          subject: fallbackConfig.subject
         });
       } else {
         setGame(data);
@@ -61,34 +69,36 @@ export const GamePlayView = () => {
   };
 
   // Xử lý khi bé hoàn thành trò chơi
-  const handleGameComplete = async (score = 100, timeSec = 60, assignmentId = null) => {
+  const handleGameComplete = async (score = 100, timeSec = 60, paramAssignmentId = null) => {
     triggerSound('victory');
+    const targetAssignmentId = paramAssignmentId || assignmentIdFromUrl || null;
 
     if (profile?.id && game?.id) {
       try {
-        // 1. Thực thi RPC complete_game_and_award an toàn tuyệt đối ở Server-side
+        // 1. Thực thi RPC complete_game_and_award an toàn ở Server-side
         const { data: rpcRes, error: rpcErr } = await supabase.rpc('complete_game_and_award', {
           p_game_id: game.id,
-          p_assignment_id: assignmentId,
+          p_assignment_id: targetAssignmentId,
           p_score: score,
           p_completion_time_seconds: timeSec
         });
 
         if (!rpcErr && rpcRes && rpcRes.success) {
           setEarnedStars(rpcRes.stars_earned || 10);
-          refreshProfile();
+          if (refreshProfile) refreshProfile();
         } else {
-          // Fallback nếu RPC chưa được tạo
-          await awardStars(10, 5);
+          // Fallback nếu RPC chưa tạo
+          if (awardStars) await awardStars(10, 5);
           await supabase.from('student_progress').insert({
             game_id: game.id,
             student_id: profile.id,
+            assignment_id: targetAssignmentId,
             status: 'completed',
             score: score,
             stars_earned: 10,
             completion_time_seconds: timeSec
           });
-          refreshProfile();
+          if (refreshProfile) refreshProfile();
         }
       } catch (err) {
         console.error('Save progress error:', err);
@@ -101,6 +111,8 @@ export const GamePlayView = () => {
   if (loading) {
     return <LoadingSkeleton type="page" />;
   }
+
+  const isGrade12BuiltinGame = game?.game_type === 'builtin' && LEARNING_GAMES_DATA[game?.game_url];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -136,7 +148,13 @@ export const GamePlayView = () => {
 
       {/* COMPONENT GAME VỚI PHÂN CHOẠN THEO GAME_TYPE & GAME_URL */}
       <div className="flex justify-center mb-10">
-        {game?.game_type === 'builtin' ? (
+        {isGrade12BuiltinGame ? (
+          <Grade12GamePlayer 
+            gameKey={game.game_url} 
+            onComplete={handleGameComplete}
+            assignmentId={assignmentIdFromUrl}
+          />
+        ) : game?.game_type === 'builtin' ? (
           game?.game_url === 'quiz-race' ? (
             <QuizRaceGame onComplete={handleGameComplete} />
           ) : (
