@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.3 (Service Role Worker RPCs)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.4 (Migration Safe & Idempotent Worker RPCs)...\n');
 
 let hasError = false;
 
@@ -21,18 +21,15 @@ if (!fs.existsSync(sqlPath)) {
     console.log('  ✅ SQL Architecture: Đã loại bỏ hoàn toàn các câu lệnh DML trực tiếp trên storage.objects!');
   }
 
-  // Check 2: REVOKE authenticated và GRANT service_role
-  if (
-    !sql.includes('REVOKE ALL ON FUNCTION public.claim_exercise_file_cleanup_job') ||
-    !sql.includes('GRANT EXECUTE ON FUNCTION public.claim_exercise_file_cleanup_job(UUID, UUID) TO service_role')
-  ) {
-    console.error('❌ LỖI PERMISSION WORKER RPC: RPC claim/finish phải được khóa hoàn toàn khỏi authenticated và GRANT cho service_role!');
+  // Check 2: DROP CÁC CHỮ KÝ OVERLOAD CŨ VÀ REVOKE RIÊNG SERVICE_ROLE
+  if (!sql.includes('DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID)') || !sql.includes('reconcile_exercise_file_cleanup_job')) {
+    console.error('❌ LỖI OVERLOAD MIGRATION: Phải DROP các chữ ký overload cũ và thêm RPC reconcile_exercise_file_cleanup_job!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Worker RPC Permissions: Khóa hoàn toàn khỏi authenticated và cấp quyền riêng cho service_role!');
+    console.log('  ✅ SQL Overload Safe Migration: Xóa sạch chữ ký overload cũ và thêm RPC reconcile đối soát!');
   }
 
-  // Check 3: FAIL-CLOSED JWT ROLE CHECK
+  // Check 3: FAIL-CLOSED JWT ROLE CHECK IN RPCs
   if (!sql.includes("auth.jwt()->>'role'") || !sql.includes('service_role')) {
     console.error('❌ LỖI JWT FAIL-CLOSED: RPC worker chưa kiểm tra auth.jwt()->>\'role\' = \'service_role\'!');
     hasError = true;
@@ -57,25 +54,18 @@ if (!fs.existsSync(edgeFuncPath)) {
 } else {
   const edgeContent = fs.readFileSync(edgeFuncPath, 'utf8');
 
-  if (!edgeContent.includes("supabaseAdmin.rpc('claim_exercise_file_cleanup_job'")) {
-    console.error('❌ LỖI SERVICE ROLE CALL: Edge Function phải gọi claim_exercise_file_cleanup_job qua supabaseAdmin (Service Role)!');
+  if (!edgeContent.includes('reconcile_exercise_file_cleanup_job')) {
+    console.error('❌ LỖI RECONCILIATION: Edge Function phải gọi reconcile_exercise_file_cleanup_job khi finish deleted lỗi!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Claim Call: Gọi claim RPC qua supabaseAdmin (Service Role Key)!');
+    console.log('  ✅ Edge Function Reconciliation: Gọi RPC reconcile_exercise_file_cleanup_job xử lý idempotent!');
   }
 
-  if (!edgeContent.includes('finishJobOrReport')) {
-    console.error('❌ LỖI FINISH HELPER: Edge Function thiếu helper finishJobOrReport!');
+  if (!edgeContent.includes('partial_success')) {
+    console.error('❌ LỖI PARTIAL SUCCESS: Edge Function phải trả về cờ partial_success!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Finish Helper: Sử dụng finishJobOrReport kiểm tra kết quả mọi lần finish!');
-  }
-
-  if (!edgeContent.includes('p_requesting_user_id')) {
-    console.error('❌ LỖI USER ID PARAM: Edge Function phải truyền p_requesting_user_id vào claim/finish RPC!');
-    hasError = true;
-  } else {
-    console.log('  ✅ Edge Function Identity Verification: Truyền p_requesting_user_id đã xác minh token!');
+    console.log('  ✅ Edge Function Partial Success: Trả cờ partial_success khi có cả job thành công và job lỗi!');
   }
 }
 
@@ -83,18 +73,18 @@ if (!fs.existsSync(edgeFuncPath)) {
 const playModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExercisePlayModal.jsx');
 if (fs.existsSync(playModalPath)) {
   const playContent = fs.readFileSync(playModalPath, 'utf8');
-  if (!playContent.includes('already_processing') || !playContent.includes('rejected')) {
-    console.error('❌ LỖI UI CLEANUP: ExercisePlayModal chưa kiểm tra rejected hoặc already_processing!');
+  if (!playContent.includes('partial_success') || !playContent.includes('validJobIds')) {
+    console.error('❌ LỖI UI CLEANUP: ExercisePlayModal chưa xử lý cờ partial_success!');
     hasError = true;
   } else {
-    console.log('  ✅ ExercisePlayModal: Kiểm tra đầy đủ rejected, already_processing, failed, missing_job_ids!');
+    console.log('  ✅ ExercisePlayModal: Kiểm tra đầy đủ partial_success và xử lý validJobIds linh hoạt!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.3 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.4 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.3 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.4 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

@@ -15,7 +15,7 @@ async function finishJobOrReport(
   status: string,
   lastError: string | null,
   userId: string
-): Promise<{ success: boolean; errorReason?: string }> {
+): Promise<{ success: boolean; alreadyFinished?: boolean; errorReason?: string }> {
   const { data: finishRes, error: finishErr } = await supabaseAdmin.rpc('finish_exercise_file_cleanup_job', {
     p_job_id: jobId,
     p_expected_attempt: expectedAttempt,
@@ -26,9 +26,12 @@ async function finishJobOrReport(
 
   if (finishErr || !finishRes?.success) {
     console.error(`[Job ${jobId}] finish_exercise_file_cleanup_job RPC error:`, finishErr || finishRes?.message);
+    if (finishRes?.already_finished) {
+      return { success: true, alreadyFinished: true };
+    }
     return { success: false, errorReason: finishRes?.reason || 'finish_rpc_failed' };
   }
-  return { success: true };
+  return { success: true, alreadyFinished: !!finishRes.already_finished };
 }
 
 serve(async (req) => {
@@ -73,7 +76,7 @@ serve(async (req) => {
     const jobIds = body?.job_ids;
     if (!Array.isArray(jobIds) || jobIds.length === 0) {
       return new Response(
-        JSON.stringify({ success: true, deleted: [], still_referenced: [], failed: [], already_claimed: [], invalid_job_ids: [], missing_job_ids: [] }),
+        JSON.stringify({ success: true, partial_success: false, deleted: [], still_referenced: [], failed: [], already_claimed: [], invalid_job_ids: [], missing_job_ids: [] }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -183,24 +186,35 @@ serve(async (req) => {
         const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
 
         if (!finRes.success) {
-          console.error(`[Job ${jobId}] Finish job RPC failed after storage remove.`);
-          // Thử đối soát CSDL (Reconciliation)
-          const reconRes = await finishJobOrReport(
-            supabaseAdmin, jobId, claimedAttempt, 'storage_deleted_job_update_failed', 'Storage deleted but status update failed', user.id
-          );
+          console.error(`[Job ${jobId}] Finish job RPC failed after storage remove. Running reconciliation...`);
+          
+          // Thử đối soát CSDL (Reconciliation Idempotent)
+          const { data: reconRes, error: reconErr } = await supabaseAdmin.rpc('reconcile_exercise_file_cleanup_job', {
+            p_job_id: jobId,
+            p_expected_attempt: claimedAttempt,
+            p_requesting_user_id: user.id
+          });
 
-          if (!reconRes.success) {
-            failed.push({
-              job_id: jobId,
-              file_path: filePath,
-              reason: 'database_reconciliation_failed'
-            });
+          if (!reconErr && reconRes?.success && reconRes?.already_finished) {
+            deleted.push(filePath);
           } else {
-            failed.push({
-              job_id: jobId,
-              file_path: filePath,
-              reason: 'storage_deleted_job_update_failed'
-            });
+            const markRes = await finishJobOrReport(
+              supabaseAdmin, jobId, claimedAttempt, 'storage_deleted_job_update_failed', 'Storage deleted but status update failed', user.id
+            );
+
+            if (!markRes.success) {
+              failed.push({
+                job_id: jobId,
+                file_path: filePath,
+                reason: 'database_reconciliation_failed'
+              });
+            } else {
+              failed.push({
+                job_id: jobId,
+                file_path: filePath,
+                reason: 'storage_deleted_job_update_failed'
+              });
+            }
           }
         } else {
           deleted.push(filePath);
@@ -208,9 +222,13 @@ serve(async (req) => {
       }
     }
 
+    const overallSuccess = failed.length === 0 && invalid_job_ids.length === 0;
+    const partialSuccess = deleted.length > 0 && failed.length > 0;
+
     return new Response(
       JSON.stringify({
-        success: true,
+        success: overallSuccess,
+        partial_success: partialSuccess,
         deleted,
         still_referenced,
         already_claimed,
@@ -224,7 +242,7 @@ serve(async (req) => {
   } catch (err: any) {
     console.error('Edge Function exception:', err);
     return new Response(
-      JSON.stringify({ success: false, message: err.message || 'Internal server error' }),
+      JSON.stringify({ success: false, partial_success: false, message: err.message || 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
