@@ -2,7 +2,7 @@
 -- MIGRATION AN TOÀN VIỆN TOÀN (IDEMPOTENT & CHỐNG RACE CONDITION TRONG GIAO DỊCH)
 -- SIẾT CHẶT BẢO MẬT GAMES, ASSIGNMENTS VÀ STORAGE GAME-THUMBNAILS
 -- KHÓA BẢN GHI BẰNG FOR UPDATE VÀ FOR KEY SHARE ĐỂ CHẶN XÓA/SỬA ĐỒNG THỜI
--- VERIFIED SYNTAX AUDIT: OK
+-- VERIFIED SYNTAX AUDIT & GAME SELECTION PERMISSION CHECK: OK
 -- ============================================================================
 
 BEGIN;
@@ -197,7 +197,7 @@ CREATE POLICY "Thumbnails_Delete_Policy" ON storage.objects
   );
 
 -- ============================================================================
--- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI LOCK FOR KEY SHARE TRÊN GAME MỚI
+-- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI SIẾT CHIẾN LƯỢC CHỌN GAME THEO RIGHT MANAGEMENT
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.replace_assignment_safely(
   p_assignment_id UUID,
@@ -209,7 +209,7 @@ RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_caller_id UUID;
   v_assign RECORD;
-  v_new_game_exists UUID;
+  v_new_game RECORD;
   v_progress_count INT;
   v_new_assignment_id UUID;
 BEGIN
@@ -252,13 +252,20 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Từ chối truy cập: Thầy/Cô không quản lý lớp học này.');
   END IF;
 
-  -- 7. KHÓA BẢN GHI TRÒ CHƠI MỚI BẰNG FOR KEY SHARE ĐỂ CHẶN RACE CONDITION XÓA ĐỒNG THỜI
-  SELECT id INTO v_new_game_exists
+  -- 7. KHÓA VÀ KIỂM TRA QUYỀN SỬ DỤNG TRÒ CHƠI MỚI BẰNG FOR KEY SHARE
+  SELECT id, is_public, author_id INTO v_new_game
   FROM public.games
   WHERE id = p_new_game_id FOR KEY SHARE;
 
-  IF v_new_game_exists IS NULL THEN
+  IF v_new_game.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Trò chơi mới chọn không tồn tại hoặc đã bị xóa.');
+  END IF;
+
+  -- BẢO MẬT PHÂN QUYỀN CHỌN GAME: Admin được chọn mọi game; Giáo viên chỉ chọn game công khai (is_public = true) hoặc game do chính mình tạo (author_id = auth.uid())
+  IF NOT app_private.is_admin() THEN
+    IF v_new_game.is_public IS NOT TRUE AND (v_new_game.author_id IS NULL OR v_new_game.author_id != v_caller_id) THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền sử dụng trò chơi này để giao bài.');
+    END IF;
   END IF;
 
   -- =========================================================================

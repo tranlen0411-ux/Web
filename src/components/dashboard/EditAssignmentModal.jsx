@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { X, BookOpen, Gamepad2, Calendar, Star, Loader2, AlertCircle, RefreshCw, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../context/AuthContext';
 import { useSound } from '../../context/SoundContext';
 
-export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availableGames, onSaved, onDeleted }) => {
+export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availableGames = [], onSaved, onDeleted }) => {
+  const { profile } = useAuth();
   const { triggerSound } = useSound();
 
   const [selectedGameId, setSelectedGameId] = useState('');
@@ -15,6 +17,12 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
   const [hasCompletedProgress, setHasCompletedProgress] = useState(false);
   const [progressCheckFailed, setProgressCheckFailed] = useState(false);
   const [checkingProgress, setCheckingProgress] = useState(false);
+
+  // Lọc danh sách trò chơi cho phép hiển thị trong dropdown theo phân quyền
+  const validGamesForUser = availableGames.filter(g => {
+    if (profile?.role === 'admin') return true;
+    return g.is_public !== false || g.author_id === profile?.id;
+  });
 
   useEffect(() => {
     if (assignmentToEdit) {
@@ -184,9 +192,9 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
               required
               disabled={progressCheckFailed}
             >
-              {availableGames.map((g) => (
+              {validGamesForUser.map((g) => (
                 <option key={g.id} value={g.id}>
-                  🎮 {g.title} (Khối {g.grade_level} - {g.subject})
+                  🎮 {g.title} (Khối {g.grade_level} - {g.subject}) {g.author_id === profile?.id ? '(Của tôi)' : ''}
                 </option>
               ))}
             </select>
@@ -195,7 +203,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
           {/* SAO THƯỞNG */}
           <div>
             <label className="block text-xs font-black text-slate-700 mb-1 flex items-center gap-1">
-              <Star className="w-4 h-4 text-amber-500" /> Sao Thưởng Hoàn Thành:
+              <Star className="w-4 h-4 text-amber-500" /> Sao Thưởng Hoàn Thành (1-100):
             </label>
             <input
               type="number"
