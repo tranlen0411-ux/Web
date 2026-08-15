@@ -18,11 +18,35 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
   const [progressCheckFailed, setProgressCheckFailed] = useState(false);
   const [checkingProgress, setCheckingProgress] = useState(false);
 
-  // Lọc danh sách trò chơi cho phép hiển thị trong dropdown theo phân quyền
-  const validGamesForUser = availableGames.filter(g => {
-    if (profile?.role === 'admin') return true;
-    return g.is_public === true || g.author_id === profile?.id;
-  });
+  // Lọc danh sách trò chơi cho phép hiển thị trong dropdown theo phân quyền & giữ duy nhất game hiện tại nếu bị Admin ẩn
+  const validGamesForUser = (() => {
+    const gameMap = new Map();
+    (availableGames || []).forEach(g => {
+      if (g && g.id) gameMap.set(g.id, g);
+    });
+
+    // Nếu game hiện tại của assignmentToEdit không nằm trong availableGames (do bị lọc ẩn ở query chính),
+    // tự động bổ sung từ assignmentToEdit.games để hiển thị đúng tên game hiện tại
+    if (assignmentToEdit?.game_id && !gameMap.has(assignmentToEdit.game_id)) {
+      if (assignmentToEdit.games) {
+        gameMap.set(assignmentToEdit.game_id, {
+          id: assignmentToEdit.game_id,
+          title: assignmentToEdit.games.title || 'Trò chơi hiện tại',
+          grade_level: assignmentToEdit.games.grade_level || 1,
+          subject: assignmentToEdit.games.subject || 'Môn học',
+          is_public: assignmentToEdit.games.is_public,
+          author_id: assignmentToEdit.games.author_id
+        });
+      }
+    }
+
+    return Array.from(gameMap.values()).filter(g => {
+      if (profile?.role === 'admin') return true;
+      const isCurrentGame = g.id === assignmentToEdit?.game_id;
+      const isNormallyAllowed = g.is_public === true || g.author_id === profile?.id;
+      return isNormallyAllowed || isCurrentGame;
+    });
+  })();
 
   useEffect(() => {
     if (assignmentToEdit) {
@@ -192,11 +216,24 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
               required
               disabled={progressCheckFailed}
             >
-              {validGamesForUser.map((g) => (
-                <option key={g.id} value={g.id}>
-                  🎮 {g.title} (Khối {g.grade_level} - {g.subject}) {g.author_id === profile?.id ? '(Của tôi)' : ''}
-                </option>
-              ))}
+              {validGamesForUser.map((g) => {
+                const isCurrentGame = g.id === assignmentToEdit?.game_id;
+                const isNormallyAllowed = profile?.role === 'admin' || g.is_public === true || g.author_id === profile?.id;
+                const isHiddenCurrentGame = isCurrentGame && !isNormallyAllowed;
+
+                let tagLabel = '';
+                if (isHiddenCurrentGame) {
+                  tagLabel = '(Đã ẩn – chỉ sửa sao/hạn)';
+                } else if (g.author_id === profile?.id) {
+                  tagLabel = '(Của tôi)';
+                }
+
+                return (
+                  <option key={g.id} value={g.id}>
+                    🎮 {g.title} (Khối {g.grade_level} - {g.subject}) {tagLabel}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
