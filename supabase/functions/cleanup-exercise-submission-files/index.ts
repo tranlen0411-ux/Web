@@ -81,6 +81,7 @@ serve(async (req) => {
         JSON.stringify({
           success: true,
           partial_success: false,
+          counter_invariant_valid: true,
           requested_count: 0,
           completed_count: 0,
           unresolved_count: 0,
@@ -160,6 +161,7 @@ serve(async (req) => {
       const job = claimRes.job;
       const filePath = job.file_path;
       const claimedAttempt = job.attempts;
+      const previousStatus = claimRes.previous_status || job.previous_status;
 
       // Validate format path
       if (
@@ -197,26 +199,35 @@ serve(async (req) => {
         continue;
       }
 
-      // XỬ LÝ NHÁNH RECONCILIATION_PENDING (Kiểm tra xem object có còn tồn tại trên Storage hay không)
-      const folderParts = filePath.split('/');
-      const filename = folderParts.pop() || '';
-      const folderPath = folderParts.join('/');
+      // XỬ LÝ NHÁNH RECONCILIATION_PENDING (Chỉ kiểm tra Storage list nếu previousStatus === 'reconciliation_pending')
+      if (previousStatus === 'reconciliation_pending') {
+        const folderParts = filePath.split('/');
+        const filename = folderParts.pop() || '';
+        const folderPath = folderParts.join('/');
 
-      const { data: objectList } = await supabaseAdmin.storage
-        .from('exercise-submissions')
-        .list(folderPath, { search: filename });
+        const { data: objectList, error: listError } = await supabaseAdmin.storage
+          .from('exercise-submissions')
+          .list(folderPath, { search: filename });
 
-      const objectExists = Array.isArray(objectList) && objectList.some((o: any) => o.name === filename);
-
-      if (!objectExists) {
-        // File đã thực sự bị xóa khỏi Storage -> Hoàn tất idempotent thành deleted
-        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
-        if (finRes.success) {
-          deleted.push(filePath);
-        } else {
-          failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'already_deleted_reconcile_failed' });
+        if (listError) {
+          console.error(`[Job ${jobId}] Storage list API error:`, listError);
+          const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', listError.message, user.id);
+          failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'storage_list_failed' });
+          continue;
         }
-        continue;
+
+        const objectExists = Array.isArray(objectList) && objectList.some((o: any) => o.name === filename);
+
+        if (!objectExists) {
+          // File đã thực sự bị xóa khỏi Storage -> Hoàn tất idempotent thành deleted
+          const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
+          if (finRes.success) {
+            deleted.push(filePath);
+          } else {
+            failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'already_deleted_reconcile_failed' });
+          }
+          continue;
+        }
       }
 
       // 5. CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API CHUẨN XÁC NGUYÊN TỬ
@@ -266,19 +277,21 @@ serve(async (req) => {
     const skipped_count = duplicate_job_ids.length;
     const duplicate_count = duplicate_job_ids.length;
 
-    let overallSuccess = unresolved_count === 0;
-    const partialSuccess = completed_count > 0 && (unresolved_count > 0 || skipped_count > 0);
+    const counter_invariant_valid = (requested_count === completed_count + unresolved_count + skipped_count);
 
-    // Kiểm tra bất biến số đếm tuyệt đối trước khi trả response
-    if (requested_count !== completed_count + unresolved_count + skipped_count) {
+    // Cờ success và partial_success loại trừ lẫn nhau tuyệt đối
+    const overallSuccess = (unresolved_count === 0 && skipped_count === 0 && counter_invariant_valid);
+    const partialSuccess = (!overallSuccess && completed_count > 0 && (unresolved_count > 0 || skipped_count > 0));
+
+    if (!counter_invariant_valid) {
       console.error(`Invariant mismatch: requested (${requested_count}) != completed (${completed_count}) + unresolved (${unresolved_count}) + skipped (${skipped_count})`);
-      overallSuccess = false;
     }
 
     return new Response(
       JSON.stringify({
         success: overallSuccess,
         partial_success: partialSuccess,
+        counter_invariant_valid,
         requested_count,
         completed_count,
         unresolved_count,
@@ -298,7 +311,7 @@ serve(async (req) => {
   } catch (err: any) {
     console.error('Edge Function exception:', err);
     return new Response(
-      JSON.stringify({ success: false, partial_success: false, message: err.message || 'Internal server error' }),
+      JSON.stringify({ success: false, partial_success: false, counter_invariant_valid: false, message: err.message || 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
