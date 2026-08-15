@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Archive, Lock } from 'lucide-react';
+import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -34,8 +34,10 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     }
   ]);
 
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isLockedByKeyError, setIsLockedByKeyError] = useState(false);
 
   useEffect(() => {
     fetchTeacherClasses();
@@ -57,7 +59,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       setShowScoreAfterSubmit(exerciseToEdit.show_score_after_submit ?? true);
       setShowCorrectAnswers(exerciseToEdit.show_correct_answers ?? false);
 
-      fetchExistingQuestions(exerciseToEdit.id);
+      fetchExistingQuestionsWithKeys(exerciseToEdit.id);
     }
   }, [exerciseToEdit]);
 
@@ -77,27 +79,48 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     }
   };
 
-  const fetchExistingQuestions = async (exerciseId) => {
+  // TẢI BÀI TẬP VÀ ĐÁP ÁN BÍ MẬT QUA RPC BẢO MẬT GET_EXERCISE_FOR_EDIT (KHÔNG TỰ SUY ĐOÁN ĐÁP ÁN)
+  const fetchExistingQuestionsWithKeys = async (exerciseId) => {
+    setIsLoadingDetails(true);
+    setIsLockedByKeyError(false);
+    setErrorMsg('');
+
     try {
-      const { data } = await supabase
-        .from('academic_exercise_questions')
-        .select('*')
-        .eq('exercise_id', exerciseId)
-        .order('question_number');
-      
-      if (data && data.length > 0) {
-        setQuestions(data.map(q => ({
-          id: q.id,
-          question_number: q.question_number,
-          question_type: q.question_type,
-          prompt: q.prompt,
-          options: q.options_json || [],
-          correct_answer: q.question_type === 'multiple_choice' ? (q.options_json?.slice(0, 1) || []) : (q.options_json?.[0] || ''),
-          points: q.points
-        })));
+      const { data: res, error } = await supabase.rpc('get_exercise_for_edit', {
+        p_exercise_id: exerciseId
+      });
+
+      if (error || !res?.success) {
+        setErrorMsg(error?.message || res?.message || 'Không thể tải câu hỏi và đáp án bí mật.');
+        setIsLockedByKeyError(true);
+        return;
+      }
+
+      if (res.questions && res.questions.length > 0) {
+        setQuestions(res.questions.map(q => {
+          const keyData = q.correct_answer_key;
+          let loadedCorrect = keyData?.correct_answer;
+          if (loadedCorrect === undefined || loadedCorrect === null) {
+            loadedCorrect = q.question_type === 'multiple_choice' ? [] : '';
+          }
+
+          return {
+            id: q.id,
+            question_number: q.question_number,
+            question_type: q.question_type,
+            prompt: q.prompt,
+            options: q.options_json || [],
+            correct_answer: loadedCorrect,
+            points: q.points
+          };
+        }));
       }
     } catch (err) {
-      console.error('Fetch questions error:', err);
+      console.error('Fetch questions exception:', err);
+      setErrorMsg('Lỗi mạng khi tải chi tiết bài tập.');
+      setIsLockedByKeyError(true);
+    } finally {
+      setIsLoadingDetails(false);
     }
   };
 
@@ -124,6 +147,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   };
 
   const handleSubmit = async (targetStatus = status) => {
+    if (isLockedByKeyError) {
+      alert('Không thể lưu bài tập do không tải được đáp án đúng bảo mật từ CSDL.');
+      return;
+    }
+
     if (!title.trim()) {
       setErrorMsg('Vui lòng nhập tiêu đề bài tập.');
       return;
@@ -209,6 +237,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         {/* FORM */}
         <form onSubmit={(e) => { e.preventDefault(); handleSubmit(status); }} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
           
+          {isLoadingDetails && (
+            <div className="p-4 bg-sky-50 border border-sky-200 rounded-xl text-xs font-bold text-sky-900 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-sky-600" /> Đang tải đáp án đúng bảo mật từ CSDL...
+            </div>
+          )}
+
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded-xl text-xs font-bold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
@@ -489,8 +523,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               <button
                 type="button"
                 onClick={() => handleSubmit('draft')}
-                disabled={isSubmitting}
-                className="px-3.5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1"
+                disabled={isSubmitting || isLockedByKeyError}
+                className="px-3.5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-xl flex items-center gap-1 disabled:opacity-50"
               >
                 <Save className="w-3.5 h-3.5" /> Lưu Nháp
               </button>
@@ -499,8 +533,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                 <button
                   type="button"
                   onClick={() => handleSubmit('closed')}
-                  disabled={isSubmitting}
-                  className="px-3.5 py-2 bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-xs rounded-xl flex items-center gap-1"
+                  disabled={isSubmitting || isLockedByKeyError}
+                  className="px-3.5 py-2 bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-xs rounded-xl flex items-center gap-1 disabled:opacity-50"
                 >
                   <Lock className="w-3.5 h-3.5" /> Đóng Bài Tập
                 </button>
@@ -518,7 +552,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               <button
                 type="button"
                 onClick={() => handleSubmit('published')}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isLockedByKeyError}
                 className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
               >
                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

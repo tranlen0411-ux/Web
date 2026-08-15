@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, Plus, FileText, CheckCircle2, Clock, AlertCircle, 
-  Search, Filter, ChevronRight, Star, Send, RotateCcw, Award, Check
+  Search, Filter, ChevronRight, Star, Send, RotateCcw, Award, Check, Edit3
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
@@ -20,6 +20,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
 
   // Modals
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [selectedExerciseToEdit, setSelectedExerciseToEdit] = useState(null);
   const [selectedExerciseToPlay, setSelectedExerciseToPlay] = useState(null);
   const [selectedSubmissionToGrade, setSelectedSubmissionToGrade] = useState(null);
 
@@ -30,10 +31,9 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách bài tập kết nối với bảng classes (class_id UUID)
       let query = supabase
         .from('academic_exercises')
-        .select('*, classes:class_id(id, name, grade_level)')
+        .select('*, classes:class_id(id, name, grade_level, teacher_id)')
         .order('created_at', { ascending: false });
 
       if (role === 'student') {
@@ -47,7 +47,6 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         setExercises(exData);
       }
 
-      // 2. Lấy danh sách bài nộp của học sinh
       let subQuery = supabase
         .from('academic_submissions')
         .select('*, academic_exercises(*), profiles!student_id(full_name, avatar_url)')
@@ -105,7 +104,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
 
         {(role === 'teacher' || role === 'admin') && (
           <button
-            onClick={() => setIsCreateModalOpen(true)}
+            onClick={() => { setSelectedExerciseToEdit(null); setIsCreateModalOpen(true); }}
             className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all shrink-0"
           >
             <Plus className="w-4 h-4" /> Tạo Bài Tập Mới
@@ -113,7 +112,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         )}
       </div>
 
-      {/* THANH TÌM KIẾM VÀ SUB-TABS BỘ LỌC */}
+      {/* SEARCH AND SUB-TABS */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative w-full sm:w-72">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -167,6 +166,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
             const isGraded = sub?.status === 'graded';
             const isPending = !sub || sub.status === 'draft';
             const isRevision = sub?.status === 'revision_requested';
+            const canEditExercise = role === 'admin' || (role === 'teacher' && (ex.teacher_id === profile?.id || ex.classes?.teacher_id === profile?.id));
 
             return (
               <div key={ex.id} className="bg-white p-5 rounded-3xl border-2 border-amber-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
@@ -239,9 +239,19 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                     )
                   ) : (
                     <div className="w-full flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-slate-500">
-                        Trạng thái: <strong className="text-slate-800">{ex.status}</strong>
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-slate-500">
+                          Trạng thái: <strong className="text-slate-800">{ex.status}</strong>
+                        </span>
+                        {canEditExercise && (
+                          <button
+                            onClick={() => setSelectedExerciseToEdit(ex)}
+                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 flex items-center gap-1"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Sửa Bài
+                          </button>
+                        )}
+                      </div>
                       <button
                         onClick={() => setSelectedSubmissionToGrade(ex)}
                         className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs rounded-xl shadow-sm flex items-center gap-1"
@@ -257,11 +267,16 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         </div>
       )}
 
-      {/* MODAL TẠO BÀI TẬP */}
-      {isCreateModalOpen && (
+      {/* MODAL TẠO & SỬA BÀI TẬP */}
+      {(isCreateModalOpen || selectedExerciseToEdit) && (
         <CreateExerciseModal
-          isOpen={isCreateModalOpen}
-          onClose={() => { setIsCreateModalOpen(false); fetchData(); }}
+          isOpen={isCreateModalOpen || !!selectedExerciseToEdit}
+          exerciseToEdit={selectedExerciseToEdit}
+          onClose={() => { 
+            setIsCreateModalOpen(false); 
+            setSelectedExerciseToEdit(null); 
+            fetchData(); 
+          }}
         />
       )}
 

@@ -1,10 +1,10 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 5.0 HOÀN HẢO
--- 1. ADVISORY TRANSACTION LOCK CHỐNG RACE CONDITION NỘP BÀI ĐỒNG THỜI
--- 2. ALTER TABLE CHUYỂN CỘT CLASS_NAME SANG CLASS_ID UUID VỚI LOGIC ÁNH XẠ ĐA ĐIỀU KIỆN
--- 3. DROP CỘT CLASS_NAME SAU KHI ÁNH XẠ THÀNH CÔNG VÀ NÂNG CONSTRAINT CHUẨN
--- 4. BẢO VỆ NGUYÊN TỬ VÀ KHÓA GHI TRỰC TIẾP CÂU HỎI PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
--- 5. REWARD_APPLIED_AT BẤT BIẾN KHÔNG CỘNG LẶP SAO VÀ KIỂM TRA ĐIỀU KIỆN XEM ĐÁP ÁN NGHIÊM NGẶT
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 6.0 TOÀN DIỆN
+-- 1. PRE-CHECK CTE KIỂM TRA MƠ HỒ DỮ LIỆU CLASS_NAME TRƯỚC KHI UPDATE & DROP COLUMN
+-- 2. TẠO RPC SECURITY DEFINER GET_EXERCISE_FOR_EDIT LẤY CHÍNH XÁC ANSWER KEYS BÍ MẬT KHI SỬA
+-- 3. KHÓA TÍNH NĂNG DELETE QUY LẠI CÂU HỎI KHI BÀI TẬP ĐÃ CÓ BÀI NỘP CỦA HỌC SINH (BẢO VỆ LỊCH SỬ)
+-- 4. ADVISORY TRANSACTION LOCK (PG_ADVISORY_XACT_LOCK) CHỐNG RACE CONDITION
+-- 5. VALIDATE P_ANSWERS CHẶT CHẼ TRÁNH LỖI VĂNG EXCEPTION UUID
 -- ============================================================================
 
 BEGIN;
@@ -35,18 +35,48 @@ CREATE TABLE IF NOT EXISTS public.academic_exercises (
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE;
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE;
 
--- BLOCK MIGRATION DỮ LIỆU CLASS_NAME NÂNG CAO ĐỐI CHIẾU THÊM GRADE_LEVEL VÀ TEACHER_ID
+-- PRE-CHECK CTE KIỂM TRA MƠ HỒ DỮ LIỆU CLASS_NAME TRƯỚC KHI UPDATE VÀ DROP COLUMN
 DO $$
 DECLARE
-  v_unmapped_count INT := 0;
-  v_ambiguous_count INT := 0;
+  v_ambiguous_json JSONB;
+  v_unmapped_json JSONB;
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns 
     WHERE table_schema = 'public' AND table_name = 'academic_exercises' AND column_name = 'class_name'
   ) THEN
     
-    -- 1. Ánh xạ dữ liệu class_name sang class_id dựa trên cả name, grade_level và teacher_id
+    -- 1. Thống kê danh sách các bài tập bị mơ hồ (khớp nhiều hơn 1 lớp)
+    WITH AmbiguousCheck AS (
+      SELECT e.id, e.title, e.class_name, COUNT(c.id) AS matched_classes
+      FROM public.academic_exercises e
+      JOIN public.classes c ON e.class_name = c.name
+      WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE AND e.class_name IS NOT NULL
+      GROUP BY e.id, e.title, e.class_name
+      HAVING COUNT(c.id) > 1
+    )
+    SELECT jsonb_agg(jsonb_build_object('id', id, 'title', title, 'class_name', class_name, 'matched_classes', matched_classes))
+    INTO v_ambiguous_json FROM AmbiguousCheck;
+
+    IF v_ambiguous_json IS NOT NULL AND jsonb_array_length(v_ambiguous_json) > 0 THEN
+      RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện các bài tập khớp với nhiều hơn 1 Lớp học mơ hồ: %', v_ambiguous_json;
+    END IF;
+
+    -- 2. Thống kê danh sách bài tập khớp 0 lớp (và không phải is_global)
+    WITH UnmappedCheck AS (
+      SELECT e.id, e.title, e.class_name
+      FROM public.academic_exercises e
+      LEFT JOIN public.classes c ON e.class_name = c.name
+      WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE AND e.class_name IS NOT NULL AND c.id IS NULL
+    )
+    SELECT jsonb_agg(jsonb_build_object('id', id, 'title', title, 'class_name', class_name))
+    INTO v_unmapped_json FROM UnmappedCheck;
+
+    IF v_unmapped_json IS NOT NULL AND jsonb_array_length(v_unmapped_json) > 0 THEN
+      RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện các bài tập có class_name không tìm thấy Lớp học tương ứng: %', v_unmapped_json;
+    END IF;
+
+    -- 3. Chỉ UPDATE những bản ghi có đúng 1 lớp khớp hoàn toàn
     UPDATE public.academic_exercises e
     SET class_id = c.id
     FROM public.classes c
@@ -55,36 +85,18 @@ BEGIN
       AND (e.grade_level = c.grade_level OR e.grade_level IS NULL)
       AND (e.teacher_id = c.teacher_id OR e.teacher_id IS NULL);
 
-    -- 2. Kiểm tra các bản ghi chưa ánh xạ được mà không phải is_global
-    SELECT COUNT(*) INTO v_unmapped_count 
-    FROM public.academic_exercises 
-    WHERE class_id IS NULL AND is_global IS NOT TRUE AND class_name IS NOT NULL;
-
-    -- 3. Kiểm tra xem có class_name nào khớp với nhiều hơn 1 lớp không
-    SELECT COUNT(*) INTO v_ambiguous_count
-    FROM (
-      SELECT e.id
-      FROM public.academic_exercises e
-      JOIN public.classes c ON e.class_name = c.name
-      WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE
-      GROUP BY e.id
-      HAVING COUNT(c.id) > 1
-    ) amb;
-
-    IF v_ambiguous_count > 0 THEN
-      RAISE EXCEPTION 'MIGRATION THẤT BẠI: Có % bản ghi bài tập có class_name khớp với nhiều hơn 1 lớp học mơ hồ. Vui lòng xử lý thủ công trước khi chuyển đổi!', v_ambiguous_count;
-    END IF;
-
-    IF v_unmapped_count = 0 THEN
-      -- Khi 100% dữ liệu hợp lệ mới drop cột class_name
+    -- 4. Khi 100% bản ghi hợp lệ mới drop cột class_name
+    IF NOT EXISTS (
+      SELECT 1 FROM public.academic_exercises 
+      WHERE class_id IS NULL AND is_global IS NOT TRUE AND class_name IS NOT NULL
+    ) THEN
       ALTER TABLE public.academic_exercises DROP COLUMN IF EXISTS class_name;
-    ELSE
-      ALTER TABLE public.academic_exercises ALTER COLUMN class_name DROP NOT NULL;
     END IF;
+
   END IF;
 END $$;
 
--- CONSTRAINT BẢO ĐẢM VỀ CLASS_ID VÀ IS_GLOBAL
+-- CONSTRAINT BẢO ĐẢM IS_GLOBAL KHÔNG THIẾU CLASS_ID
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -211,7 +223,7 @@ ON CONFLICT (id) DO UPDATE SET
   ];
 
 -- ============================================================================
--- CLEAN DROP TẤT CẢ POLICY CŨ & BẢO VỆ RLS CHUẨN ĐÚNG NGUYÊN TẮC
+-- RLS POLICIES VÀ KHÓA GHI TRỰC TIẾP
 -- ============================================================================
 ALTER TABLE public.academic_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_exercise_questions ENABLE ROW LEVEL SECURITY;
@@ -279,7 +291,7 @@ FOR UPDATE USING (
   )
 );
 
--- 2. ACADEMIC_EXERCISE_QUESTIONS RLS (CHỈ CHO SELECT; KHÓA GHI TRỰC TIẾP QUA RLS, PHẢI QUA RPC SECURITY DEFINER)
+-- 2. ACADEMIC_EXERCISE_QUESTIONS RLS (CHỈ SELECT)
 CREATE POLICY "Academic questions select policy" ON public.academic_exercise_questions
 FOR SELECT USING (
   EXISTS (
@@ -369,6 +381,65 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
+-- RPC BẢO MẬT LẤY CHI TIẾT BÀI TẬP VÀ ĐÁP ÁN BÍ MẬT DÀNH CHO GIÁO VIÊN/ADMIN SỬA
+CREATE OR REPLACE FUNCTION public.get_exercise_for_edit(
+  p_exercise_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_ex RECORD;
+  v_questions JSONB := '[]'::jsonb;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
+  END IF;
+
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+
+  SELECT * INTO v_ex FROM public.academic_exercises WHERE id = p_exercise_id;
+  IF v_ex.id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Bài tập không tồn tại.');
+  END IF;
+
+  IF v_caller_role != 'admin' AND v_ex.teacher_id != v_caller_id THEN
+    IF NOT EXISTS (SELECT 1 FROM public.classes WHERE id = v_ex.class_id AND teacher_id = v_caller_id) THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền chỉnh sửa bài tập này.');
+    END IF;
+  END IF;
+
+  SELECT jsonb_agg(jsonb_build_object(
+    'id', q.id,
+    'question_number', q.question_number,
+    'question_type', q.question_type,
+    'prompt', q.prompt,
+    'options_json', q.options_json,
+    'points', q.points,
+    'correct_answer_key', jsonb_build_object(
+      'correct_answer', k.correct_answer,
+      'accepted_answers', k.accepted_answers,
+      'case_sensitive', k.case_sensitive
+    )
+  ) ORDER BY q.question_number ASC) INTO v_questions
+  FROM public.academic_exercise_questions q
+  LEFT JOIN app_private.academic_answer_keys k ON k.question_id = q.id
+  WHERE q.exercise_id = p_exercise_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'exercise', to_jsonb(v_ex),
+    'questions', COALESCE(v_questions, '[]'::jsonb)
+  );
+END;
+$$;
+
+
 -- 1. CREATE_OR_GET_SUBMISSION_DRAFT
 CREATE OR REPLACE FUNCTION public.create_or_get_submission_draft(
   p_exercise_id UUID
@@ -445,7 +516,7 @@ END;
 $$;
 
 
--- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS
+-- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS (VỚI KHÓA CHỐNG XOÁ CÂU HỎI KHI ĐÃ CÓ BÀI NỘP)
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -467,6 +538,7 @@ DECLARE
   v_key_json JSONB;
   v_updated_rows INT;
   v_is_global BOOLEAN := FALSE;
+  v_has_submissions BOOLEAN := FALSE;
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -517,6 +589,11 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không sở hữu bài tập này.');
     END IF;
 
+    -- KIỂM TRA XEM BÀI TẬP ĐÃ CÓ BÀI NỘP CỦA HỌC SINH CHƯA
+    SELECT EXISTS (
+      SELECT 1 FROM public.academic_submissions WHERE exercise_id = v_exercise_id
+    ) INTO v_has_submissions;
+
     UPDATE public.academic_exercises
     SET
       title = trim(p_exercise->>'title'),
@@ -535,9 +612,9 @@ BEGIN
       updated_at = NOW()
     WHERE id = v_exercise_id;
 
-    GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
-    IF v_updated_rows != 1 THEN
-      RAISE EXCEPTION 'UPDATE bài tập thất bại: Không tác động đúng 1 dòng.';
+    -- NẾU ĐÃ CÓ BÀI NỘP -> KHÔNG ĐƯỢC DELETE XOÁ SẠCH CÂU HỎI ĐỂ TRÁNH THÀNH CASCADE XOÁ LỊCH SỬ BÀI LÀM!
+    IF v_has_submissions THEN
+      RETURN jsonb_build_object('success', true, 'exercise_id', v_exercise_id, 'message', 'Đã cập nhật thông tin bài tập! (Giữ nguyên câu hỏi cũ để bảo vệ lịch sử bài làm)');
     END IF;
 
   ELSE
@@ -563,6 +640,7 @@ BEGIN
     ) RETURNING id INTO v_exercise_id;
   END IF;
 
+  -- NẾU CHƯA CÓ BÀI NỘP HOẶC TẠO MỚI -> CHO PHÉP TẠO LẠI CÂU HỎI VÀ ANSWER KEYS
   DELETE FROM public.academic_exercise_questions WHERE exercise_id = v_exercise_id;
 
   FOR v_q_json IN SELECT * FROM jsonb_array_elements(p_questions)
@@ -600,7 +678,7 @@ END;
 $$;
 
 
--- 3. SUBMIT_ACADEMIC_EXERCISE VỚI VALIDATE P_ANSWERS NGHIÊM NGẶT
+-- 3. SUBMIT_ACADEMIC_EXERCISE
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
   p_answers JSONB,
@@ -650,14 +728,14 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Cấu trúc câu trả lời không hợp lệ.');
   END IF;
 
-  -- 1. VALIDATE KHÔNG CÓ QUESTION_ID TRÙNG HOẶC KHÔNG THUỘC BÀI TẬP
+  -- VALIDATE TOÀN BỘ P_ANSWERS CHỐNG TRÙNG VÀ CÂU HỎI LẠ
   FOR v_ans_item IN SELECT * FROM jsonb_array_elements(p_answers)
   LOOP
-    IF (v_ans_item->>'question_id') IS NULL THEN
-      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thiếu question_id trong câu trả lời.');
-    END IF;
-
-    v_curr_q_id := (v_ans_item->>'question_id')::UUID;
+    BEGIN
+      v_curr_q_id := (v_ans_item->>'question_id')::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ question_id không đúng định dạng UUID.');
+    END;
 
     IF v_curr_q_id = ANY(v_seen_q_ids) THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Phát hiện question_id bị gửi trùng lặp.');
@@ -669,7 +747,6 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- ADVISORY TRANSACTION LOCK
   PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || p_exercise_id::text || '_' || v_student_id::text));
 
   SELECT * INTO v_ex FROM public.academic_exercises WHERE id = p_exercise_id;
@@ -835,7 +912,7 @@ END;
 $$;
 
 
--- 4. GRADE_ACADEMIC_SUBMISSION CHỈ CHẤM BÀI SUBMITTED/PENDING_MANUAL_GRADE, TỪ CHỐI DRAFT
+-- 4. GRADE_ACADEMIC_SUBMISSION CHỈ CHẤM SUBMITTED/PENDING_MANUAL_GRADE, TỪ CHỐI DRAFT & REVISION_REQUESTED
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -875,9 +952,8 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
   END IF;
 
-  -- 1. TỪ CHỐI CHẤM BẢN NHÁP (DRAFT)
-  IF v_sub.status = 'draft' THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Không thể chấm bài nộp ở trạng thái Bản Nháp (draft).');
+  IF v_sub.status IN ('draft', 'revision_requested') THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ được chấm bài nộp ở trạng thái submitted hoặc pending_manual_grade.');
   END IF;
 
   SELECT * INTO v_ex FROM public.academic_exercises WHERE id = v_sub.exercise_id;
@@ -958,66 +1034,15 @@ BEGIN
 END;
 $$;
 
-
--- 5. GET_SUBMISSION_CORRECT_ANSWERS CHỈ CHO XEM KHI ĐÃ HẾT LƯỢT HOẶC ĐÃ CLOSED/ARCHIVED
-CREATE OR REPLACE FUNCTION public.get_submission_correct_answers(
-  p_submission_id UUID
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-  v_student_id UUID;
-  v_sub RECORD;
-  v_ex RECORD;
-  v_existing_sub_count INT := 0;
-  v_res JSONB := '[]'::jsonb;
-BEGIN
-  v_student_id := auth.uid();
-  IF v_student_id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
-  END IF;
-
-  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id;
-  IF v_sub.id IS NULL OR v_sub.student_id != v_student_id THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Không có quyền xem đáp án.');
-  END IF;
-
-  SELECT * INTO v_ex FROM public.academic_exercises WHERE id = v_sub.exercise_id;
-  IF v_ex.show_correct_answers IS NOT TRUE THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bài tập này không mở hiển thị đáp án đúng.');
-  END IF;
-
-  -- 1. CHỈ CHO XEM KHI ĐÃ HẾT SỐ LƯỢT MAX_ATTEMPTS HOẶC BÀI ĐÃ CLOSED/ARCHIVED
-  SELECT COUNT(*) INTO v_existing_sub_count 
-  FROM public.academic_submissions 
-  WHERE exercise_id = v_ex.id AND student_id = v_student_id AND status != 'draft';
-
-  IF v_existing_sub_count < COALESCE(v_ex.max_attempts, 1) AND v_ex.status NOT IN ('closed', 'archived') THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Bé chưa thể xem đáp án vì vẫn còn lượt nộp bài tiếp theo.');
-  END IF;
-
-  SELECT jsonb_agg(jsonb_build_object(
-    'question_id', q.id,
-    'correct_answer', k.correct_answer
-  )) INTO v_res
-  FROM public.academic_exercise_questions q
-  JOIN app_private.academic_answer_keys k ON k.question_id = q.id
-  WHERE q.exercise_id = v_ex.id;
-
-  RETURN jsonb_build_object('success', true, 'answers', v_res);
-END;
-$$;
-
--- GRANT / REVOKE
+-- GRANT / REVOKE PERMISSIONS
+REVOKE EXECUTE ON FUNCTION public.get_exercise_for_edit FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.create_or_get_submission_draft FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.submit_academic_exercise FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.grade_academic_submission FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.get_submission_correct_answers FROM PUBLIC, anon;
 
+GRANT EXECUTE ON FUNCTION public.get_exercise_for_edit TO authenticated;
 GRANT EXECUTE ON FUNCTION public.create_or_get_submission_draft TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys TO authenticated;
 GRANT EXECUTE ON FUNCTION public.submit_academic_exercise TO authenticated;
