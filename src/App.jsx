@@ -10,6 +10,7 @@ import { TeacherDashboard } from './pages/TeacherDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { GamePlayView } from './pages/GamePlayView';
 import { LeaderboardView } from './pages/LeaderboardView';
+import { MaterialsView } from './pages/MaterialsView';
 
 // Protected Route Component theo Role từ Supabase
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -80,6 +81,15 @@ function AppRoutes() {
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
           
+          <Route 
+            path="/materials" 
+            element={
+              <ProtectedRoute allowedRoles={['student', 'teacher', 'admin']}>
+                <MaterialsView />
+              </ProtectedRoute>
+            } 
+          />
+
           <Route 
             path="/student" 
             element={

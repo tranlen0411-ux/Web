@@ -10,7 +10,8 @@ import {
   ShieldCheck, 
   GraduationCap,
   ChevronDown,
-  Lock
+  Lock,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
@@ -66,7 +67,7 @@ export const Navbar = () => {
   // Kiểm tra active cho nút Kho Trò Chơi
   const isGamesActive = 
     (role === 'admin' && location.pathname === '/admin' && location.search.includes('tab=games')) ||
-    (role === 'teacher' && location.pathname === '/teacher') ||
+    (role === 'teacher' && location.pathname === '/teacher' && !location.pathname.includes('materials')) ||
     (role === 'student' && (location.pathname === '/' || location.pathname === '/student'));
 
   // Kiểm tra active cho nút Bảng Quản Lý theo Role
@@ -96,7 +97,7 @@ export const Navbar = () => {
               HỌC VUI <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
             </span>
             <span className="text-xs font-black text-sky-600 uppercase tracking-wider block -mt-1">
-              Kho Trò Chơi Tiểu Học
+              Kho Trò Chơi & Bài Giảng
             </span>
           </div>
         </a>
@@ -114,6 +115,20 @@ export const Navbar = () => {
           >
             <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
           </button>
+
+          {/* NÚT GÓC TÀI LIỆU (DÀNH CHO TẤT CẢ USER ĐÃ ĐĂNG NHẬP) */}
+          {user && (
+            <button
+              onClick={() => handleNavClick('/materials')}
+              className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+                location.pathname === '/materials'
+                  ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
+              }`}
+            >
+              <BookOpen className="w-4 h-4 text-amber-400" /> Góc Tài Liệu
+            </button>
+          )}
 
           {/* NÚT BẢNG XẾP HẠNG */}
           <button
@@ -189,6 +204,16 @@ export const Navbar = () => {
                       {role === 'admin' ? '🛡️ Quản trị viên' : role === 'teacher' ? '👩‍🏫 Giáo viên' : '🎒 Học sinh'}
                     </p>
                   </div>
+
+                  <button
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      handleNavClick('/materials');
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                  >
+                    <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
+                  </button>
 
                   <button
                     onClick={() => {
