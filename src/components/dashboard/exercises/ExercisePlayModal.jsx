@@ -153,6 +153,12 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
       }
     }
 
+    // CHẶN SVG TRỰC TIẾP TẠI FRONTEND
+    if (file.name.toLowerCase().endsWith('.svg') || file.type.includes('svg')) {
+      alert('Chặn định dạng SVG để bảo đảm an toàn hệ thống.');
+      return;
+    }
+
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const filePath = `${profile.id}/${currentSubId}/${qId}_${Date.now()}_${cleanFileName}`;
 
@@ -242,7 +248,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         throw new Error(submitErr?.message || submitRes?.message || 'Lỗi khi nộp bài tập.');
       }
 
-      // NẾU RPC THÀNH CÔNG: Xóa file mới trung gian & dọn dẹp file baseline cũ nếu không được tham chiếu khác
+      // NẾU RPC THÀNH CÔNG: Gọi RPC delete_unreferenced_submission_files bảo mật trên Server
       const oldDeletions = [];
       Object.keys(newFilesByQuestionRef.current).forEach(qId => {
         const arr = newFilesByQuestionRef.current[qId];
@@ -259,27 +265,14 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       const uniqueDeletions = Array.from(new Set(oldDeletions));
       if (uniqueDeletions.length > 0) {
-        // Lọc kiểm tra xem file cũ có đang được lượt nộp khác tham chiếu không
-        const safeDeletions = [];
-        for (const oldPath of uniqueDeletions) {
-          const { data: refCheck } = await supabase
-            .from('academic_submission_answers')
-            .select('id')
-            .eq('file_url', oldPath);
-          if (!refCheck || refCheck.length <= 1) {
-            safeDeletions.push(oldPath);
-          }
-        }
+        // GỌI RPC SERVER SECURITY DEFINER AN TOÀN TOÀN DIỆN CSDL
+        const { data: cleanRes, error: cleanErr } = await supabase.rpc('delete_unreferenced_submission_files', {
+          p_paths: uniqueDeletions
+        });
 
-        if (safeDeletions.length > 0) {
-          const { error: removeOldErr } = await supabase.storage
-            .from('exercise-submissions')
-            .remove(safeDeletions);
-          
-          if (removeOldErr) {
-            console.error('Remove old files error:', removeOldErr);
-            setWarningMsg('Bài làm đã được lưu thành công, nhưng file cũ chưa dọn được khỏi Storage. Quản trị viên sẽ dọn dẹp file rác.');
-          }
+        if (cleanErr || (cleanRes?.still_referenced && cleanRes.still_referenced.length > 0)) {
+          console.warn('Cleanup files report:', cleanRes);
+          setWarningMsg(`Bài làm đã được lưu thành công, nhưng có ${cleanRes?.still_referenced?.length || 1} file cũ chưa dọn được khỏi Storage (cần Quản trị viên dọn dẹp).`);
         }
       }
 
