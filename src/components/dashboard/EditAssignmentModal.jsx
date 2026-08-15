@@ -13,6 +13,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [hasCompletedProgress, setHasCompletedProgress] = useState(false);
+  const [progressCheckFailed, setProgressCheckFailed] = useState(false);
   const [checkingProgress, setCheckingProgress] = useState(false);
 
   useEffect(() => {
@@ -21,6 +22,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
       setRewardStars(assignmentToEdit.reward_stars || 10);
       setDueDate(assignmentToEdit.due_date ? assignmentToEdit.due_date.slice(0, 10) : '');
       setErrorMsg('');
+      setProgressCheckFailed(false);
 
       // Kiểm tra xem đã có học sinh nào làm bài tập này chưa
       checkExistingProgress(assignmentToEdit.id);
@@ -29,19 +31,29 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
 
   const checkExistingProgress = async (assignId) => {
     setCheckingProgress(true);
+    setProgressCheckFailed(false);
     try {
       const { count, error } = await supabase
         .from('student_progress')
         .select('id', { count: 'exact', head: true })
         .eq('assignment_id', assignId);
 
-      if (!error && count && count > 0) {
+      if (error) {
+        console.error('❌ Lỗi kiểm tra tiến độ học sinh:', error);
+        setProgressCheckFailed(true);
+        setErrorMsg('Chưa thể xác minh lịch sử bài làm của học sinh. Vui lòng thử lại sau.');
+        return;
+      }
+
+      if (count && count > 0) {
         setHasCompletedProgress(true);
       } else {
         setHasCompletedProgress(false);
       }
     } catch (err) {
       console.error('Error checking progress:', err);
+      setProgressCheckFailed(true);
+      setErrorMsg('Chưa thể xác minh lịch sử bài làm của học sinh.');
     } finally {
       setCheckingProgress(false);
     }
@@ -54,37 +66,29 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
       return;
     }
 
+    if (progressCheckFailed) {
+      setErrorMsg('Chưa thể xác minh lịch sử bài làm của học sinh. Không thể thực hiện thao tác.');
+      return;
+    }
+
     setLoading(true);
     setErrorMsg('');
 
     try {
-      const isGameChanged = selectedGameId !== assignmentToEdit.game_id;
+      // Gọi RPC nguyên tử replace_assignment_safely
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('replace_assignment_safely', {
+        p_assignment_id: assignmentToEdit.id,
+        p_new_game_id: selectedGameId,
+        p_reward_stars: parseInt(rewardStars),
+        p_due_date: dueDate ? new Date(dueDate).toISOString() : null
+      });
 
-      if (isGameChanged && hasCompletedProgress) {
-        // BẢO TOÀN LỊCH SỬ HỌC SINH: Đã có học sinh làm bài tập cũ -> Tạo lượt giao mới cho game mới, giữ lại lịch sử cũ
-        const { error: newAssignErr } = await supabase
-          .from('assignments')
-          .insert({
-            game_id: selectedGameId,
-            class_id: assignmentToEdit.class_id,
-            reward_stars: parseInt(rewardStars),
-            due_date: dueDate ? new Date(dueDate).toISOString() : null
-          });
+      if (rpcErr) {
+        throw rpcErr;
+      }
 
-        if (newAssignErr) throw newAssignErr;
-
-      } else {
-        // Chưa có học sinh nào làm bài cũ HOẶC chỉ đổi ngày/sao -> Cập nhật trực tiếp bản ghi assignments
-        const { error: updateErr } = await supabase
-          .from('assignments')
-          .update({
-            game_id: selectedGameId,
-            reward_stars: parseInt(rewardStars),
-            due_date: dueDate ? new Date(dueDate).toISOString() : null
-          })
-          .eq('id', assignmentToEdit.id);
-
-        if (updateErr) throw updateErr;
+      if (rpcRes && rpcRes.success === false) {
+        throw new Error(rpcRes.message);
       }
 
       triggerSound('victory');
@@ -99,25 +103,34 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
     }
   };
 
-  const handleDeleteAssignment = async () => {
-    if (!window.confirm('Thầy/Cô có chắc chắn muốn hủy lượt giao bài này? (Kết quả làm bài cũ của học sinh vẫn được bảo toàn)')) {
+  // Hủy mềm lượt giao bài (cancel_assignment_safely RPC) - KHÔNG XÓA CỨNG BẢN GHI
+  const handleCancelAssignment = async () => {
+    if (!window.confirm('Thầy/Cô có chắc chắn muốn hủy lượt giao bài này? (Trạng thái bài sẽ chuyển sang "Đã hủy" và toàn bộ lịch sử điểm số của học sinh được bảo toàn 100%)')) {
+      return;
+    }
+
+    if (progressCheckFailed) {
+      setErrorMsg('Chưa thể xác minh lịch sử bài làm của học sinh. Vui lòng thử lại sau.');
       return;
     }
 
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from('assignments')
-        .delete()
-        .eq('id', assignmentToEdit.id);
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('cancel_assignment_safely', {
+        p_assignment_id: assignmentToEdit.id
+      });
 
-      if (error) throw error;
+      if (rpcErr) throw rpcErr;
+
+      if (rpcRes && rpcRes.success === false) {
+        throw new Error(rpcRes.message);
+      }
 
       triggerSound('click');
       if (onDeleted) onDeleted();
       onClose();
     } catch (err) {
-      console.error('Delete assignment error:', err);
+      console.error('Cancel assignment error:', err);
       setErrorMsg('Lỗi khi hủy lượt giao bài: ' + err.message);
     } finally {
       setLoading(false);
@@ -152,9 +165,9 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
           </div>
         )}
 
-        {hasCompletedProgress && (
+        {hasCompletedProgress && !progressCheckFailed && (
           <div className="mb-4 p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl text-amber-900 font-bold text-[11px]">
-            💡 <strong>Lưu ý bảo toàn lịch sử:</strong> Lượt giao này đã có học sinh hoàn thành. Nếu Thầy/Cô thay sang trò chơi mới, hệ thống sẽ tự động tạo lượt giao mới và giữ nguyên lịch sử điểm thưởng bài cũ của các bé.
+            💡 <strong>Bảo toàn lịch sử:</strong> Lượt giao này đã có học sinh làm bài. Khi Thầy/Cô thay sang trò chơi mới, hệ thống sẽ lưu trữ bài cũ và tạo lượt giao mới cho game mới để giữ nguyên 100% điểm thưởng cũ của các bé.
           </div>
         )}
 
@@ -169,6 +182,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
               onChange={(e) => setSelectedGameId(e.target.value)}
               className="w-full p-3 bg-amber-50/70 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none"
               required
+              disabled={progressCheckFailed}
             >
               {availableGames.map((g) => (
                 <option key={g.id} value={g.id}>
@@ -191,6 +205,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
               onChange={(e) => setRewardStars(e.target.value)}
               className="w-full p-3 bg-amber-50/70 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800"
               required
+              disabled={progressCheckFailed}
             />
           </div>
 
@@ -204,6 +219,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
               className="w-full p-3 bg-amber-50/70 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800"
+              disabled={progressCheckFailed}
             />
           </div>
 
@@ -211,7 +227,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
           <div className="flex flex-col gap-2 pt-2">
             <button
               type="submit"
-              disabled={loading || checkingProgress}
+              disabled={loading || checkingProgress || progressCheckFailed}
               className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center justify-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -230,11 +246,11 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
 
               <button
                 type="button"
-                onClick={handleDeleteAssignment}
-                disabled={loading}
-                className="py-2.5 px-4 bg-rose-100 hover:bg-rose-200 text-rose-700 font-black text-xs rounded-xl flex items-center gap-1"
+                onClick={handleCancelAssignment}
+                disabled={loading || checkingProgress || progressCheckFailed}
+                className="py-2.5 px-4 bg-rose-100 hover:bg-rose-200 text-rose-700 font-black text-xs rounded-xl flex items-center gap-1 disabled:opacity-50"
               >
-                <Trash2 className="w-4 h-4" /> Hủy Lượt Giao
+                <Trash2 className="w-4 h-4" /> Hủy Mềm Bài Giao
               </button>
             </div>
           </div>

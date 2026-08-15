@@ -101,6 +101,7 @@ export const StudentDashboard = () => {
               )
             `)
             .in('class_id', myClassIds)
+            .eq('status', 'active')
             .order('created_at', { ascending: false });
 
           if (assignErr) {

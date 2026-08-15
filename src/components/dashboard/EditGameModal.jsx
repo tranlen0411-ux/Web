@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useSound } from '../../context/SoundContext';
 
 export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { triggerSound } = useSound();
 
   const [title, setTitle] = useState('');
@@ -24,7 +24,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
   
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [imageError, setImageError] = useState(false);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
 
   const subjects = [
     'Toán',
@@ -39,6 +39,15 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
     'Mỹ thuật',
     'Hoạt động trải nghiệm'
   ];
+
+  const isValidHttpsUrl = (urlStr) => {
+    try {
+      const parsed = new URL(urlStr);
+      return parsed.protocol === 'https:';
+    } catch (e) {
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (gameToEdit) {
@@ -55,7 +64,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
       setImageMode('url');
       setSelectedFile(null);
       setErrorMsg('');
-      setImageError(false);
+      setImageLoadFailed(false);
     }
   }, [gameToEdit, isOpen]);
 
@@ -63,7 +72,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     setErrorMsg('');
-    setImageError(false);
+    setImageLoadFailed(false);
 
     if (!file) return;
 
@@ -92,7 +101,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
   const handleUrlChange = (val) => {
     setThumbnailUrl(val);
     setPreviewUrl(val);
-    setImageError(false);
+    setImageLoadFailed(false);
     setErrorMsg('');
   };
 
@@ -105,13 +114,18 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
       return;
     }
 
-    if (!gameUrl.trim() || !gameUrl.startsWith('https://')) {
-      setErrorMsg('URL trò chơi không hợp lệ. Phải bắt đầu bằng https://');
+    if (!isValidHttpsUrl(gameUrl.trim())) {
+      setErrorMsg('URL trò chơi không hợp lệ. Phải là định dạng HTTPS chuẩn (VD: https://example.com/game).');
       return;
     }
 
-    if (imageMode === 'url' && thumbnailUrl && !thumbnailUrl.startsWith('https://')) {
-      setErrorMsg('URL ảnh đại diện phải bắt đầu bằng https://');
+    if (imageMode === 'url' && thumbnailUrl && !isValidHttpsUrl(thumbnailUrl.trim())) {
+      setErrorMsg('URL ảnh đại diện không hợp lệ. Phải là định dạng HTTPS chuẩn.');
+      return;
+    }
+
+    if (imageMode === 'url' && imageLoadFailed) {
+      setErrorMsg('Hình ảnh từ URL này không thể hiển thị. Vui lòng chọn URL ảnh khác.');
       return;
     }
 
@@ -120,7 +134,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
     let finalThumbnailUrl = thumbnailUrl;
 
     try {
-      // 1. UPLOAD ẢNH MỚI LÊN BUCKET game-thumbnails (NẾU CHỌN TỆP TỪ MÁY)
+      // 1. UPLOAD ẢNH MỚI LÊN BUCKET game-thumbnails THEO ĐÚNG THƯ MỤC CÁ NHÂN {auth.uid()}/{filename}
       if (imageMode === 'file' && selectedFile) {
         const fileExt = selectedFile.name.split('.').pop().toLowerCase();
         uploadedFilePath = `${user.id}/${Date.now()}_${crypto.randomUUID().slice(0, 6)}.${fileExt}`;
@@ -143,45 +157,67 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
         finalThumbnailUrl = publicUrlData.publicUrl;
       }
 
-      // 2. CẬP NHẬT BẢN GHI TRONG CSDL (UPDATE PUBLIC.GAMES KHÔNG ĐỔI ID)
+      // 2. CẬP NHẬT BẢN GHI TRONG CSDL (UPDATE PUBLIC.GAMES KHÔNG ĐỔI ID VÀ GIỮ NGUYÊN AUTHOR_ID NẾU LÀ GIÁO VIÊN)
+      const updatePayload = {
+        title: title.trim(),
+        description: description.trim(),
+        game_type: gameType,
+        game_url: gameUrl.trim(),
+        thumbnail_url: finalThumbnailUrl || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60',
+        grade_level: parseInt(gradeLevel),
+        subject,
+        is_public: isPublic
+      };
+
+      // Đảm bảo nếu là Giáo viên thì author_id không bị thay đổi
+      if (profile?.role === 'teacher') {
+        updatePayload.author_id = user.id;
+      }
+
       const { data: updatedGame, error: updateErr } = await supabase
         .from('games')
-        .update({
-          title: title.trim(),
-          description: description.trim(),
-          game_type: gameType,
-          game_url: gameUrl.trim(),
-          thumbnail_url: finalThumbnailUrl || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60',
-          grade_level: parseInt(gradeLevel),
-          subject,
-          is_public: isPublic
-        })
+        .update(updatePayload)
         .eq('id', gameToEdit.id)
         .select()
         .single();
 
-      // 3. NẾU DATABASE LỖI -> ROLLBACK XÓA FILE ẢNH MỚI VỪA UPLOAD PENDING
+      // 3. NẾU DATABASE LỖI -> ROLLBACK XÓA FILE ẢNH MỚI VỪA UPLOAD VA KIỂM TRA LỖI ROLLBACK
       if (updateErr) {
         if (uploadedFilePath) {
-          await supabase.storage.from('game-thumbnails').remove([uploadedFilePath]);
+          const { error: rollbackErr } = await supabase.storage.from('game-thumbnails').remove([uploadedFilePath]);
+          if (rollbackErr) {
+            console.error('❌ Lỗi rollback tệp ảnh mới:', rollbackErr);
+            throw new Error(`Lỗi CSDL: ${updateErr.message}. Cảnh báo: Chưa xóa được tệp ảnh mới vừa upload [${uploadedFilePath}], cần Admin dọn dẹp thủ công.`);
+          }
         }
         throw new Error('Lỗi cập nhật CSDL: ' + updateErr.message);
       }
 
-      // 4. DỌN DẸP ẢNH CỦ NẾU CẬP NHẬT DB THÀNH CÔNG VÀ ẢNH CỦ THUỘC BUCKET HỆ THỐNG
+      // 4. DỌN DẸP ẢNH CỦ NẾU CẬP NHẬT DB THÀNH CÔNG VÀ ẢNH CỦ THUỘC BUCKET HỆ THỐNG VẤ ĐÚNG THƯ MỤC SỞ HỮU
       if (uploadedFilePath && gameToEdit.thumbnail_url && gameToEdit.thumbnail_url.includes('/game-thumbnails/')) {
         try {
           const oldPathPart = gameToEdit.thumbnail_url.split('/game-thumbnails/')[1];
           if (oldPathPart) {
-            // Kiểm tra xem ảnh cũ có còn trò chơi nào khác dùng chung không
-            const { data: existUsage } = await supabase
-              .from('games')
-              .select('id')
-              .eq('thumbnail_url', gameToEdit.thumbnail_url)
-              .neq('id', gameToEdit.id);
+            const decodedOldPath = decodeURIComponent(oldPathPart);
+            const pathFolder = decodedOldPath.split('/')[0];
+            const isMyFolder = pathFolder === user.id;
+            const isAdmin = profile?.role === 'admin';
 
-            if (!existUsage || existUsage.length === 0) {
-              await supabase.storage.from('game-thumbnails').remove([decodeURIComponent(oldPathPart)]);
+            // Chỉ cho phép xóa nếu là Admin hoặc là ảnh trong thư mục của chính mình
+            if (isAdmin || isMyFolder) {
+              // Kiểm tra xem ảnh cũ có còn trò chơi nào khác dùng chung không
+              const { data: existUsage } = await supabase
+                .from('games')
+                .select('id')
+                .eq('thumbnail_url', gameToEdit.thumbnail_url)
+                .neq('id', gameToEdit.id);
+
+              if (!existUsage || existUsage.length === 0) {
+                const { error: removeOldErr } = await supabase.storage.from('game-thumbnails').remove([decodedOldPath]);
+                if (removeOldErr) {
+                  console.warn('⚠️ Không thể xóa tệp ảnh cũ ở Storage:', removeOldErr.message);
+                }
+              }
             }
           }
         } catch (cleanupErr) {
@@ -297,7 +333,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
           </div>
 
           <div>
-            <label className="block text-xs font-black text-slate-700 mb-1">Đường Dẫn URL Trò Chơi (https://):</label>
+            <label className="block text-xs font-black text-slate-700 mb-1">Đường Dẫn URL Trò Chơi (HTTPS):</label>
             <input
               type="url"
               value={gameUrl}
@@ -356,14 +392,14 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
               </div>
             )}
 
-            {/* XEM TRƯỚC HÌNH ẢNH */}
+            {/* XEM TRƯỚC HÌNH ẢNH VA KIỂM TRA LỖI TẢI ẢNH */}
             {previewUrl && (
               <div className="relative w-full h-36 rounded-2xl overflow-hidden border-2 border-amber-300 bg-slate-900 mb-3">
-                {!imageError ? (
+                {!imageLoadFailed ? (
                   <img
                     src={previewUrl}
                     alt="Preview"
-                    onError={() => setImageError(true)}
+                    onError={() => setImageLoadFailed(true)}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -405,7 +441,7 @@ export const EditGameModal = ({ isOpen, onClose, gameToEdit, onSaved }) => {
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (imageMode === 'url' && imageLoadFailed)}
               className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center justify-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Edit2 className="w-4 h-4" />}

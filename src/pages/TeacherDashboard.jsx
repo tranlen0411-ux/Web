@@ -400,40 +400,68 @@ export const TeacherDashboard = () => {
                       <th className="p-3">Lớp Nhận Bài</th>
                       <th className="p-3">Sao Thưởng</th>
                       <th className="p-3">Hạn Hoàn Thành</th>
+                      <th className="p-3">Trạng Thái</th>
                       <th className="p-3 text-right">Thao Tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-amber-100 text-slate-700">
-                    {assignments.map((asg) => (
-                      <tr key={asg.id} className="hover:bg-amber-50">
-                        <td className="p-3 font-black text-amber-950 flex items-center gap-2.5">
-                          <img
-                            src={asg.games?.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
-                            alt=""
-                            className="w-8 h-8 rounded-lg object-cover border border-amber-300"
-                          />
-                          <span>{asg.games?.title || 'Trò chơi'}</span>
-                        </td>
-                        <td className="p-3 text-sky-700 font-black">Lớp {asg.classes?.name}</td>
-                        <td className="p-3 text-amber-600 font-black">+{asg.reward_stars} 🌟</td>
-                        <td className="p-3 text-slate-500">
-                          {asg.due_date ? new Date(asg.due_date).toLocaleDateString('vi-VN') : 'Không hạn'}
-                        </td>
-                        <td className="p-3 text-right">
-                          <button
-                            onClick={() => {
-                              setAssignmentToEdit(asg);
-                              setIsEditAssignOpen(true);
-                              triggerSound('click');
-                            }}
-                            className="px-3 py-1.5 bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs rounded-xl flex items-center gap-1 ml-auto"
-                            title="Thay trò chơi hoặc sửa hạn bài giao"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5" /> Thay / Sửa Bài Giao
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {assignments.map((asg) => {
+                      const isActive = asg.status === 'active' || !asg.status;
+                      const isArchived = asg.status === 'archived';
+                      const isCancelled = asg.status === 'cancelled';
+
+                      return (
+                        <tr key={asg.id} className="hover:bg-amber-50">
+                          <td className="p-3 font-black text-amber-950 flex items-center gap-2.5">
+                            <img
+                              src={asg.games?.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
+                              alt=""
+                              className="w-8 h-8 rounded-lg object-cover border border-amber-300"
+                            />
+                            <span>{asg.games?.title || 'Trò chơi'}</span>
+                          </td>
+                          <td className="p-3 text-sky-700 font-black">Lớp {asg.classes?.name}</td>
+                          <td className="p-3 text-amber-600 font-black">+{asg.reward_stars} 🌟</td>
+                          <td className="p-3 text-slate-500">
+                            {asg.due_date ? new Date(asg.due_date).toLocaleDateString('vi-VN') : 'Không hạn'}
+                          </td>
+                          <td className="p-3">
+                            {isActive && (
+                              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold rounded-lg">
+                                🟢 Hoạt động
+                              </span>
+                            )}
+                            {isArchived && (
+                              <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold rounded-lg" title="Bài giao cũ đã thay trò chơi mới (Lịch sử làm bài được lưu giữ)">
+                                🟡 Đã lưu trữ
+                              </span>
+                            )}
+                            {isCancelled && (
+                              <span className="px-2 py-0.5 bg-rose-100 text-rose-800 font-extrabold rounded-lg" title="Bài giao đã hủy">
+                                🔴 Đã hủy
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            {isActive ? (
+                              <button
+                                onClick={() => {
+                                  setAssignmentToEdit(asg);
+                                  setIsEditAssignOpen(true);
+                                  triggerSound('click');
+                                }}
+                                className="px-3 py-1.5 bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs rounded-xl flex items-center gap-1 ml-auto"
+                                title="Thay trò chơi hoặc sửa hạn bài giao"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" /> Thay / Sửa Bài Giao
+                              </button>
+                            ) : (
+                              <span className="text-slate-400 font-bold text-[11px]">Đã lưu vết</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               ) : (
