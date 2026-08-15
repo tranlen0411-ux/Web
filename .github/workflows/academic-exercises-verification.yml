@@ -48,38 +48,53 @@ jobs:
           npm install --no-package-lock
 
       - name: Run Node Static Exercise Validator
+        id: validator
         run: |
           npm run validate:exercises
 
       - name: Run Vite Production Build
+        id: build
         run: |
           npm run build
 
       - name: Run Deno Typecheck on Edge Function
+        id: deno_check
         run: |
           deno check supabase/functions/cleanup-exercise-submission-files/index.ts
 
       - name: Start Supabase Local Containers Safely
+        id: supabase_start
         run: |
           echo "Starting Supabase local stack (output redirected to sanitize secrets)..."
           supabase start > /tmp/supabase_start_raw.log 2>&1 || (cat /tmp/supabase_start_raw.log | grep -i "error" | grep -v "key" && exit 1)
           echo "✅ Supabase local containers started successfully on 127.0.0.1!"
 
       - name: Run SQL Migration Test A, Test B & Post-Migration Verification Assertions
+        id: migration
         run: |
           chmod +x scripts/ci/*.sh
           ./scripts/ci/verifyAcademicExercisesMigration.sh
 
       - name: Run Parallel Postgres Concurrency Claim & Reset Tests
+        id: concurrency
         run: |
           ./scripts/ci/verifyAcademicExercisesConcurrency.sh
 
       - name: Run Local Edge Function Integration Tests
+        id: edge_integration
         run: |
           ./scripts/ci/verifyAcademicExercisesEdgeFunction.sh
 
       - name: Generate Sanitized Artifact Report
         if: always()
+        env:
+          VALIDATOR_OUTCOME: ${{ steps.validator.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          DENO_OUTCOME: ${{ steps.deno_check.outcome }}
+          SUPABASE_START_OUTCOME: ${{ steps.supabase_start.outcome }}
+          MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+          CONCURRENCY_OUTCOME: ${{ steps.concurrency.outcome }}
+          EDGE_OUTCOME: ${{ steps.edge_integration.outcome }}
         run: |
           node scripts/ci/generateSanitizedReport.js
 
@@ -91,7 +106,8 @@ jobs:
           path: artifacts/academic-exercises-verification-summary.json
           retention-days: 7
 
-      - name: Stop Local Supabase Containers
+      - name: Stop Local Supabase Containers & Cleanup
         if: always()
         run: |
+          rm -f /tmp/supabase_start_raw.log /tmp/worker*.json /tmp/reset*.json || true
           supabase stop --no-backup || true
