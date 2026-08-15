@@ -8,6 +8,29 @@ const corsHeaders = {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+async function finishJobOrReport(
+  supabaseAdmin: any,
+  jobId: string,
+  expectedAttempt: number,
+  status: string,
+  lastError: string | null,
+  userId: string
+): Promise<{ success: boolean; errorReason?: string }> {
+  const { data: finishRes, error: finishErr } = await supabaseAdmin.rpc('finish_exercise_file_cleanup_job', {
+    p_job_id: jobId,
+    p_expected_attempt: expectedAttempt,
+    p_status: status,
+    p_last_error: lastError,
+    p_requesting_user_id: userId,
+  });
+
+  if (finishErr || !finishRes?.success) {
+    console.error(`[Job ${jobId}] finish_exercise_file_cleanup_job RPC error:`, finishErr || finishRes?.message);
+    return { success: false, errorReason: finishRes?.reason || 'finish_rpc_failed' };
+  }
+  return { success: true };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -33,7 +56,7 @@ serve(async (req) => {
       );
     }
 
-    // 1. Client với token JWT của Caller để gọi các RPC SECURITY DEFINER có phân quyền
+    // 1. Client với token JWT của Caller ĐƯỢC DÙNG DUY NHẤT để xác minh user token
     const supabaseCaller = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -74,6 +97,8 @@ serve(async (req) => {
     }
 
     const uniqueJobIds = Array.from(new Set(valid_requested_uuids));
+
+    // 2. Client Service Role NỘI BỘ dành riêng cho các RPC claim và finish bảo mật
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     const deleted: string[] = [];
@@ -83,9 +108,10 @@ serve(async (req) => {
     const failed: Array<{ job_id: string; file_path?: string; reason: string }> = [];
 
     for (const jobId of uniqueJobIds) {
-      // 2. KÍCH HOẠT RPC CLAIM NGUYÊN TỬ CSDL (CHỈ MỘT WORKER CLAIM THÀNH CÔNG VỚI QUYỀN CALLER)
-      const { data: claimRes, error: claimErr } = await supabaseCaller.rpc('claim_exercise_file_cleanup_job', {
-        p_job_id: jobId
+      // 3. THỰC THI RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB QUA SUPABASEADMIN (SERVICE_ROLE KEY)
+      const { data: claimRes, error: claimErr } = await supabaseAdmin.rpc('claim_exercise_file_cleanup_job', {
+        p_job_id: jobId,
+        p_requesting_user_id: user.id
       });
 
       if (claimErr || !claimRes?.success) {
@@ -112,17 +138,16 @@ serve(async (req) => {
         filePath.startsWith('/') ||
         filePath.length > 500
       ) {
-        await supabaseCaller.rpc('finish_exercise_file_cleanup_job', {
-          p_job_id: jobId,
-          p_expected_attempt: claimedAttempt,
-          p_status: 'failed',
-          p_last_error: 'Invalid file path format'
-        });
-        failed.push({ job_id: jobId, file_path: String(filePath), reason: 'invalid_path_format' });
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', 'Invalid file path format', user.id);
+        if (!finRes.success) {
+          failed.push({ job_id: jobId, file_path: String(filePath), reason: finRes.errorReason || 'invalid_path_and_finish_failed' });
+        } else {
+          failed.push({ job_id: jobId, file_path: String(filePath), reason: 'invalid_path_format' });
+        }
         continue;
       }
 
-      // 3. FAIL-CLOSED SECURITY PATTERN: Kiểm tra tham chiếu CSDL với Service Role
+      // 4. FAIL-CLOSED SECURITY PATTERN: Kiểm tra tham chiếu CSDL với Service Role
       const { data: refCheck, error: refError } = await supabaseAdmin
         .from('academic_submission_answers')
         .select('id')
@@ -130,57 +155,53 @@ serve(async (req) => {
 
       if (refError) {
         console.error(`[Job ${jobId}] Ref check DB error:`, refError);
-        await supabaseCaller.rpc('finish_exercise_file_cleanup_job', {
-          p_job_id: jobId,
-          p_expected_attempt: claimedAttempt,
-          p_status: 'failed',
-          p_last_error: refError.message
-        });
-        failed.push({ job_id: jobId, file_path: filePath, reason: 'reference_check_failed' });
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', refError.message, user.id);
+        failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'reference_check_failed' });
         continue;
       }
 
       if (refCheck && refCheck.length > 0) {
         still_referenced.push(filePath);
-        await supabaseCaller.rpc('finish_exercise_file_cleanup_job', {
-          p_job_id: jobId,
-          p_expected_attempt: claimedAttempt,
-          p_status: 'still_referenced',
-          p_last_error: null
-        });
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'still_referenced', null, user.id);
+        if (!finRes.success) {
+          failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'still_referenced_finish_failed' });
+        }
         continue;
       }
 
-      // 4. CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API CHUẨN XÁC NGUYÊN TỬ
+      // 5. CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API CHUẨN XÁC NGUYÊN TỬ
       const { error: removeErr } = await supabaseAdmin.storage
         .from('exercise-submissions')
         .remove([filePath]);
 
       if (removeErr) {
         console.error(`[Job ${jobId}] Storage API remove error (${filePath}):`, removeErr);
-        await supabaseCaller.rpc('finish_exercise_file_cleanup_job', {
-          p_job_id: jobId,
-          p_expected_attempt: claimedAttempt,
-          p_status: 'failed',
-          p_last_error: removeErr.message
-        });
-        failed.push({ job_id: jobId, file_path: filePath, reason: removeErr.message });
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', removeErr.message, user.id);
+        failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || removeErr.message });
       } else {
-        // 5. GỌI RPC FINISH_EXERCISE_FILE_CLEANUP_JOB CẬP NHẬT TRẠNG THÁI DELETED
-        const { data: finishRes, error: finishErr } = await supabaseCaller.rpc('finish_exercise_file_cleanup_job', {
-          p_job_id: jobId,
-          p_expected_attempt: claimedAttempt,
-          p_status: 'deleted',
-          p_last_error: null
-        });
+        // 6. GỌI FINISH_EXERCISE_FILE_CLEANUP_JOB QUA SUPABASEADMIN (SERVICE_ROLE KEY)
+        const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
 
-        if (finishErr || !finishRes?.success) {
-          console.error(`[Job ${jobId}] Finish job RPC failed after storage remove:`, finishErr || finishRes?.message);
-          failed.push({
-            job_id: jobId,
-            file_path: filePath,
-            reason: 'storage_deleted_job_update_failed'
-          });
+        if (!finRes.success) {
+          console.error(`[Job ${jobId}] Finish job RPC failed after storage remove.`);
+          // Thử đối soát CSDL (Reconciliation)
+          const reconRes = await finishJobOrReport(
+            supabaseAdmin, jobId, claimedAttempt, 'storage_deleted_job_update_failed', 'Storage deleted but status update failed', user.id
+          );
+
+          if (!reconRes.success) {
+            failed.push({
+              job_id: jobId,
+              file_path: filePath,
+              reason: 'database_reconciliation_failed'
+            });
+          } else {
+            failed.push({
+              job_id: jobId,
+              file_path: filePath,
+              reason: 'storage_deleted_job_update_failed'
+            });
+          }
         } else {
           deleted.push(filePath);
         }

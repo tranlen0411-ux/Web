@@ -268,8 +268,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         // 1. Đưa file vào hàng đợi cleanup jobs trong DB
         const { data: queueRes, error: queueErr } = await supabase.rpc('queue_file_cleanup', { p_paths: uniqueDeletions });
 
-        if (queueErr || !queueRes?.success) {
-          console.warn('Queue file cleanup warning:', queueErr || queueRes?.message);
+        if (
+          queueErr ||
+          !queueRes?.success ||
+          (queueRes?.rejected && queueRes.rejected.length > 0) ||
+          (queueRes?.already_processing && queueRes.already_processing.length > 0)
+        ) {
+          console.warn('Queue file cleanup warning:', queueErr || queueRes?.message || queueRes);
           setWarningMsg('Bài làm đã lưu thành công! Tiến trình dọn dẹp file cũ sẽ tự động chạy trong hàng đợi hệ thống.');
         } else {
           const validJobs = queueRes?.jobs || [];
@@ -286,6 +291,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 edgeErr ||
                 (edgeRes?.failed && edgeRes.failed.length > 0) ||
                 (edgeRes?.missing_job_ids && edgeRes.missing_job_ids.length > 0) ||
+                (edgeRes?.invalid_job_ids && edgeRes.invalid_job_ids.length > 0) ||
                 (edgeRes?.already_claimed && edgeRes.already_claimed.length > 0)
               ) {
                 console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
