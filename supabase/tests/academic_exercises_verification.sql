@@ -179,12 +179,30 @@ BEGIN
     RAISE NOTICE '  ✅ Fail-closed Test B Passed: Insert status không hợp lệ bị từ chối!';
   END;
 
-  -- Test C: RPC claim với NULL user_id must return success = false and reason = missing_user_id
+  -- Test C1: RPC claim từ chối caller không có role service_role (reason = unauthorized_role)
+  PERFORM set_config(
+    'request.jwt.claims',
+    '{"role":"authenticated","sub":"00000000-0000-0000-0000-000000000001"}',
+    true
+  );
+  v_claim_res := public.claim_exercise_file_cleanup_job(gen_random_uuid(), gen_random_uuid());
+  IF (v_claim_res->>'success')::BOOLEAN IS TRUE OR (v_claim_res->>'reason') != 'unauthorized_role' THEN
+    RAISE EXCEPTION 'FAIL-CLOSED TEST C1 FAILED: RPC claim từ chối caller non-service_role không trả về reason = unauthorized_role (Nhận được: %)', v_claim_res;
+  ELSE
+    RAISE NOTICE '  ✅ Fail-closed Test C1 Passed: RPC claim từ chối caller non-service_role với reason = unauthorized_role!';
+  END IF;
+
+  -- Test C2: RPC claim với caller service_role nhưng user_id NULL (reason = missing_user_id)
+  PERFORM set_config(
+    'request.jwt.claims',
+    '{"role":"service_role","sub":"00000000-0000-0000-0000-000000000001"}',
+    true
+  );
   v_claim_res := public.claim_exercise_file_cleanup_job(gen_random_uuid(), NULL);
   IF (v_claim_res->>'success')::BOOLEAN IS TRUE OR (v_claim_res->>'reason') != 'missing_user_id' THEN
-    RAISE EXCEPTION 'FAIL-CLOSED TEST FAILED: RPC claim từ chối user_id NULL không trả về reason = missing_user_id (Nhận được: %)', v_claim_res;
+    RAISE EXCEPTION 'FAIL-CLOSED TEST C2 FAILED: RPC claim với user_id NULL không trả về reason = missing_user_id (Nhận được: %)', v_claim_res;
   ELSE
-    RAISE NOTICE '  ✅ Fail-closed Test C Passed: RPC claim từ chối user_id NULL với reason = missing_user_id!';
+    RAISE NOTICE '  ✅ Fail-closed Test C2 Passed: RPC claim từ chối user_id NULL với reason = missing_user_id!';
   END IF;
 
   RAISE NOTICE '✅ ALL POST-MIGRATION ASSERTIONS & FAIL-CLOSED TESTS PASSED 100%%!';
