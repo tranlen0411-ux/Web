@@ -28,55 +28,82 @@ export const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
   const [headerClasses, setHeaderClasses] = useState([]);
+  const [headerClassesLoaded, setHeaderClassesLoaded] = useState(false);
 
   const role = profile?.role || 'student';
 
-  // Lấy danh sách Lớp Học thuộc quyền hạn người dùng để hiển thị trên Dropdown Header
+  // 1. Lấy danh sách Lớp Học thuộc quyền hạn người dùng để hiển thị trên Dropdown Header
   useEffect(() => {
     const fetchHeaderClasses = async () => {
       if (!user || !profile) {
         setHeaderClasses([]);
+        setHeaderClassesLoaded(false);
         return;
       }
+
+      setHeaderClassesLoaded(false);
+
       try {
         if (role === 'admin') {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('classes')
             .select('id, name, grade_level')
             .order('grade_level');
+
+          if (error) {
+            console.error('❌ Lỗi truy vấn danh sách lớp Admin:', error.message);
+            return;
+          }
+
           setHeaderClasses(data || []);
+          setHeaderClassesLoaded(true);
+
         } else if (role === 'teacher') {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('classes')
             .select('id, name, grade_level')
             .eq('teacher_id', profile.id);
+
+          if (error) {
+            console.error('❌ Lỗi truy vấn danh sách lớp Giáo viên:', error.message);
+            return;
+          }
+
           setHeaderClasses(data || []);
+          setHeaderClassesLoaded(true);
+
         } else if (role === 'student') {
-          const { data: memberData } = await supabase
+          const { data: memberData, error } = await supabase
             .from('class_members')
             .select('classes:class_id(id, name, grade_level)')
             .eq('student_id', profile.id);
-          setHeaderClasses((memberData || []).map(m => m.classes).filter(Boolean));
+
+          if (error) {
+            console.error('❌ Lỗi truy vấn danh sách lớp Học sinh:', error.message);
+            return;
+          }
+
+          const parsedClasses = (memberData || []).map(m => m.classes).filter(Boolean);
+          setHeaderClasses(parsedClasses);
+          setHeaderClassesLoaded(true);
         }
       } catch (err) {
-        console.error('Error fetching header classes:', err);
+        console.error('❌ Lỗi ngoại lệ khi tải danh sách lớp header:', err);
       }
     };
 
     fetchHeaderClasses();
   }, [user, profile?.id, role]);
 
-  // Tự động đưa globalClassFilter về 'ALL' nếu UUID lớp hiện tại không còn nằm trong headerClasses
+  // 2. CHỈ KIỂM TRA VÀ TỰ ĐỘNG KHÔI PHỤC globalClassFilter VỀ 'ALL' SAU KHI ĐÃ TẢI XONG DỮ LIỆU (headerClassesLoaded === true)
   useEffect(() => {
-    if (globalClassFilter !== 'ALL' && globalClassFilter !== 'NO_CLASS') {
-      if (headerClasses.length > 0) {
-        const isValid = headerClasses.some(c => c.id === globalClassFilter);
-        if (!isValid) {
-          setGlobalClassFilter('ALL');
-        }
+    if (headerClassesLoaded && globalClassFilter !== 'ALL' && globalClassFilter !== 'NO_CLASS') {
+      const isValid = headerClasses.some(c => c.id === globalClassFilter);
+      if (!isValid) {
+        setGlobalClassFilter('ALL');
       }
     }
-  }, [headerClasses, globalClassFilter, setGlobalClassFilter]);
+  }, [headerClassesLoaded, headerClasses, globalClassFilter, setGlobalClassFilter]);
 
   const handleNavClick = (path) => {
     triggerSound('click');
@@ -112,6 +139,7 @@ export const Navbar = () => {
     triggerSound('click');
     setIsMenuOpen(false);
     setHeaderClasses([]);
+    setHeaderClassesLoaded(false);
     await signOut();
     navigate('/auth');
   };
