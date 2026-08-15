@@ -21,7 +21,7 @@ export const EditAssignmentModal = ({ isOpen, onClose, assignmentToEdit, availab
   // Lọc danh sách trò chơi cho phép hiển thị trong dropdown theo phân quyền
   const validGamesForUser = availableGames.filter(g => {
     if (profile?.role === 'admin') return true;
-    return g.is_public !== false || g.author_id === profile?.id;
+    return g.is_public === true || g.author_id === profile?.id;
   });
 
   useEffect(() => {

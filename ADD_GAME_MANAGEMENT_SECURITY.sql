@@ -2,7 +2,7 @@
 -- MIGRATION AN TOÀN VIỆN TOÀN (IDEMPOTENT & CHỐNG RACE CONDITION TRONG GIAO DỊCH)
 -- SIẾT CHẶT BẢO MẬT GAMES, ASSIGNMENTS VÀ STORAGE GAME-THUMBNAILS
 -- KHÓA BẢN GHI BẰNG FOR UPDATE VÀ FOR KEY SHARE ĐỂ CHẶN XÓA/SỬA ĐỒNG THỜI
--- VERIFIED SYNTAX AUDIT & GAME SELECTION PERMISSION CHECK: OK
+-- VERIFIED SYNTAX AUDIT & RE-ORDERED CASE A METADATA UPDATE FLOW: OK
 -- ============================================================================
 
 BEGIN;
@@ -197,7 +197,7 @@ CREATE POLICY "Thumbnails_Delete_Policy" ON storage.objects
   );
 
 -- ============================================================================
--- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI SIẾT CHIẾN LƯỢC CHỌN GAME THEO RIGHT MANAGEMENT
+-- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI SẮP XẾP QUY TRÌNH CHUẨN XÁC
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.replace_assignment_safely(
   p_assignment_id UUID,
@@ -252,27 +252,10 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Từ chối truy cập: Thầy/Cô không quản lý lớp học này.');
   END IF;
 
-  -- 7. KHÓA VÀ KIỂM TRA QUYỀN SỬ DỤNG TRÒ CHƠI MỚI BẰNG FOR KEY SHARE
-  SELECT id, is_public, author_id INTO v_new_game
-  FROM public.games
-  WHERE id = p_new_game_id FOR KEY SHARE;
-
-  IF v_new_game.id IS NULL THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Trò chơi mới chọn không tồn tại hoặc đã bị xóa.');
-  END IF;
-
-  -- BẢO MẬT PHÂN QUYỀN CHỌN GAME: Admin được chọn mọi game; Giáo viên chỉ chọn game công khai (is_public = true) hoặc game do chính mình tạo (author_id = auth.uid())
-  IF NOT app_private.is_admin() THEN
-    IF v_new_game.is_public IS NOT TRUE AND (v_new_game.author_id IS NULL OR v_new_game.author_id != v_caller_id) THEN
-      RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền sử dụng trò chơi này để giao bài.');
-    END IF;
-  END IF;
-
   -- =========================================================================
-  -- XỬ LÝ 3 TRƯỜNG HỢP LOGIC NGUYÊN TỬ CHUẨN XÁC:
-  -- =========================================================================
-
   -- TRƯỜNG HỢP A: KHÔNG ĐỔI TRÒ CHƠI (p_new_game_id = v_assign.game_id)
+  -- =========================================================================
+  -- Cho phép Giáo viên cập nhật sao thưởng/hạn bài giao mà không yêu cầu game hiện tại phải đang is_public = true
   IF p_new_game_id = v_assign.game_id THEN
     UPDATE public.assignments
     SET reward_stars = p_reward_stars,
@@ -286,7 +269,26 @@ BEGIN
     );
   END IF;
 
-  -- Đếm số lượt học sinh đã làm bài
+  -- =========================================================================
+  -- NẾU THAY ĐỔI SANG TRÒ CHƠI KHÁC (p_new_game_id <> v_assign.game_id):
+  -- =========================================================================
+  -- 7. KHÓA VÀ KIỂM TRA QUYỀN SỬ DỤNG TRÒ CHƠI MỚI BẰNG FOR KEY SHARE
+  SELECT id, is_public, author_id INTO v_new_game
+  FROM public.games
+  WHERE id = p_new_game_id FOR KEY SHARE;
+
+  IF v_new_game.id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Trò chơi mới chọn không tồn tại hoặc đã bị xóa.');
+  END IF;
+
+  -- BẢO MẬT PHÂN QUYỀN CHỌN GAME MỚI: Admin được chọn mọi game; Giáo viên chỉ được chọn game công khai (is_public = true) hoặc game do chính mình tạo (author_id = auth.uid())
+  IF NOT app_private.is_admin() THEN
+    IF v_new_game.is_public IS NOT TRUE AND (v_new_game.author_id IS NULL OR v_new_game.author_id != v_caller_id) THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền sử dụng trò chơi này để giao bài.');
+    END IF;
+  END IF;
+
+  -- Đếm số lượt học sinh đã làm bài cho bài giao hiện tại
   SELECT COUNT(*) INTO v_progress_count
   FROM public.student_progress
   WHERE assignment_id = p_assignment_id;
