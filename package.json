@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "vite build",
     "preview": "vite preview",
-    "validate:games": "node scripts/validateLearningGames.mjs"
+    "validate:games": "node scripts/validateLearningGames.mjs",
+    "validate:exercises": "node scripts/validateAcademicExercises.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.46.1",

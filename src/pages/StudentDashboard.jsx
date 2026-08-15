@@ -18,6 +18,8 @@ import { GameCard } from '../components/games/GameCard';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
 
+import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
+
 export const StudentDashboard = () => {
   const { profile, refreshProfile } = useAuth();
   const { triggerSound } = useSound();
@@ -26,6 +28,7 @@ export const StudentDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'exercises') return 'exercises';
     if (tabParam === 'learning') return 'assignments';
     if (tabParam === 'games') return 'library';
     return 'library';
@@ -314,6 +317,21 @@ export const StudentDashboard = () => {
 
         <button
           onClick={() => {
+            setActiveTab('academic_exercises');
+            triggerSound('click');
+            setSearchParams({ tab: 'exercises' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'academic_exercises'
+              ? 'bg-amber-600 text-white shadow-md border-b-4 border-amber-800'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" /> Bài Tập Học Thuật
+        </button>
+
+        <button
+          onClick={() => {
             setActiveTab('assignments');
             triggerSound('click');
             setSearchParams({ tab: 'learning' }, { replace: true });
@@ -324,7 +342,7 @@ export const StudentDashboard = () => {
               : 'text-slate-600 hover:bg-amber-50'
           }`}
         >
-          <BookOpen className="w-4 h-4" /> Bài Tập Được Giao ({assignments.length})
+          <Gamepad2 className="w-4 h-4" /> Trò Chơi Đã Giao ({assignments.length})
         </button>
 
         <button
@@ -357,6 +375,10 @@ export const StudentDashboard = () => {
           <Clock className="w-4 h-4" /> Lịch Sử Chơi
         </button>
       </div>
+
+      {activeTab === 'academic_exercises' && (
+        <ExerciseListTab role="student" />
+      )}
 
       {/* NỘI DUNG THEO TAB */}
       {activeTab === 'library' && (

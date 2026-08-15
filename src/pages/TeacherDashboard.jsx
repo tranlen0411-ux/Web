@@ -26,6 +26,7 @@ import { EditAssignmentModal } from '../components/dashboard/EditAssignmentModal
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
+import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 
 export const TeacherDashboard = () => {
   const { profile } = useAuth();
@@ -34,6 +35,7 @@ export const TeacherDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'exercises') return 'exercises';
     if (tabParam === 'games') return 'games';
     if (tabParam === 'classes') return 'classes';
     return 'classes';
@@ -256,9 +258,28 @@ export const TeacherDashboard = () => {
               : 'text-slate-600 hover:bg-amber-50'
           }`}
         >
-          <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi & Giao Bài ({games.length})
+          <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi & Giao Trò Chơi ({games.length})
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('exercises');
+            triggerSound('click');
+            setSearchParams({ tab: 'exercises' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'exercises'
+              ? 'bg-amber-500 text-white shadow-md border-b-4 border-amber-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" /> Quản Lý Bài Tập Học Thuật
         </button>
       </div>
+
+      {activeTab === 'exercises' && (
+        <ExerciseListTab role="teacher" />
+      )}
 
       {/* KHU VỰC 1: QUẢN LÝ LỚP HỌC & HỌC SINH (tab=classes) */}
       {activeTab === 'classes' && (

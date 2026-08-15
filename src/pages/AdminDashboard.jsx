@@ -22,21 +22,22 @@ import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
+import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 
 export const AdminDashboard = () => {
   const { profile } = useAuth();
   const { triggerSound } = useSound();
   const [searchParams] = useSearchParams();
 
-  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users
+  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=exercises
   const tabParam = searchParams.get('tab');
   const [activeAdminTab, setActiveAdminTab] = useState(
-    tabParam === 'games' ? 'games' : 'users'
+    tabParam === 'exercises' ? 'exercises' : tabParam === 'games' ? 'games' : 'users'
   );
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'users') {
+    if (tab === 'games' || tab === 'users' || tab === 'exercises') {
       setActiveAdminTab(tab);
     }
   }, [searchParams]);
@@ -200,7 +201,24 @@ export const AdminDashboard = () => {
         >
           <Gamepad2 className="w-4 h-4" /> Quản Lý Kho Trò Chơi ({gamesList.length})
         </button>
+
+        <button
+          onClick={() => { setActiveAdminTab('exercises'); triggerSound('click'); }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeAdminTab === 'exercises'
+              ? 'bg-emerald-500 text-white shadow-md border-b-4 border-emerald-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <ShieldCheck className="w-4 h-4" /> Quản Lý Bài Tập Học Thuật
+        </button>
       </div>
+
+      {activeAdminTab === 'exercises' && (
+        <div className="mb-10 animate-fadeIn">
+          <ExerciseListTab role="admin" />
+        </div>
+      )}
 
       {/* TAB 1: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG */}
       {activeAdminTab === 'users' && (
