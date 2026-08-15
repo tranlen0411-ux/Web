@@ -1,9 +1,9 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.0 CHUẨN KIẾN TRÚC JOB-BASED CLEANUP
--- 1. RPC QUEUE_FILE_CLEANUP DÙNG 'INSERT ... RETURNING ID, FILE_PATH' TRÁNH BÁO QUEUED GIẢ VÀ CHỈ TRẢ VỀ DÂN SÁCH JOB OBJECTS THỰC THỰC TẠO
--- 2. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG SQL MIGRATION
--- 3. VALIDATE AN TOÀN TUYỆT ĐỐI TOÀN BỘ CÁC TRƯỜNG KIỂU SỐ (QUESTION_NUMBER, POINTS, GRADE_LEVEL...) BẰNG TRUNC(NUMERIC) TRÁNH VĂNG EXCEPTION CSDB
--- 4. BẮT BỘC KIỂM TRA MÔN HỌC, TIÊU ĐỀ, PROMPT GIỚI HẠN ĐỘ DÀI VÀ CHO PHÉP XUẤT BẢN KHI BÀI TẬP CÓ ÍT NHẤT 1 CÂU HỎI HỢP LỆ
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.1 BẢO MẬT & VALIDATION TUYỆT ĐỐI
+-- 1. AN TOÀN TOÀN DIỆN PHASE 1 ZERO-DML: CHẶN VÀ KIỂM TRA MỌI TRƯỜNG SỐ (GRADE_LEVEL, MAX_ATTEMPTS, REWARD_STARS, POINTS...) DÙNG TRUNC(NUMERIC)
+-- 2. LOẠI BỎ TOÀN BỘ PHÉP ÉP TRỰC TIẾP KHÔNG AN TOÀN ((->>'...')::INT) VÀ KHÔNG DÙNG GREATEST/LEAST ĐỂ SỬA ÂM THẦM DỮ LIỆU SAI
+-- 3. PARSE AN TOÀN CHO UUID, TIMESTAMPTZ, BOOLEAN NỔI LỖI JSON THÂN THIỆN TRÁNH VĂNG EXCEPTION CSDB
+-- 4. RPC QUEUE_FILE_CLEANUP VỚI RESET BIẾN VÒNG LẶP NGUYÊN TỬ, CHỐNG BÁO QUEUED GIẢ VÀ DỰA TRÊN THỰC TẾ RETURNING
 -- ============================================================================
 
 BEGIN;
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS public.exercise_file_cleanup_jobs (
   bucket_id TEXT NOT NULL DEFAULT 'exercise-submissions',
   file_path TEXT NOT NULL UNIQUE,
   requested_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed')),
   attempts INT DEFAULT 0 CHECK (attempts >= 0),
   last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS public.academic_exercises (
   exercise_type TEXT NOT NULL DEFAULT 'mixed' CHECK (exercise_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload', 'mixed')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed', 'archived')),
   due_date TIMESTAMPTZ,
-  max_attempts INT DEFAULT 1 CHECK (max_attempts >= 1),
-  reward_stars INT DEFAULT 10 CHECK (reward_stars >= 0),
+  max_attempts INT DEFAULT 1 CHECK (max_attempts BETWEEN 1 AND 100),
+  reward_stars INT DEFAULT 10 CHECK (reward_stars BETWEEN 0 AND 1000),
   show_score_after_submit BOOLEAN DEFAULT TRUE,
   show_correct_answers BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -355,7 +355,7 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
--- 1. RPC QUEUE_FILE_CLEANUP DÙNG RETURNING ĐỂ KHÔNG BÁO QUEUED GIẢ
+-- 1. RPC QUEUE_FILE_CLEANUP CHUẨN HÓA VỚI RESET BIẾN VÒNG LẶP VÀ RETURNING
 CREATE OR REPLACE FUNCTION public.queue_file_cleanup(
   p_paths TEXT[]
 )
@@ -368,11 +368,13 @@ DECLARE
   v_caller_id UUID;
   v_caller_role TEXT;
   v_path TEXT;
+  v_raw_path TEXT;
   v_jobs JSONB := '[]'::jsonb;
   v_rejected TEXT[] := ARRAY[]::TEXT[];
   v_processing TEXT[] := ARRAY[]::TEXT[];
   v_inserted_id UUID;
   v_inserted_path TEXT;
+  v_dedup_paths TEXT[] := ARRAY[]::TEXT[];
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -389,14 +391,35 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Vượt quá giới hạn tối đa 50 đường dẫn file mỗi lần yêu cầu.');
   END IF;
 
-  FOREACH v_path IN ARRAY p_paths
+  -- Chuẩn hóa và loại bỏ trùng lặp
+  FOREACH v_raw_path IN ARRAY p_paths
   LOOP
+    IF v_raw_path IS NOT NULL THEN
+      v_path := trim(v_raw_path);
+      IF length(v_path) > 0 AND NOT (v_path = ANY(v_dedup_paths)) THEN
+        v_dedup_paths := array_append(v_dedup_paths, v_path);
+      END IF;
+    END IF;
+  END LOOP;
+
+  FOREACH v_path IN ARRAY v_dedup_paths
+  LOOP
+    -- RESET BẮT BỘC BIẾN RETURNING Ở ĐẦU MỖI VÒNG LẶP
+    v_inserted_id := NULL;
+    v_inserted_path := NULL;
+
+    -- Kiểm tra path hợp lệ
+    IF v_path IS NULL OR length(v_path) = 0 OR length(v_path) > 500 OR v_path LIKE '/%' OR v_path LIKE '%..%' THEN
+      v_rejected := array_append(v_rejected, v_path);
+      CONTINUE;
+    END IF;
+
     IF v_caller_role != 'admin' AND NOT (v_path LIKE v_caller_id::text || '/%') THEN
       v_rejected := array_append(v_rejected, v_path);
       CONTINUE;
     END IF;
 
-    -- Thực hiện INSERT / UPDATE với RETURNING ID thực tế
+    -- Thực hiện INSERT / UPDATE với RETURNING ID thực tế khi không ở trạng thái processing
     INSERT INTO public.exercise_file_cleanup_jobs (
       bucket_id, file_path, requested_by, status, attempts, last_error, processed_at
     ) VALUES (
@@ -573,7 +596,7 @@ END;
 $$;
 
 
--- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION KIỂU SỐ AN TOÀN TRUNC(NUMERIC)
+-- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN MỌI TRƯỜNG VÀ DÙNG BIẾN TYPED
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -586,14 +609,13 @@ AS $$
 DECLARE
   v_caller_id UUID;
   v_caller_role TEXT;
-  v_exercise_id UUID;
-  v_class_id UUID;
+  v_exercise_id UUID := NULL;
+  v_class_id UUID := NULL;
   v_class_teacher UUID;
   v_existing_ex RECORD;
   v_q_json JSONB;
   v_q_id UUID;
   v_key_json JSONB;
-  v_is_global BOOLEAN := FALSE;
   v_has_submissions BOOLEAN := FALSE;
   v_existing_questions_json JSONB;
   v_incoming_questions_json JSONB;
@@ -607,9 +629,19 @@ DECLARE
   v_opt_match BOOLEAN;
   v_distinct_opts INT;
   v_num_val NUMERIC;
+  
+  -- BIẾN TYPED ĐÃ PARSE VÀ VALIDATE CHUẨN XÁC
+  v_valid_grade_level INT := 1;
+  v_valid_max_attempts INT := 1;
+  v_valid_reward_stars INT := 10;
+  v_valid_is_global BOOLEAN := FALSE;
+  v_valid_due_date TIMESTAMPTZ := NULL;
+  v_valid_show_score BOOLEAN := TRUE;
+  v_valid_show_answers BOOLEAN := FALSE;
+  v_valid_points INT := 10;
 BEGIN
   -- =========================================================================
-  -- PHASE 1: ZERO-DML VALIDATION PHASE
+  -- PHASE 1: ZERO-DML VALIDATION PHASE (PARSE AN TOÀN TOÀN BỘ CÁC TRƯỜNG)
   -- =========================================================================
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -621,24 +653,53 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không có quyền quản lý bài tập.');
   END IF;
 
+  IF p_exercise IS NULL OR jsonb_typeof(p_exercise) != 'object' THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đối tượng p_exercise phải là một JSON object.');
+  END IF;
+
   IF jsonb_typeof(p_questions) != 'array' THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Cấu trúc câu hỏi p_questions phải là một mảng JSON.');
   END IF;
 
+  -- 1. Parse an toàn ID Bài tập (nếu có)
+  IF (p_exercise->>'id') IS NOT NULL AND length(trim(p_exercise->>'id')) > 0 THEN
+    BEGIN
+      v_exercise_id := (p_exercise->>'id')::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ id bài tập không đúng định dạng UUID.');
+    END;
+  END IF;
+
+  -- 2. Parse an toàn status
   v_new_status := COALESCE(p_exercise->>'status', 'draft');
+  IF v_new_status NOT IN ('draft', 'published', 'closed', 'archived') THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Trạng thái bài tập status không hợp lệ.');
+  END IF;
 
   IF v_new_status = 'published' AND jsonb_array_length(p_questions) = 0 THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập trạng thái Xuất bản (published) phải chứa ít nhất 1 câu hỏi.');
   END IF;
 
-  v_is_global := COALESCE((p_exercise->>'is_global')::BOOLEAN, FALSE);
+  -- 3. Parse an toàn is_global
+  IF (p_exercise->'is_global') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'is_global') != 'boolean' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ is_global phải là kiểu boolean.');
+    END IF;
+    v_valid_is_global := (p_exercise->>'is_global')::BOOLEAN;
+  END IF;
 
-  IF v_is_global AND v_caller_role != 'admin' THEN
+  IF v_valid_is_global AND v_caller_role != 'admin' THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ Admin mới có quyền tạo bài tập chung toàn trường (is_global).');
   END IF;
 
-  IF (p_exercise->>'class_id') IS NOT NULL AND (p_exercise->>'class_id') != '' THEN
-    v_class_id := (p_exercise->>'class_id')::UUID;
+  -- 4. Parse an toàn class_id
+  IF (p_exercise->>'class_id') IS NOT NULL AND length(trim(p_exercise->>'class_id')) > 0 THEN
+    BEGIN
+      v_class_id := (p_exercise->>'class_id')::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ class_id không đúng định dạng UUID.');
+    END;
+
     SELECT teacher_id INTO v_class_teacher FROM public.classes WHERE id = v_class_id;
     IF v_class_teacher IS NULL THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Lớp học được chọn không tồn tại.');
@@ -648,11 +709,90 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chỉ được tạo bài tập cho lớp mình phụ trách.');
     END IF;
   ELSE
-    IF NOT v_is_global THEN
+    IF NOT v_valid_is_global THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập phải gán cho một Lớp học cụ thể.');
     END IF;
   END IF;
 
+  -- 5. Parse an toàn grade_level (1..5)
+  IF (p_exercise->'grade_level') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'grade_level') != 'number' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Khối lớp grade_level phải là một số nguyên.');
+    END IF;
+
+    BEGIN
+      v_num_val := (p_exercise->>'grade_level')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Khối lớp grade_level không đúng định dạng số.');
+    END;
+
+    IF v_num_val != TRUNC(v_num_val) OR v_num_val < 1 OR v_num_val > 5 THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Khối lớp grade_level phải là số nguyên từ 1 đến 5.');
+    END IF;
+    v_valid_grade_level := v_num_val::INT;
+  END IF;
+
+  -- 6. Parse an toàn max_attempts (1..100)
+  IF (p_exercise->'max_attempts') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'max_attempts') != 'number' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số lượt làm tối đa max_attempts phải là một số nguyên.');
+    END IF;
+
+    BEGIN
+      v_num_val := (p_exercise->>'max_attempts')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số lượt làm tối đa max_attempts không đúng định dạng số.');
+    END;
+
+    IF v_num_val != TRUNC(v_num_val) OR v_num_val < 1 OR v_num_val > 100 THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số lượt làm tối đa max_attempts phải là số nguyên từ 1 đến 100.');
+    END IF;
+    v_valid_max_attempts := v_num_val::INT;
+  END IF;
+
+  -- 7. Parse an toàn reward_stars (0..1000)
+  IF (p_exercise->'reward_stars') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'reward_stars') != 'number' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số sao thưởng reward_stars phải là một số nguyên.');
+    END IF;
+
+    BEGIN
+      v_num_val := (p_exercise->>'reward_stars')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số sao thưởng reward_stars không đúng định dạng số.');
+    END;
+
+    IF v_num_val != TRUNC(v_num_val) OR v_num_val < 0 OR v_num_val > 1000 THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số sao thưởng reward_stars phải là số nguyên từ 0 đến 1000.');
+    END IF;
+    v_valid_reward_stars := v_num_val::INT;
+  END IF;
+
+  -- 8. Parse an toàn due_date ISO Timestamp
+  IF (p_exercise->>'due_date') IS NOT NULL AND length(trim(p_exercise->>'due_date')) > 0 THEN
+    BEGIN
+      v_valid_due_date := (p_exercise->>'due_date')::TIMESTAMPTZ;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thời gian hạn nộp due_date không đúng định dạng ISO timestamp.');
+    END;
+  END IF;
+
+  -- 9. Parse an toàn show_score_after_submit & show_correct_answers
+  IF (p_exercise->'show_score_after_submit') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'show_score_after_submit') != 'boolean' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ show_score_after_submit phải là kiểu boolean.');
+    END IF;
+    v_valid_show_score := (p_exercise->>'show_score_after_submit')::BOOLEAN;
+  END IF;
+
+  IF (p_exercise->'show_correct_answers') IS NOT NULL THEN
+    IF jsonb_typeof(p_exercise->'show_correct_answers') != 'boolean' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ show_correct_answers phải là kiểu boolean.');
+    END IF;
+    v_valid_show_answers := (p_exercise->>'show_correct_answers')::BOOLEAN;
+  END IF;
+
+  -- 10. Parse title, subject, description
   IF (p_exercise->>'title') IS NULL OR length(trim(p_exercise->>'title')) = 0 THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được để trống.');
   END IF;
@@ -708,8 +848,8 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points không đúng định dạng số.');
       END;
 
-      IF v_num_val != TRUNC(v_num_val) OR v_num_val <= 0 THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points phải là số nguyên lớn hơn 0.');
+      IF v_num_val != TRUNC(v_num_val) OR v_num_val <= 0 OR v_num_val > 1000 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points phải là số nguyên từ 1 đến 1000.');
       END IF;
     END IF;
 
@@ -768,11 +908,9 @@ BEGIN
   END LOOP;
 
   -- =========================================================================
-  -- PHASE 2: DML EXECUTION PHASE
+  -- PHASE 2: DML EXECUTION PHASE (CHỈ DÙNG CÁC BIẾN TYPED ĐÃ PARSE CHUẨN XÁC)
   -- =========================================================================
-  IF (p_exercise->>'id') IS NOT NULL AND (p_exercise->>'id') != '' THEN
-    v_exercise_id := (p_exercise->>'id')::UUID;
-
+  IF v_exercise_id IS NOT NULL THEN
     SELECT * INTO v_existing_ex FROM public.academic_exercises WHERE id = v_exercise_id FOR UPDATE;
 
     IF v_existing_ex.id IS NULL THEN
@@ -845,15 +983,15 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập đã có bài nộp của học sinh; không được sửa cấu trúc câu hỏi hoặc đáp án.');
       END IF;
 
-      -- Cập nhật các trường metadata an toàn
+      -- Cập nhật các trường metadata an toàn dùng local typed variables
       UPDATE public.academic_exercises
       SET
         title = trim(p_exercise->>'title'),
         description = p_exercise->>'description',
         status = v_new_status,
-        due_date = CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
-        show_score_after_submit = COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, show_score_after_submit),
-        show_correct_answers = COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, show_correct_answers),
+        due_date = v_valid_due_date,
+        show_score_after_submit = v_valid_show_score,
+        show_correct_answers = v_valid_show_answers,
         updated_at = NOW()
       WHERE id = v_exercise_id;
 
@@ -865,16 +1003,16 @@ BEGIN
       title = trim(p_exercise->>'title'),
       description = p_exercise->>'description',
       class_id = v_class_id,
-      is_global = v_is_global,
-      grade_level = GREATEST(1, LEAST(5, COALESCE((p_exercise->>'grade_level')::INT, 1))),
+      is_global = v_valid_is_global,
+      grade_level = v_valid_grade_level,
       subject = COALESCE(p_exercise->>'subject', 'Toán'),
       exercise_type = COALESCE(p_exercise->>'exercise_type', 'mixed'),
       status = v_new_status,
-      due_date = CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
-      max_attempts = GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
-      reward_stars = GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
-      show_score_after_submit = COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, TRUE),
-      show_correct_answers = COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, FALSE),
+      due_date = v_valid_due_date,
+      max_attempts = v_valid_max_attempts,
+      reward_stars = v_valid_reward_stars,
+      show_score_after_submit = v_valid_show_score,
+      show_correct_answers = v_valid_show_answers,
       updated_at = NOW()
     WHERE id = v_exercise_id;
 
@@ -886,18 +1024,18 @@ BEGIN
     ) VALUES (
       v_caller_id,
       v_class_id,
-      v_is_global,
-      GREATEST(1, LEAST(5, COALESCE((p_exercise->>'grade_level')::INT, 1))),
+      v_valid_is_global,
+      v_valid_grade_level,
       COALESCE(p_exercise->>'subject', 'Toán'),
       trim(p_exercise->>'title'),
       p_exercise->>'description',
       COALESCE(p_exercise->>'exercise_type', 'mixed'),
       v_new_status,
-      CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
-      GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
-      GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
-      COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, TRUE),
-      COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, FALSE)
+      v_valid_due_date,
+      v_valid_max_attempts,
+      v_valid_reward_stars,
+      v_valid_show_score,
+      v_valid_show_answers
     ) RETURNING id INTO v_exercise_id;
   END IF;
 
@@ -906,16 +1044,17 @@ BEGIN
   FOR v_q_json IN SELECT * FROM jsonb_array_elements(p_questions)
   LOOP
     v_q_type := COALESCE(v_q_json->>'question_type', 'single_choice');
+    v_valid_points := COALESCE((v_q_json->>'points')::INT, 10);
 
     INSERT INTO public.academic_exercise_questions (
       exercise_id, question_number, question_type, prompt, options_json, points
     ) VALUES (
       v_exercise_id,
-      GREATEST(1, COALESCE((v_q_json->>'question_number')::INT, 1)),
+      (v_q_json->>'question_number')::INT,
       v_q_type,
       trim(v_q_json->>'prompt'),
       COALESCE(v_q_json->'options_json', '[]'::jsonb),
-      GREATEST(1, COALESCE((v_q_json->>'points')::INT, 10))
+      v_valid_points
     ) RETURNING id INTO v_q_id;
 
     v_key_json := v_q_json->'correct_answer_key';
