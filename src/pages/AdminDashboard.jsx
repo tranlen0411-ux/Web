@@ -119,11 +119,18 @@ export const AdminDashboard = () => {
     
     triggerSound('click');
     try {
-      const { error } = await supabase.from('games').delete().eq('id', gameId);
-      if (error) throw error;
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('delete_game_safely', { p_game_id: gameId });
+      if (rpcErr) throw rpcErr;
+
+      if (rpcRes && rpcRes.success === false) {
+        alert(rpcRes.message);
+        return;
+      }
+
+      alert(rpcRes.message || 'Đã xóa trò chơi thành công.');
       fetchAdminData();
     } catch (err) {
-      alert('Lỗi khi xóa game: ' + err.message);
+      alert('Không thể xóa trò chơi: ' + err.message);
     }
   };
 
