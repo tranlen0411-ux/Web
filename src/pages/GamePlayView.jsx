@@ -12,7 +12,7 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
 import { LEARNING_GAMES_DATA } from '../data/learningGamesData';
 
-// Regex kiểm tra định dạng UUID v4
+// Regex kiểm tra định dạng UUID v4 chính thức
 const IS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export const GamePlayView = () => {
@@ -42,37 +42,23 @@ export const GamePlayView = () => {
       let query = supabase.from('games').select('*');
 
       if (IS_UUID_REGEX.test(id)) {
-        // Truy vấn theo UUID PK chính thức
+        // 1. URL chứa UUID -> Lấy theo ID chính thức
         query = query.eq('id', id);
       } else {
-        // Truy vấn theo slug game_url để luôn lấy UUID thật từ CSDL
+        // 2. URL chứa slug -> Lấy theo game_url trong CSDL để lấy UUID thật
         query = query.eq('game_url', id);
       }
 
       const { data, error } = await query.single();
 
-      if (error || !data) {
-        // Nếu không có trong CSDL nhưng là slug của 10 game học tập (chờ nạp seed)
-        if (LEARNING_GAMES_DATA[id]) {
-          const fallbackConfig = LEARNING_GAMES_DATA[id];
-          setGame({
-            id: null, // Không có UUID thật trong CSDL
-            title: fallbackConfig.title,
-            description: fallbackConfig.instruction,
-            game_type: 'builtin',
-            game_url: id,
-            grade_level: fallbackConfig.grade,
-            subject: fallbackConfig.subject
-          });
-        } else {
-          setGame(null);
-          setNotFound(true);
-        }
+      // CHỈ MỞ GAME KHI SUPABASE TRẢ VỀ BẢN GHI THẬT CÓ GAME.ID LÀ UUID HỢP LỆ
+      if (error || !data || !data.id || !IS_UUID_REGEX.test(data.id)) {
+        // HOÀN TOÀN XÓA ĐOẠN SETGAME WITH ID: NULL FALLBACK
+        // Không tạo game tạm, không đặt id: null, không cho chơi game chưa seed
+        setGame(null);
+        setNotFound(true);
       } else {
-        // Đã tìm thấy bản ghi game thật trong CSDL Supabase
         setGame(data);
-        // HOÀN TOÀN XÓA ĐOẠN UPDATE PLAY_COUNT TRỰC TIẾP TỪ FRONTEND
-        // Lý do: RPC complete_game_and_award đã tăng play_count tự động ở Server-side
       }
     } catch (err) {
       console.error('Fetch game error:', err);
@@ -83,7 +69,7 @@ export const GamePlayView = () => {
     }
   };
 
-  // Xử lý khi hoàn thành trò chơi - CHỈ DÙNG RPC SERVER-SIDE AN TOÀN
+  // Xử lý khi hoàn thành trò chơi - CHỈ GỌI RPC KHI CÓ UUID HỢP LỆ
   const handleGameComplete = async (score = 100, timeSec = 60, paramAssignmentId = null) => {
     const targetAssignmentId = paramAssignmentId || assignmentIdFromUrl || null;
 
@@ -106,18 +92,18 @@ export const GamePlayView = () => {
       };
     }
 
-    // Nếu game chưa nạp seed SQL (thiếu UUID)
+    // Kiểm tra bắt buộc phải có UUID hợp lệ trong CSDL trước khi gọi RPC
     if (!game?.id || !IS_UUID_REGEX.test(game.id)) {
       return {
         success: false,
-        message: 'Trò chơi này chưa được nạp mã UUID chính thức trong CSDL. Thầy/Cô hãy chạy file seed SQL để nạp game nhé!'
+        message: 'Trò chơi chưa có mã UUID hợp lệ trong hệ thống. Thầy/Cô hãy nạp file SQL seed trò chơi nhé!'
       };
     }
 
     try {
       // 2. GỌI RPC SERVER-SIDE AN TOÀN `complete_game_and_award` VỚI UUID THẬT
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('complete_game_and_award', {
-        p_game_id: game.id, // Đảm bảo là UUID hợp lệ
+        p_game_id: game.id, // Luôn là UUID hợp lệ
         p_assignment_id: targetAssignmentId,
         p_score: score,
         p_completion_time_seconds: timeSec
@@ -162,7 +148,7 @@ export const GamePlayView = () => {
           }
         }
 
-        // CHỈ MỞ BADGEMODAL KHI LƯU THÀNH CÔNG VÀ KHÔNG PHẢI XEM THỬ
+        // CHỈ MỜ BADGEMODAL KHI LƯU THÀNH CÔNG VÀ KHÔNG PHẢI XEM THỬ
         setIsBadgeModalOpen(true);
 
         return {
@@ -190,14 +176,14 @@ export const GamePlayView = () => {
     return <LoadingSkeleton type="page" />;
   }
 
-  if (notFound || !game) {
+  if (notFound || !game || !game.id || !IS_UUID_REGEX.test(game.id)) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <div className="bg-white p-8 rounded-3xl border-4 border-amber-300 shadow-xl">
           <AlertCircle className="w-16 h-16 text-amber-500 mx-auto mb-4" />
           <h2 className="text-2xl font-black text-slate-800 mb-2">Không Tìm Thấy Trò Chơi</h2>
           <p className="text-xs font-bold text-slate-500 mb-6">
-            Trò chơi Thầy/Cô hoặc bé chọn không tồn tại hoặc đã bị ẩn khỏi hệ thống.
+            Trò chơi Thầy/Cô hoặc bé chọn không tồn tại hoặc chưa được nạp mã UUID trong CSDL.
           </p>
           <button
             onClick={() => navigate('/student')}
