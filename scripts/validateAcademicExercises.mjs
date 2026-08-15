@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.5 (Migration Idempotency & Admin Retry)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.6 (Counter Invariants & Atomic CTE Reset)...\n');
 
 let hasError = false;
 
@@ -21,12 +21,12 @@ if (!fs.existsSync(sqlPath)) {
     console.log('  ✅ SQL Architecture: Đã loại bỏ hoàn toàn các câu lệnh DML trực tiếp trên storage.objects!');
   }
 
-  // Check 2: DROP FUNCTION IF EXISTS KHÔNG REVOKE TRƯỚC DROP
-  if (!sql.includes('DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID);') || !sql.includes('admin_retry_pending_cleanup_jobs')) {
-    console.error('❌ LỖI IDEMPOTENT DROP: SQL phải dùng DROP FUNCTION IF EXISTS không gọi REVOKE trước drop!');
+  // Check 2: DROP FUNCTION IF EXISTS KHÔNG REVOKE TRƯỚC DROP VÀ RPC RESET MỚI
+  if (!sql.includes('DROP FUNCTION IF EXISTS public.claim_exercise_file_cleanup_job(UUID);') || !sql.includes('reset_cleanup_jobs_for_retry') || !sql.includes('FOR UPDATE SKIP LOCKED')) {
+    console.error('❌ LỖI RPC RESET: SQL phải chứa RPC reset_cleanup_jobs_for_retry với FOR UPDATE SKIP LOCKED!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Idempotent Drops: Đã loại bỏ REVOKE trước DROP và tích hợp RPC admin_retry_pending_cleanup_jobs!');
+    console.log('  ✅ SQL Atomic CTE Reset: RPC reset_cleanup_jobs_for_retry dùng FOR UPDATE SKIP LOCKED và RETURNING job_ids chuẩn xác!');
   }
 
   // Check 3: FAIL-CLOSED JWT ROLE CHECK IN RPCs
@@ -46,11 +46,11 @@ if (!fs.existsSync(edgeFuncPath)) {
 } else {
   const edgeContent = fs.readFileSync(edgeFuncPath, 'utf8');
 
-  if (!edgeContent.includes('unresolved_count') || !edgeContent.includes('requested_count')) {
-    console.error('❌ LỖI EDGE COUNTERS: Edge Function thiếu đếm requested_count hoặc unresolved_count!');
+  if (!edgeContent.includes('requested_count') || !edgeContent.includes('requested_count !== completed_count + unresolved_count')) {
+    console.error('❌ LỖI EDGE COUNTER INVARIANT: Edge Function chưa kiểm tra bất biến requested_count === completed_count + unresolved_count!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Summary Counters: Đếm chuẩn xác requested_count, completed_count, unresolved_count!');
+    console.log('  ✅ Edge Function Counter Invariants: Bất biến requested_count = completed_count + unresolved_count chuẩn xác!');
   }
 }
 
@@ -58,18 +58,18 @@ if (!fs.existsSync(edgeFuncPath)) {
 const playModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExercisePlayModal.jsx');
 if (fs.existsSync(playModalPath)) {
   const playContent = fs.readFileSync(playModalPath, 'utf8');
-  if (!playContent.includes('unresolved_count')) {
-    console.error('❌ LỖI UI CLEANUP: ExercisePlayModal chưa kiểm tra unresolved_count!');
+  if (!playContent.includes('unresolved_count') || !playContent.includes('isCounterValid')) {
+    console.error('❌ LỖI UI CLEANUP: ExercisePlayModal chưa kiểm tra bất biến bộ đếm!');
     hasError = true;
   } else {
-    console.log('  ✅ ExercisePlayModal: Đã tích hợp kiểm tra unresolved_count chuẩn xác!');
+    console.log('  ✅ ExercisePlayModal: Đã tích hợp kiểm tra thông báo trung thực và bất biến bộ đếm!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.5 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.6 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.5 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.6 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

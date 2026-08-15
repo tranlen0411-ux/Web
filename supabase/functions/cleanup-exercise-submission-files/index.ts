@@ -73,8 +73,10 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const jobIds = body?.job_ids;
-    if (!Array.isArray(jobIds) || jobIds.length === 0) {
+    const rawJobIds = Array.isArray(body?.job_ids) ? body.job_ids : [];
+    const requested_count = rawJobIds.length;
+
+    if (requested_count === 0) {
       return new Response(
         JSON.stringify({
           success: true,
@@ -93,7 +95,7 @@ serve(async (req) => {
       );
     }
 
-    if (jobIds.length > 50) {
+    if (requested_count > 50) {
       return new Response(
         JSON.stringify({ success: false, message: 'Payload exceeds maximum limit of 50 job_ids per request' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -102,18 +104,20 @@ serve(async (req) => {
 
     const invalid_job_ids: string[] = [];
     const valid_requested_uuids: string[] = [];
+    const seen_raw_ids = new Set<string>();
 
-    for (const rawId of jobIds) {
+    for (const rawId of rawJobIds) {
+      const strId = String(rawId);
+      if (seen_raw_ids.has(strId)) continue;
+      seen_raw_ids.add(strId);
+
       if (typeof rawId === 'string' && UUID_REGEX.test(rawId)) {
         valid_requested_uuids.push(rawId);
       } else {
-        invalid_job_ids.push(String(rawId));
+        invalid_job_ids.push(strId);
       }
     }
 
-    const uniqueJobIds = Array.from(new Set(valid_requested_uuids));
-
-    // 2. Client Service Role NỘI BỘ dành riêng cho các RPC claim và finish bảo mật
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     const deleted: string[] = [];
@@ -122,7 +126,7 @@ serve(async (req) => {
     const missing_job_ids: string[] = [];
     const failed: Array<{ job_id: string; file_path?: string; reason: string }> = [];
 
-    for (const jobId of uniqueJobIds) {
+    for (const jobId of valid_requested_uuids) {
       // 3. THỰC THI RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB QUA SUPABASEADMIN (SERVICE_ROLE KEY)
       const { data: claimRes, error: claimErr } = await supabaseAdmin.rpc('claim_exercise_file_cleanup_job', {
         p_job_id: jobId,
@@ -154,11 +158,7 @@ serve(async (req) => {
         filePath.length > 500
       ) {
         const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', 'Invalid file path format', user.id);
-        if (!finRes.success) {
-          failed.push({ job_id: jobId, file_path: String(filePath), reason: finRes.errorReason || 'invalid_path_and_finish_failed' });
-        } else {
-          failed.push({ job_id: jobId, file_path: String(filePath), reason: 'invalid_path_format' });
-        }
+        failed.push({ job_id: jobId, file_path: String(filePath), reason: finRes.errorReason || 'invalid_path_format' });
         continue;
       }
 
@@ -176,9 +176,10 @@ serve(async (req) => {
       }
 
       if (refCheck && refCheck.length > 0) {
-        still_referenced.push(filePath);
         const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'still_referenced', null, user.id);
-        if (!finRes.success) {
+        if (finRes.success) {
+          still_referenced.push(filePath);
+        } else {
           failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || 'still_referenced_finish_failed' });
         }
         continue;
@@ -194,7 +195,7 @@ serve(async (req) => {
         const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'failed', removeErr.message, user.id);
         failed.push({ job_id: jobId, file_path: filePath, reason: finRes.errorReason || removeErr.message });
       } else {
-        // 6. GỌI FINISH_EXERCISE_FILE_CLEANUP_JOB QUA SUPABASEADMIN (SERVICE_ROLE KEY)
+        // 6. GỌI FINISH_EXERCISE_FILE_CLEANUP_JOB QUA SUPABASEADMIN (SERVICE_ROLE KEY) FIRST
         const finRes = await finishJobOrReport(supabaseAdmin, jobId, claimedAttempt, 'deleted', null, user.id);
 
         if (!finRes.success) {
@@ -214,19 +215,11 @@ serve(async (req) => {
               supabaseAdmin, jobId, claimedAttempt, 'storage_deleted_job_update_failed', 'Storage deleted but status update failed', user.id
             );
 
-            if (!markRes.success) {
-              failed.push({
-                job_id: jobId,
-                file_path: filePath,
-                reason: 'database_reconciliation_failed'
-              });
-            } else {
-              failed.push({
-                job_id: jobId,
-                file_path: filePath,
-                reason: 'storage_deleted_job_update_failed'
-              });
-            }
+            failed.push({
+              job_id: jobId,
+              file_path: filePath,
+              reason: markRes.success ? 'storage_deleted_job_update_failed' : 'database_reconciliation_failed'
+            });
           }
         } else {
           deleted.push(filePath);
@@ -234,12 +227,17 @@ serve(async (req) => {
       }
     }
 
-    const requested_count = uniqueJobIds.length;
     const completed_count = deleted.length + still_referenced.length;
     const unresolved_count = failed.length + missing_job_ids.length + invalid_job_ids.length + already_claimed.length;
 
-    const overallSuccess = unresolved_count === 0;
+    let overallSuccess = unresolved_count === 0;
     const partialSuccess = completed_count > 0 && unresolved_count > 0;
+
+    // Kiểm tra bất biến số đếm trước khi trả response
+    if (requested_count !== completed_count + unresolved_count) {
+      console.error(`Invariant mismatch: requested (${requested_count}) != completed (${completed_count}) + unresolved (${unresolved_count})`);
+      overallSuccess = false;
+    }
 
     return new Response(
       JSON.stringify({

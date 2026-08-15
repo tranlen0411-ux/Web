@@ -270,13 +270,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
         if (queueErr || !queueRes?.success) {
           console.warn('Queue file cleanup warning:', queueErr || queueRes?.message || queueRes);
-          setWarningMsg('Bài làm đã lưu thành công! Các file cũ chưa dọn dẹp ngay sẽ được lưu trong hàng đợi CSDL.');
+          setWarningMsg('Bài làm đã lưu; một số file cũ đang chờ quản trị viên dọn dẹp.');
         } else {
           const validJobs = queueRes?.jobs || [];
           const validJobIds = validJobs.map(j => j.id).filter(Boolean);
 
           if (queueRes?.rejected?.length > 0 || queueRes?.already_processing?.length > 0) {
-            setWarningMsg('Bài làm đã lưu thành công! Một số file cũ đang được xử lý trong hàng đợi dọn dẹp hệ thống.');
+            setWarningMsg('Bài làm đã lưu; một số file cũ đang được xử lý trong hàng đợi dọn dẹp CSDL.');
           }
 
           if (validJobIds.length > 0) {
@@ -286,10 +286,15 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 body: { job_ids: validJobIds }
               });
 
+              const isCounterValid = edgeRes && typeof edgeRes.requested_count === 'number'
+                ? edgeRes.requested_count === (edgeRes.completed_count || 0) + (edgeRes.unresolved_count || 0)
+                : true;
+
               if (
                 edgeErr ||
                 !edgeRes?.success ||
                 edgeRes?.partial_success ||
+                !isCounterValid ||
                 (edgeRes?.unresolved_count && edgeRes.unresolved_count > 0) ||
                 (edgeRes?.failed && edgeRes.failed.length > 0) ||
                 (edgeRes?.missing_job_ids && edgeRes.missing_job_ids.length > 0) ||
@@ -297,11 +302,11 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 (edgeRes?.already_claimed && edgeRes.already_claimed.length > 0)
               ) {
                 console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
-                setWarningMsg('Bài làm đã lưu thành công! Các file cũ chưa dọn dẹp ngay sẽ được lưu trong hàng đợi CSDL.');
+                setWarningMsg('Bài làm đã lưu; một số file cũ đang chờ quản trị viên dọn dẹp.');
               }
             } catch (efErr) {
               console.error('Invoke cleanup Edge Function exception:', efErr);
-              setWarningMsg('Bài làm đã lưu thành công! Tiến trình dọn dẹp file rác sẽ chạy trong hàng đợi hệ thống.');
+              setWarningMsg('Bài làm đã lưu; một số file cũ đang chờ quản trị viên dọn dẹp.');
             }
           }
         }
