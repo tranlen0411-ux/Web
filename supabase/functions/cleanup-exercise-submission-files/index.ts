@@ -44,7 +44,8 @@ serve(async (req) => {
       );
     }
 
-    const { paths } = await req.json();
+    const body = await req.json();
+    const paths = body?.paths;
     if (!Array.isArray(paths) || paths.length === 0) {
       return new Response(
         JSON.stringify({ success: true, deleted: [], still_referenced: [], failed: [] }),
@@ -75,51 +76,81 @@ serve(async (req) => {
 
     const deleted: string[] = [];
     const still_referenced: string[] = [];
-    const failed: string[] = [];
+    const failed: Array<{ path: string; reason: string }> = [];
 
     for (const filePath of uniquePaths) {
-      // Xác minh học sinh chỉ được yêu cầu xóa file trong thư mục của chính mình
-      if (!isAdmin && !filePath.startsWith(`${user.id}/`)) {
-        failed.push(filePath);
+      // Validate path string an toàn
+      if (
+        typeof filePath !== 'string' ||
+        !filePath.trim() ||
+        filePath.includes('..') ||
+        filePath.startsWith('/') ||
+        filePath.length > 500
+      ) {
+        failed.push({ path: String(filePath), reason: 'invalid_path_format' });
         continue;
       }
 
-      // Kiểm tra tham chiếu CSDL với Service Role bỏ qua RLS hạn chế
-      const { data: refCheck } = await supabaseAdmin
+      // Xác minh học sinh chỉ được yêu cầu xóa file trong thư mục của chính mình
+      if (!isAdmin && !filePath.startsWith(`${user.id}/`)) {
+        failed.push({ path: filePath, reason: 'unauthorized_path_segment' });
+        continue;
+      }
+
+      // Đánh dấu status processing trong hàng đợi cleanup jobs
+      await supabaseAdmin
+        .from('exercise_file_cleanup_jobs')
+        .update({ status: 'processing' })
+        .eq('file_path', filePath);
+
+      // FAIL-CLOSED SECURITY PATTERN: Kiểm tra tham chiếu CSDL với Service Role
+      const { data: refCheck, error: refError } = await supabaseAdmin
         .from('academic_submission_answers')
         .select('id')
         .eq('file_url', filePath);
 
+      // BẤT KỲ LỖI TRUY VẤN CSDL NÀO ĐỀU PHẢI CHẶN VÀ KHÔNG XÓA FILE (FAIL-CLOSED)
+      if (refError) {
+        console.error(`Ref check DB error for ${filePath}:`, refError);
+        failed.push({ path: filePath, reason: 'reference_check_failed' });
+
+        await supabaseAdmin
+          .from('exercise_file_cleanup_jobs')
+          .update({ status: 'failed', last_error: refError.message, processed_at: new Date().toISOString() })
+          .eq('file_path', filePath);
+        continue;
+      }
+
       if (refCheck && refCheck.length > 0) {
         still_referenced.push(filePath);
 
-        // Cập nhật trạng thái job trong bảng hàng đợi
         await supabaseAdmin
           .from('exercise_file_cleanup_jobs')
           .update({ status: 'still_referenced', processed_at: new Date().toISOString() })
           .eq('file_path', filePath);
+        continue;
+      }
+
+      // CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API (KHÔNG DÙNG SQL DELETE METADATA)
+      const { error: removeErr } = await supabaseAdmin.storage
+        .from('exercise-submissions')
+        .remove([filePath]);
+
+      if (removeErr) {
+        console.error(`Storage API remove error for ${filePath}:`, removeErr);
+        failed.push({ path: filePath, reason: removeErr.message });
+
+        await supabaseAdmin
+          .from('exercise_file_cleanup_jobs')
+          .update({ status: 'failed', last_error: removeErr.message, processed_at: new Date().toISOString() })
+          .eq('file_path', filePath);
       } else {
-        // CHÍNH THỨC GỌI SUPABASE STORAGE REMOVE() API (KHÔNG DÙNG SQL DELETE)
-        const { error: removeErr } = await supabaseAdmin.storage
-          .from('exercise-submissions')
-          .remove([filePath]);
+        deleted.push(filePath);
 
-        if (removeErr) {
-          console.error(`Storage API remove error for ${filePath}:`, removeErr);
-          failed.push(filePath);
-
-          await supabaseAdmin
-            .from('exercise_file_cleanup_jobs')
-            .update({ status: 'failed', last_error: removeErr.message, processed_at: new Date().toISOString() })
-            .eq('file_path', filePath);
-        } else {
-          deleted.push(filePath);
-
-          await supabaseAdmin
-            .from('exercise_file_cleanup_jobs')
-            .update({ status: 'deleted', processed_at: new Date().toISOString() })
-            .eq('file_path', filePath);
-        }
+        await supabaseAdmin
+          .from('exercise_file_cleanup_jobs')
+          .update({ status: 'deleted', processed_at: new Date().toISOString() })
+          .eq('file_path', filePath);
       }
     }
 

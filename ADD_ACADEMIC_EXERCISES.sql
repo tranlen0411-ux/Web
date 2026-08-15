@@ -1,10 +1,9 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 14.0 HOÀN THIỆN CHÍNH THỨC
--- 1. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG CÁC SCRIPT SQL (TUÂN THỦ TÀI LIỆU SUPABASE)
--- 2. TẠO BẢNG HÀNG ĐỢI PUBLIC.EXERCISE_FILE_CLEANUP_JOBS VÀ RPC PUBLIC.QUEUE_FILE_CLEANUP
--- 3. EDGE FUNCTION SUPABASE/FUNCTIONS/CLEANUP-EXERCISE-SUBMISSION-FILES DÙNG STORAGE API REMOVE() CHÍNH THỨC
--- 4. VALIDATION ZERO-DML NGHIÊM NGẶT TOÀN BỘ CÂU HỎI & ĐÁP ÁN BÍ MẬT TRƯỚC KHI XÓA/GHI ĐÈ CSDL
--- 5. VALIDATE SỐ NGUYÊN AN TOÀN TRUNC(NUMERIC) = NUMERIC VÀ LENGTH TRONG SUBMIT VÀ SAVE EXERCISE
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 14.1 CHUẨN MỰC BẢO MẬT
+-- 1. SỬA LỖI PHẠM VI CTE CLASSCANDIDATES BẰNG CÁCH GỘP SELECT DÙNG FILTER THỐNG NHẤT
+-- 2. CẬP NHẬT RPC QUEUE_FILE_CLEANUP VỚI ON CONFLICT RESET STATUS 'PENDING' HỢP LỆ VÀ ĐIỀU KIỆN WHERE STATUS != 'PROCESSING'
+-- 3. EDGE FUNCTION FAIL-CLOSED BẢO MẬT: CHỈ XÓA FILE KHI TRUY VẤN CSDL THÀNH CÔNG VÀ KHÔNG CÒN THAM CHIẾU
+-- 4. VALIDATE THỜI ĐIỂM ZERO-DML MẠNH MẼ CHO CÂU HỎI & ĐÁP ÁN BÍ MẬT TRƯỚC KHI DELETE CÂU HỎI CỦ
 -- ============================================================================
 
 BEGIN;
@@ -51,7 +50,7 @@ CREATE TABLE IF NOT EXISTS public.academic_exercises (
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE;
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE;
 
--- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION
+-- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION (CÁCH A: DÙNG CÙNG MỘT SELECT VỚI FILTER BẢO ĐẢM PHẠM VI CTE)
 DO $$
 DECLARE
   v_ambiguous_json JSONB;
@@ -78,19 +77,15 @@ BEGIN
       WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE
       GROUP BY e.id, e.title, e.class_name, e.is_global
     )
-    SELECT jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name, 'matched_count', matched_count, 'candidates', candidates))
-    INTO v_ambiguous_json
-    FROM ClassCandidates
-    WHERE matched_count > 1;
+    SELECT 
+      jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name, 'matched_count', matched_count, 'candidates', candidates)) FILTER (WHERE matched_count > 1),
+      jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name)) FILTER (WHERE matched_count = 0)
+    INTO v_ambiguous_json, v_unmapped_json
+    FROM ClassCandidates;
 
     IF v_ambiguous_json IS NOT NULL AND jsonb_array_length(v_ambiguous_json) > 0 THEN
       RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện danh sách bài tập khớp với nhiều hơn 1 Lớp học mơ hồ: %', v_ambiguous_json;
     END IF;
-
-    SELECT jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name))
-    INTO v_unmapped_json
-    FROM ClassCandidates
-    WHERE matched_count = 0;
 
     IF v_unmapped_json IS NOT NULL AND jsonb_array_length(v_unmapped_json) > 0 THEN
       RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện các bài tập không tìm thấy Lớp học tương ứng: %', v_unmapped_json;
@@ -360,7 +355,7 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
--- 1. RPC QUEUE_FILE_CLEANUP (KHÔNG DÙNG DELETE SQL TRÊN STORAGE.OBJECTS METADATA)
+-- 1. RPC QUEUE_FILE_CLEANUP VỚI ON CONFLICT TRỞ VỀ PENDING VÀ ĐIỀU KIỆN KHI JOB KHÔNG PHẢI PROCESSING
 CREATE OR REPLACE FUNCTION public.queue_file_cleanup(
   p_paths TEXT[]
 )
@@ -399,13 +394,18 @@ BEGIN
     END IF;
 
     INSERT INTO public.exercise_file_cleanup_jobs (
-      bucket_id, file_path, requested_by, status
+      bucket_id, file_path, requested_by, status, attempts, last_error, processed_at
     ) VALUES (
-      'exercise-submissions', v_path, v_caller_id, 'pending'
+      'exercise-submissions', v_path, v_caller_id, 'pending', 0, NULL, NULL
     )
     ON CONFLICT (file_path) DO UPDATE SET
       requested_by = EXCLUDED.requested_by,
-      created_at = NOW();
+      status = 'pending',
+      attempts = 0,
+      last_error = NULL,
+      processed_at = NULL,
+      created_at = NOW()
+    WHERE public.exercise_file_cleanup_jobs.status != 'processing';
 
     v_queued := array_append(v_queued, v_path);
   END LOOP;
