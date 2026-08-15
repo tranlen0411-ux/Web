@@ -345,7 +345,7 @@ FOR SELECT USING (
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e 
     JOIN public.classes c ON c.id = e.class_id
-    WHERE e.id = s.exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
+    WHERE e.id = exercise_id AND (e.teacher_id = auth.uid() OR c.teacher_id = auth.uid())
   )
 );
 
