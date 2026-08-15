@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Award, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload, Save, Eye, History } from 'lucide-react';
+import { X, Send, CheckCircle2, Clock, FileText, AlertCircle, Loader2, Star, Upload, Save, Eye, History } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -23,19 +23,68 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     fetchQuestionsAndSubmissions();
   }, [exercise.id]);
 
+  // NẠP DỮ LIỆU ĐÚNG LƯỢT ĐƯỢC CHỌN TRONG LỊCH SỬ NỘP BÀI
+  const loadSubmissionDetails = async (sub, allQuestions) => {
+    setSubmission(sub);
+    const ansMap = {};
+    const fileMap = {};
+    const signedMap = {};
+
+    if (sub && sub.academic_submission_answers) {
+      for (const a of sub.academic_submission_answers) {
+        ansMap[a.question_id] = a.student_answer_json;
+        if (a.file_url) {
+          fileMap[a.question_id] = a.file_url;
+          try {
+            const { data: signedData } = await supabase.storage
+              .from('exercise-submissions')
+              .createSignedUrl(a.file_url, 900);
+            if (signedData?.signedUrl) {
+              signedMap[a.question_id] = signedData.signedUrl;
+            }
+          } catch (e) {
+            console.error('Signed URL error:', e);
+          }
+        }
+      }
+    }
+
+    setAnswers(ansMap);
+    setFileUrls(fileMap);
+    setSignedUrlsMap(signedMap);
+
+    // Kiểm tra cờ show_correct_answers
+    if (exercise.show_correct_answers && sub && ['submitted', 'pending_manual_grade', 'graded'].includes(sub.status)) {
+      const { data: keyRes } = await supabase.rpc('get_submission_correct_answers', {
+        p_submission_id: sub.id
+      });
+
+      if (keyRes?.success && keyRes.answers) {
+        const keyMap = {};
+        keyRes.answers.forEach(k => {
+          keyMap[k.question_id] = k.correct_answer;
+        });
+        setCorrectAnswersMap(keyMap);
+      }
+    } else {
+      setCorrectAnswersMap({});
+    }
+  };
+
   const fetchQuestionsAndSubmissions = async () => {
     setLoading(true);
     try {
-      // 1. Lấy danh sách câu hỏi công khai (khôngSELECT app_private)
+      // 1. Lấy danh sách câu hỏi
       const { data: qData } = await supabase
         .from('academic_exercise_questions')
         .select('*')
         .eq('exercise_id', exercise.id)
         .order('question_number', { ascending: true });
 
-      if (qData) setQuestions(qData);
+      const loadedQuestions = qData || [];
+      setQuestions(loadedQuestions);
 
-      // 2. Lấy tất cả các lượt nộp bài của học sinh (HỖ TRỢ MAX_ATTEMPTS > 1, KHÔNG DÙNG MAYBESINGLE)
+      // 2. Lấy tất cả lượt nộp bài của học sinh
       const { data: subData } = await supabase
         .from('academic_submissions')
         .select('*, academic_submission_answers(*)')
@@ -45,52 +94,8 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       if (subData && subData.length > 0) {
         setSubmissionsList(subData);
-
-        // Lấy lượt nháp hoặc lượt mới nhất
         const activeSub = subData.find(s => s.status === 'draft' || s.status === 'revision_requested') || subData[0];
-        setSubmission(activeSub);
-
-        const ansMap = {};
-        const fileMap = {};
-        const signedMap = {};
-
-        if (activeSub.academic_submission_answers) {
-          for (const a of activeSub.academic_submission_answers) {
-            ansMap[a.question_id] = a.student_answer_json;
-            if (a.file_url) {
-              fileMap[a.question_id] = a.file_url;
-              try {
-                const { data: signedData } = await supabase.storage
-                  .from('exercise-submissions')
-                  .createSignedUrl(a.file_url, 900);
-                if (signedData?.signedUrl) {
-                  signedMap[a.question_id] = signedData.signedUrl;
-                }
-              } catch (e) {
-                console.error('Signed URL error:', e);
-              }
-            }
-          }
-        }
-
-        setAnswers(ansMap);
-        setFileUrls(fileMap);
-        setSignedUrlsMap(signedMap);
-
-        // Nếu được phép xem đáp án đúng sau khi nộp -> gọi RPC an toàn get_submission_correct_answers
-        if (exercise.show_correct_answers && ['submitted', 'pending_manual_grade', 'graded'].includes(activeSub.status)) {
-          const { data: keyRes } = await supabase.rpc('get_submission_correct_answers', {
-            p_submission_id: activeSub.id
-          });
-
-          if (keyRes?.success && keyRes.answers) {
-            const keyMap = {};
-            keyRes.answers.forEach(k => {
-              keyMap[k.question_id] = k.correct_answer;
-            });
-            setCorrectAnswersMap(keyMap);
-          }
-        }
+        await loadSubmissionDetails(activeSub, loadedQuestions);
       }
     } catch (err) {
       console.error('Fetch submission error:', err);
@@ -99,7 +104,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     }
   };
 
-  // Upload file bài làm vào PATH CHUẨN: {student_id}/{submission_id}/{uuid}_{clean_filename}
   const handleFileUpload = async (questionId, file) => {
     if (!file) return;
 
@@ -117,7 +121,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
     setUploadingQId(questionId);
     try {
-      // 1. TẠO HOẶC LẤY DRAFT SUBMISSION ID AN TOÀN TRƯỚC KHI UPLOAD STORAGE
       let currentSubId = submission?.id;
       if (!currentSubId) {
         const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
@@ -133,7 +136,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         currentSubId = draftRes.submission_id;
       }
 
-      // 2. PATH CHUẨN STORAGE RLS: {student_id}/{submission_id}/{uuid}_{clean_filename}
       const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const filePath = `${profile.id}/${currentSubId}/${crypto.randomUUID()}_${cleanName}`;
 
@@ -160,7 +162,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     }
   };
 
-  // Nộp bài làm hoặc Lưu bản nháp qua RPC submit_academic_exercise
   const handleSubmitExercise = async (isDraft = false) => {
     setIsSubmitting(true);
     setSubmitResult(null);
@@ -199,7 +200,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   if (!exercise) return null;
 
   const isGraded = submission?.status === 'graded';
-  const isSubmitted = submission?.status === 'submitted' || submission?.status === 'pending_manual_grade';
   const isRevisionRequested = submission?.status === 'revision_requested';
   const canEdit = !submission || submission.status === 'draft' || isRevisionRequested;
 
@@ -247,7 +247,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 {submissionsList.map(s => (
                   <button
                     key={s.id}
-                    onClick={() => setSubmission(s)}
+                    onClick={() => loadSubmissionDetails(s, questions)}
                     className={`px-2.5 py-1 rounded-lg font-bold text-[11px] ${submission?.id === s.id ? 'bg-amber-500 text-white' : 'bg-white text-slate-600 border border-slate-300'}`}
                   >
                     Lượt {s.attempt_number} ({s.status})
@@ -312,7 +312,6 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       </span>
                     </div>
 
-                    {/* SHOW CORRECT ANSWER NẾU CÓ CỜ SHOW_CORRECT_ANSWERS SAU KHI NỘP */}
                     {correctAnswerKey && (
                       <div className="p-2.5 bg-emerald-100/70 border border-emerald-300 rounded-xl text-xs font-bold text-emerald-900">
                         ✅ Đáp án đúng của hệ thống: <strong>{JSON.stringify(correctAnswerKey)}</strong>
@@ -405,7 +404,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                       ></textarea>
                     )}
 
-                    {/* 6 & 7. NỘP FILE BÀI LÀM VỚI PATH AN TOÀN */}
+                    {/* 6 & 7. NỘP FILE BÀI LÀM */}
                     {(q.question_type === 'image_upload' || q.question_type === 'file_upload') && (
                       <div className="space-y-2">
                         {canEdit && (
