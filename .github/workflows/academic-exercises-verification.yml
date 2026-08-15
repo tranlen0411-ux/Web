@@ -59,21 +59,39 @@ jobs:
         run: |
           deno check supabase/functions/cleanup-exercise-submission-files/index.ts
 
-      - name: Start Supabase Local Containers
+      - name: Start Supabase Local Containers Safely
         run: |
-          supabase start
+          echo "Starting Supabase local stack (output redirected to sanitize secrets)..."
+          supabase start > /tmp/supabase_start_raw.log 2>&1 || (cat /tmp/supabase_start_raw.log | grep -i "error" | grep -v "key" && exit 1)
+          echo "✅ Supabase local containers started successfully on 127.0.0.1!"
 
-      - name: Mask Connection Credentials in Logs
+      - name: Run SQL Migration Test A, Test B & Post-Migration Verification Assertions
         run: |
-          echo "::add-mask::postgres"
-          echo "::add-mask::127.0.0.1"
-
-      - name: Run SQL Migration Test A, Test B & Verification Assertions
-        run: |
-          chmod +x scripts/ci/verifyAcademicExercisesMigration.sh
+          chmod +x scripts/ci/*.sh
           ./scripts/ci/verifyAcademicExercisesMigration.sh
+
+      - name: Run Parallel Postgres Concurrency Claim & Reset Tests
+        run: |
+          ./scripts/ci/verifyAcademicExercisesConcurrency.sh
+
+      - name: Run Local Edge Function Integration Tests
+        run: |
+          ./scripts/ci/verifyAcademicExercisesEdgeFunction.sh
+
+      - name: Generate Sanitized Artifact Report
+        if: always()
+        run: |
+          node scripts/ci/generateSanitizedReport.js
+
+      - name: Upload Verification Summary Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: academic-exercises-verification-summary
+          path: artifacts/academic-exercises-verification-summary.json
+          retention-days: 7
 
       - name: Stop Local Supabase Containers
         if: always()
         run: |
-          supabase stop --no-backup
+          supabase stop --no-backup || true
