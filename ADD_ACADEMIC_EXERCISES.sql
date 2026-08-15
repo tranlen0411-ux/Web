@@ -1,10 +1,10 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 10.0 HOÀN HẢO
--- 1. BẮT BỘC V_SUBMISSION_ID THỰC TẾ TRƯỚC KHI NỘP BẤT KỲ FILE NÀO (TỪ CHỐI IF V_SUBMISSION_ID IS NULL)
--- 2. SO SÁNH NGUYÊN TỬ VÀ CHUẨN HÓA ANSWER KEYS (ESSAY/FILE UPLOAD KHÔNG SO SÁNH DUMMY KEY)
--- 3. 2-PHASE ZERO-DML VALIDATION TRONG GRADE_ACADEMIC_SUBMISSION (TỪ CHỐI TOÀN BỘ NẾU CHỨA CÂU KHÔNG HỢP LỆ)
--- 4. SERVER-SIDE STATE TRANSITION ALLOW-LIST NGHIÊM NGẶT CHO THUỘC TÍNH STATUS BÀI TẬP
--- 5. REWARD_APPLIED_AT BẤT BIẾN CHỐNG CỘNG SAO LẦN HAI VÀ VALIDATE TRƯỚC KHI DELETE CÂU HỎI CỦ
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 11.0 CHUẨN MỰC
+-- 1. BẮT BỘC V_SUBMISSION_ID THỰC TẾ VÀ KIỂM TRA ĐỐI CHIẾU OPTIONS_JSON TRÊN SERVER KHI SUBMIT
+-- 2. SO SÁNH NGUYÊN TỬ CẢ CẤU TRÚC LẪN ANSWER KEYS BÍ MẬT CHUẨN HÓA TRONG SAVE_EXERCISE
+-- 3. 2-PHASE ZERO-DML VALIDATION TRONG GRADE_ACADEMIC_SUBMISSION (TỪ CHỐI NẾU POINTS_EARNED SAI KIỂU HOẶC CÓ CÂU TRẮC NGHIỆM)
+-- 4. SERVER-SIDE STATE TRANSITION ALLOW-LIST NGHIÊM NGẶT CHO STATUS BÀI TẬP
+-- 5. PHÂN QUYỀN VÀ REWARD_APPLIED_AT BẤT BIẾN CHỐNG CỘNG SAO LẦN HAI
 -- ============================================================================
 
 BEGIN;
@@ -540,7 +540,7 @@ END;
 $$;
 
 
--- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI NGUYÊN TẮC ZERO-DESTRUCTIVE CHUẨN HÓA ANSWER KEYS
+-- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI NGUYÊN TẮC ZERO-DESTRUCTIVE VÀ CHUẨN HÓA ANSWER KEYS CẤU TRÚC
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -825,6 +825,7 @@ DECLARE
   v_file_exists BOOLEAN := FALSE;
   v_total_questions_count INT := 0;
   v_has_any_file BOOLEAN := FALSE;
+  v_opt_match BOOLEAN := FALSE;
 BEGIN
   -- =========================================================================
   -- PHASE 1: ZERO-DML VALIDATION PHASE (KHÔNG CHẠY LỆNH INSERT/UPDATE/DELETE NÀO)
@@ -905,7 +906,7 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn phải trả lời đầy đủ chính xác tất cả câu hỏi trước khi nộp bài chính thức.');
   END IF;
 
-  -- 1.7 Kiểm tra từng câu trả lời trong p_answers VÀ xác minh file Storage
+  -- 1.7 Kiểm tra từng câu trả lời trong p_answers VÀ xác minh file Storage & Options JSON DB
   FOR v_ans_item IN SELECT * FROM jsonb_array_elements(p_answers)
   LOOP
     BEGIN
@@ -927,7 +928,7 @@ BEGIN
     v_student_ans := v_ans_item->'answer';
     v_file_url := v_ans_item->>'file_url';
 
-    -- Đánh giá theo loại câu hỏi
+    -- Đánh giá theo loại câu hỏi và ĐỐI CHIẾU THỰC TẾ VỚI OPTIONS_JSON TRONG CSDL
     IF v_q.question_type = 'single_choice' THEN
       IF NOT p_is_draft AND (v_student_ans IS NULL OR jsonb_typeof(v_student_ans) = 'null') THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa chọn đáp án trắc nghiệm.');
@@ -935,12 +936,30 @@ BEGIN
       IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) != 'string' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án câu hỏi trắc nghiệm đơn phải là một chuỗi chữ.');
       END IF;
+      IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) = 'string' THEN
+        SELECT EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(v_q.options_json) opt WHERE opt = (v_student_ans#>>'{}')
+        ) INTO v_opt_match;
+        IF NOT v_opt_match THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án trắc nghiệm đơn được chọn không thuộc danh sách lựa chọn của câu hỏi.');
+        END IF;
+      END IF;
+
     ELSIF v_q.question_type = 'multiple_choice' THEN
       IF NOT p_is_draft AND (v_student_ans IS NULL OR jsonb_typeof(v_student_ans) != 'array' OR jsonb_array_length(v_student_ans) = 0) THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn chưa chọn đáp án cho câu hỏi trắc nghiệm nhiều lựa chọn.');
       END IF;
       IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) != 'array' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án câu hỏi nhiều lựa chọn phải là một mảng JSON.');
+      END IF;
+      IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) = 'array' THEN
+        SELECT NOT EXISTS (
+          SELECT elem FROM jsonb_array_elements_text(v_student_ans) elem
+          WHERE elem NOT IN (SELECT jsonb_array_elements_text(v_q.options_json))
+        ) INTO v_opt_match;
+        IF NOT v_opt_match THEN
+          RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Phát hiện lựa chọn trong câu trắc nghiệm không thuộc danh sách lựa chọn hợp lệ.');
+        END IF;
       END IF;
     END IF;
 
@@ -1126,6 +1145,7 @@ DECLARE
   v_updated_rows INT;
   v_seen_q_ids UUID[] := ARRAY[]::UUID[];
   v_curr_q_id UUID;
+  v_sub_ans_exists BOOLEAN := FALSE;
 BEGIN
   -- =========================================================================
   -- PHASE 1: ZERO-DML VALIDATION PHASE (KHÔNG CHẠY LỆNH UPDATE NÀO)
@@ -1185,6 +1205,21 @@ BEGIN
       IF v_q_type NOT IN ('essay', 'image_upload', 'file_upload') THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ được chấm thủ công các câu hỏi tự luận hoặc nộp file.');
       END IF;
+
+      -- XÁC MINH CÂU TRẢ LỜI CÓ TỒN TẠI TRONG BÀI NỘP NÀY KHÔNG
+      SELECT EXISTS (
+        SELECT 1 FROM public.academic_submission_answers 
+        WHERE submission_id = p_submission_id AND question_id = v_curr_q_id
+      ) INTO v_sub_ans_exists;
+
+      IF NOT v_sub_ans_exists THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bản ghi câu trả lời không tồn tại trong bài nộp.');
+      END IF;
+
+      -- KIỂM TRA ĐIỂM SỐ PHẢI LÀ SỐ NGUYÊN HỢP LỆ VÀ NẰM TRONG KHOẢNG 0..POINTS
+      IF (v_grade_item->>'points_earned') IS NULL OR (v_grade_item->>'points_earned')::INT < 0 OR (v_grade_item->>'points_earned')::INT > COALESCE(v_q_points, 10) THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm cho câu hỏi không hợp lệ hoặc vượt quá điểm tối đa.');
+      END IF;
     END LOOP;
   END IF;
 
@@ -1199,7 +1234,7 @@ BEGIN
       WHERE id = (v_grade_item->>'question_id')::UUID AND exercise_id = v_sub.exercise_id;
 
       IF v_q_type IN ('essay', 'image_upload', 'file_upload') THEN
-        v_item_points := GREATEST(0, LEAST(COALESCE(v_q_points, 10), COALESCE((v_grade_item->>'points_earned')::INT, 0)));
+        v_item_points := (v_grade_item->>'points_earned')::INT;
 
         UPDATE public.academic_submission_answers
         SET

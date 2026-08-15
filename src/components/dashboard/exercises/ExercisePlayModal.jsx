@@ -15,16 +15,15 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const [fileUrlsMap, setFileUrlsMap] = useState({});
   const [signedUrlsMap, setSignedUrlsMap] = useState({});
 
-  // DÙNG USEREF ĐỂ TRÁNH ASYNCHRONOUS STATE RACE CONDITION KHI ROLLBACK FILE
-  const newlyUploadedPathsRef = useRef([]);
-  const pendingOldFileDeletionsRef = useRef([]);
-  const previousFileUrlsMapRef = useRef({});
-  const previousSignedUrlsMapRef = useRef({});
+  // QUẢN LÝ BASELINE VÀ TẤT CẢ FILE MỚI TRONG PHIÊN BẰNG USEREF
+  const baselineFilesRef = useRef({}); // { [qId]: { path, signedUrl } }
+  const newFilesByQuestionRef = useRef({}); // { [qId]: [path1, path2...] }
 
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [warningMsg, setWarningMsg] = useState('');
   const [successResult, setSuccessResult] = useState(null);
 
   const [historySubmissions, setHistorySubmissions] = useState([]);
@@ -70,7 +69,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
           populateAnswersFromSubmission(lastSub, qData);
         }
       } else {
-        // BẮT BỘC TẠO DRAFT TỪ CRATE_OR_GET_SUBMISSION_DRAFT TRƯỚC KHI CHO NỘP FILE
+        // BẮT BỘC TẠO DRAFT TỪ CREATE_OR_GET_SUBMISSION_DRAFT TRƯỚC KHI CHO NỘP FILE
         const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
           p_exercise_id: exercise.id
         });
@@ -94,6 +93,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     const initAns = {};
     const initFiles = {};
     const signedMap = {};
+    const baselines = {};
 
     if (subObj.academic_submission_answers) {
       for (const ans of subObj.academic_submission_answers) {
@@ -102,6 +102,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         }
         if (ans.file_url) {
           initFiles[ans.question_id] = ans.file_url;
+
           try {
             const { data: signRes } = await supabase.storage
               .from('exercise-submissions')
@@ -112,6 +113,11 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
           } catch (e) {
             console.error('Sign URL error:', e);
           }
+
+          baselines[ans.question_id] = {
+            path: ans.file_url,
+            signedUrl: signedMap[ans.question_id] || ''
+          };
         }
       }
     }
@@ -119,28 +125,36 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     setAnswersMap(initAns);
     setFileUrlsMap(initFiles);
     setSignedUrlsMap(signedMap);
-    previousFileUrlsMapRef.current = { ...initFiles };
-    previousSignedUrlsMapRef.current = { ...signedMap };
+    baselineFilesRef.current = baselines;
+    newFilesByQuestionRef.current = {};
   };
 
-  // QUY TRÌNH THAY FILE NGUYÊN TỬ: BƯỚC 1 UPLOAD FILE MỚI, BƯỚC 2 BẢO TỒN FILE CŨ
+  // QUY TRÌNH THAY FILE NGUYÊN TỬ VỚI BIẾN CỤC BỘ DRAFT SUBMISSION ID
   const handleFileUpload = async (qId, file) => {
-    if (!submissionId) {
-      alert('Chưa có lượt làm bài (submission_id). Đang tự động khởi tạo...');
-      const { data: draftRes } = await supabase.rpc('create_or_get_submission_draft', {
-        p_exercise_id: exercise.id
-      });
-      if (draftRes?.submission_id) {
-        setSubmissionId(draftRes.submission_id);
-      } else {
-        alert('Không thể tạo lượt nộp bài.');
+    let currentSubId = submissionId;
+
+    if (!currentSubId) {
+      setSubmitting(true);
+      try {
+        const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
+          p_exercise_id: exercise.id
+        });
+        if (draftErr || !draftRes?.success || !draftRes?.submission_id) {
+          alert('Không thể tạo lượt làm bài nháp: ' + (draftErr?.message || draftRes?.message));
+          setSubmitting(false);
+          return;
+        }
+        currentSubId = draftRes.submission_id;
+        setSubmissionId(currentSubId);
+      } catch (e) {
+        alert('Lỗi khởi tạo lượt làm nháp.');
+        setSubmitting(false);
         return;
       }
     }
 
-    const currentSubId = submissionId;
-    const fileExt = file.name.split('.').pop();
-    const filePath = `${profile.id}/${currentSubId}/${qId}_${Date.now()}.${fileExt}`;
+    const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = `${profile.id}/${currentSubId}/${qId}_${Date.now()}_${cleanFileName}`;
 
     setSubmitting(true);
     try {
@@ -152,21 +166,15 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
       if (uploadErr) throw uploadErr;
 
       const newFilePath = uploadData.path;
-      newlyUploadedPathsRef.current.push(newFilePath);
-
-      // 2. Giữ nguyên file cũ trong CSDL và Storage (chưa xóa)
-      const oldPath = fileUrlsMap[qId];
-      if (oldPath && oldPath !== newFilePath) {
-        pendingOldFileDeletionsRef.current.push(oldPath);
+      if (!newFilesByQuestionRef.current[qId]) {
+        newFilesByQuestionRef.current[qId] = [];
       }
+      newFilesByQuestionRef.current[qId].push(newFilePath);
 
-      // 3. Tạo Signed URL xem trước
+      // 2. Tạo Signed URL xem trước
       const { data: signData } = await supabase.storage
         .from('exercise-submissions')
         .createSignedUrl(newFilePath, 900);
-
-      previousFileUrlsMapRef.current = { ...fileUrlsMap };
-      previousSignedUrlsMapRef.current = { ...signedUrlsMap };
 
       setFileUrlsMap(prev => ({ ...prev, [qId]: newFilePath }));
       if (signData?.signedUrl) {
@@ -181,11 +189,20 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     }
   };
 
+  const getAllNewPaths = () => {
+    const paths = [];
+    Object.values(newFilesByQuestionRef.current).forEach(arr => {
+      if (Array.isArray(arr)) paths.push(...arr);
+    });
+    return Array.from(new Set(paths));
+  };
+
   const handleSaveOrSubmit = async (isDraft = false) => {
     if (submitting) return;
 
     setSubmitting(true);
     setErrorMsg('');
+    setWarningMsg('');
 
     try {
       const formattedAnswers = questions.map(q => ({
@@ -194,45 +211,90 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         file_url: fileUrlsMap[q.id] || null
       }));
 
-      // BƯỚC 3: GỌI RPC NỘP/LƯU BÀI VỚI FILE MỚI
+      // GỌI RPC NỘP/LƯU BÀI VỚI FILE MỚI
       const { data: submitRes, error: submitErr } = await supabase.rpc('submit_academic_exercise', {
         p_exercise_id: exercise.id,
         p_answers: formattedAnswers,
         p_is_draft: isDraft
       });
 
-      // BƯỚC 4: XỬ LÝ THEO KẾT QUẢ RPC
       if (submitErr || !submitRes?.success) {
-        // NẾU RPC THẤT BẠI: Xóa file mới, khôi phục UI về file cũ!
-        if (newlyUploadedPathsRef.current.length > 0) {
+        // NẾU RPC THẤT BẠI: Xóa tất cả file mới chưa commit, khôi phục UI về DB baseline!
+        const allNew = getAllNewPaths();
+        if (allNew.length > 0) {
           const { error: removeErr } = await supabase.storage
             .from('exercise-submissions')
-            .remove(newlyUploadedPathsRef.current);
-          if (removeErr) console.error('Remove newly uploaded paths error:', removeErr);
+            .remove(allNew);
+          if (removeErr) console.error('Remove new files error:', removeErr);
         }
 
-        // Khôi phục UI về trạng thái file cũ
-        setFileUrlsMap({ ...previousFileUrlsMapRef.current });
-        setSignedUrlsMap({ ...previousSignedUrlsMapRef.current });
+        // Khôi phục UI về DB baseline
+        const restoredFiles = {};
+        const restoredSigned = {};
+        Object.keys(baselineFilesRef.current).forEach(qId => {
+          restoredFiles[qId] = baselineFilesRef.current[qId].path;
+          restoredSigned[qId] = baselineFilesRef.current[qId].signedUrl;
+        });
 
-        newlyUploadedPathsRef.current = [];
-        pendingOldFileDeletionsRef.current = [];
+        setFileUrlsMap(restoredFiles);
+        setSignedUrlsMap(restoredSigned);
+        newFilesByQuestionRef.current = {};
         throw new Error(submitErr?.message || submitRes?.message || 'Lỗi khi nộp bài tập.');
       }
 
-      // NẾU RPC THÀNH CÔNG: Mới xóa các file cũ bị thay thế!
-      if (pendingOldFileDeletionsRef.current.length > 0) {
-        const { error: removeOldErr } = await supabase.storage
-          .from('exercise-submissions')
-          .remove(pendingOldFileDeletionsRef.current);
-        if (removeOldErr) console.error('Remove old replaced paths error:', removeOldErr);
+      // NẾU RPC THÀNH CÔNG: Xóa file mới trung gian & dọn dẹp file baseline cũ nếu không được tham chiếu khác
+      const oldDeletions = [];
+      Object.keys(newFilesByQuestionRef.current).forEach(qId => {
+        const arr = newFilesByQuestionRef.current[qId];
+        if (arr && arr.length > 1) {
+          // Xóa các file trung gian trừ file cuối cùng vừa commit
+          oldDeletions.push(...arr.slice(0, arr.length - 1));
+        }
+        const oldBase = baselineFilesRef.current[qId]?.path;
+        const currentCommittedPath = fileUrlsMap[qId];
+        if (oldBase && oldBase !== currentCommittedPath) {
+          oldDeletions.push(oldBase);
+        }
+      });
+
+      const uniqueDeletions = Array.from(new Set(oldDeletions));
+      if (uniqueDeletions.length > 0) {
+        // Lọc kiểm tra xem file cũ có đang được lượt nộp khác tham chiếu không
+        const safeDeletions = [];
+        for (const oldPath of uniqueDeletions) {
+          const { data: refCheck } = await supabase
+            .from('academic_submission_answers')
+            .select('id')
+            .eq('file_url', oldPath);
+          if (!refCheck || refCheck.length <= 1) {
+            safeDeletions.push(oldPath);
+          }
+        }
+
+        if (safeDeletions.length > 0) {
+          const { error: removeOldErr } = await supabase.storage
+            .from('exercise-submissions')
+            .remove(safeDeletions);
+          
+          if (removeOldErr) {
+            console.error('Remove old files error:', removeOldErr);
+            setWarningMsg('Bài làm đã được lưu thành công, nhưng file cũ chưa dọn được khỏi Storage. Quản trị viên sẽ dọn dẹp file rác.');
+          }
+        }
       }
 
-      // Cập nhật mảng tham chiếu cũ
-      previousFileUrlsMapRef.current = { ...fileUrlsMap };
-      previousSignedUrlsMapRef.current = { ...signedUrlsMap };
-      newlyUploadedPathsRef.current = [];
-      pendingOldFileDeletionsRef.current = [];
+      // Cập nhật baseline mới thành các file vừa commit
+      const newBaseline = {};
+      Object.keys(fileUrlsMap).forEach(qId => {
+        if (fileUrlsMap[qId]) {
+          newBaseline[qId] = {
+            path: fileUrlsMap[qId],
+            signedUrl: signedUrlsMap[qId] || ''
+          };
+        }
+      });
+      baselineFilesRef.current = newBaseline;
+      newFilesByQuestionRef.current = {};
 
       if (isDraft) {
         alert('Đã lưu bản nháp bài làm thành công!');
@@ -249,12 +311,12 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   };
 
   const handleCloseModal = async () => {
-    // Chỉ xóa newlyUploadedPaths nếu đóng modal mà CHƯA bấm Lưu/Nộp bài thành công!
-    if (newlyUploadedPathsRef.current.length > 0 && !successResult) {
+    const allNew = getAllNewPaths();
+    if (allNew.length > 0 && !successResult) {
       try {
         const { error: removeErr } = await supabase.storage
           .from('exercise-submissions')
-          .remove(newlyUploadedPathsRef.current);
+          .remove(allNew);
         if (removeErr) console.error('Cleanup newly uploaded files on close error:', removeErr);
       } catch (err) {
         console.error('Rollback session files exception:', err);
@@ -353,6 +415,13 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
               <div className="p-3 bg-rose-50 border border-rose-300 text-rose-800 rounded-xl text-xs font-bold flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
                 <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {warningMsg && (
+              <div className="p-3 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>{warningMsg}</span>
               </div>
             )}
 
