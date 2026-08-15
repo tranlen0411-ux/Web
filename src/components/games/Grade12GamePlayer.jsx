@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Trophy, RotateCcw, ArrowLeft, Volume2, VolumeX, Sparkles, 
+  Trophy, RotateCcw, Volume2, VolumeX, 
   CheckCircle2, XCircle, Play, Star, HelpCircle, AlertCircle, Loader2, MoveRight
 } from 'lucide-react';
 import { useSound } from '../../context/SoundContext';
@@ -31,6 +31,8 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
 
   const startTimeRef = useRef(null);
   const completedRef = useRef(false);
+  // Lưu điểm số và thời gian hoàn thành cố định ngay lúc kết thúc game để tái sử dụng khi retry
+  const lastCompletedDataRef = useRef({ finalScore: 100, totalSec: 60 });
 
   // Khởi tạo lượt chơi mới
   const startNewGame = () => {
@@ -157,6 +159,9 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
     const totalSec = Math.max(10, Math.floor((Date.now() - (startTimeRef.current || Date.now())) / 1000));
     const finalScore = Math.round((correctCount / Math.max(1, questions.length)) * 100);
 
+    // LƯU CỐ ĐỊNH ĐIỂM SỐ VÀ THỜI GIAN NGAY LÚC KẾT THÚC CÂU CUỐI CÙNG
+    lastCompletedDataRef.current = { finalScore, totalSec };
+
     if (onComplete) {
       const res = await onComplete(finalScore, totalSec, assignmentId);
       setIsSubmitting(false);
@@ -177,14 +182,13 @@ export const Grade12GamePlayer = ({ gameKey, onComplete, assignmentId = null }) 
     }
   };
 
-  // Thử lưu kết quả lại khi bị lỗi mạng/RPC
+  // Thử lưu kết quả lại khi bị lỗi mạng/RPC (TÁI SỬ DỤNG ĐÚNG THỜI GIAN VÀ ĐIỂM SỐ ĐÃ LƯU)
   const handleRetrySave = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
     setSaveResult(null);
 
-    const totalSec = Math.max(10, Math.floor((Date.now() - (startTimeRef.current || Date.now())) / 1000));
-    const finalScore = Math.round((correctCount / Math.max(1, questions.length)) * 100);
+    const { finalScore, totalSec } = lastCompletedDataRef.current;
 
     if (onComplete) {
       const res = await onComplete(finalScore, totalSec, assignmentId);

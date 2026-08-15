@@ -149,7 +149,7 @@ export const LEARNING_GAMES_DATA = {
     questions: [
       {
         id: 1,
-        passage: 'Mèo con rất thích ăn cá tươi. Buổi sáng, Mèo con ra sân nằm sưởi nắng.',
+        passage: 'Mèo con rất thích ăn cá tươi. Buổi sáng, mèo con ra sân nằm sưởi nắng.',
         question: 'Mèo con thích ăn món gì?',
         options: ['Cỏ tươi', 'Cá tươi', 'Bánh mì', 'Hạt ngô'],
         answer: 'Cá tươi'
@@ -170,8 +170,8 @@ export const LEARNING_GAMES_DATA = {
       },
       {
         id: 4,
-        passage: 'Mùa xuân đến, cây cối đâm chồi nẩy lộc. Những bông hoa cúc nở vàng rực cả góc vườn.',
-        question: 'Mùa nào cây cối đâm chồi nẩy lộc?',
+        passage: 'Mùa xuân đến, cây cối đâm chồi nảy lộc. Những bông hoa cúc nở vàng rực cả góc vườn.',
+        question: 'Mùa nào cây cối đâm chồi nảy lộc?',
         options: ['Mùa xuân', 'Mùa hạ', 'Mùa thu', 'Mùa đông'],
         answer: 'Mùa xuân'
       },
@@ -407,26 +407,26 @@ export const LEARNING_GAMES_DATA = {
     subject: 'Tự nhiên & Xã hội',
     instruction: 'Phân loại các loài động vật và thực vật vào đúng nhóm thích hợp!',
     questions: [
-      { id: 1, item: 'Con Chim Sẻ', prompt: 'Con Chim Sẻ thuộc nhóm nào?', options: ['Loài chim (Bay trên trời)', 'Loài cá (Sống dưới nước)', 'Cây cho bóng mát'], answer: 'Loài chim (Bay trên trời)' },
-      { id: 2, item: 'Cây Bàng', prompt: 'Cây Bàng thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Rau ăn lá', 'Loài cá dưới nước'], answer: 'Cây cho bóng mát' },
-      { id: 3, item: 'Con Cá Chép', prompt: 'Con Cá Chép thuộc nhóm nào?', options: ['Loài cá (Sống dưới nước)', 'Loài chim (Bay trên trời)', 'Cây ăn quả'], answer: 'Loài cá (Sống dưới nước)' },
-      { id: 4, item: 'Cây Dưa Hấu', prompt: 'Cây Dưa Hấu thuộc nhóm thực vật nào?', options: ['Cây ăn quả', 'Cây cho bóng mát', 'Côn trùng'], answer: 'Cây ăn quả' },
-      { id: 5, item: 'Con Hổ', prompt: 'Con Hổ thuộc nhóm động vật nào?', options: ['Thú ăn thịt (Động vật sống trên cạn)', 'Loài chim', 'Loài cá dưới nước'], answer: 'Thú ăn thịt (Động vật sống trên cạn)' },
-      { id: 6, item: 'Hoa Hồng', prompt: 'Hoa Hồng thuộc nhóm nào?', options: ['Thực vật (Cây hoa trang trí)', 'Thú ăn thịt', 'Côn trùng hút mật'], answer: 'Thực vật (Cây hoa trang trí)' },
-      { id: 7, item: 'Con Ong', prompt: 'Con Ong thuộc nhóm nào?', options: ['Côn trùng', 'Loài cá dưới nước', 'Cây ăn quả'], answer: 'Côn trùng' },
-      { id: 8, item: 'Cây Lúa', prompt: 'Cây Lúa cung cấp lương thực nào?', options: ['Hạt gạo', 'Củ cà rốt', 'Quả cam'], answer: 'Hạt gạo' },
-      { id: 9, item: 'Con Voi', prompt: 'Con Voi thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài chim', 'Loài cá dưới nước'], answer: 'Động vật sống trên cạn' },
-      { id: 10, item: 'Cây Xoài', prompt: 'Cây Xoài thuộc nhóm nào?', options: ['Cây ăn quả', 'Loài chim', 'Côn trùng'], answer: 'Cây ăn quả' },
-      { id: 11, item: 'Con Én', prompt: 'Con Én là loài chim thường báo hiệu mùa nào?', options: ['Mùa xuân', 'Mùa đông', 'Mùa thu'], answer: 'Mùa xuân' },
-      { id: 12, item: 'Củ Cà Rốt', prompt: 'Củ Cà Rốt là bộ phận nào của cây?', options: ['Rễ củ (Thực vật)', 'Lá cây', 'Hoa cây'], answer: 'Rễ củ (Thực vật)' },
-      { id: 13, item: 'Con Thỏ', prompt: 'Con Thỏ thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài cá dưới nước', 'Côn trùng'], answer: 'Động vật sống trên cạn' },
-      { id: 14, item: 'Cây Phượng', prompt: 'Cây Phượng thường nở hoa đỏ rực vào mùa nào?', options: ['Mùa hạ', 'Mùa đông', 'Mùa xuân'], answer: 'Mùa hạ' },
-      { id: 15, item: 'Con Tôm', prompt: 'Con Tôm thuộc nhóm động vật nào?', options: ['Loài cá (Sống dưới nước)', 'Loài chim (Bay trên trời)', 'Động vật sống trên cạn'], answer: 'Loài cá (Sống dưới nước)' },
-      { id: 16, item: 'Cây Thông', prompt: 'Cây Thông thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Cây ăn quả', 'Rau ăn lá'], answer: 'Cây cho bóng mát' },
-      { id: 17, item: 'Con Bướm', prompt: 'Con Bướm thuộc nhóm nào?', options: ['Côn trùng', 'Loài cá dưới nước', 'Động vật sống trên cạn'], answer: 'Côn trùng' },
-      { id: 18, item: 'Rau Muống', prompt: 'Rau Muống thuộc nhóm thực vật nào?', options: ['Rau ăn lá', 'Cây cho bóng mát', 'Cây ăn quả'], answer: 'Rau ăn lá' },
-      { id: 19, item: 'Con Rùa', prompt: 'Con Rùa thuộc nhóm động vật nào?', options: ['Bò sát (Động vật)', 'Loài chim', 'Côn trùng'], answer: 'Bò sát (Động vật)' },
-      { id: 20, item: 'Cây Chuối', prompt: 'Cây Chuối cho chúng ta sản phẩm nào?', options: ['Quả chuối ngọt lịm', 'Củ cải', 'Hạt gạo'], answer: 'Quả chuối ngọt lịm' }
+      { id: 1, item: 'Con chim sẻ', prompt: 'Con chim sẻ thuộc nhóm nào?', options: ['Loài chim (Bay trên trời)', 'Động vật sống dưới nước', 'Cây cho bóng mát'], answer: 'Loài chim (Bay trên trời)' },
+      { id: 2, item: 'Cây bàng', prompt: 'Cây bàng thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Rau ăn lá', 'Động vật sống dưới nước'], answer: 'Cây cho bóng mát' },
+      { id: 3, item: 'Con cá chép', prompt: 'Con cá chép thuộc nhóm nào?', options: ['Động vật sống dưới nước', 'Loài chim (Bay trên trời)', 'Cây ăn quả'], answer: 'Động vật sống dưới nước' },
+      { id: 4, item: 'Cây dưa hấu', prompt: 'Cây dưa hấu thuộc nhóm thực vật nào?', options: ['Cây ăn quả', 'Cây cho bóng mát', 'Côn trùng'], answer: 'Cây ăn quả' },
+      { id: 5, item: 'Con hổ', prompt: 'Con hổ thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài chim', 'Động vật sống dưới nước'], answer: 'Động vật sống trên cạn' },
+      { id: 6, item: 'Hoa hồng', prompt: 'Hoa hồng thuộc nhóm nào?', options: ['Cây hoa trang trí', 'Động vật sống trên cạn', 'Côn trùng hút mật'], answer: 'Cây hoa trang trí' },
+      { id: 7, item: 'Con ong', prompt: 'Con ong thuộc nhóm nào?', options: ['Côn trùng', 'Động vật sống dưới nước', 'Cây ăn quả'], answer: 'Côn trùng' },
+      { id: 8, item: 'Cây lúa', prompt: 'Cây lúa cung cấp sản phẩm nào?', options: ['Hạt gạo', 'Củ cà rốt', 'Quả cam'], answer: 'Hạt gạo' },
+      { id: 9, item: 'Con voi', prompt: 'Con voi thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Loài chim', 'Động vật sống dưới nước'], answer: 'Động vật sống trên cạn' },
+      { id: 10, item: 'Cây xoài', prompt: 'Cây xoài thuộc nhóm nào?', options: ['Cây ăn quả', 'Loài chim', 'Côn trùng'], answer: 'Cây ăn quả' },
+      { id: 11, item: 'Con én', prompt: 'Con én thường xuất hiện báo hiệu mùa nào?', options: ['Mùa xuân', 'Mùa đông', 'Mùa thu'], answer: 'Mùa xuân' },
+      { id: 12, item: 'Củ cà rốt', prompt: 'Củ cà rốt là bộ phận nào của cây?', options: ['Rễ củ', 'Lá cây', 'Bông hoa'], answer: 'Rễ củ' },
+      { id: 13, item: 'Con thỏ', prompt: 'Con thỏ thuộc nhóm động vật nào?', options: ['Động vật sống trên cạn', 'Động vật sống dưới nước', 'Côn trùng'], answer: 'Động vật sống trên cạn' },
+      { id: 14, item: 'Cây phượng', prompt: 'Cây phượng thường nở hoa đỏ rực vào mùa nào?', options: ['Mùa hạ', 'Mùa đông', 'Mùa xuân'], answer: 'Mùa hạ' },
+      { id: 15, item: 'Con tôm', prompt: 'Con tôm thuộc nhóm động vật nào?', options: ['Động vật sống dưới nước', 'Loài chim (Bay trên trời)', 'Động vật sống trên cạn'], answer: 'Động vật sống dưới nước' },
+      { id: 16, item: 'Cây thông', prompt: 'Cây thông thuộc nhóm thực vật nào?', options: ['Cây cho bóng mát', 'Cây ăn quả', 'Rau ăn lá'], answer: 'Cây cho bóng mát' },
+      { id: 17, item: 'Con bướm', prompt: 'Con bướm thuộc nhóm nào?', options: ['Côn trùng', 'Động vật sống dưới nước', 'Động vật sống trên cạn'], answer: 'Côn trùng' },
+      { id: 18, item: 'Rau muống', prompt: 'Rau muống thuộc nhóm thực vật nào?', options: ['Rau ăn lá', 'Cây cho bóng mát', 'Cây ăn quả'], answer: 'Rau ăn lá' },
+      { id: 19, item: 'Con rùa', prompt: 'Con rùa thuộc nhóm động vật nào?', options: ['Bò sát (Động vật)', 'Loài chim', 'Côn trùng'], answer: 'Bò sát (Động vật)' },
+      { id: 20, item: 'Cây chuối', prompt: 'Cây chuối cho chúng ta sản phẩm nào?', options: ['Quả chuối ngọt lịm', 'Củ cải', 'Hạt gạo'], answer: 'Quả chuối ngọt lịm' }
     ]
   }
 };

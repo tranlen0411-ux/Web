@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { ArrowLeft, Sparkles, Trophy, Gamepad2, AlertCircle, RefreshCw } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Gamepad2, AlertCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { MemoryGame } from '../components/games/MemoryGame';
@@ -11,6 +11,9 @@ import { BadgeModal } from '../components/common/BadgeModal';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
 import { LEARNING_GAMES_DATA } from '../data/learningGamesData';
+
+// Regex kiểm tra định dạng UUID v4
+const IS_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export const GamePlayView = () => {
   const { id } = useParams();
@@ -35,44 +38,41 @@ export const GamePlayView = () => {
     setLoading(true);
     setNotFound(false);
 
-    // 1. Nếu ID khớp với slug của 10 game học tập
-    if (LEARNING_GAMES_DATA[id]) {
-      const fallbackConfig = LEARNING_GAMES_DATA[id];
-      setGame({
-        id,
-        title: fallbackConfig.title,
-        description: fallbackConfig.instruction,
-        game_type: 'builtin',
-        game_url: id,
-        grade_level: fallbackConfig.grade,
-        subject: fallbackConfig.subject
-      });
-      setLoading(false);
-      return;
-    }
-
-    // 2. Nếu ID là UUID từ CSDL Supabase
     try {
-      const { data, error } = await supabase
-        .from('games')
-        .select('*')
-        .eq('id', id)
-        .single();
+      let query = supabase.from('games').select('*');
+
+      if (IS_UUID_REGEX.test(id)) {
+        // Truy vấn theo UUID PK chính thức
+        query = query.eq('id', id);
+      } else {
+        // Truy vấn theo slug game_url để luôn lấy UUID thật từ CSDL
+        query = query.eq('game_url', id);
+      }
+
+      const { data, error } = await query.single();
 
       if (error || !data) {
-        setGame(null);
-        setNotFound(true);
-      } else {
-        setGame(data);
-        // Tăng lượt chơi phía CSDL nếu có RLS / RPC hỗ trợ
-        try {
-          await supabase
-            .from('games')
-            .update({ play_count: (data.play_count || 0) + 1 })
-            .eq('id', id);
-        } catch (e) {
-          // Bỏ qua nếu RLS không cho phép sửa trực tiếp
+        // Nếu không có trong CSDL nhưng là slug của 10 game học tập (chờ nạp seed)
+        if (LEARNING_GAMES_DATA[id]) {
+          const fallbackConfig = LEARNING_GAMES_DATA[id];
+          setGame({
+            id: null, // Không có UUID thật trong CSDL
+            title: fallbackConfig.title,
+            description: fallbackConfig.instruction,
+            game_type: 'builtin',
+            game_url: id,
+            grade_level: fallbackConfig.grade,
+            subject: fallbackConfig.subject
+          });
+        } else {
+          setGame(null);
+          setNotFound(true);
         }
+      } else {
+        // Đã tìm thấy bản ghi game thật trong CSDL Supabase
+        setGame(data);
+        // HOÀN TOÀN XÓA ĐOẠN UPDATE PLAY_COUNT TRỰC TIẾP TỪ FRONTEND
+        // Lý do: RPC complete_game_and_award đã tăng play_count tự động ở Server-side
       }
     } catch (err) {
       console.error('Fetch game error:', err);
@@ -83,7 +83,7 @@ export const GamePlayView = () => {
     }
   };
 
-  // Xử lý khi bé hoàn thành trò chơi - KHÔNG DÙNG CLIENT-SIDE FALLBACK CỘNG SAO NGUY HIỂM
+  // Xử lý khi hoàn thành trò chơi - CHỈ DÙNG RPC SERVER-SIDE AN TOÀN
   const handleGameComplete = async (score = 100, timeSec = 60, paramAssignmentId = null) => {
     const targetAssignmentId = paramAssignmentId || assignmentIdFromUrl || null;
 
@@ -106,17 +106,18 @@ export const GamePlayView = () => {
       };
     }
 
-    if (!game?.id) {
+    // Nếu game chưa nạp seed SQL (thiếu UUID)
+    if (!game?.id || !IS_UUID_REGEX.test(game.id)) {
       return {
         success: false,
-        message: 'Không tìm thấy thông tin mã trò chơi.'
+        message: 'Trò chơi này chưa được nạp mã UUID chính thức trong CSDL. Thầy/Cô hãy chạy file seed SQL để nạp game nhé!'
       };
     }
 
     try {
-      // 2. CHỈ GỌI RPC SERVER-SIDE AN TOÀN `complete_game_and_award`
+      // 2. GỌI RPC SERVER-SIDE AN TOÀN `complete_game_and_award` VỚI UUID THẬT
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('complete_game_and_award', {
-        p_game_id: game.id,
+        p_game_id: game.id, // Đảm bảo là UUID hợp lệ
         p_assignment_id: targetAssignmentId,
         p_score: score,
         p_completion_time_seconds: timeSec
@@ -152,7 +153,16 @@ export const GamePlayView = () => {
       if (rpcRes.success) {
         const stars = rpcRes.stars_earned || 0;
         setEarnedStars(stars);
-        if (refreshProfile) refreshProfile();
+        
+        if (refreshProfile) {
+          try {
+            await refreshProfile();
+          } catch (e) {
+            console.error('Refresh profile error:', e);
+          }
+        }
+
+        // CHỈ MỞ BADGEMODAL KHI LƯU THÀNH CÔNG VÀ KHÔNG PHẢI XEM THỬ
         setIsBadgeModalOpen(true);
 
         return {
@@ -180,7 +190,6 @@ export const GamePlayView = () => {
     return <LoadingSkeleton type="page" />;
   }
 
-  // KHÔNG MỞ MẶC ĐỊNH GAME ĐOÀN TÀU SỐ HỌC KHI KHÔNG TÌM THẤY GAME SỐ VỚI ID KHÔNG TỒN TẠI
   if (notFound || !game) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
@@ -201,7 +210,7 @@ export const GamePlayView = () => {
     );
   }
 
-  const isGrade12BuiltinGame = game?.game_type === 'builtin' && LEARNING_GAMES_DATA[game?.game_url];
+  const isGrade12BuiltinGame = (game?.game_type === 'builtin' && LEARNING_GAMES_DATA[game?.game_url]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
