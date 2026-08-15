@@ -45,18 +45,18 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const paths = body?.paths;
-    if (!Array.isArray(paths) || paths.length === 0) {
+    const jobIds = body?.job_ids;
+    if (!Array.isArray(jobIds) || jobIds.length === 0) {
       return new Response(
         JSON.stringify({ success: true, deleted: [], still_referenced: [], failed: [] }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Giới hạn tối đa 50 path mỗi payload request
-    if (paths.length > 50) {
+    // Giới hạn tối đa 50 job IDs mỗi payload request
+    if (jobIds.length > 50) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Payload exceeds maximum limit of 50 paths per request' }),
+        JSON.stringify({ success: false, message: 'Payload exceeds maximum limit of 50 job_ids per request' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -64,22 +64,63 @@ serve(async (req) => {
     // 2. Client Service Role chỉ dùng trong môi trường Edge Function bảo mật
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Lấy thông tin role người dùng
-    const { data: profile } = await supabaseAdmin
+    // Lấy thông tin role người dùng và kiểm tra lỗi profileError
+    const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single();
 
+    if (profileError) {
+      console.error('Profile fetch error:', profileError);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Failed to verify user profile' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const isAdmin = profile?.role === 'admin';
-    const uniquePaths = Array.from(new Set(paths)) as string[];
+    const uniqueJobIds = Array.from(new Set(jobIds)) as string[];
+
+    // 3. Truy vấn các jobs thực tế từ Bảng Hàng Đợi exercise_file_cleanup_jobs
+    const { data: jobs, error: jobsError } = await supabaseAdmin
+      .from('exercise_file_cleanup_jobs')
+      .select('*')
+      .in('id', uniqueJobIds);
+
+    if (jobsError) {
+      console.error('Jobs fetch error:', jobsError);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Failed to query cleanup jobs' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     const deleted: string[] = [];
     const still_referenced: string[] = [];
-    const failed: Array<{ path: string; reason: string }> = [];
+    const failed: Array<{ job_id: string; file_path: string; reason: string }> = [];
 
-    for (const filePath of uniquePaths) {
-      // Validate path string an toàn
+    for (const job of jobs || []) {
+      const jobId = job.id;
+      const filePath = job.file_path;
+
+      // Xác minh điều kiện job hợp lệ
+      if (job.bucket_id !== 'exercise-submissions') {
+        failed.push({ job_id: jobId, file_path: filePath, reason: 'invalid_bucket' });
+        continue;
+      }
+
+      if (!['pending', 'failed'].includes(job.status)) {
+        failed.push({ job_id: jobId, file_path: filePath, reason: 'invalid_job_status' });
+        continue;
+      }
+
+      if (!isAdmin && job.requested_by !== user.id) {
+        failed.push({ job_id: jobId, file_path: filePath, reason: 'unauthorized_job_owner' });
+        continue;
+      }
+
+      // Validate format file_path trong CSDL
       if (
         typeof filePath !== 'string' ||
         !filePath.trim() ||
@@ -87,21 +128,23 @@ serve(async (req) => {
         filePath.startsWith('/') ||
         filePath.length > 500
       ) {
-        failed.push({ path: String(filePath), reason: 'invalid_path_format' });
+        failed.push({ job_id: jobId, file_path: String(filePath), reason: 'invalid_path_format' });
         continue;
       }
 
-      // Xác minh học sinh chỉ được yêu cầu xóa file trong thư mục của chính mình
-      if (!isAdmin && !filePath.startsWith(`${user.id}/`)) {
-        failed.push({ path: filePath, reason: 'unauthorized_path_segment' });
-        continue;
-      }
-
-      // Đánh dấu status processing trong hàng đợi cleanup jobs
-      await supabaseAdmin
+      // Claim job status = 'processing' một cách nguyên tử
+      const { data: claimData, error: claimErr } = await supabaseAdmin
         .from('exercise_file_cleanup_jobs')
         .update({ status: 'processing' })
-        .eq('file_path', filePath);
+        .eq('id', jobId)
+        .in('status', ['pending', 'failed'])
+        .select('id');
+
+      if (claimErr || !claimData || claimData.length === 0) {
+        console.error(`Failed to claim job ${jobId}:`, claimErr);
+        failed.push({ job_id: jobId, file_path: filePath, reason: 'job_claim_failed' });
+        continue;
+      }
 
       // FAIL-CLOSED SECURITY PATTERN: Kiểm tra tham chiếu CSDL với Service Role
       const { data: refCheck, error: refError } = await supabaseAdmin
@@ -111,13 +154,13 @@ serve(async (req) => {
 
       // BẤT KỲ LỖI TRUY VẤN CSDL NÀO ĐỀU PHẢI CHẶN VÀ KHÔNG XÓA FILE (FAIL-CLOSED)
       if (refError) {
-        console.error(`Ref check DB error for ${filePath}:`, refError);
-        failed.push({ path: filePath, reason: 'reference_check_failed' });
+        console.error(`Ref check DB error for job ${jobId} (${filePath}):`, refError);
+        failed.push({ job_id: jobId, file_path: filePath, reason: 'reference_check_failed' });
 
         await supabaseAdmin
           .from('exercise_file_cleanup_jobs')
           .update({ status: 'failed', last_error: refError.message, processed_at: new Date().toISOString() })
-          .eq('file_path', filePath);
+          .eq('id', jobId);
         continue;
       }
 
@@ -127,7 +170,7 @@ serve(async (req) => {
         await supabaseAdmin
           .from('exercise_file_cleanup_jobs')
           .update({ status: 'still_referenced', processed_at: new Date().toISOString() })
-          .eq('file_path', filePath);
+          .eq('id', jobId);
         continue;
       }
 
@@ -137,20 +180,20 @@ serve(async (req) => {
         .remove([filePath]);
 
       if (removeErr) {
-        console.error(`Storage API remove error for ${filePath}:`, removeErr);
-        failed.push({ path: filePath, reason: removeErr.message });
+        console.error(`Storage API remove error for job ${jobId} (${filePath}):`, removeErr);
+        failed.push({ job_id: jobId, file_path: filePath, reason: removeErr.message });
 
         await supabaseAdmin
           .from('exercise_file_cleanup_jobs')
           .update({ status: 'failed', last_error: removeErr.message, processed_at: new Date().toISOString() })
-          .eq('file_path', filePath);
+          .eq('id', jobId);
       } else {
         deleted.push(filePath);
 
         await supabaseAdmin
           .from('exercise_file_cleanup_jobs')
           .update({ status: 'deleted', processed_at: new Date().toISOString() })
-          .eq('file_path', filePath);
+          .eq('id', jobId);
       }
     }
 

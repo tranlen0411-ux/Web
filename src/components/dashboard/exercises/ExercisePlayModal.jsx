@@ -266,21 +266,31 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
       const uniqueDeletions = Array.from(new Set(oldDeletions));
       if (uniqueDeletions.length > 0) {
         // 1. Đưa file vào hàng đợi cleanup jobs trong DB
-        await supabase.rpc('queue_file_cleanup', { p_paths: uniqueDeletions });
+        const { data: queueRes, error: queueErr } = await supabase.rpc('queue_file_cleanup', { p_paths: uniqueDeletions });
 
-        // 2. Kích hoạt Supabase Edge Function dọn dẹp Storage bằng API remove() chính thức
-        try {
-          const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke('cleanup-exercise-submission-files', {
-            body: { paths: uniqueDeletions }
-          });
+        if (queueErr || !queueRes?.success) {
+          console.warn('Queue file cleanup warning:', queueErr || queueRes?.message);
+          setWarningMsg('Bài làm đã lưu thành công! Tiến trình dọn dẹp file cũ sẽ tự động chạy trong hàng đợi hệ thống.');
+        } else {
+          const validJobs = queueRes?.jobs || [];
+          const validJobIds = validJobs.map(j => j.id).filter(Boolean);
 
-          if (edgeErr || (edgeRes?.failed && edgeRes.failed.length > 0)) {
-            console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
-            setWarningMsg('Bài làm đã được lưu thành công, nhưng có file cũ chưa dọn được khỏi Storage (cần Quản trị viên dọn dẹp).');
+          if (validJobIds.length > 0) {
+            // 2. Kích hoạt Supabase Edge Function dọn dẹp Storage bằng danh sách job_ids
+            try {
+              const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke('cleanup-exercise-submission-files', {
+                body: { job_ids: validJobIds }
+              });
+
+              if (edgeErr || (edgeRes?.failed && edgeRes.failed.length > 0)) {
+                console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
+                setWarningMsg('Bài làm đã lưu thành công, nhưng có file cũ đang chờ xử lý trong hàng đợi dọn dẹp.');
+              }
+            } catch (efErr) {
+              console.error('Invoke cleanup Edge Function exception:', efErr);
+              setWarningMsg('Bài làm đã lưu thành công! Tiến trình dọn dẹp file rác sẽ chạy trong hàng đợi hệ thống.');
+            }
           }
-        } catch (efErr) {
-          console.error('Invoke cleanup Edge Function exception:', efErr);
-          setWarningMsg('Bài làm đã được lưu thành công! Tiến trình dọn dẹp file rác sẽ chạy trong hàng đợi hệ thống.');
         }
       }
 

@@ -1,9 +1,9 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 14.1 CHUẨN MỰC BẢO MẬT
--- 1. SỬA LỖI PHẠM VI CTE CLASSCANDIDATES BẰNG CÁCH GỘP SELECT DÙNG FILTER THỐNG NHẤT
--- 2. CẬP NHẬT RPC QUEUE_FILE_CLEANUP VỚI ON CONFLICT RESET STATUS 'PENDING' HỢP LỆ VÀ ĐIỀU KIỆN WHERE STATUS != 'PROCESSING'
--- 3. EDGE FUNCTION FAIL-CLOSED BẢO MẬT: CHỈ XÓA FILE KHI TRUY VẤN CSDL THÀNH CÔNG VÀ KHÔNG CÒN THAM CHIẾU
--- 4. VALIDATE THỜI ĐIỂM ZERO-DML MẠNH MẼ CHO CÂU HỎI & ĐÁP ÁN BÍ MẬT TRƯỚC KHI DELETE CÂU HỎI CỦ
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.0 CHUẨN KIẾN TRÚC JOB-BASED CLEANUP
+-- 1. RPC QUEUE_FILE_CLEANUP DÙNG 'INSERT ... RETURNING ID, FILE_PATH' TRÁNH BÁO QUEUED GIẢ VÀ CHỈ TRẢ VỀ DÂN SÁCH JOB OBJECTS THỰC THỰC TẠO
+-- 2. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG SQL MIGRATION
+-- 3. VALIDATE AN TOÀN TUYỆT ĐỐI TOÀN BỘ CÁC TRƯỜNG KIỂU SỐ (QUESTION_NUMBER, POINTS, GRADE_LEVEL...) BẰNG TRUNC(NUMERIC) TRÁNH VĂNG EXCEPTION CSDB
+-- 4. BẮT BỘC KIỂM TRA MÔN HỌC, TIÊU ĐỀ, PROMPT GIỚI HẠN ĐỘ DÀI VÀ CHO PHÉP XUẤT BẢN KHI BÀI TẬP CÓ ÍT NHẤT 1 CÂU HỎI HỢP LỆ
 -- ============================================================================
 
 BEGIN;
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS public.academic_exercises (
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE;
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE;
 
--- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION (CÁCH A: DÙNG CÙNG MỘT SELECT VỚI FILTER BẢO ĐẢM PHẠM VI CTE)
+-- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION
 DO $$
 DECLARE
   v_ambiguous_json JSONB;
@@ -355,7 +355,7 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
--- 1. RPC QUEUE_FILE_CLEANUP VỚI ON CONFLICT TRỞ VỀ PENDING VÀ ĐIỀU KIỆN KHI JOB KHÔNG PHẢI PROCESSING
+-- 1. RPC QUEUE_FILE_CLEANUP DÙNG RETURNING ĐỂ KHÔNG BÁO QUEUED GIẢ
 CREATE OR REPLACE FUNCTION public.queue_file_cleanup(
   p_paths TEXT[]
 )
@@ -368,8 +368,11 @@ DECLARE
   v_caller_id UUID;
   v_caller_role TEXT;
   v_path TEXT;
-  v_queued TEXT[] := ARRAY[]::TEXT[];
+  v_jobs JSONB := '[]'::jsonb;
   v_rejected TEXT[] := ARRAY[]::TEXT[];
+  v_processing TEXT[] := ARRAY[]::TEXT[];
+  v_inserted_id UUID;
+  v_inserted_path TEXT;
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -379,7 +382,7 @@ BEGIN
   SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
 
   IF p_paths IS NULL OR array_length(p_paths, 1) = 0 THEN
-    RETURN jsonb_build_object('success', true, 'queued', '[]'::jsonb, 'rejected', '[]'::jsonb);
+    RETURN jsonb_build_object('success', true, 'jobs', '[]'::jsonb, 'rejected', '[]'::jsonb, 'already_processing', '[]'::jsonb);
   END IF;
 
   IF array_length(p_paths, 1) > 50 THEN
@@ -393,6 +396,7 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- Thực hiện INSERT / UPDATE với RETURNING ID thực tế
     INSERT INTO public.exercise_file_cleanup_jobs (
       bucket_id, file_path, requested_by, status, attempts, last_error, processed_at
     ) VALUES (
@@ -405,12 +409,22 @@ BEGIN
       last_error = NULL,
       processed_at = NULL,
       created_at = NOW()
-    WHERE public.exercise_file_cleanup_jobs.status != 'processing';
+    WHERE public.exercise_file_cleanup_jobs.status != 'processing'
+    RETURNING id, file_path INTO v_inserted_id, v_inserted_path;
 
-    v_queued := array_append(v_queued, v_path);
+    IF v_inserted_id IS NOT NULL THEN
+      v_jobs := v_jobs || jsonb_build_array(jsonb_build_object('id', v_inserted_id, 'file_path', v_inserted_path));
+    ELSE
+      v_processing := array_append(v_processing, v_path);
+    END IF;
   END LOOP;
 
-  RETURN jsonb_build_object('success', true, 'queued', to_jsonb(v_queued), 'rejected', to_jsonb(v_rejected));
+  RETURN jsonb_build_object(
+    'success', true,
+    'jobs', v_jobs,
+    'rejected', to_jsonb(v_rejected),
+    'already_processing', to_jsonb(v_processing)
+  );
 END;
 $$;
 
@@ -559,7 +573,7 @@ END;
 $$;
 
 
--- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN CÂU HỎI TRƯỚC DELETE
+-- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION KIỂU SỐ AN TOÀN TRUNC(NUMERIC)
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -592,6 +606,7 @@ DECLARE
   v_opt_item TEXT;
   v_opt_match BOOLEAN;
   v_distinct_opts INT;
+  v_num_val NUMERIC;
 BEGIN
   -- =========================================================================
   -- PHASE 1: ZERO-DML VALIDATION PHASE
@@ -642,13 +657,27 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được để trống.');
   END IF;
 
+  IF length(p_exercise->>'title') > 200 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được vượt quá 200 ký tự.');
+  END IF;
+
   -- VALIDATE TOÀN BỘ MẢNG CÂU HỎI TRƯỚC KHI XÓA/SỬA BẤT KỲ DỮ LIỆU NÀO
   FOR v_q_json IN SELECT * FROM jsonb_array_elements(p_questions)
   LOOP
-    v_q_num := (v_q_json->>'question_number')::INT;
-    IF v_q_num IS NULL OR v_q_num <= 0 THEN
+    IF (v_q_json->'question_number') IS NULL OR jsonb_typeof(v_q_json->'question_number') != 'number' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ question_number phải là một số nguyên.');
+    END IF;
+
+    BEGIN
+      v_num_val := (v_q_json->>'question_number')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ question_number không đúng định dạng số.');
+    END;
+
+    IF v_num_val != TRUNC(v_num_val) OR v_num_val <= 0 THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Thẻ question_number phải là số nguyên dương.');
     END IF;
+    v_q_num := v_num_val::INT;
 
     IF v_q_num = ANY(v_q_num_seen) THEN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Số thứ tự câu hỏi question_number bị trùng lặp.');
@@ -664,8 +693,24 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Nội dung câu hỏi không được để trống.');
     END IF;
 
-    IF (v_q_json->>'points') IS NOT NULL AND (v_q_json->>'points')::INT <= 0 THEN
-      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi phải lớn hơn 0.');
+    IF length(v_q_json->>'prompt') > 5000 THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Nội dung câu hỏi không được vượt quá 5.000 ký tự.');
+    END IF;
+
+    IF (v_q_json->'points') IS NOT NULL THEN
+      IF jsonb_typeof(v_q_json->'points') != 'number' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points phải là một số nguyên.');
+      END IF;
+
+      BEGIN
+        v_num_val := (v_q_json->>'points')::NUMERIC;
+      EXCEPTION WHEN OTHERS THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points không đúng định dạng số.');
+      END;
+
+      IF v_num_val != TRUNC(v_num_val) OR v_num_val <= 0 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm câu hỏi points phải là số nguyên lớn hơn 0.');
+      END IF;
     END IF;
 
     v_opts_arr := v_q_json->'options_json';
