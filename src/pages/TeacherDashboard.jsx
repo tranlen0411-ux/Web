@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { 
   GraduationCap, 
   Plus, 
@@ -23,6 +24,24 @@ import { useSound } from '../context/SoundContext';
 export const TeacherDashboard = () => {
   const { profile } = useAuth();
   const { triggerSound } = useSound();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'games') return 'games';
+    if (tabParam === 'classes') return 'classes';
+    return 'classes';
+  });
+
+  // Tự động đồng bộ URL query parameter cho Giáo viên
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'games' || tab === 'classes') {
+      setActiveTab(tab);
+    } else {
+      setSearchParams({ tab: 'classes' }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const [classes, setClasses] = useState([]);
   const [games, setGames] = useState([]);
@@ -171,195 +190,237 @@ export const TeacherDashboard = () => {
         </div>
       </div>
 
-      {/* DANH SÁCH LỚP HỌC */}
-      <div className="mb-10">
-        <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
-          <GraduationCap className="w-6 h-6 text-emerald-600" /> Danh Sách Lớp Học Do Thầy/Cô Quản Lý ({classes.length})
-        </h3>
+      {/* TABS CHUYỂN ĐỔI KHU VỰC GIÁO VIÊN */}
+      <div className="flex flex-wrap bg-white p-2 rounded-2xl border-4 border-amber-200 mb-8 gap-2">
+        <button
+          onClick={() => {
+            setActiveTab('classes');
+            triggerSound('click');
+            setSearchParams({ tab: 'classes' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'classes'
+              ? 'bg-emerald-500 text-white shadow-md border-b-4 border-emerald-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" /> Quản Lý Lớp & Học Sinh ({classes.length})
+        </button>
 
-        {classes.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-            {classes.map((cls) => (
-              <div key={cls.id} className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="px-3 py-1 bg-amber-100 text-amber-900 text-xs font-black rounded-xl border border-amber-300">
-                      Khối {cls.grade_level}
-                    </span>
-                    <span className="text-xs font-extrabold text-slate-400">Tạo mới</span>
+        <button
+          onClick={() => {
+            setActiveTab('games');
+            triggerSound('click');
+            setSearchParams({ tab: 'games' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'games'
+              ? 'bg-sky-500 text-white shadow-md border-b-4 border-sky-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi & Giao Bài ({games.length})
+        </button>
+      </div>
+
+      {/* KHU VỰC 1: QUẢN LÝ LỚP HỌC & HỌC SINH (tab=classes) */}
+      {activeTab === 'classes' && (
+        <>
+          {/* DANH SÁCH LỚP HỌC */}
+          <div className="mb-10">
+            <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+              <GraduationCap className="w-6 h-6 text-emerald-600" /> Danh Sách Lớp Học Do Thầy/Cô Quản Lý ({classes.length})
+            </h3>
+
+            {classes.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                {classes.map((cls) => (
+                  <div key={cls.id} className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="px-3 py-1 bg-amber-100 text-amber-900 text-xs font-black rounded-xl border border-amber-300">
+                          Khối {cls.grade_level}
+                        </span>
+                        <span className="text-xs font-extrabold text-slate-400">Tạo mới</span>
+                      </div>
+                      <h4 className="text-lg font-black text-slate-800 mb-2">{cls.name}</h4>
+                      <div className="bg-amber-50 p-2.5 rounded-2xl border border-amber-200 flex items-center justify-between text-xs font-bold mb-4">
+                        <span className="text-slate-600">Mã Lớp Học:</span>
+                        <span className="font-black text-sky-600 text-sm tracking-wider">{cls.code}</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-500">
+                      <span className="flex items-center gap-1"><Users className="w-4 h-4 text-amber-500" /> Học Sinh Trong Lớp</span>
+                      <span className="text-emerald-600 font-black">Hoạt Động</span>
+                    </div>
                   </div>
-                  <h4 className="text-lg font-black text-slate-800 mb-2">{cls.name}</h4>
-                  <div className="bg-amber-50 p-2.5 rounded-2xl border border-amber-200 flex items-center justify-between text-xs font-bold mb-4">
-                    <span className="text-slate-600">Mã Lớp Học:</span>
-                    <span className="font-black text-sky-600 text-sm tracking-wider">{cls.code}</span>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-500">
-                  <span className="flex items-center gap-1"><Users className="w-4 h-4 text-amber-500" /> Học Sinh Trong Lớp</span>
-                  <span className="text-emerald-600 font-black">Hoạt Động</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 bg-white rounded-3xl border-4 border-amber-200">
-            <GraduationCap className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-            <h4 className="text-base font-black text-amber-900">Thầy/Cô chưa tạo lớp học nào</h4>
-            <p className="text-xs font-bold text-slate-500 mb-3">Tạo lớp học để học sinh gia nhập và làm bài tập nhé!</p>
-            <button
-              onClick={() => setIsClassModalOpen(true)}
-              className="px-4 py-2 bg-amber-400 text-amber-950 font-black text-xs rounded-xl shadow-md"
-            >
-              + Tạo Lớp Học Ngay
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* DỰ ÁN HỌC SINH TRONG LỚP & MÃ TRA CỨU PHỤ HUYNH (CHỈ CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN) */}
-      <div className="mb-10">
-        <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
-          <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Đặt Mã PIN ({managedStudents.length})
-        </h3>
-
-        {/* GHI CHÚ BẢO MẬT MÃ PHÚ HUYNH GIÁO VIÊN */}
-        <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
-          <Info className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>
-            <strong>Mã Tra Cứu Phụ Huynh & Mã PIN:</strong> Thầy/Cô có thể tạo Mã PIN đăng nhập cho học sinh trong lớp để các bé vào học ngay.
-          </span>
-        </div>
-
-        <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
-          {managedStudents.length > 0 ? (
-            <table className="w-full text-left text-xs font-bold whitespace-nowrap">
-              <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
-                <tr>
-                  <th className="p-3">Tên Học Sinh</th>
-                  <th className="p-3">Lớp Học</th>
-                  <th className="p-3">Khối</th>
-                  <th className="p-3">Tổng Sao</th>
-                  <th className="p-3">Mã Tra Cứu PH</th>
-                  <th className="p-3 text-right">Thao Tác</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-amber-100 text-slate-700">
-                {managedStudents.map((st) => {
-                  const hasPin = pinStatusMap[st.id] === true;
-                  return (
-                    <tr key={st.id} className="hover:bg-amber-50">
-                      <td className="p-3 font-black text-slate-800 flex items-center gap-2">
-                        <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
-                        <span>{st.full_name}</span>
-                      </td>
-                      <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
-                      <td className="p-3">Khối {st.grade_level || 1}</td>
-                      <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
-                      <td className="p-3">
-                        <ParentCodeCell code={st.parent_access_code} />
-                      </td>
-                      <td className="p-3 text-right">
-                        <button
-                          onClick={() => {
-                            setUserForPin(st);
-                            setIsPinModalOpen(true);
-                            triggerSound('click');
-                          }}
-                          className={`p-1.5 rounded-lg transition-colors ${
-                            hasPin
-                              ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
-                              : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
-                          }`}
-                          title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
-                        >
-                          <KeyRound className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div className="p-6 text-center text-slate-500 font-bold">
-              Chưa có học sinh nào gia nhập các lớp học của Thầy/Cô. Thầy/Cô hãy gửi Mã Lớp cho học sinh nhé!
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* KHO GAME & GIAO BÀI TẬP */}
-      <div className="mb-10">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-            <Gamepad2 className="w-6 h-6 text-sky-600" /> Kho Trò Chơi — Giao Bài Cho Học Sinh
-          </h3>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {games.slice(0, 8).map((game) => (
-            <div key={game.id} className="bg-white p-4 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <img
-                  src={game.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
-                  alt={game.title}
-                  className="w-full h-36 object-cover rounded-2xl border-2 border-amber-100 mb-3"
-                />
-                <h4 className="text-sm font-black text-slate-800 line-clamp-1">{game.title}</h4>
-                <p className="text-[11px] font-bold text-slate-500 mt-0.5 mb-3">Khối {game.grade_level} • Môn {game.subject}</p>
-              </div>
-
-              <button
-                onClick={() => handleOpenAssignModal(game)}
-                className="w-full py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-xs rounded-xl border-b-2 border-amber-600 shadow-sm flex items-center justify-center gap-1"
-              >
-                <BookOpen className="w-3.5 h-3.5" /> Giao Bài Ngay
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* BÁO CÁO TIẾN ĐỘ HỌC SINH */}
-      <div>
-        <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
-          <BarChart2 className="w-6 h-6 text-purple-600" /> Báo Cáo Kết Quả & Tiến Độ Làm Bài Mới Nhất
-        </h3>
-
-        <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm">
-          {studentProgressList.length > 0 ? (
-            <table className="w-full text-left text-xs font-bold">
-              <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
-                <tr>
-                  <th className="p-3">Học Sinh</th>
-                  <th className="p-3">Khối</th>
-                  <th className="p-3">Tên Trò Chơi</th>
-                  <th className="p-3">Điểm Số</th>
-                  <th className="p-3">Sao Thưởng</th>
-                  <th className="p-3">Thời Gian Hoàn Thành</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-amber-100 text-slate-700">
-                {studentProgressList.map((sp) => (
-                  <tr key={sp.id} className="hover:bg-amber-50">
-                    <td className="p-3 font-black text-amber-900">{sp.profiles?.full_name || 'Học Sinh'}</td>
-                    <td className="p-3">Lớp {sp.profiles?.grade_level || 1}</td>
-                    <td className="p-3 text-slate-800">{sp.games?.title || 'Game Học Tập'}</td>
-                    <td className="p-3 text-sky-600 font-extrabold">{sp.score} điểm</td>
-                    <td className="p-3 text-amber-600 font-extrabold">+{sp.stars_earned} 🌟</td>
-                    <td className="p-3 text-slate-500">{new Date(sp.completed_at).toLocaleString('vi-VN')}</td>
-                  </tr>
                 ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="p-8 text-center text-slate-500 font-bold">
-              Chưa có dữ liệu tiến độ của học sinh.
+              </div>
+            ) : (
+              <div className="text-center py-8 bg-white rounded-3xl border-4 border-amber-200">
+                <GraduationCap className="w-12 h-12 text-amber-400 mx-auto mb-2" />
+                <h4 className="text-base font-black text-amber-900">Thầy/Cô chưa tạo lớp học nào</h4>
+                <p className="text-xs font-bold text-slate-500 mb-3">Tạo lớp học để học sinh gia nhập và làm bài tập nhé!</p>
+                <button
+                  onClick={() => setIsClassModalOpen(true)}
+                  className="px-4 py-2 bg-amber-400 text-amber-950 font-black text-xs rounded-xl shadow-md"
+                >
+                  + Tạo Lớp Học Ngay
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* DANH SÁCH HỌC SINH TRONG LỚP & ĐẶT MÃ PIN */}
+          <div className="mb-10">
+            <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
+              <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Đặt Mã PIN ({managedStudents.length})
+            </h3>
+
+            <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
+              <Info className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Mã Tra Cứu Phụ Huynh & Mã PIN:</strong> Thầy/Cô có thể tạo Mã PIN đăng nhập cho học sinh trong lớp để các bé vào học ngay.
+              </span>
             </div>
-          )}
-        </div>
-      </div>
+
+            <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
+              {managedStudents.length > 0 ? (
+                <table className="w-full text-left text-xs font-bold whitespace-nowrap">
+                  <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
+                    <tr>
+                      <th className="p-3">Tên Học Sinh</th>
+                      <th className="p-3">Lớp Học</th>
+                      <th className="p-3">Khối</th>
+                      <th className="p-3">Tổng Sao</th>
+                      <th className="p-3">Mã Tra Cứu PH</th>
+                      <th className="p-3 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-100 text-slate-700">
+                    {managedStudents.map((st) => {
+                      const hasPin = pinStatusMap[st.id] === true;
+                      return (
+                        <tr key={st.id} className="hover:bg-amber-50">
+                          <td className="p-3 font-black text-slate-800 flex items-center gap-2">
+                            <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
+                            <span>{st.full_name}</span>
+                          </td>
+                          <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
+                          <td className="p-3">Khối {st.grade_level || 1}</td>
+                          <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
+                          <td className="p-3">
+                            <ParentCodeCell code={st.parent_access_code} />
+                          </td>
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => {
+                                setUserForPin(st);
+                                setIsPinModalOpen(true);
+                                triggerSound('click');
+                              }}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                hasPin
+                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                              }`}
+                              title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                            >
+                              <KeyRound className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-6 text-center text-slate-500 font-bold">
+                  Chưa có học sinh nào gia nhập các lớp học của Thầy/Cô. Thầy/Cô hãy gửi Mã Lớp cho học sinh nhé!
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* KHU VỰC 2: KHO TRÒ CHƠI & BÁO CÁO TIẾN ĐỘ (tab=games) */}
+      {activeTab === 'games' && (
+        <>
+          {/* KHO GAME & GIAO BÀI TẬP */}
+          <div className="mb-10">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                <Gamepad2 className="w-6 h-6 text-sky-600" /> Kho Trò Chơi — Giao Bài Cho Học Sinh
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+              {games.map((game) => (
+                <div key={game.id} className="bg-white p-4 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <img
+                      src={game.thumbnail_url || 'https://images.unsplash.com/photo-1606326608606-aa0b62935f2b?w=500&auto=format&fit=crop&q=60'}
+                      alt={game.title}
+                      className="w-full h-36 object-cover rounded-2xl border-2 border-amber-100 mb-3"
+                    />
+                    <h4 className="text-sm font-black text-slate-800 line-clamp-1">{game.title}</h4>
+                    <p className="text-[11px] font-bold text-slate-500 mt-0.5 mb-3">Khối {game.grade_level} • Môn {game.subject}</p>
+                  </div>
+
+                  <button
+                    onClick={() => handleOpenAssignModal(game)}
+                    className="w-full py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-black text-xs rounded-xl border-b-2 border-amber-600 shadow-sm flex items-center justify-center gap-1"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" /> Giao Bài Ngay
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* BÁO CÁO TIẾN ĐỘ HỌC SINH */}
+          <div>
+            <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+              <BarChart2 className="w-6 h-6 text-purple-600" /> Báo Cáo Kết Quả & Tiến Độ Làm Bài Mới Nhất
+            </h3>
+
+            <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm">
+              {studentProgressList.length > 0 ? (
+                <table className="w-full text-left text-xs font-bold">
+                  <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
+                    <tr>
+                      <th className="p-3">Học Sinh</th>
+                      <th className="p-3">Khối</th>
+                      <th className="p-3">Tên Trò Chơi</th>
+                      <th className="p-3">Điểm Số</th>
+                      <th className="p-3">Sao Thưởng</th>
+                      <th className="p-3">Thời Gian Hoàn Thành</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-100 text-slate-700">
+                    {studentProgressList.map((sp) => (
+                      <tr key={sp.id} className="hover:bg-amber-50">
+                        <td className="p-3 font-black text-amber-900">{sp.profiles?.full_name || 'Học Sinh'}</td>
+                        <td className="p-3">Lớp {sp.profiles?.grade_level || 1}</td>
+                        <td className="p-3 text-slate-800">{sp.games?.title || 'Game Học Tập'}</td>
+                        <td className="p-3 text-sky-600 font-extrabold">{sp.score} điểm</td>
+                        <td className="p-3 text-amber-600 font-extrabold">+{sp.stars_earned} 🌟</td>
+                        <td className="p-3 text-slate-500">{new Date(sp.completed_at).toLocaleString('vi-VN')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-8 text-center text-slate-500 font-bold">
+                  Chưa có dữ liệu tiến độ của học sinh.
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* MODALS */}
       <ClassManageModal

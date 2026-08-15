@@ -117,9 +117,9 @@ export const Navbar = () => {
     if (role === 'admin') {
       navigate('/admin?tab=games');
     } else if (role === 'teacher') {
-      navigate('/teacher');
+      navigate('/teacher?tab=games');
     } else {
-      navigate('/student');
+      navigate('/student?tab=games');
     }
   };
 
@@ -129,9 +129,9 @@ export const Navbar = () => {
     if (role === 'admin') {
       navigate('/admin?tab=users');
     } else if (role === 'teacher') {
-      navigate('/teacher');
+      navigate('/teacher?tab=classes');
     } else {
-      navigate('/student');
+      navigate('/student?tab=learning');
     }
   };
 
@@ -144,15 +144,22 @@ export const Navbar = () => {
     navigate('/auth');
   };
 
+  // Đọc tab parameter từ URL để tính toán chính xác trạng thái Active loại trừ lẫn nhau
+  const searchParams = new URLSearchParams(location.search);
+  const currentTab = searchParams.get('tab');
+
   const isGamesActive = 
-    (role === 'admin' && location.pathname === '/admin' && location.search.includes('tab=games')) ||
-    (role === 'teacher' && location.pathname === '/teacher' && !location.pathname.includes('materials')) ||
-    (role === 'student' && (location.pathname === '/' || location.pathname === '/student'));
+    (role === 'admin' && location.pathname === '/admin' && currentTab === 'games') ||
+    (role === 'teacher' && location.pathname === '/teacher' && currentTab === 'games') ||
+    (role === 'student' && location.pathname === '/student' && (currentTab === 'games' || !currentTab));
 
   const isDashboardActive = 
-    (role === 'admin' && location.pathname === '/admin' && !location.search.includes('tab=games')) ||
-    (role === 'teacher' && location.pathname === '/teacher') ||
-    (role === 'student' && location.pathname === '/student');
+    (role === 'admin' && location.pathname === '/admin' && currentTab === 'users') ||
+    (role === 'teacher' && location.pathname === '/teacher' && currentTab === 'classes') ||
+    (role === 'student' && location.pathname === '/student' && currentTab === 'learning');
+
+  const isLeaderboardActive = location.pathname === '/leaderboard';
+  const isMaterialsActive = location.pathname === '/materials';
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-4 border-amber-200 shadow-sm">
@@ -181,7 +188,7 @@ export const Navbar = () => {
         </a>
 
         {/* ĐIỀU HƯỚNG CHÍNH MÀN HÌNH MÁY TÍNH (DESKTOP >= lg) */}
-        {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Bảng Xếp Hạng ➔ Dashboard (Góc Học Tập/Lớp & Giao Bài/Quản Trị Hệ Thống) ➔ Góc Tài Liệu */}
+        {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Bảng Xếp Hạng ➔ Dashboard theo role ➔ Góc Tài Liệu */}
         <nav className="hidden lg:flex items-center gap-2">
           
           {/* BỘ LỌC LỚP HEADER TOÀN CỤC MÁY TÍNH */}
@@ -224,7 +231,7 @@ export const Navbar = () => {
           <button
             onClick={() => handleNavClick('/leaderboard')}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
-              location.pathname === '/leaderboard' 
+              isLeaderboardActive
                 ? 'bg-amber-500 text-white border-amber-600 shadow-sm' 
                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
             }`}
@@ -254,7 +261,7 @@ export const Navbar = () => {
             <button
               onClick={() => handleNavClick('/materials')}
               className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
-                location.pathname === '/materials'
+                isMaterialsActive
                   ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
               }`}
@@ -309,12 +316,14 @@ export const Navbar = () => {
                     </p>
                   </div>
 
-                  {/* NÚT ĐIỀU HƯỚNG MOBILE/TABLET (ĐỒNG BỘ THỨ TỰ VỚI DESKTOP) */}
+                  {/* NÚT ĐIỀU HƯỚNG MOBILE/TABLET (ĐỒNG BỘ THỨ TỰ & ACTIVE VỚI DESKTOP) */}
                   <div className="lg:hidden border-b-2 border-slate-100 pb-1 mb-1">
                     {/* 1. KHO TRÒ CHƠI */}
                     <button
                       onClick={handleGamesNavClick}
-                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                      className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
+                        isGamesActive ? 'bg-sky-50 text-sky-700 font-black' : 'text-slate-700 hover:bg-amber-50'
+                      }`}
                     >
                       <Gamepad2 className="w-4 h-4 text-sky-500" /> Kho Trò Chơi
                     </button>
@@ -322,15 +331,19 @@ export const Navbar = () => {
                     {/* 2. BẢNG XẾP HẠNG */}
                     <button
                       onClick={() => handleNavClick('/leaderboard')}
-                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                      className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
+                        isLeaderboardActive ? 'bg-amber-50 text-amber-900 font-black' : 'text-slate-700 hover:bg-amber-50'
+                      }`}
                     >
                       <Trophy className="w-4 h-4 text-amber-500" /> Bảng Xếp Hạng
                     </button>
 
-                    {/* 3. DASHBOARD THEO ROLE (GÓC HỌC TẬP / LỚP & GIAO BÀI / QUẢN TRỊ HỆ THỐNG) */}
+                    {/* 3. DASHBOARD THEO ROLE */}
                     <button
                       onClick={handleDashboardNavClick}
-                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                      className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
+                        isDashboardActive ? 'bg-emerald-50 text-emerald-800 font-black' : 'text-slate-700 hover:bg-amber-50'
+                      }`}
                     >
                       {role === 'admin' && <ShieldCheck className="w-4 h-4 text-emerald-600" />}
                       {role === 'teacher' && <GraduationCap className="w-4 h-4 text-emerald-600" />}
@@ -341,18 +354,13 @@ export const Navbar = () => {
                     {/* 4. GÓC TÀI LIỆU */}
                     <button
                       onClick={() => handleNavClick('/materials')}
-                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
+                      className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
+                        isMaterialsActive ? 'bg-amber-50 text-amber-900 font-black' : 'text-slate-700 hover:bg-amber-50'
+                      }`}
                     >
                       <BookOpen className="w-4 h-4 text-amber-500" /> Góc Tài Liệu
                     </button>
                   </div>
-
-                  <button
-                    onClick={handleDashboardNavClick}
-                    className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-900 flex items-center gap-2"
-                  >
-                    <User className="w-4 h-4 text-amber-500" /> Hồ Sơ & Bảng Quản Lý
-                  </button>
 
                   <button
                     onClick={() => {

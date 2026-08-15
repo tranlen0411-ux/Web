@@ -65,9 +65,9 @@ const HomeDispatcher = () => {
     return <Navigate to="/admin?tab=games" replace />;
   }
   if (profile?.role === 'teacher') {
-    return <Navigate to="/teacher" replace />;
+    return <Navigate to="/teacher?tab=classes" replace />;
   }
-  return <Navigate to="/student" replace />;
+  return <Navigate to="/student?tab=games" replace />;
 };
 
 function AppRoutes() {

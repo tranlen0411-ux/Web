@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Sparkles, 
   Trophy, 
@@ -22,8 +22,27 @@ export const StudentDashboard = () => {
   const { profile, refreshProfile } = useAuth();
   const { triggerSound } = useSound();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState('library'); // 'library' | 'assignments' | 'badges' | 'history'
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'learning') return 'assignments';
+    if (tabParam === 'games') return 'library';
+    return 'library';
+  });
+
+  // Tự động đồng bộ tab parameter từ URL
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'games') {
+      setActiveTab('library');
+    } else if (tab === 'learning') {
+      setActiveTab(prev => (prev === 'library' ? 'assignments' : prev));
+    } else {
+      setSearchParams({ tab: 'games' }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const [selectedGrade, setSelectedGrade] = useState(profile?.grade_level || 1);
   const [selectedSubject, setSelectedSubject] = useState('ALL');
   
@@ -278,7 +297,11 @@ export const StudentDashboard = () => {
       {/* TABS ĐIỀU HƯỚNG BẢNG ĐIỀU KHIỂN */}
       <div className="flex flex-wrap bg-white p-2 rounded-2xl border-4 border-amber-200 mb-6 gap-2">
         <button
-          onClick={() => { setActiveTab('library'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveTab('library');
+            triggerSound('click');
+            setSearchParams({ tab: 'games' }, { replace: true });
+          }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'library'
               ? 'bg-sky-500 text-white shadow-md border-b-4 border-sky-700'
@@ -289,7 +312,11 @@ export const StudentDashboard = () => {
         </button>
 
         <button
-          onClick={() => { setActiveTab('assignments'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveTab('assignments');
+            triggerSound('click');
+            setSearchParams({ tab: 'learning' }, { replace: true });
+          }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'assignments'
               ? 'bg-amber-500 text-white shadow-md border-b-4 border-amber-700'
@@ -300,7 +327,11 @@ export const StudentDashboard = () => {
         </button>
 
         <button
-          onClick={() => { setActiveTab('badges'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveTab('badges');
+            triggerSound('click');
+            setSearchParams({ tab: 'learning' }, { replace: true });
+          }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'badges'
               ? 'bg-emerald-500 text-white shadow-md border-b-4 border-emerald-700'
@@ -311,7 +342,11 @@ export const StudentDashboard = () => {
         </button>
 
         <button
-          onClick={() => { setActiveTab('history'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveTab('history');
+            triggerSound('click');
+            setSearchParams({ tab: 'learning' }, { replace: true });
+          }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'history'
               ? 'bg-purple-500 text-white shadow-md border-b-4 border-purple-700'
