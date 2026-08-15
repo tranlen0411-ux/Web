@@ -1,20 +1,37 @@
 -- ============================================================================
--- MIGRATION AN TOÀN VIỆN TOÀN: SIẾT CHẶT BẢO MẬT GAMES, ASSIGNMENTS VÀ STORAGE GAME-THUMBNAILS
--- BẢO TOÀN 100% DỮ LIỆU VÀ LỊCH SỬ HỌC SINH (CHẶN HOÀN TOÀN DELETE TRỰC TIẾP, GIAO DỊCH 3 TRƯỜNG HỢP)
+-- MIGRATION AN TOÀN VIỆN TOÀN (IDEMPOTENT & CHỐNG RACE CONDITION TRONG GIAO DỊCH)
+-- SIẾT CHẶT BẢO MẬT GAMES, ASSIGNMENTS VÀ STORAGE GAME-THUMBNAILS
+-- KHÓA BẢN GHI BẰNG FOR UPDATE VÀ FOR KEY SHARE ĐỂ CHẶN XÓA/SỬA ĐỒNG THỜI
 -- ============================================================================
 
 BEGIN;
 
 -- 1. BỔ SUNG CÁC CỘT MỚI CHO PUBLIC.ASSIGNMENTS (DÙNG ADD COLUMN IF NOT EXISTS)
-ALTER TABLE public.assignments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'cancelled'));
+ALTER TABLE public.assignments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 ALTER TABLE public.assignments ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 ALTER TABLE public.assignments ADD COLUMN IF NOT EXISTS replaced_by UUID REFERENCES public.assignments(id) ON DELETE SET NULL;
 
+-- CHUẨN HÓA DỮ LIỆU TRƯỚC KHI TẠO CONSTRAINT
+UPDATE public.assignments
+SET status = 'active'
+WHERE status IS NULL OR status NOT IN ('active', 'archived', 'cancelled');
+
+-- GẮN TÊN CHECK CONSTRAINT ASSIGNMENTS_STATUS_CHECK MỘT CÁCH IDEMPOTENT
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'assignments_status_check'
+      AND conrelid = 'public.assignments'::regclass
+  ) THEN
+    ALTER TABLE public.assignments
+    ADD CONSTRAINT assignments_status_check
+    CHECK (status IN ('active', 'archived', 'cancelled'));
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_assignments_status ON public.assignments(status);
 CREATE INDEX IF NOT EXISTS idx_assignments_class_status ON public.assignments(class_id, status);
-
--- CHỈ CẬP NHẬT TRẠNG THÁI ACTIVE CHO BẢN GHI CÓ STATUS LÀ NULL (BẢO TOÀN GIÁ TRỊ CŨ)
-UPDATE public.assignments SET status = 'active' WHERE status IS NULL;
 
 -- 2. ĐẢM BẢO CỘT AUTHOR_ID VÀ CHỈ MỤC CHO PUBLIC.GAMES
 ALTER TABLE public.games ADD COLUMN IF NOT EXISTS author_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
@@ -179,7 +196,7 @@ CREATE POLICY "Thumbnails_Delete_Policy" ON storage.objects
   );
 
 -- ============================================================================
--- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI 3 TRƯỜNG HỢP VÀ GIỚI HẠN ĐẦU VÀO STICK
+-- 7. RPC THAY TRÒ CHƠI ĐÃ GIAO NGUYÊN TỬ VỚI LOCK FOR KEY SHARE TRÊN GAME MỚI
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.replace_assignment_safely(
   p_assignment_id UUID,
@@ -191,6 +208,7 @@ RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_caller_id UUID;
   v_assign RECORD;
+  v_new_game_exists UUID;
   v_progress_count INT;
   v_new_assignment_id UUID;
 BEGIN
@@ -233,9 +251,13 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Từ chối truy cập: Thầy/Cô không quản lý lớp học này.');
   END IF;
 
-  -- 7. Kiểm tra trò chơi mới chọn có tồn tại không
-  IF NOT EXISTS (SELECT 1 FROM public.games WHERE id = p_new_game_id) THEN
-    RETURN jsonb_build_object('success', false, 'message', 'Trò chơi mới chọn không tồn tại.');
+  -- 7. KHÓA BẢN GHI TRÒ CHƠI MỚI BẰNG FOR KEY SHARE ĐỂ CHẶN RACE CONDITION XÓA ĐỒNG THỜI
+  SELECT id INTO v_new_game_exists
+  FROM public.games
+  WHERE id = p_new_game_id FOR KEY SHARE;
+
+  IF v_new_game_exists IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Trò chơi mới chọn không tồn tại hoặc đã bị xóa.');
   END IF;
 
   -- =========================================================================
@@ -352,12 +374,13 @@ REVOKE ALL ON FUNCTION public.cancel_assignment_safely(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.cancel_assignment_safely(UUID) TO authenticated;
 
 -- ============================================================================
--- 9. RPC XÓA GAME AN TOÀN DÀNH CHO ADMIN (CHỈ XÓA KHI CHƯA TỪNG ĐƯỢC SỬ DỤNG)
+-- 9. RPC XÓA GAME AN TOÀN DÀNH CHO ADMIN VỚI FOR UPDATE KHÓA GAME TRƯỚC KHI ĐẾM
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.delete_game_safely(p_game_id UUID)
 RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
   v_caller_id UUID;
+  v_game_id UUID;
   v_assign_count INT;
   v_progress_count INT;
 BEGIN
@@ -375,17 +398,20 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Từ chối truy cập: Chỉ Admin mới có quyền xóa trò chơi khỏi kho.');
   END IF;
 
-  -- Kiểm tra game tồn tại
-  IF NOT EXISTS (SELECT 1 FROM public.games WHERE id = p_game_id) THEN
+  -- 1. KHÓA BẢN GHI GAME BẰNG FOR UPDATE TRƯỚC KHI ĐẾM DỮ LIỆU THAM CHIẾU (CHỐNG RACE CONDITION)
+  SELECT id INTO v_game_id
+  FROM public.games
+  WHERE id = p_game_id FOR UPDATE;
+
+  IF v_game_id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Trò chơi không tồn tại.');
   END IF;
 
-  -- Kiểm tra xem trò chơi đã từng được giao chưa
+  -- 2. ĐẾM SỐ BÀI GIAO VÀ TIẾN ĐỘ HỌC SINH SAU KHI ĐÃ KHÓA BẢN GHI GAME
   SELECT COUNT(*) INTO v_assign_count
   FROM public.assignments
   WHERE game_id = p_game_id;
 
-  -- Kiểm tra xem trò chơi đã từng có tiến độ làm bài chưa
   SELECT COUNT(*) INTO v_progress_count
   FROM public.student_progress
   WHERE game_id = p_game_id;
@@ -397,6 +423,7 @@ BEGIN
     );
   END IF;
 
+  -- 3. XÓA BẢN GHI KHI KHÔNG CÓ BẤT KỲ LIÊN KẾT NÀO
   DELETE FROM public.games WHERE id = p_game_id;
 
   RETURN jsonb_build_object('success', true, 'message', 'Đã xóa trò chơi chưa từng được sử dụng thành công.');
