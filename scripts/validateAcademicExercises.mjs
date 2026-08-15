@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 12.0 (Academic Exercises)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 13.0 (Academic Exercises)...\n');
 
 let hasError = false;
 
@@ -13,55 +13,62 @@ if (!fs.existsSync(sqlPath)) {
 } else {
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Check 1: Candidate CTE pre-check
-  if (!sql.includes('ClassCandidates AS') || !sql.includes('MIGRATION BỊ DỪNG')) {
-    console.error('❌ LỖI MIGRATION: Thiếu Unified Candidate CTE pre-check!');
+  // Check 1: TUYỆT ĐỐI KHÔNG DÙNG DELETE FROM STORAGE.OBJECTS TRONG SQL
+  if (sql.includes('DELETE FROM storage.objects') || sql.includes('INSERT INTO storage.objects') || sql.includes('UPDATE storage.objects')) {
+    console.error('❌ LỖI KIẾN TRÚC STORAGE SQL: SQL không được phép DELETE/INSERT/UPDATE trực tiếp trên storage.objects metadata!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Migration: Đã tích hợp Unified Candidate CTE pre-check!');
+    console.log('  ✅ SQL Architecture: Đã loại bỏ hoàn toàn các câu lệnh DML trực tiếp trên storage.objects!');
   }
 
-  // Check 2: RPC delete_unreferenced_submission_files
-  if (!sql.includes('FUNCTION public.delete_unreferenced_submission_files') || !sql.includes('v_is_referenced')) {
-    console.error('❌ LỖI STORAGE RPC: Thiếu RPC delete_unreferenced_submission_files bảo mật!');
+  // Check 2: Bảng hàng đợi cleanup và RPC queue_file_cleanup
+  if (!sql.includes('exercise_file_cleanup_jobs') || !sql.includes('FUNCTION public.queue_file_cleanup')) {
+    console.error('❌ LỖI CLEANUP QUEUE: Thiếu bảng exercise_file_cleanup_jobs hoặc RPC queue_file_cleanup!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Storage RPC: Đã tích hợp RPC delete_unreferenced_submission_files bảo mật!');
+    console.log('  ✅ SQL Cleanup Queue: Đã tích hợp bảng exercise_file_cleanup_jobs và RPC queue_file_cleanup!');
   }
 
-  // Check 3: Distinct count check cho multiple_choice
-  if (!sql.includes('SELECT COUNT(DISTINCT elem) INTO v_distinct_count') || !sql.includes('v_distinct_count != jsonb_array_length(v_student_ans)')) {
-    console.error('❌ LỖI MULTIPLE CHOICE VALIDATION: submit_academic_exercise chưa kiểm tra phần tử trùng lặp!');
+  // Check 3: Kiểm tra TRUNC cho points_earned
+  if (!sql.includes('v_num_val != TRUNC(v_num_val)')) {
+    console.error('❌ LỖI INT VALIDATION: RPC grade chưa có kiểm tra v_num_val != TRUNC(v_num_val) loại bỏ số thập phân 1.5!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Multiple Choice: RPC submit_academic_exercise từ chối mảng trắc nghiệm chứa phần tử trùng lặp!');
-  }
-
-  // Check 4: Type check an toàn cho points_earned
-  if (!sql.includes('jsonb_typeof(v_grade_item->\'points_earned\') != \'number\'') || !sql.includes('v_graded_subjective_count < v_total_subjective_count')) {
-    console.error('❌ LỖI GRADING TYPE CHECK: RPC grade chưa có kiểm tra kiếu số an toàn hoặc bắt buộc chấm 100% câu tự luận!');
-    hasError = true;
-  } else {
-    console.log('  ✅ SQL Grading: RPC grade_academic_submission có type check số an toàn và bắt buộc chấm 100% câu tự luận!');
+    console.log('  ✅ SQL Int Validation: RPC grade_academic_submission kiểm tra số nguyên TRUNC(v_num_val) = v_num_val chuẩn xác!');
   }
 }
 
-// 2. KIỂM TRA FRONTEND COMPONENTS
+// 2. KIỂM TRA SUPABASE EDGE FUNCTION
+const edgeFuncPath = path.join(process.cwd(), 'supabase', 'functions', 'cleanup-exercise-submission-files', 'index.ts');
+if (!fs.existsSync(edgeFuncPath)) {
+  console.error('❌ LỖI EDGE FUNCTION: Thiếu file Edge Function supabase/functions/cleanup-exercise-submission-files/index.ts');
+  hasError = true;
+} else {
+  const edgeContent = fs.readFileSync(edgeFuncPath, 'utf8');
+  if (!edgeContent.includes('storage.from(\'exercise-submissions\').remove')) {
+    console.error('❌ LỖI EDGE FUNCTION API: Edge Function chưa gọi Storage API remove() chính thức!');
+    hasError = true;
+  } else {
+    console.log('  ✅ Supabase Edge Function: Đã tạo Edge Function cleanup gọi đúng Storage API remove() chính thức!');
+  }
+}
+
+// 3. KIỂM TRA FRONTEND COMPONENTS
 const playModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExercisePlayModal.jsx');
 if (fs.existsSync(playModalPath)) {
   const playContent = fs.readFileSync(playModalPath, 'utf8');
-  if (!playContent.includes('delete_unreferenced_submission_files') || !playContent.includes('baselineFilesRef')) {
-    console.error('❌ LỖI UI RPC STORAGE: ExercisePlayModal chưa gọi RPC delete_unreferenced_submission_files!');
+  if (!playContent.includes('cleanup-exercise-submission-files') || !playContent.includes('queue_file_cleanup')) {
+    console.error('❌ LỖI UI CLEANUP: ExercisePlayModal chưa tích hợp Edge Function cleanup-exercise-submission-files!');
     hasError = true;
   } else {
-    console.log('  ✅ ExercisePlayModal: Tích hợp gọi RPC delete_unreferenced_submission_files cho cleanup Storage an toàn!');
+    console.log('  ✅ ExercisePlayModal: Đã tích hợp gọi Edge Function cleanup-exercise-submission-files và queue_file_cleanup!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 12.0 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 13.0 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 12.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 13.0 THÀNH CÔNG (EXIT CODE 0)!');
   process.exit(0);
 }

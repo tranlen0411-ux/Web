@@ -1,10 +1,10 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 12.0 BẢO MẬT TUYỆT ĐỐI
--- 1. RPC BẢO MẬT DELETE_UNREFERENCED_SUBMISSION_FILES: KIỂM TRA NOT EXISTS TRÊN TOÀN CSDL (SECURITY DEFINER BỎ QUA RLS HẠN CHẾ CỦA FRONTEND) TRƯỚC KHI XÓA FILE
--- 2. VALIDATE MULTIPLE_CHOICE KHÔNG ĐƯỢC CHỨA CÁC PHẦN TỬ TRÙNG LẶP (DISTINCT COUNT = ARRAY LENGTH)
--- 3. XỬ LÝ AN TOÀN LOẠI BỎ CAST TRỰC TIẾP POINTS_EARNED::INT (CHECK JSONB_TYPEOF = 'number' TRÁNH EXCEPTION CSDL)
--- 4. BẮT BỘC CHẤM ĐỦ 100% CÂU TỰ LUẬN TRƯỚC KHI CHUYỂN TRẠNG THÁI GRADED TRONG GRADE_ACADEMIC_SUBMISSION
--- 5. CHUẨN HÓA ZERO-DML VALIDATION VÀ SERVER-SIDE STATE TRANSITIONS
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 13.0 CHUẨN KIẾN TRÚC STORAGE API
+-- 1. LOẠI BỎ HOÀN TOÀN 'DELETE FROM STORAGE.OBJECTS' TRONG SQL (TRÁNH LỖI METADATA MỒ CÔI THUỘC TÀI LIỆU CHÍNH THỨC SUPABASE)
+-- 2. TẠO BẢNG HÀNG ĐỜI PUBLIC.EXERCISE_FILE_CLEANUP_JOBS VÀ RPC PUBLIC.QUEUE_FILE_CLEANUP
+-- 3. CHÍNH THỨC SỬ DỤNG EDGE FUNCTION CLEANUP-EXERCISE-SUBMISSION-FILES VỚI SUPABASE.STORAGE.REMOVE() API
+-- 4. VALIDATE INT THỰC TẾ CHO POINTS_EARNED (TRUNC(NUMERIC) = NUMERIC KHÔNG CHO PHÉP SỐ THẬP PHÂN NHƯ 1.5 HOẶC CHUỖI "ABC")
+-- 5. PHÂN TÁCH MẠNH VÀ HOÀN THIỆN ZERO-DML VALIDATION PHASE TRONG MỌI RPC
 -- ============================================================================
 
 BEGIN;
@@ -12,7 +12,23 @@ BEGIN;
 -- 1. SCHEMA PRIVACY APP_PRIVATE
 CREATE SCHEMA IF NOT EXISTS app_private;
 
--- 2. BẢNG PUBLIC.ACADEMIC_EXERCISES
+-- DROP RPC XÓA DIRECT STORAGE TRỰC TIẾP CŨ NẾU CÓ
+DROP FUNCTION IF EXISTS public.delete_unreferenced_submission_files(TEXT[]);
+
+-- 2. BẢNG HÀNG ĐỢI CLEANUP FILE BẢO MẬT
+CREATE TABLE IF NOT EXISTS public.exercise_file_cleanup_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bucket_id TEXT NOT NULL DEFAULT 'exercise-submissions',
+  file_path TEXT NOT NULL UNIQUE,
+  requested_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'deleted', 'still_referenced', 'failed')),
+  attempts INT DEFAULT 0 CHECK (attempts >= 0),
+  last_error TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  processed_at TIMESTAMPTZ
+);
+
+-- 3. BẢNG PUBLIC.ACADEMIC_EXERCISES
 CREATE TABLE IF NOT EXISTS public.academic_exercises (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   teacher_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
@@ -113,7 +129,7 @@ BEGIN
   END IF;
 END $$;
 
--- 3. BẢNG CÂU HỎI PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
+-- 4. BẢNG CÂU HỎI PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
 CREATE TABLE IF NOT EXISTS public.academic_exercise_questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   exercise_id UUID NOT NULL REFERENCES public.academic_exercises(id) ON DELETE CASCADE,
@@ -125,7 +141,7 @@ CREATE TABLE IF NOT EXISTS public.academic_exercise_questions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. BẢNG ĐÁP ÁN BÍ MẬT APP_PRIVATE.ACADEMIC_ANSWER_KEYS
+-- 5. BẢNG ĐÁP ÁN BÍ MẬT APP_PRIVATE.ACADEMIC_ANSWER_KEYS
 CREATE TABLE IF NOT EXISTS app_private.academic_answer_keys (
   question_id UUID PRIMARY KEY REFERENCES public.academic_exercise_questions(id) ON DELETE CASCADE,
   correct_answer JSONB NOT NULL,
@@ -136,7 +152,7 @@ CREATE TABLE IF NOT EXISTS app_private.academic_answer_keys (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. BẢNG BÀI NỘP PUBLIC.ACADEMIC_SUBMISSIONS
+-- 6. BẢNG BÀI NỘP PUBLIC.ACADEMIC_SUBMISSIONS
 CREATE TABLE IF NOT EXISTS public.academic_submissions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   exercise_id UUID NOT NULL REFERENCES public.academic_exercises(id) ON DELETE CASCADE,
@@ -171,7 +187,7 @@ BEGIN
   END IF;
 END $$;
 
--- 6. BẢNG CÂU TRẢ LỜI PUBLIC.ACADEMIC_SUBMISSION_ANSWERS
+-- 7. BẢNG CÂU TRẢ LỜI PUBLIC.ACADEMIC_SUBMISSION_ANSWERS
 CREATE TABLE IF NOT EXISTS public.academic_submission_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   submission_id UUID NOT NULL REFERENCES public.academic_submissions(id) ON DELETE CASCADE,
@@ -201,7 +217,7 @@ REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM PUBLIC, anon, authenticated;
 
 -- ============================================================================
--- STORAGE BUCKET PRIVATE EXERCISE-SUBMISSIONS VÀ POLICY DELETE
+-- STORAGE BUCKET PRIVATE EXERCISE-SUBMISSIONS
 -- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -224,22 +240,18 @@ ON CONFLICT (id) DO UPDATE SET
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   ];
 
--- ============================================================================
--- RLS POLICIES VÀ KHÓA GHI TRỰC TIẾP
--- ============================================================================
+-- RLS ON PUBLIC TABLES
 ALTER TABLE public.academic_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_exercise_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_submission_answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exercise_file_cleanup_jobs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Academic exercises select policy" ON public.academic_exercises;
-DROP POLICY IF EXISTS "Academic exercises write policy" ON public.academic_exercises;
-DROP POLICY IF EXISTS "Academic exercises insert policy" ON public.academic_exercises;
-DROP POLICY IF EXISTS "Academic exercises update policy" ON public.academic_exercises;
-
 DROP POLICY IF EXISTS "Academic questions select policy" ON public.academic_exercise_questions;
 DROP POLICY IF EXISTS "Academic submissions select policy" ON public.academic_submissions;
 DROP POLICY IF EXISTS "Academic submission answers select policy" ON public.academic_submission_answers;
+DROP POLICY IF EXISTS "Exercise file cleanup jobs select policy" ON public.exercise_file_cleanup_jobs;
 
 CREATE POLICY "Academic exercises select policy" ON public.academic_exercises
 FOR SELECT USING (
@@ -305,7 +317,13 @@ FOR SELECT USING (
   )
 );
 
--- STORAGE POLICIES FOR EXERCISE-SUBMISSIONS
+CREATE POLICY "Exercise file cleanup jobs select policy" ON public.exercise_file_cleanup_jobs
+FOR SELECT USING (
+  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
+  OR requested_by = auth.uid()
+);
+
+-- STORAGE POLICIES
 DROP POLICY IF EXISTS "Exercise submissions student insert policy" ON storage.objects;
 DROP POLICY IF EXISTS "Exercise submissions student delete policy" ON storage.objects;
 DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
@@ -323,18 +341,6 @@ FOR INSERT WITH CHECK (
   AND (
     name NOT ILIKE '%.svg' AND name NOT ILIKE '%.exe' AND name NOT ILIKE '%.html'
     AND name NOT ILIKE '%.js' AND name NOT ILIKE '%.sh' AND name NOT ILIKE '%.bat'
-  )
-);
-
-CREATE POLICY "Exercise submissions student delete policy" ON storage.objects
-FOR DELETE USING (
-  bucket_id = 'exercise-submissions'
-  AND (storage.foldername(name))[1] = auth.uid()::text
-  AND EXISTS (
-    SELECT 1 FROM public.academic_submissions s
-    WHERE s.id::text = (storage.foldername(name))[2]
-      AND s.student_id = auth.uid()
-      AND s.status IN ('draft', 'revision_requested')
   )
 );
 
@@ -357,8 +363,8 @@ FOR SELECT USING (
 -- CÁC RPC SECURITY DEFINER
 -- ============================================================================
 
--- 1. RPC SECURITY DEFINER XÓA FILE STORAGE AN TOÀN (BỎ QUA RLS HẠN CHẾ CỦA FRONTEND)
-CREATE OR REPLACE FUNCTION public.delete_unreferenced_submission_files(
+-- 1. RPC AN TOÀN ĐƯA FILE VÀO HÀNG ĐỢI CLEANUP BẢO MẬT (KHÔNG DÙNG DELETE SQL TRÊN STORAGE.OBJECTS)
+CREATE OR REPLACE FUNCTION public.queue_file_cleanup(
   p_paths TEXT[]
 )
 RETURNS JSONB
@@ -370,10 +376,8 @@ DECLARE
   v_caller_id UUID;
   v_caller_role TEXT;
   v_path TEXT;
-  v_deleted TEXT[] := ARRAY[]::TEXT[];
-  v_still_referenced TEXT[] := ARRAY[]::TEXT[];
-  v_not_found TEXT[] := ARRAY[]::TEXT[];
-  v_is_referenced BOOLEAN := FALSE;
+  v_queued TEXT[] := ARRAY[]::TEXT[];
+  v_rejected TEXT[] := ARRAY[]::TEXT[];
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -383,48 +387,42 @@ BEGIN
   SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
 
   IF p_paths IS NULL OR array_length(p_paths, 1) = 0 THEN
-    RETURN jsonb_build_object('success', true, 'deleted', '[]'::jsonb, 'still_referenced', '[]'::jsonb, 'not_found', '[]'::jsonb);
+    RETURN jsonb_build_object('success', true, 'queued', '[]'::jsonb, 'rejected', '[]'::jsonb);
+  END IF;
+
+  IF array_length(p_paths, 1) > 50 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Vượt quá giới hạn tối đa 50 đường dẫn file mỗi lần yêu cầu.');
   END IF;
 
   FOREACH v_path IN ARRAY p_paths
   LOOP
-    -- 1. Kiểm tra quyền sở hữu đường dẫn file (phải bắt đầu bằng auth.uid() hoặc caller là Admin)
     IF v_caller_role != 'admin' AND NOT (v_path LIKE v_caller_id::text || '/%') THEN
-      v_still_referenced := array_append(v_still_referenced, v_path);
+      v_rejected := array_append(v_rejected, v_path);
       CONTINUE;
     END IF;
 
-    -- 2. Kiểm tra xem file có còn được tham chiếu ở BẤT KỲ đâu trong CSDL không (Bỏ qua RLS)
-    SELECT EXISTS (
-      SELECT 1 FROM public.academic_submission_answers WHERE file_url = v_path
-    ) INTO v_is_referenced;
+    INSERT INTO public.exercise_file_cleanup_jobs (
+      bucket_id, file_path, requested_by, status
+    ) VALUES (
+      'exercise-submissions', v_path, v_caller_id, 'pending'
+    )
+    ON CONFLICT (file_path) DO UPDATE SET
+      requested_by = EXCLUDED.requested_by,
+      created_at = NOW();
 
-    IF v_is_referenced THEN
-      v_still_referenced := array_append(v_still_referenced, v_path);
-    ELSE
-      -- Xóa file object trong storage.objects nếu không còn bất kỳ tham chiếu nào
-      DELETE FROM storage.objects 
-      WHERE bucket_id = 'exercise-submissions' AND name = v_path;
-
-      IF FOUND THEN
-        v_deleted := array_append(v_deleted, v_path);
-      ELSE
-        v_not_found := array_append(v_not_found, v_path);
-      END IF;
-    END IF;
+    v_queued := array_append(v_queued, v_path);
   END LOOP;
 
   RETURN jsonb_build_object(
     'success', true,
-    'deleted', to_jsonb(v_deleted),
-    'still_referenced', to_jsonb(v_still_referenced),
-    'not_found', to_jsonb(v_not_found)
+    'queued', to_jsonb(v_queued),
+    'rejected', to_jsonb(v_rejected)
   );
 END;
 $$;
 
 
--- 2. RPC GET_EXERCISE_FOR_EDIT
+-- 2. GET_EXERCISE_FOR_EDIT
 CREATE OR REPLACE FUNCTION public.get_exercise_for_edit(
   p_exercise_id UUID
 )
@@ -815,7 +813,7 @@ END;
 $$;
 
 
--- 5. SUBMIT_ACADEMIC_EXERCISE VỚI CÁC KIỂM TRA ĐỘ LẶP MULTIPLE_CHOICE VÀ ZERO-DML VALIDATION
+-- 5. SUBMIT_ACADEMIC_EXERCISE
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
   p_answers JSONB,
@@ -982,7 +980,6 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án câu hỏi nhiều lựa chọn phải là một mảng JSON.');
       END IF;
       IF v_student_ans IS NOT NULL AND jsonb_typeof(v_student_ans) = 'array' THEN
-        -- KIỂM TRA PHẦN TỬ TRÙNG LẶP (DÙNG DISTINCT COUNT)
         SELECT COUNT(DISTINCT elem) INTO v_distinct_count FROM jsonb_array_elements_text(v_student_ans) elem;
         IF v_distinct_count != jsonb_array_length(v_student_ans) THEN
           RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đáp án câu hỏi trắc nghiệm nhiều lựa chọn không được chứa các phần tử trùng lặp.');
@@ -1151,7 +1148,7 @@ END;
 $$;
 
 
--- 6. GRADE_ACADEMIC_SUBMISSION VỚI AN TOÀN LOẠI BỎ CAST INT TRỰC TIẾP VÀ BẮT BỘC CHẤM ĐỦ 100% CÂU TỰ LUẬN
+-- 6. GRADE_ACADEMIC_SUBMISSION VỚI VALIDATION KIỂU INT CHO POINTS_EARNED DÙNG NUMERIC TRUNC
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -1183,6 +1180,7 @@ DECLARE
   v_sub_ans_exists BOOLEAN := FALSE;
   v_total_subjective_count INT := 0;
   v_graded_subjective_count INT := 0;
+  v_num_val NUMERIC;
 BEGIN
   -- =========================================================================
   -- PHASE 1: ZERO-DML VALIDATION PHASE (KHÔNG CHẠY LỆNH UPDATE NÀO)
@@ -1253,12 +1251,22 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bản ghi câu trả lời không tồn tại trong bài nộp.');
       END IF;
 
-      -- KIỂM TRA ĐIỂM SỐ CHÍNH XÁC KIỂU SỐ (AN TOÀN LOẠI BỎ CAST INT TRỰC TIẾP)
+      -- KIỂM TRA ĐIỂM SỐ CHÍNH XÁC KIỂU SỐ NGUYÊN (TRÁNH CÁC SỐ THẬP PHÂN NHƯ 1.5 HOẶC CHUỖI "ABC")
       IF (v_grade_item->'points_earned') IS NULL OR jsonb_typeof(v_grade_item->'points_earned') != 'number' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm points_earned phải là một số nguyên.');
       END IF;
 
-      v_item_points := (v_grade_item->>'points_earned')::INT;
+      BEGIN
+        v_num_val := (v_grade_item->>'points_earned')::NUMERIC;
+      EXCEPTION WHEN OTHERS THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm points_earned không đúng định dạng số.');
+      END;
+
+      IF v_num_val != TRUNC(v_num_val) THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm points_earned phải là số nguyên, không được chứa phần thập phân.');
+      END IF;
+
+      v_item_points := v_num_val::INT;
       IF v_item_points < 0 OR v_item_points > COALESCE(v_q_points, 10) THEN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm cho câu hỏi không nằm trong khoảng 0 đến điểm tối đa của câu.');
       END IF;
@@ -1354,14 +1362,14 @@ END;
 $$;
 
 -- GRANT / REVOKE PERMISSIONS
-REVOKE EXECUTE ON FUNCTION public.delete_unreferenced_submission_files FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.queue_file_cleanup FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.get_exercise_for_edit FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.create_or_get_submission_draft FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.submit_academic_exercise FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.grade_academic_submission FROM PUBLIC, anon;
 
-GRANT EXECUTE ON FUNCTION public.delete_unreferenced_submission_files TO authenticated;
+GRANT EXECUTE ON FUNCTION public.queue_file_cleanup TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_exercise_for_edit TO authenticated;
 GRANT EXECUTE ON FUNCTION public.create_or_get_submission_draft TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys TO authenticated;

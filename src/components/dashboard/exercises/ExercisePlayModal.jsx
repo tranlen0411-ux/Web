@@ -164,10 +164,10 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
     setSubmitting(true);
     try {
-      // 1. Upload file mới
+      // 1. Upload file mới (Không dùng upsert để bảo đảm UUID/timestamp độc bản)
       const { data: uploadData, error: uploadErr } = await supabase.storage
         .from('exercise-submissions')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { upsert: false });
 
       if (uploadErr) throw uploadErr;
 
@@ -248,7 +248,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         throw new Error(submitErr?.message || submitRes?.message || 'Lỗi khi nộp bài tập.');
       }
 
-      // NẾU RPC THÀNH CÔNG: Gọi RPC delete_unreferenced_submission_files bảo mật trên Server
+      // NẾU RPC THÀNH CÔNG: Đưa các file cũ vào hàng đợi cleanup DB và gọi Edge Function
       const oldDeletions = [];
       Object.keys(newFilesByQuestionRef.current).forEach(qId => {
         const arr = newFilesByQuestionRef.current[qId];
@@ -265,14 +265,22 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
       const uniqueDeletions = Array.from(new Set(oldDeletions));
       if (uniqueDeletions.length > 0) {
-        // GỌI RPC SERVER SECURITY DEFINER AN TOÀN TOÀN DIỆN CSDL
-        const { data: cleanRes, error: cleanErr } = await supabase.rpc('delete_unreferenced_submission_files', {
-          p_paths: uniqueDeletions
-        });
+        // 1. Đưa file vào hàng đợi cleanup jobs trong DB
+        await supabase.rpc('queue_file_cleanup', { p_paths: uniqueDeletions });
 
-        if (cleanErr || (cleanRes?.still_referenced && cleanRes.still_referenced.length > 0)) {
-          console.warn('Cleanup files report:', cleanRes);
-          setWarningMsg(`Bài làm đã được lưu thành công, nhưng có ${cleanRes?.still_referenced?.length || 1} file cũ chưa dọn được khỏi Storage (cần Quản trị viên dọn dẹp).`);
+        // 2. Kích hoạt Supabase Edge Function dọn dẹp Storage bằng API remove() chính thức
+        try {
+          const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke('cleanup-exercise-submission-files', {
+            body: { paths: uniqueDeletions }
+          });
+
+          if (edgeErr || (edgeRes?.failed && edgeRes.failed.length > 0)) {
+            console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
+            setWarningMsg('Bài làm đã được lưu thành công, nhưng có file cũ chưa dọn được khỏi Storage (cần Quản trị viên dọn dẹp).');
+          }
+        } catch (efErr) {
+          console.error('Invoke cleanup Edge Function exception:', efErr);
+          setWarningMsg('Bài làm đã được lưu thành công! Tiến trình dọn dẹp file rác sẽ chạy trong hàng đợi hệ thống.');
         }
       }
 
@@ -542,7 +550,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                         <span className="text-[10px] font-bold text-slate-400">Định dạng JPG, PNG, WEBP, PDF, DOCX (Tối đa 10MB)</span>
                         <input
                           type="file"
-                          accept="image/*,.pdf,.doc,.docx"
+                          accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx"
                           className="hidden"
                           onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {
