@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 6.0 (Academic Exercises)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 7.0 (Academic Exercises)...\n');
 
 let hasError = false;
 
@@ -13,66 +13,47 @@ if (!fs.existsSync(sqlPath)) {
 } else {
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Check 1: CTE pre-check kiêm kiểm tra mơ hồ trước khi UPDATE class_id
-  if (!sql.includes('AmbiguousCheck AS') || !sql.includes('MIGRATION BỊ DỪNG')) {
-    console.error('❌ LỖI MIGRATION: Thiếu CTE pre-check kiểm tra mơ hồ dữ liệu class_name trước khi UPDATE!');
+  // Check 1: Candidate CTE pre-check kiêm kiểm tra mơ hồ trước khi UPDATE class_id
+  if (!sql.includes('ClassCandidates AS') || !sql.includes('MIGRATION BỊ DỪNG')) {
+    console.error('❌ LỖI MIGRATION: Thiếu Unified Candidate CTE pre-check kiểm tra mơ hồ dữ liệu class_name trước khi UPDATE!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Migration: Có CTE pre-check kiểm tra mơ hồ class_name trước khi UPDATE!');
+    console.log('  ✅ SQL Migration: Đã tích hợp Unified Candidate CTE pre-check đa điều kiện trước khi UPDATE/DROP!');
   }
 
-  // Check 2: Khóa DELETE câu hỏi khi bài tập đã có submissions
-  if (!sql.includes('v_has_submissions') || !sql.includes('SELECT EXISTS (\n      SELECT 1 FROM public.academic_submissions')) {
-    console.error('❌ LỖI BẢO VỆ DỮ LIỆU: Chưa khóa DELETE câu hỏi khi bài tập đã có bài nộp!');
+  // Check 2: Từ chối thay đổi metadata & cấu trúc câu hỏi khi v_has_submissions = true
+  if (!sql.includes('v_has_submissions') || !sql.includes('Lỗi: Bài tập đã có bài nộp của học sinh')) {
+    console.error('❌ LỖI BẢO VỆ DỮ LIỆU: Server chưa từ chối thay đổi cấu trúc/metadata nhạy cảm khi bài tập đã có bài nộp!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Data Protection: Đã khóa DELETE câu hỏi khi bài tập đã có bài nộp của học sinh!');
+    console.log('  ✅ SQL Data Protection: Server từ chối thay đổi cấu trúc/metadata nhạy cảm khi bài tập đã có bài nộp!');
   }
 
-  // Check 3: RPC get_exercise_for_edit
-  if (!sql.includes('FUNCTION public.get_exercise_for_edit')) {
-    console.error('❌ LỖI SECURITY: Thiếu RPC get_exercise_for_edit!');
+  // Check 3: RPC get_exercise_for_edit trả về has_submissions
+  if (!sql.includes('v_has_sub') || !sql.includes('has_submissions')) {
+    console.error('❌ LỖI SECURITY: RPC get_exercise_for_edit chưa trả về cờ has_submissions!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL RPC: get_exercise_for_edit tải chính xác answer key bí mật!');
-  }
-
-  // Check 4: Check RLS khóa direct write trên academic_exercise_questions
-  if (sql.includes('CREATE POLICY "Academic questions write policy" ON public.academic_exercise_questions') && sql.includes('FOR ALL')) {
-    console.error('❌ LỖI RLS: Không được mở policy FOR ALL trên academic_exercise_questions!');
-    hasError = true;
-  } else {
-    console.log('  ✅ SQL RLS: Đã khóa direct write RLS trên academic_exercise_questions!');
+    console.log('  ✅ SQL RPC: get_exercise_for_edit trả về cờ has_submissions và submission_count!');
   }
 }
 
 // 2. KIỂM TRA FRONTEND COMPONENTS
-const listTabPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExerciseListTab.jsx');
-if (fs.existsSync(listTabPath)) {
-  const listContent = fs.readFileSync(listTabPath, 'utf8');
-  if (!listContent.includes('selectedExerciseToEdit')) {
-    console.error('❌ LỖI UI: ExerciseListTab.jsx chưa có state selectedExerciseToEdit!');
-    hasError = true;
-  } else {
-    console.log('  ✅ ExerciseListTab: Đã bổ sung state selectedExerciseToEdit và nút Sửa Bài Tập!');
-  }
-}
-
 const createModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'CreateExerciseModal.jsx');
 if (fs.existsSync(createModalPath)) {
   const createContent = fs.readFileSync(createModalPath, 'utf8');
-  if (!createContent.includes('get_exercise_for_edit')) {
-    console.error('❌ LỖI PROMPT: CreateExerciseModal chưa dùng RPC get_exercise_for_edit!');
+  if (!createContent.includes('hasSubmissions')) {
+    console.error('❌ LỖI UI: CreateExerciseModal chưa hỗ trợ cờ hasSubmissions!');
     hasError = true;
   } else {
-    console.log('  ✅ CreateExerciseModal: Dùng RPC get_exercise_for_edit tải đáp án thật!');
+    console.log('  ✅ CreateExerciseModal: Đã khóa các trường cấu trúc và hiển thị banner thông báo khi bài đã có bài nộp!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 6.0 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 7.0 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 6.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 7.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

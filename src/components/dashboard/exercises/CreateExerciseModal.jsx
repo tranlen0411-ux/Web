@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock } from 'lucide-react';
+import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock, ShieldAlert } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 
@@ -34,6 +34,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     }
   ]);
 
+  const [hasSubmissions, setHasSubmissions] = useState(false);
+  const [submissionCount, setSubmissionCount] = useState(0);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -79,7 +81,6 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     }
   };
 
-  // TẢI BÀI TẬP VÀ ĐÁP ÁN BÍ MẬT QUA RPC BẢO MẬT GET_EXERCISE_FOR_EDIT (KHÔNG TỰ SUY ĐOÁN ĐÁP ÁN)
   const fetchExistingQuestionsWithKeys = async (exerciseId) => {
     setIsLoadingDetails(true);
     setIsLockedByKeyError(false);
@@ -95,6 +96,9 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         setIsLockedByKeyError(true);
         return;
       }
+
+      setHasSubmissions(res.has_submissions || false);
+      setSubmissionCount(res.submission_count || 0);
 
       if (res.questions && res.questions.length > 0) {
         setQuestions(res.questions.map(q => {
@@ -127,6 +131,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   if (!isOpen) return null;
 
   const handleAddQuestion = () => {
+    if (hasSubmissions) return;
     setQuestions(prev => [
       ...prev,
       {
@@ -142,7 +147,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   };
 
   const handleRemoveQuestion = (idx) => {
-    if (questions.length <= 1) return;
+    if (hasSubmissions || questions.length <= 1) return;
     setQuestions(prev => prev.filter((_, i) => i !== idx));
   };
 
@@ -234,6 +239,17 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           </button>
         </div>
 
+        {/* THÔNG BÁO KHÓA CẤU TRÚC NẾU ĐÃ CÓ SUBMISSION */}
+        {hasSubmissions && (
+          <div className="mt-3 p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl text-amber-950 text-xs font-bold flex items-start gap-2.5 shrink-0">
+            <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-sm text-amber-900 mb-0.5">🔒 Bài tập đã có {submissionCount} học sinh nộp bài</p>
+              <p className="text-amber-800">Bạn chỉ có thể sửa thông tin chung (tiêu đề, hướng dẫn, hạn nộp, trạng thái); cấu trúc câu hỏi và đáp án đã được khóa để bảo vệ lịch sử bài làm.</p>
+            </div>
+          </div>
+        )}
+
         {/* FORM */}
         <form onSubmit={(e) => { e.preventDefault(); handleSubmit(status); }} className="space-y-6 overflow-y-auto py-4 pr-1 flex-1">
           
@@ -268,8 +284,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               <select
                 value={selectedClassId}
                 onChange={(e) => setSelectedClassId(e.target.value)}
-                disabled={isGlobal}
-                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                disabled={isGlobal || hasSubmissions}
+                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500 disabled:bg-slate-100"
               >
                 {classesList.map(c => (
                   <option key={c.id} value={c.id}>
@@ -299,6 +315,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   type="checkbox"
                   id="isGlobalCheck"
                   checked={isGlobal}
+                  disabled={hasSubmissions}
                   onChange={(e) => setIsGlobal(e.target.checked)}
                   className="w-4 h-4 text-amber-500 rounded"
                 />
@@ -312,8 +329,9 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               <label className="block text-xs font-black text-amber-950 mb-1">Môn Học</label>
               <select
                 value={subject}
+                disabled={hasSubmissions}
                 onChange={(e) => setSubject(e.target.value)}
-                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500 disabled:bg-slate-100"
               >
                 <option value="Toán">Toán</option>
                 <option value="Tiếng Việt">Tiếng Việt</option>
@@ -327,9 +345,10 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                 type="number"
                 min="0"
                 max="100"
+                disabled={hasSubmissions}
                 value={rewardStars}
                 onChange={(e) => setRewardStars(e.target.value)}
-                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500 disabled:bg-slate-100"
               />
             </div>
 
@@ -349,17 +368,19 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-black text-slate-800">Danh Sách Câu Hỏi ({questions.length} câu)</h3>
-              <button
-                type="button"
-                onClick={handleAddQuestion}
-                className="px-3 py-1.5 bg-sky-100 text-sky-900 hover:bg-sky-200 font-extrabold text-xs rounded-xl border border-sky-300 flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" /> Thêm Câu Hỏi
-              </button>
+              {!hasSubmissions && (
+                <button
+                  type="button"
+                  onClick={handleAddQuestion}
+                  className="px-3 py-1.5 bg-sky-100 text-sky-900 hover:bg-sky-200 font-extrabold text-xs rounded-xl border border-sky-300 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Thêm Câu Hỏi
+                </button>
+              )}
             </div>
 
             {questions.map((q, idx) => (
-              <div key={idx} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+              <div key={idx} className={`p-4 rounded-2xl border space-y-3 ${hasSubmissions ? 'bg-slate-100 border-slate-300 opacity-90' : 'bg-slate-50 border-slate-200'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="px-2.5 py-0.5 bg-slate-800 text-white font-black text-xs rounded-lg">
                     Câu {idx + 1}
@@ -367,6 +388,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   <div className="flex items-center gap-2">
                     <select
                       value={q.question_type}
+                      disabled={hasSubmissions}
                       onChange={(e) => {
                         const val = e.target.value;
                         setQuestions(prev => prev.map((item, i) => {
@@ -378,7 +400,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                           return item;
                         }));
                       }}
-                      className="px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold"
+                      className="px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold disabled:bg-slate-200"
                     >
                       <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                       <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
@@ -389,7 +411,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                       <option value="file_upload">Nộp File PDF/DOCX</option>
                     </select>
                     
-                    {questions.length > 1 && (
+                    {!hasSubmissions && questions.length > 1 && (
                       <button
                         type="button"
                         onClick={() => handleRemoveQuestion(idx)}
@@ -405,13 +427,14 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   <input
                     type="text"
                     required
+                    disabled={hasSubmissions}
                     placeholder="Nhập nội dung câu hỏi..."
                     value={q.prompt}
                     onChange={(e) => {
                       const val = e.target.value;
                       setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, prompt: val } : item));
                     }}
-                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold"
+                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold disabled:bg-slate-200"
                   />
                 </div>
 
@@ -421,6 +444,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                       <div key={oIdx} className="flex items-center gap-1.5">
                         <input
                           type="text"
+                          disabled={hasSubmissions}
                           value={opt}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -433,10 +457,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                               return item;
                             }));
                           }}
-                          className="w-full px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs"
+                          className="w-full px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs disabled:bg-slate-200"
                         />
                         <button
                           type="button"
+                          disabled={hasSubmissions}
                           onClick={() => {
                             setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: opt } : item));
                           }}
@@ -461,6 +486,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                           <div key={oIdx} className="flex items-center gap-1.5">
                             <input
                               type="text"
+                              disabled={hasSubmissions}
                               value={opt}
                               onChange={(e) => {
                                 const val = e.target.value;
@@ -473,10 +499,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                   return item;
                                 }));
                               }}
-                              className="w-full px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs"
+                              className="w-full px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs disabled:bg-slate-200"
                             />
                             <button
                               type="button"
+                              disabled={hasSubmissions}
                               onClick={() => {
                                 let newArr;
                                 if (isChecked) {
@@ -502,13 +529,14 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                     <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Đáp án đúng tự động chấm:</label>
                     <input
                       type="text"
+                      disabled={hasSubmissions}
                       placeholder="Nhập từ hoặc số đúng..."
                       value={q.correct_answer}
                       onChange={(e) => {
                         const val = e.target.value;
                         setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
                       }}
-                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold disabled:bg-slate-200"
                     />
                   </div>
                 )}
