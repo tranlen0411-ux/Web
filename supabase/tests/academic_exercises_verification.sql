@@ -75,16 +75,45 @@ BEGIN
 
   -- 3. SECTION VIII: SECURITY DEFINER & SEARCH_PATH LOCK
   FOR v_proc_oid IN
-    SELECT p.oid FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public'
-      AND p.proname IN ('claim_exercise_file_cleanup_job', 'finish_exercise_file_cleanup_job', 'reconcile_exercise_file_cleanup_job', 'reset_cleanup_jobs_for_retry')
+    SELECT p.oid FROM (
+      VALUES
+        (to_regprocedure('public.claim_exercise_file_cleanup_job(uuid,uuid)')),
+        (to_regprocedure('public.finish_exercise_file_cleanup_job(uuid,integer,text,text,uuid)')),
+        (to_regprocedure('public.reconcile_exercise_file_cleanup_job(uuid,integer,uuid)')),
+        (to_regprocedure('public.reset_cleanup_jobs_for_retry(integer)'))
+    ) AS t(oid) WHERE t.oid IS NOT NULL
   LOOP
-    IF EXISTS (
-      SELECT 1 FROM pg_proc p WHERE p.oid = v_proc_oid AND (p.prosecdef = false OR p.proconfig IS NULL OR NOT ('search_path=' = ANY(p.proconfig)))
-    ) THEN
-      RAISE EXCEPTION 'ASSERTION FAILED: RPC OID % chưa được thiết lập SECURITY DEFINER hoặc search_path = ''''!', v_proc_oid;
-    END IF;
+    DECLARE
+      v_sig TEXT;
+      v_secdef BOOLEAN;
+      v_cfg TEXT[];
+      v_has_empty_sp BOOLEAN := FALSE;
+      v_has_unsafe_sp BOOLEAN := FALSE;
+    BEGIN
+      SELECT p.oid::regprocedure::text, p.prosecdef, p.proconfig
+      INTO v_sig, v_secdef, v_cfg
+      FROM pg_proc p WHERE p.oid = v_proc_oid;
+
+      IF v_secdef IS NOT TRUE THEN
+        RAISE EXCEPTION 'ASSERTION FAILED: RPC OID % (signature: %) chưa được thiết lập SECURITY DEFINER (prosecdef = %, proconfig = %)',
+          v_proc_oid, v_sig, v_secdef, v_cfg;
+      END IF;
+
+      IF v_cfg IS NULL THEN
+        RAISE EXCEPTION 'ASSERTION FAILED: RPC OID % (signature: %) thiếu cấu hình search_path rỗng (prosecdef = %, proconfig = NULL)',
+          v_proc_oid, v_sig, v_secdef;
+      END IF;
+
+      SELECT
+        EXISTS (SELECT 1 FROM unnest(v_cfg) elem WHERE elem IN ('search_path=""', 'search_path=')),
+        EXISTS (SELECT 1 FROM unnest(v_cfg) elem WHERE elem LIKE 'search_path=%' AND elem NOT IN ('search_path=""', 'search_path='))
+      INTO v_has_empty_sp, v_has_unsafe_sp;
+
+      IF v_has_empty_sp IS NOT TRUE OR v_has_unsafe_sp IS TRUE THEN
+        RAISE EXCEPTION 'ASSERTION FAILED: RPC OID % (signature: %) có search_path không an toàn hoặc không rỗng! (prosecdef = %, proconfig = %)',
+          v_proc_oid, v_sig, v_secdef, v_cfg;
+      END IF;
+    END;
   END LOOP;
 
   -- 4. SECTION XI: STORAGE BUCKET & PRIVATE SCHEMA SECURITY
