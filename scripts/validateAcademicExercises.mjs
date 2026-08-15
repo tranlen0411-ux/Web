@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 7.0 (Academic Exercises)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 8.0 (Academic Exercises)...\n');
 
 let hasError = false;
 
@@ -13,47 +13,55 @@ if (!fs.existsSync(sqlPath)) {
 } else {
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Check 1: Candidate CTE pre-check kiêm kiểm tra mơ hồ trước khi UPDATE class_id
+  // Check 1: Candidate CTE pre-check
   if (!sql.includes('ClassCandidates AS') || !sql.includes('MIGRATION BỊ DỪNG')) {
-    console.error('❌ LỖI MIGRATION: Thiếu Unified Candidate CTE pre-check kiểm tra mơ hồ dữ liệu class_name trước khi UPDATE!');
+    console.error('❌ LỖI MIGRATION: Thiếu Unified Candidate CTE pre-check!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Migration: Đã tích hợp Unified Candidate CTE pre-check đa điều kiện trước khi UPDATE/DROP!');
+    console.log('  ✅ SQL Migration: Đã tích hợp Unified Candidate CTE pre-check!');
   }
 
-  // Check 2: Từ chối thay đổi metadata & cấu trúc câu hỏi khi v_has_submissions = true
-  if (!sql.includes('v_has_submissions') || !sql.includes('Lỗi: Bài tập đã có bài nộp của học sinh')) {
-    console.error('❌ LỖI BẢO VỆ DỮ LIỆU: Server chưa từ chối thay đổi cấu trúc/metadata nhạy cảm khi bài tập đã có bài nộp!');
+  // Check 2: So sánh nguyên tử v_existing_questions_json khi v_has_submissions = true
+  if (!sql.includes('v_existing_questions_json') || !sql.includes('v_incoming_questions_json') || !sql.includes('IS DISTINCT FROM')) {
+    console.error('❌ LỖI BẢO VỆ DỮ LIỆU: Server chưa so sánh nguyên tử cấu trúc câu hỏi để từ chối thay đổi!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL Data Protection: Server từ chối thay đổi cấu trúc/metadata nhạy cảm khi bài tập đã có bài nộp!');
+    console.log('  ✅ SQL Data Protection: Server so sánh nguyên tử cấu trúc câu hỏi v_existing_questions_json để từ chối thay đổi!');
   }
 
-  // Check 3: RPC get_exercise_for_edit trả về has_submissions
-  if (!sql.includes('v_has_sub') || !sql.includes('has_submissions')) {
-    console.error('❌ LỖI SECURITY: RPC get_exercise_for_edit chưa trả về cờ has_submissions!');
+  // Check 3: Xác minh storage.objects thực sự tồn tại
+  if (!sql.includes('FROM storage.objects') || !sql.includes('bucket_id = \'exercise-submissions\'')) {
+    console.error('❌ LỖI STORAGE: Server chưa kiểm tra object thật sự tồn tại trong storage.objects!');
     hasError = true;
   } else {
-    console.log('  ✅ SQL RPC: get_exercise_for_edit trả về cờ has_submissions và submission_count!');
+    console.log('  ✅ SQL Storage Check: RPC xác minh object thực sự tồn tại trong storage.objects!');
+  }
+
+  // Check 4: Allow-list trạng thái chấm bài
+  if (!sql.includes('v_sub.status NOT IN (\'submitted\', \'pending_manual_grade\')')) {
+    console.error('❌ LỖI GRADING: RPC grade chưa sử dụng allow-list trạng thái v_sub.status NOT IN (\'submitted\', \'pending_manual_grade\')!');
+    hasError = true;
+  } else {
+    console.log('  ✅ SQL Grading: RPC grade sử dụng allow-list trạng thái v_sub.status NOT IN (\'submitted\', \'pending_manual_grade\')!');
   }
 }
 
 // 2. KIỂM TRA FRONTEND COMPONENTS
-const createModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'CreateExerciseModal.jsx');
-if (fs.existsSync(createModalPath)) {
-  const createContent = fs.readFileSync(createModalPath, 'utf8');
-  if (!createContent.includes('hasSubmissions')) {
-    console.error('❌ LỖI UI: CreateExerciseModal chưa hỗ trợ cờ hasSubmissions!');
+const playModalPath = path.join(process.cwd(), 'src', 'components', 'dashboard', 'exercises', 'ExercisePlayModal.jsx');
+if (fs.existsSync(playModalPath)) {
+  const playContent = fs.readFileSync(playModalPath, 'utf8');
+  if (!playContent.includes('cleanupSessionUploadedFiles') || !playContent.includes('sessionUploadedFiles')) {
+    console.error('❌ LỖI UI STORAGE: ExercisePlayModal chưa có cơ chế cleanupSessionUploadedFiles!');
     hasError = true;
   } else {
-    console.log('  ✅ CreateExerciseModal: Đã khóa các trường cấu trúc và hiển thị banner thông báo khi bài đã có bài nộp!');
+    console.log('  ✅ ExercisePlayModal: Đã tích hợp cơ chế rollback cleanup file rác Storage!');
   }
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 7.0 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 8.0 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 7.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 8.0 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

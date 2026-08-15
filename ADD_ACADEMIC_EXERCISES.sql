@@ -1,10 +1,10 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 7.0 HOÀN THIỆN
--- 1. UNIFIED CANDIDATE CTE PRE-CHECK CLASS_NAME SANG CLASS_ID VỚI FULL ĐIỀU KIỆN (NAME, GRADE, TEACHER)
--- 2. GET_EXERCISE_FOR_EDIT TRẢ VỀ HAS_SUBMISSIONS VÀ SUBMISSION_COUNT ĐỂ KHÓA UI CHỈNH SỬA CÂU HỎI
--- 3. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS KHÓA THAY ĐỔI CẤU TRÚC VÀ METADATA NHẠY CẢM KHI ĐÃ CÓ BÀI NỘP
--- 4. VALIDATE P_ANSWERS NGHIÊM NGẶT TRÊN SERVER TRONG SUBMIT_ACADEMIC_EXERCISE
--- 5. REWARD_APPLIED_AT BẤT BIẾN KHÔNG CỘNG LẶP SAO VÀ KHÓA CHẤM BÀI DRAFT
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 8.0 CHUẨN MỰC
+-- 1. UNIFIED CANDIDATE CTE PRE-CHECK VỚI FILTER() SẠCH SẼ TRƯỚC KHI UPDATE VÀ DROP COLUMN
+-- 2. SO SÁNH NGUYÊN TỬ CẤU TRÚC CÂU HỎI TRONG SAVE_EXERCISE KHI ĐÃ CÓ BÀI NỘP - TỪ CHỐI NẾU KHÁC BIỆT
+-- 3. XÁC MINH OBJECT THỰC SỰ TỒN TẠI TRONG STORAGE.OBJECTS TRONG SUBMIT_ACADEMIC_EXERCISE
+-- 4. ALLOW-LIST CHỈ CHẤM BÀI SUBMITTED HOẶC PENDING_MANUAL_GRADE TRONG GRADE_ACADEMIC_SUBMISSION
+-- 5. RÀNG BUỘC CHUYỂN TRẠNG THÁI BÀI TẬP BẢO VỆ CHẮC CHẮN TRÊN SERVER (STATE TRANSITION)
 -- ============================================================================
 
 BEGIN;
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS public.academic_exercises (
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS class_id UUID REFERENCES public.classes(id) ON DELETE CASCADE;
 ALTER TABLE public.academic_exercises ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT FALSE;
 
--- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION BÀI TẬP BỊ MƠ HỒ HOẶC UNMAPPED
+-- UNIFIED CANDIDATE CTE PRE-CHECK MIGRATION
 DO $$
 DECLARE
   v_ambiguous_json JSONB;
@@ -46,7 +46,6 @@ BEGIN
     WHERE table_schema = 'public' AND table_name = 'academic_exercises' AND column_name = 'class_name'
   ) THEN
     
-    -- CTE Thống kê số lượng Lớp học ứng viên khớp đủ name, grade_level, teacher_id
     WITH ClassCandidates AS (
       SELECT 
         e.id AS exercise_id,
@@ -54,7 +53,7 @@ BEGIN
         e.class_name,
         e.is_global,
         COUNT(c.id) AS matched_count,
-        jsonb_agg(jsonb_build_object('class_id', c.id, 'class_name', c.name, 'teacher_id', c.teacher_id)) AS candidates
+        jsonb_agg(jsonb_build_object('class_id', c.id, 'class_name', c.name, 'teacher_id', c.teacher_id)) FILTER (WHERE c.id IS NOT NULL) AS candidates
       FROM public.academic_exercises e
       LEFT JOIN public.classes c ON 
         e.class_name = c.name
@@ -63,7 +62,6 @@ BEGIN
       WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE
       GROUP BY e.id, e.title, e.class_name, e.is_global
     )
-    -- 1. Kiểm tra bài tập khớp > 1 lớp mơ hồ
     SELECT jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name, 'matched_count', matched_count, 'candidates', candidates))
     INTO v_ambiguous_json
     FROM ClassCandidates
@@ -73,31 +71,15 @@ BEGIN
       RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện danh sách bài tập khớp với nhiều hơn 1 Lớp học mơ hồ: %', v_ambiguous_json;
     END IF;
 
-    -- 2. Kiểm tra bài tập khớp 0 lớp (unmapped)
-    WITH ClassCandidates0 AS (
-      SELECT 
-        e.id AS exercise_id,
-        e.title,
-        e.class_name,
-        COUNT(c.id) AS matched_count
-      FROM public.academic_exercises e
-      LEFT JOIN public.classes c ON 
-        e.class_name = c.name
-        AND (e.grade_level IS NULL OR e.grade_level = c.grade_level)
-        AND (e.teacher_id IS NULL OR e.teacher_id = c.teacher_id)
-      WHERE e.class_id IS NULL AND e.is_global IS NOT TRUE
-      GROUP BY e.id, e.title, e.class_name
-    )
     SELECT jsonb_agg(jsonb_build_object('exercise_id', exercise_id, 'title', title, 'class_name', class_name))
     INTO v_unmapped_json
-    FROM ClassCandidates0
+    FROM ClassCandidates
     WHERE matched_count = 0;
 
     IF v_unmapped_json IS NOT NULL AND jsonb_array_length(v_unmapped_json) > 0 THEN
       RAISE EXCEPTION 'MIGRATION BỊ DỪNG: Phát hiện các bài tập không tìm thấy Lớp học tương ứng: %', v_unmapped_json;
     END IF;
 
-    -- 3. Thực thi UPDATE class_id cho các bản ghi có đúng 1 lớp ứng viên khớp
     UPDATE public.academic_exercises e
     SET class_id = c.id
     FROM public.classes c
@@ -106,7 +88,6 @@ BEGIN
       AND (e.grade_level IS NULL OR e.grade_level = c.grade_level)
       AND (e.teacher_id IS NULL OR e.teacher_id = c.teacher_id);
 
-    -- 4. Đảm bảo không còn bài tập không-global nào chưa có class_id trước khi DROP COLUMN class_name
     IF NOT EXISTS (
       SELECT 1 FROM public.academic_exercises 
       WHERE class_id IS NULL AND is_global IS NOT TRUE
@@ -220,7 +201,7 @@ REVOKE ALL ON SCHEMA app_private FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM PUBLIC, anon, authenticated;
 
 -- ============================================================================
--- STORAGE BUCKET PRIVATE EXERCISE-SUBMISSIONS
+-- STORAGE BUCKET PRIVATE EXERCISE-SUBMISSIONS VÀ POLICY DELETE
 -- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -363,8 +344,9 @@ FOR SELECT USING (
   )
 );
 
--- 5. STORAGE RLS
+-- 5. STORAGE RLS FOR EXERCISE-SUBMISSIONS (INSERT VÀ DELETE)
 DROP POLICY IF EXISTS "Exercise submissions student insert policy" ON storage.objects;
+DROP POLICY IF EXISTS "Exercise submissions student delete policy" ON storage.objects;
 DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
 
 CREATE POLICY "Exercise submissions student insert policy" ON storage.objects
@@ -380,6 +362,18 @@ FOR INSERT WITH CHECK (
   AND (
     name NOT ILIKE '%.svg' AND name NOT ILIKE '%.exe' AND name NOT ILIKE '%.html'
     AND name NOT ILIKE '%.js' AND name NOT ILIKE '%.sh' AND name NOT ILIKE '%.bat'
+  )
+);
+
+CREATE POLICY "Exercise submissions student delete policy" ON storage.objects
+FOR DELETE USING (
+  bucket_id = 'exercise-submissions'
+  AND (storage.foldername(name))[1] = auth.uid()::text
+  AND EXISTS (
+    SELECT 1 FROM public.academic_submissions s
+    WHERE s.id::text = (storage.foldername(name))[2]
+      AND s.student_id = auth.uid()
+      AND s.status IN ('draft', 'revision_requested')
   )
 );
 
@@ -437,7 +431,6 @@ BEGIN
     END IF;
   END IF;
 
-  -- Đếm số lượt bài nộp của học sinh
   SELECT COUNT(*) INTO v_sub_count FROM public.academic_submissions WHERE exercise_id = p_exercise_id;
   IF v_sub_count > 0 THEN
     v_has_sub := TRUE;
@@ -547,7 +540,7 @@ END;
 $$;
 
 
--- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS (VỚI TỪ CHỐI THAY ĐỔI CẤU TRÚC KHI ĐÃ CÓ SUBMISSION)
+-- 2. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI NGUYÊN TẮC SO SÁNH NGUYÊN TỬ CẤU TRÚC KHI ĐÃ CÓ SUBMISSION
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -570,6 +563,9 @@ DECLARE
   v_updated_rows INT;
   v_is_global BOOLEAN := FALSE;
   v_has_submissions BOOLEAN := FALSE;
+  v_existing_questions_json JSONB;
+  v_incoming_questions_json JSONB;
+  v_new_status TEXT;
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -607,6 +603,8 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Tiêu đề bài tập không được để trống.');
   END IF;
 
+  v_new_status := COALESCE(p_exercise->>'status', 'draft');
+
   IF (p_exercise->>'id') IS NOT NULL AND (p_exercise->>'id') != '' THEN
     v_exercise_id := (p_exercise->>'id')::UUID;
 
@@ -620,34 +618,57 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không sở hữu bài tập này.');
     END IF;
 
-    -- KIỂM TRA BÀI NỘP CỦA HỌC SINH
+    -- KIỂM TRA CHUYỂN TRẠNG THÁI (STATE TRANSITION RULES)
+    IF v_existing_ex.status = 'archived' AND v_new_status = 'draft' THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Không được chuyển trạng thái từ archived về draft.');
+    END IF;
+
     SELECT EXISTS (
       SELECT 1 FROM public.academic_submissions WHERE exercise_id = v_exercise_id
     ) INTO v_has_submissions;
 
     IF v_has_submissions THEN
-      -- Khi đã có bài nộp -> từ chối thay đổi class_id, is_global, exercise_type, max_attempts, reward_stars
-      IF v_existing_ex.class_id IS DISTINCT FROM v_class_id 
-         OR v_existing_ex.is_global IS DISTINCT FROM v_is_global 
-         OR v_existing_ex.exercise_type IS DISTINCT FROM (p_exercise->>'exercise_type')
-         OR v_existing_ex.max_attempts IS DISTINCT FROM COALESCE((p_exercise->>'max_attempts')::INT, v_existing_ex.max_attempts)
-         OR v_existing_ex.reward_stars IS DISTINCT FROM COALESCE((p_exercise->>'reward_stars')::INT, v_existing_ex.reward_stars) THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập đã có bài nộp của học sinh. Không thể sửa Lớp học, Loại bài, Số lượt hoặc Sao thưởng.');
+      IF v_existing_ex.status = 'published' AND v_new_status = 'draft' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập đã có bài nộp của học sinh, không thể đưa trở lại trạng thái Bản nháp (draft).');
       END IF;
 
-      -- Chỉ cập nhật các trường metadata an toàn (title, description, due_date, status, show_score, show_correct)
+      -- Lấy danh sách cấu trúc câu hỏi hiện tại từ CSDL
+      SELECT jsonb_agg(jsonb_build_object(
+        'question_number', q.question_number,
+        'question_type', q.question_type,
+        'prompt', q.prompt,
+        'options_json', q.options_json,
+        'points', q.points
+      ) ORDER BY q.question_number ASC) INTO v_existing_questions_json
+      FROM public.academic_exercise_questions q WHERE q.exercise_id = v_exercise_id;
+
+      SELECT jsonb_agg(jsonb_build_object(
+        'question_number', (value->>'question_number')::INT,
+        'question_type', value->>'question_type',
+        'prompt', trim(value->>'prompt'),
+        'options_json', COALESCE(value->'options_json', '[]'::jsonb),
+        'points', (value->>'points')::INT
+      ) ORDER BY (value->>'question_number')::INT ASC) INTO v_incoming_questions_json
+      FROM jsonb_array_elements(p_questions);
+
+      -- NẾU CLIENT CỐ TÌNH GỬI THAY ĐỔI CẤU TRÚC CÂU HỎI KHI ĐÃ CÓ BÀI NỘP -> TỪ CHỐI VÀ TRẢ LỖI THỰC TẾ
+      IF v_existing_questions_json IS DISTINCT FROM v_incoming_questions_json THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài tập đã có bài nộp của học sinh; không được sửa cấu trúc câu hỏi hoặc đáp án.');
+      END IF;
+
+      -- Cập nhật các trường metadata an toàn
       UPDATE public.academic_exercises
       SET
         title = trim(p_exercise->>'title'),
         description = p_exercise->>'description',
-        status = COALESCE(p_exercise->>'status', status),
+        status = v_new_status,
         due_date = CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
         show_score_after_submit = COALESCE((p_exercise->>'show_score_after_submit')::BOOLEAN, show_score_after_submit),
         show_correct_answers = COALESCE((p_exercise->>'show_correct_answers')::BOOLEAN, show_correct_answers),
         updated_at = NOW()
       WHERE id = v_exercise_id;
 
-      RETURN jsonb_build_object('success', true, 'exercise_id', v_exercise_id, 'message', 'Đã cập nhật các thông tin an toàn của bài tập! (Cấu trúc câu hỏi được giữ nguyên)');
+      RETURN jsonb_build_object('success', true, 'exercise_id', v_exercise_id, 'message', 'Đã cập nhật các thông tin an toàn của bài tập!');
     END IF;
 
     UPDATE public.academic_exercises
@@ -659,7 +680,7 @@ BEGIN
       grade_level = GREATEST(1, LEAST(5, COALESCE((p_exercise->>'grade_level')::INT, 1))),
       subject = COALESCE(p_exercise->>'subject', 'Toán'),
       exercise_type = COALESCE(p_exercise->>'exercise_type', 'mixed'),
-      status = COALESCE(p_exercise->>'status', 'draft'),
+      status = v_new_status,
       due_date = CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
       max_attempts = GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
       reward_stars = GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
@@ -682,7 +703,7 @@ BEGIN
       trim(p_exercise->>'title'),
       p_exercise->>'description',
       COALESCE(p_exercise->>'exercise_type', 'mixed'),
-      COALESCE(p_exercise->>'status', 'draft'),
+      v_new_status,
       CASE WHEN (p_exercise->>'due_date') IS NOT NULL AND (p_exercise->>'due_date') != '' THEN (p_exercise->>'due_date')::TIMESTAMPTZ ELSE NULL END,
       GREATEST(1, COALESCE((p_exercise->>'max_attempts')::INT, 1)),
       GREATEST(0, COALESCE((p_exercise->>'reward_stars')::INT, 10)),
@@ -728,7 +749,7 @@ END;
 $$;
 
 
--- 3. SUBMIT_ACADEMIC_EXERCISE
+-- 3. SUBMIT_ACADEMIC_EXERCISE VỚI XÁC MINH FILE TỒN TẠI THẬT TRONG STORAGE.OBJECTS
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
   p_answers JSONB,
@@ -763,6 +784,7 @@ DECLARE
   v_already_applied TIMESTAMPTZ;
   v_seen_q_ids UUID[] := ARRAY[]::UUID[];
   v_curr_q_id UUID;
+  v_file_exists BOOLEAN := FALSE;
 BEGIN
   v_student_id := auth.uid();
   IF v_student_id IS NULL THEN
@@ -861,9 +883,23 @@ BEGIN
     v_student_ans := v_ans_item->'answer';
     v_file_url := v_ans_item->>'file_url';
 
+    -- XÁC MINH FILE OBJECT THỰC SỰ TỒN TẠI TRONG BUCKET EXERCISE-SUBMISSIONS VÀ ĐÚNG PATH
     IF v_file_url IS NOT NULL AND length(trim(v_file_url)) > 0 THEN
+      IF v_q.question_type NOT IN ('image_upload', 'file_upload') THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Câu hỏi không thuộc dạng nộp file nhưng chứa file_url.');
+      END IF;
+
       IF NOT (v_file_url LIKE v_student_id::text || '/' || v_submission_id::text || '/%') THEN
-        v_file_url := NULL;
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Đường dẫn file nộp không đúng cấu trúc thư mục của học sinh.');
+      END IF;
+
+      SELECT EXISTS (
+        SELECT 1 FROM storage.objects 
+        WHERE bucket_id = 'exercise-submissions' AND name = v_file_url
+      ) INTO v_file_exists;
+
+      IF NOT v_file_exists THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: File bài làm đã khai báo nhưng không tồn tại trên hệ thống lưu trữ Storage.');
       END IF;
     END IF;
 
@@ -961,7 +997,7 @@ END;
 $$;
 
 
--- 4. GRADE_ACADEMIC_SUBMISSION CHỈ CHẤM SUBMITTED HOẶC PENDING_MANUAL_GRADE
+-- 4. GRADE_ACADEMIC_SUBMISSION VỚI ALLOW-LIST TRẠNG THÁI NGHIÊM NGẶT
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -1001,7 +1037,8 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
   END IF;
 
-  IF v_sub.status IN ('draft', 'revision_requested') THEN
+  -- ALLOW-LIST CHỈ CHẤM SUBMITTED HOẶC PENDING_MANUAL_GRADE
+  IF v_sub.status NOT IN ('submitted', 'pending_manual_grade') THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ được chấm bài nộp ở trạng thái submitted hoặc pending_manual_grade.');
   END IF;
 
