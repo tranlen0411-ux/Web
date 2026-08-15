@@ -282,9 +282,14 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                 body: { job_ids: validJobIds }
               });
 
-              if (edgeErr || (edgeRes?.failed && edgeRes.failed.length > 0) || (edgeRes?.missing_job_ids && edgeRes.missing_job_ids.length > 0)) {
+              if (
+                edgeErr ||
+                (edgeRes?.failed && edgeRes.failed.length > 0) ||
+                (edgeRes?.missing_job_ids && edgeRes.missing_job_ids.length > 0) ||
+                (edgeRes?.already_claimed && edgeRes.already_claimed.length > 0)
+              ) {
                 console.warn('Edge Function cleanup report:', edgeRes || edgeErr);
-                setWarningMsg('Bài làm đã lưu thành công! Có file cũ đang chờ xử lý hoặc sẽ được dọn dẹp ở đợt kế tiếp.');
+                setWarningMsg('Bài làm đã lưu thành công! Có file cũ đang được xử lý trong hàng đợi dọn dẹp hệ thống.');
               }
             } catch (efErr) {
               console.error('Invoke cleanup Edge Function exception:', efErr);

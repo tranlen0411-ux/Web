@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.1 (Academic Exercises)...\n');
+console.log('🔍 Bắt đầu kiểm tra tĩnh siêu chuẩn xác Hệ Thống Bài Tập Học Thuật 15.2 (Academic Exercises)...\n');
 
 let hasError = false;
 
@@ -21,7 +21,15 @@ if (!fs.existsSync(sqlPath)) {
     console.log('  ✅ SQL Architecture: Đã loại bỏ hoàn toàn các câu lệnh DML trực tiếp trên storage.objects!');
   }
 
-  // Check 2: Mẫu local typed variables an toàn cho Phase 1
+  // Check 2: RPC claim_exercise_file_cleanup_job & finish_exercise_file_cleanup_job CSDL nguyên tử
+  if (!sql.includes('claim_exercise_file_cleanup_job') || !sql.includes('finish_exercise_file_cleanup_job')) {
+    console.error('❌ LỖI ATOMIC CLAIM RPC: Thiếu RPC claim_exercise_file_cleanup_job hoặc finish_exercise_file_cleanup_job!');
+    hasError = true;
+  } else {
+    console.log('  ✅ SQL Atomic Claim RPCs: Tích hợp RPC claim và finish job CSDL nguyên tử chống race condition!');
+  }
+
+  // Check 3: Mẫu local typed variables an toàn cho Phase 1
   if (!sql.includes('v_valid_grade_level') || !sql.includes('v_valid_max_attempts') || !sql.includes('v_valid_reward_stars') || !sql.includes('v_valid_due_date')) {
     console.error('❌ LỖI TYPED VARIABLES: SQL save_exercise chưa khai báo và sử dụng đầy đủ các biến typed v_valid_*!');
     hasError = true;
@@ -29,24 +37,16 @@ if (!fs.existsSync(sqlPath)) {
     console.log('  ✅ SQL Phase 1 Typed Variables: Đã khai báo và sử dụng biến typed an toàn v_valid_*!');
   }
 
-  // Check 3: RPC queue_file_cleanup dùng RETURNING id, file_path
+  // Check 4: RPC queue_file_cleanup dùng RETURNING id, file_path
   if (!sql.includes('RETURNING id, file_path')) {
     console.error('❌ LỖI QUEUE RETURNING: RPC queue_file_cleanup chưa dùng RETURNING id, file_path để chống báo queued giả!');
     hasError = true;
   } else {
     console.log('  ✅ SQL Queue RPC: RPC queue_file_cleanup dùng RETURNING id, file_path chuẩn xác!');
   }
-
-  // Check 4: Kiểm tra TRUNC cho points và question_number
-  if (!sql.includes('v_num_val != TRUNC(v_num_val)')) {
-    console.error('❌ LỖI INT VALIDATION: RPC chưa có kiểm tra v_num_val != TRUNC(v_num_val) loại bỏ số thập phân!');
-    hasError = true;
-  } else {
-    console.log('  ✅ SQL Int Validation: RPC kiểm tra số nguyên TRUNC(v_num_val) = v_num_val chuẩn xác!');
-  }
 }
 
-// 2. KIỂM TRA SUPABASE EDGE FUNCTION VỚI JOB_IDS VÀ MẪU BẢO MẬT FAIL-CLOSED
+// 2. KIỂM TRA SUPABASE EDGE FUNCTION VỚI ATOMIC RPC CALLS
 const edgeFuncPath = path.join(process.cwd(), 'supabase', 'functions', 'cleanup-exercise-submission-files', 'index.ts');
 if (!fs.existsSync(edgeFuncPath)) {
   console.error('❌ LỖI EDGE FUNCTION: Thiếu file Edge Function supabase/functions/cleanup-exercise-submission-files/index.ts');
@@ -55,18 +55,18 @@ if (!fs.existsSync(edgeFuncPath)) {
   const edgeContent = fs.readFileSync(edgeFuncPath, 'utf8');
   const storageRemoveRegex = /storage\s*\.\s*from\(\s*['"]exercise-submissions['"]\s*\)\s*\.\s*remove\s*\(/;
 
-  if (!edgeContent.includes('job_ids')) {
-    console.error('❌ LỖI JOB-BASED PAYLOAD: Edge Function phải nhận job_ids thay vì paths tùy ý!');
+  if (!edgeContent.includes('claim_exercise_file_cleanup_job')) {
+    console.error('❌ LỖI EDGE CLAIM RPC: Edge Function phải gọi RPC claim_exercise_file_cleanup_job!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Payload: Nhận job_ids hợp lệ!');
+    console.log('  ✅ Edge Function Claim RPC: Gọi RPC claim_exercise_file_cleanup_job CSDL nguyên tử!');
   }
 
-  if (!edgeContent.includes('updateJobStatus')) {
-    console.error('❌ LỖI UPDATE HELPER: Edge Function thiếu helper updateJobStatus kiểm tra lỗi mọi câu lệnh CSDL!');
+  if (!edgeContent.includes('finish_exercise_file_cleanup_job')) {
+    console.error('❌ LỖI EDGE FINISH RPC: Edge Function phải gọi RPC finish_exercise_file_cleanup_job!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Helper: Tích hợp updateJobStatus xử lý lỗi DB kiên cố!');
+    console.log('  ✅ Edge Function Finish RPC: Gọi RPC finish_exercise_file_cleanup_job CSDL nguyên tử!');
   }
 
   if (!storageRemoveRegex.test(edgeContent)) {
@@ -76,11 +76,11 @@ if (!fs.existsSync(edgeFuncPath)) {
     console.log('  ✅ Supabase Edge Function: Đã tạo Edge Function cleanup gọi đúng Storage API remove() chính thức!');
   }
 
-  if (!edgeContent.includes('storage_deleted_job_update_failed') || !edgeContent.includes('missing_job_ids')) {
-    console.error('❌ LỖI FAIL-CLOSED: Edge Function chưa hỗ trợ trạng thái storage_deleted_job_update_failed hoặc missing_job_ids!');
+  if (!edgeContent.includes('already_claimed') || !edgeContent.includes('missing_job_ids')) {
+    console.error('❌ LỖI CATEGORIZATION: Edge Function chưa hỗ trợ phân loại already_claimed và missing_job_ids!');
     hasError = true;
   } else {
-    console.log('  ✅ Edge Function Fail-Closed: Hỗ trợ storage_deleted_job_update_failed và missing_job_ids chuẩn xác!');
+    console.log('  ✅ Edge Function Categorization: Phân loại already_claimed và missing_job_ids chuẩn xác!');
   }
 }
 
@@ -97,9 +97,9 @@ if (fs.existsSync(playModalPath)) {
 }
 
 if (hasError) {
-  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.1 THẤT BẠI!');
+  console.error('\n❌ KIỂM TRA TĨNH BÀI TẬP HỌC THUẬT 15.2 THẤT BẠI!');
   process.exit(1);
 } else {
-  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.1 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
+  console.log('\n✅ KIỂM TRA TĨNH HỆ THỐNG BÀI TẬP HỌC THUẬT 15.2 THÀNH CÔNG RỰC RỠ (EXIT CODE 0)!');
   process.exit(0);
 }

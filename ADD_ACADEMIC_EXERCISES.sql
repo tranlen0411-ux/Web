@@ -1,9 +1,9 @@
 -- ============================================================================
--- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.1 BẢO MẬT & VALIDATION TUYỆT ĐỐI
--- 1. AN TOÀN TOÀN DIỆN PHASE 1 ZERO-DML: CHẶN VÀ KIỂM TRA MỌI TRƯỜNG SỐ (GRADE_LEVEL, MAX_ATTEMPTS, REWARD_STARS, POINTS...) DÙNG TRUNC(NUMERIC)
--- 2. LOẠI BỎ TOÀN BỘ PHÉP ÉP TRỰC TIẾP KHÔNG AN TOÀN ((->>'...')::INT) VÀ KHÔNG DÙNG GREATEST/LEAST ĐỂ SỬA ÂM THẦM DỮ LIỆU SAI
--- 3. PARSE AN TOÀN CHO UUID, TIMESTAMPTZ, BOOLEAN NỔI LỖI JSON THÂN THIỆN TRÁNH VĂNG EXCEPTION CSDB
--- 4. RPC QUEUE_FILE_CLEANUP VỚI RESET BIẾN VÒNG LẶP NGUYÊN TỬ, CHỐNG BÁO QUEUED GIẢ VÀ DỰA TRÊN THỰC TẾ RETURNING
+-- MIGRATION CSDL HỆ THỐNG BÀI TẬP HỌC THUẬT (ACADEMIC EXERCISES) - PHIÊN BẢN 15.2 NGUYÊN TỬ VÀ CHỐNG RACE CONDITION
+-- 1. BỔ SUNG RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB THỰC THI THIẾT LẬP NGUYÊN TỬ CSDL (KHÔNG DÙNG SNAPSHOT EDGE FUNCTION)
+-- 2. BỔ SUNG RPC FINISH_EXERCISE_FILE_CLEANUP_JOB CẬP NHẬT TRẠNG THÁI CUỐI CÙNG VỚI RETURNING ROW_COUNT = 1
+-- 3. CHUẨN HÓA HOÀN TOÀN TẤT CẢ PHÉP VALIDAION SỐ VÀ KHÁI NIỆM LOCAL TYPED VARIABLES
+-- 4. BẢO VỆ BÀI LÀM CỦA HỌC SINH VA CLEANUP FILE KHÔNG ẢNH HƯỞNG TỚI THÀNH CÔNG BÀI NỘP
 -- ============================================================================
 
 BEGIN;
@@ -428,7 +428,6 @@ BEGIN
     ON CONFLICT (file_path) DO UPDATE SET
       requested_by = EXCLUDED.requested_by,
       status = 'pending',
-      attempts = 0,
       last_error = NULL,
       processed_at = NULL,
       created_at = NOW()
@@ -452,7 +451,129 @@ END;
 $$;
 
 
--- 2. GET_EXERCISE_FOR_EDIT
+-- 2. RPC CLAIM_EXERCISE_FILE_CLEANUP_JOB CSDL NGUYÊN TỬ (KHÔNG CHẠY TRÊN EDGE FUNCTION SNAPSHOT)
+CREATE OR REPLACE FUNCTION public.claim_exercise_file_cleanup_job(
+  p_job_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_job RECORD;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'unauthorized', 'message', 'Chưa đăng nhập.');
+  END IF;
+
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+
+  -- THỰC THI 1 CÂU LỆNH UPDATE DUY NHẤT CÓ ĐIỀU KIỆN VÀ RETURNING
+  UPDATE public.exercise_file_cleanup_jobs
+  SET
+    status = 'processing',
+    attempts = attempts + 1,
+    last_error = NULL,
+    processed_at = NOW()
+  WHERE id = p_job_id
+    AND bucket_id = 'exercise-submissions'
+    AND attempts < 5
+    AND (
+      v_caller_role = 'admin' OR requested_by = v_caller_id
+    )
+    AND (
+      status IN ('pending', 'failed')
+      OR (status = 'processing' AND processed_at < NOW() - INTERVAL '15 minutes')
+    )
+  RETURNING * INTO v_job;
+
+  IF v_job.id IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'job', to_jsonb(v_job)
+    );
+  END IF;
+
+  -- NẾU UPDATE TRẢ 0 DÒNG -> XÁC ĐỊNH CHÍNH XÁC NGUYÊN NHÂN TỪ CSDL
+  SELECT * INTO v_job FROM public.exercise_file_cleanup_jobs WHERE id = p_job_id;
+  IF v_job.id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'missing_job', 'message', 'Job không tồn tại.');
+  END IF;
+
+  IF v_caller_role != 'admin' AND v_job.requested_by != v_caller_id THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'unauthorized_owner', 'message', 'Không có quyền xử lý job này.');
+  END IF;
+
+  IF v_job.attempts >= 5 THEN
+    UPDATE public.exercise_file_cleanup_jobs
+    SET status = 'permanent_failed', last_error = 'Max retries (5) exceeded'
+    WHERE id = p_job_id;
+    RETURN jsonb_build_object('success', false, 'reason', 'permanent_failed_max_retries', 'message', 'Job đã vượt quá số lần thử tối đa (5).');
+  END IF;
+
+  IF v_job.status = 'processing' AND (v_job.processed_at IS NULL OR v_job.processed_at >= NOW() - INTERVAL '15 minutes') THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'already_claimed', 'message', 'Job đang được worker khác xử lý (chưa quá 15 phút).');
+  END IF;
+
+  RETURN jsonb_build_object('success', false, 'reason', 'not_claimable', 'message', 'Trạng thái job không thể claim.');
+END;
+$$;
+
+
+-- 3. RPC FINISH_EXERCISE_FILE_CLEANUP_JOB HOÀN TẤT NGUYÊN TỬ
+CREATE OR REPLACE FUNCTION public.finish_exercise_file_cleanup_job(
+  p_job_id UUID,
+  p_expected_attempt INT,
+  p_status TEXT,
+  p_last_error TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_updated_rows INT;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
+  END IF;
+
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+
+  IF p_status NOT IN ('deleted', 'still_referenced', 'failed', 'permanent_failed', 'storage_deleted_job_update_failed') THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Trạng thái đích không hợp lệ.');
+  END IF;
+
+  UPDATE public.exercise_file_cleanup_jobs
+  SET
+    status = p_status,
+    last_error = p_last_error,
+    processed_at = NOW()
+  WHERE id = p_job_id
+    AND status = 'processing'
+    AND attempts = p_expected_attempt
+    AND (v_caller_role = 'admin' OR requested_by = v_caller_id);
+
+  GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+
+  IF v_updated_rows = 1 THEN
+    RETURN jsonb_build_object('success', true);
+  ELSE
+    RETURN jsonb_build_object('success', false, 'message', 'Cập nhật hoàn tất job thất bại (0 dòng khớp).');
+  END IF;
+END;
+$$;
+
+
+-- 4. GET_EXERCISE_FOR_EDIT
 CREATE OR REPLACE FUNCTION public.get_exercise_for_edit(
   p_exercise_id UUID
 )
@@ -520,7 +641,7 @@ END;
 $$;
 
 
--- 3. CREATE_OR_GET_SUBMISSION_DRAFT
+-- 5. CREATE_OR_GET_SUBMISSION_DRAFT
 CREATE OR REPLACE FUNCTION public.create_or_get_submission_draft(
   p_exercise_id UUID
 )
@@ -596,7 +717,7 @@ END;
 $$;
 
 
--- 4. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN MỌI TRƯỜNG VÀ DÙNG BIẾN TYPED
+-- 6. SAVE_EXERCISE_WITH_QUESTIONS_AND_KEYS VỚI VALIDATION TOÀN DIỆN MỌI TRƯỜNG VÀ DÙNG BIẾN TYPED
 CREATE OR REPLACE FUNCTION public.save_exercise_with_questions_and_keys(
   p_exercise JSONB,
   p_questions JSONB
@@ -1075,7 +1196,7 @@ END;
 $$;
 
 
--- 5. SUBMIT_ACADEMIC_EXERCISE
+-- 7. SUBMIT_ACADEMIC_EXERCISE
 CREATE OR REPLACE FUNCTION public.submit_academic_exercise(
   p_exercise_id UUID,
   p_answers JSONB,
@@ -1444,7 +1565,7 @@ END;
 $$;
 
 
--- 6. GRADE_ACADEMIC_SUBMISSION VỚI VALIDATION KIỂU INT CHO POINTS_EARNED DÙNG NUMERIC TRUNC
+-- 8. GRADE_ACADEMIC_SUBMISSION VỚI VALIDATION KIỂU INT CHO POINTS_EARNED DÙNG NUMERIC TRUNC
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -1643,7 +1764,7 @@ BEGIN
 
   IF v_stars_to_award > 0 AND v_sub.reward_applied_at IS NULL THEN
     UPDATE public.profiles
-    SET total_stars = COALESCE(total_stars, 0) + v_stars_to_award
+    SET total_stars = COALESCE(total_stars, 0) + v_reward_stars
     WHERE id = v_sub.student_id;
   END IF;
 
@@ -1659,6 +1780,8 @@ $$;
 
 -- GRANT / REVOKE PERMISSIONS
 REVOKE EXECUTE ON FUNCTION public.queue_file_cleanup FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.claim_exercise_file_cleanup_job FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.finish_exercise_file_cleanup_job FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.get_exercise_for_edit FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.create_or_get_submission_draft FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys FROM PUBLIC, anon;
@@ -1666,6 +1789,8 @@ REVOKE EXECUTE ON FUNCTION public.submit_academic_exercise FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.grade_academic_submission FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION public.queue_file_cleanup TO authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_exercise_file_cleanup_job TO authenticated;
+GRANT EXECUTE ON FUNCTION public.finish_exercise_file_cleanup_job TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_exercise_for_edit TO authenticated;
 GRANT EXECUTE ON FUNCTION public.create_or_get_submission_draft TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_exercise_with_questions_and_keys TO authenticated;
