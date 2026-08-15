@@ -74,8 +74,15 @@ BEGIN
   END IF;
 
   -- 3. SECTION VIII: SECURITY DEFINER & SEARCH_PATH LOCK
+  IF to_regprocedure('public.claim_exercise_file_cleanup_job(uuid,uuid)') IS NULL
+     OR to_regprocedure('public.finish_exercise_file_cleanup_job(uuid,integer,text,text,uuid)') IS NULL
+     OR to_regprocedure('public.reconcile_exercise_file_cleanup_job(uuid,integer,uuid)') IS NULL
+     OR to_regprocedure('public.reset_cleanup_jobs_for_retry(integer)') IS NULL THEN
+    RAISE EXCEPTION 'ASSERTION FAILED: Một hoặc nhiều RPC signature hiện hành bị thiếu OID (to_regprocedure IS NULL)!';
+  END IF;
+
   FOR v_proc_oid IN
-    SELECT p.oid FROM (
+    SELECT t.oid FROM (
       VALUES
         (to_regprocedure('public.claim_exercise_file_cleanup_job(uuid,uuid)')),
         (to_regprocedure('public.finish_exercise_file_cleanup_job(uuid,integer,text,text,uuid)')),
