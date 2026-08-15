@@ -32,8 +32,8 @@ export const LegacyFilesMigrationTool = ({ onMigrated }) => {
       const itemsToMove = (legacyItems || []).filter(item => item.file_path && !item.file_path.includes('/'));
 
       if (itemsToMove.length === 0) {
-        addLog('✅ Không có file cũ nào ở root Storage cần di chuyển. Tất cả file đã nằm đúng chuẩn thư mục {created_by}/{filename}.');
-        setSummary({ success: 0, failed: 0, total: 0 });
+        addLog('✅ Không có file cũ nào ở root Storage cần di chuyển. Tất cả tệp tin đã nằm đúng cấu trúc thư mục {created_by}/{filename}.');
+        setSummary({ success: 0, cleanupWarning: 0, failed: 0, total: 0 });
         setLoading(false);
         return;
       }
@@ -41,6 +41,7 @@ export const LegacyFilesMigrationTool = ({ onMigrated }) => {
       addLog(`📌 Tìm thấy ${itemsToMove.length} tệp tin cũ ở root Storage. Bắt đầu di chuyển...`);
 
       let successCount = 0;
+      let cleanupWarningCount = 0;
       let failCount = 0;
 
       for (const item of itemsToMove) {
@@ -67,20 +68,42 @@ export const LegacyFilesMigrationTool = ({ onMigrated }) => {
           .eq('id', item.id);
 
         if (dbErr) {
-          addLog(`❌ Lỗi cập nhật DB cho "${item.title}": ${dbErr.message}. Đang dọn dẹp file copy...`);
-          await supabase.storage.from('learning-materials').remove([newPath]);
+          addLog(`❌ Lỗi cập nhật DB cho "${item.title}": ${dbErr.message}. Đang dọn dẹp file copy mới...`);
+          
+          // Kiểm tra lỗi khi rollback xóa newPath
+          const { error: rollbackErr } = await supabase.storage
+            .from('learning-materials')
+            .remove([newPath]);
+
+          if (rollbackErr) {
+            addLog(`⚠️ Cảnh báo Rollback: Không thể xóa file mới [${newPath}] vừa copy (Lỗi: ${rollbackErr.message}).`);
+          }
           failCount++;
           continue;
         }
 
-        // C. Xóa file cũ ở root Storage
-        await supabase.storage.from('learning-materials').remove([oldPath]);
+        // C. Xóa file cũ ở root Storage & KIỂM TRA LỖI KHI XÓA OLD PATH
+        const { error: removeOldErr } = await supabase.storage
+          .from('learning-materials')
+          .remove([oldPath]);
 
-        addLog(`✅ Đã di chuyển thành công: "${item.title}"`);
-        successCount++;
+        if (removeOldErr) {
+          addLog(`⚠️ Đã di chuyển đường dẫn CSDL sang tệp mới thành công, nhưng không thể xóa tệp cũ ở root [${oldPath}] (Lỗi: ${removeOldErr.message}). Cần Admin dọn dẹp tệp cũ thủ công.`);
+          cleanupWarningCount++;
+          // KHÔNG rollback DB vì file mới đã hoạt động trong CSDL
+          // KHÔNG tăng successCount!
+        } else {
+          addLog(`✅ Di chuyển hoàn toàn thành công: "${item.title}"`);
+          successCount++;
+        }
       }
 
-      setSummary({ success: successCount, failed: failCount, total: itemsToMove.length });
+      setSummary({ 
+        total: itemsToMove.length, 
+        success: successCount, 
+        cleanupWarning: cleanupWarningCount, 
+        failed: failCount 
+      });
       onMigrated?.();
 
     } catch (err) {
@@ -123,10 +146,15 @@ export const LegacyFilesMigrationTool = ({ onMigrated }) => {
       )}
 
       {summary && (
-        <div className="p-2.5 bg-white rounded-xl border border-amber-200 text-xs font-bold text-slate-700 flex items-center justify-between">
-          <span>Tổng số file quét: {summary.total}</span>
-          <span className="text-emerald-700 font-black">Thành công: {summary.success}</span>
-          {summary.failed > 0 && <span className="text-rose-600 font-black">Thất bại: {summary.failed}</span>}
+        <div className="p-2.5 bg-white rounded-xl border border-amber-200 text-xs font-bold text-slate-700 flex items-center justify-between flex-wrap gap-2">
+          <span>Tổng số tệp quét: {summary.total}</span>
+          <span className="text-emerald-700 font-black">Hoàn toàn thành công: {summary.success}</span>
+          {summary.cleanupWarning > 0 && (
+            <span className="text-amber-700 font-black">Cần dọn file cũ: {summary.cleanupWarning}</span>
+          )}
+          {summary.failed > 0 && (
+            <span className="text-rose-600 font-black">Thất bại: {summary.failed}</span>
+          )}
         </div>
       )}
     </div>

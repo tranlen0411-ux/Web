@@ -46,6 +46,7 @@ export const MaterialsView = () => {
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedLocalClassId, setSelectedLocalClassId] = useState('ALL');
   const [selectedSubject, setSelectedSubject] = useState('ALL');
   const [selectedFileType, setSelectedFileType] = useState('ALL');
 
@@ -131,9 +132,9 @@ export const MaterialsView = () => {
     }
   };
 
-  // Lọc danh sách tài liệu ở Frontend theo cả Bộ lọc dùng chung (globalClassFilter) và bộ lọc riêng
+  // Áp dụng ĐỒNG THỜI 2 tầng lọc: Bộ Lọc Header Dùng Chung (globalClassFilter) và Bộ Lọc Nội Bộ Trang
   const filteredMaterials = materials.filter(item => {
-    // 1. Đồng bộ Bộ Lọc Lớp Dùng Chung (globalClassFilter từ Header/AuthContext)
+    // TẦNG 1: ĐỒNG BỘ THEO BỘ LỌC LỚP HEADER TOÀN CỤC (globalClassFilter từ AuthContext)
     if (globalClassFilter !== 'ALL') {
       if (globalClassFilter === 'NO_CLASS') {
         if (item.class_id !== null) return false;
@@ -142,7 +143,16 @@ export const MaterialsView = () => {
       }
     }
 
-    // 2. Lọc theo tìm kiếm từ khóa
+    // TẦNG 2: BỘ LỌC LỚP NỘI BỘ TRANG GÓC TÀI LIỆU (selectedLocalClassId)
+    if (selectedLocalClassId !== 'ALL') {
+      if (selectedLocalClassId === 'NO_CLASS') {
+        if (item.class_id !== null) return false;
+      } else if (item.class_id !== selectedLocalClassId) {
+        return false;
+      }
+    }
+
+    // TẦNG 3: LỌC THEO TÌM KIẾM TỪ KHÓA TÊN BÀI GIẢNG / MÔ TẢ
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const matchTitle = item.title?.toLowerCase().includes(q);
@@ -150,12 +160,12 @@ export const MaterialsView = () => {
       if (!matchTitle && !matchDesc) return false;
     }
 
-    // 3. Lọc theo Môn Học
+    // TẦNG 4: LỌC THEO MÔN HỌC
     if (selectedSubject !== 'ALL' && item.subject !== selectedSubject) {
       return false;
     }
 
-    // 4. Lọc theo Loại File
+    // TẦNG 5: LỌC THEO LOẠI FILE
     if (selectedFileType !== 'ALL' && item.file_type !== selectedFileType) {
       return false;
     }
@@ -287,7 +297,7 @@ export const MaterialsView = () => {
         </div>
       )}
 
-      {/* KHU VỰC TÌM KIẾM & BỘ LỌC TÀI LIỆU */}
+      {/* KHU VỰC TÌM KIẾM & BỘ LỌC NỘI BỘ TRANG */}
       <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm mb-8 space-y-4">
         
         {/* Ô TÌM KIẾM THEO TÊN BÀI GIẢNG */}
@@ -310,23 +320,23 @@ export const MaterialsView = () => {
           )}
         </div>
 
-        {/* CÁC BỘ LỌC CHI TIẾT DÙNG CHUNG VỚI HEADER */}
+        {/* CÁC BỘ LỌC NỘI BỘ TRANG */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           
-          {/* 1. LỌC THEO LỚP HỌC (ĐỒNG BỘ TRỰC TIẾP VỚI GLOBAL CLASS FILTER) */}
+          {/* 1. LỌC THEO LỚP HỌC NỘI BỘ (TÁC ĐỘNG ĐỒNG THỜI CÙNG HEADER FILTER) */}
           <div>
             <label className="block text-[11px] font-black text-slate-500 uppercase mb-1">
-              Lớp học (Header Filter):
+              Lọc lớp học nội bộ:
             </label>
             <select
-              value={globalClassFilter}
+              value={selectedLocalClassId}
               onChange={(e) => { 
-                setGlobalClassFilter(e.target.value); 
+                setSelectedLocalClassId(e.target.value); 
                 triggerSound('click'); 
               }}
               className="w-full p-2.5 bg-amber-50/70 border-2 border-amber-200 rounded-xl font-bold text-xs text-slate-800"
             >
-              <option value="ALL">🌐 Tất cả các lớp áp dụng</option>
+              <option value="ALL">🌐 Tất cả các lớp (Trong phạm vi Header)</option>
               <option value="NO_CLASS">📌 Bài giảng chung (Tất cả lớp)</option>
               {classes.map(c => (
                 <option key={c.id} value={c.id}>

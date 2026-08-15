@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { 
   Gamepad2, 
@@ -11,30 +11,66 @@ import {
   GraduationCap,
   ChevronDown,
   Lock,
-  FileText
+  Filter
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
 import { useSound } from '../../context/SoundContext';
 import { ChangePasswordModal } from './ChangePasswordModal';
+import { supabase } from '../../lib/supabase';
 
 export const Navbar = () => {
-  const { user, profile, signOut } = useAuth();
+  const { user, profile, signOut, globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isChangePassOpen, setIsChangePassOpen] = useState(false);
+  const [headerClasses, setHeaderClasses] = useState([]);
 
   const role = profile?.role || 'student';
+
+  // Lấy danh sách Lớp Học thuộc quyền hạn người dùng để hiển thị trên Dropdown Header
+  useEffect(() => {
+    const fetchHeaderClasses = async () => {
+      if (!user || !profile) {
+        setHeaderClasses([]);
+        return;
+      }
+      try {
+        if (role === 'admin') {
+          const { data } = await supabase
+            .from('classes')
+            .select('id, name, grade_level')
+            .order('grade_level');
+          setHeaderClasses(data || []);
+        } else if (role === 'teacher') {
+          const { data } = await supabase
+            .from('classes')
+            .select('id, name, grade_level')
+            .eq('teacher_id', profile.id);
+          setHeaderClasses(data || []);
+        } else if (role === 'student') {
+          const { data: memberData } = await supabase
+            .from('class_members')
+            .select('classes:class_id(id, name, grade_level)')
+            .eq('student_id', profile.id);
+          setHeaderClasses((memberData || []).map(m => m.classes).filter(Boolean));
+        }
+      } catch (err) {
+        console.error('Error fetching header classes:', err);
+      }
+    };
+
+    fetchHeaderClasses();
+  }, [user, profile?.id, role]);
 
   const handleNavClick = (path) => {
     triggerSound('click');
     navigate(path);
   };
 
-  // Điều hướng Kho Trò Chơi theo đúng vai trò role
   const handleGamesNavClick = () => {
     triggerSound('click');
     if (role === 'admin') {
@@ -46,7 +82,6 @@ export const Navbar = () => {
     }
   };
 
-  // Điều hướng Bảng Quản Lý theo đúng vai trò role
   const handleDashboardNavClick = () => {
     triggerSound('click');
     if (role === 'admin') {
@@ -64,13 +99,11 @@ export const Navbar = () => {
     navigate('/auth');
   };
 
-  // Kiểm tra active cho nút Kho Trò Chơi
   const isGamesActive = 
     (role === 'admin' && location.pathname === '/admin' && location.search.includes('tab=games')) ||
     (role === 'teacher' && location.pathname === '/teacher' && !location.pathname.includes('materials')) ||
     (role === 'student' && (location.pathname === '/' || location.pathname === '/student'));
 
-  // Kiểm tra active cho nút Bảng Quản Lý theo Role
   const isDashboardActive = 
     (role === 'admin' && location.pathname === '/admin' && !location.search.includes('tab=games')) ||
     (role === 'teacher' && location.pathname === '/teacher') ||
@@ -102,8 +135,33 @@ export const Navbar = () => {
           </div>
         </a>
 
-        {/* ĐIỀU HƯỚNG CHÍNH CHUẨN ROLE */}
-        <nav className="hidden md:flex items-center gap-2">
+        {/* ĐIỀU HƯỚNG CHÍNH CHUẨN ROLE & BỘ LỌC LỚP HEADER TOÀN CỤC */}
+        <nav className="hidden lg:flex items-center gap-2">
+          
+          {/* BỘ LỌC LỚP DÙNG CHUNG TRÊN HEADER (GLOBAL CLASS FILTER) */}
+          {user && (
+            <div className="flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-2xl border-2 border-amber-200 mr-1">
+              <Filter className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+              <span className="text-xs font-black text-amber-950 shrink-0">Lớp:</span>
+              <select
+                value={globalClassFilter}
+                onChange={(e) => {
+                  setGlobalClassFilter(e.target.value);
+                  triggerSound('click');
+                }}
+                className="bg-transparent text-xs font-bold text-amber-900 focus:outline-none cursor-pointer max-w-[140px] truncate"
+              >
+                <option value="ALL">🌐 Tất cả các lớp</option>
+                <option value="NO_CLASS">📌 Bài giảng chung</option>
+                {headerClasses.map(c => (
+                  <option key={c.id} value={c.id}>
+                    🏫 Lớp {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* NÚT KHO TRÒ CHƠI */}
           <button
             onClick={handleGamesNavClick}
@@ -116,7 +174,7 @@ export const Navbar = () => {
             <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
           </button>
 
-          {/* NÚT GÓC TÀI LIỆU (DÀNH CHO TẤT CẢ USER ĐÃ ĐĂNG NHẬP) */}
+          {/* NÚT GÓC TÀI LIỆU */}
           {user && (
             <button
               onClick={() => handleNavClick('/materials')}
