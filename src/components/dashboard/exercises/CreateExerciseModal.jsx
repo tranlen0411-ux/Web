@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock, ShieldAlert } from 'lucide-react';
+import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock, ShieldAlert, FileSpreadsheet } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
+import { ImportQuestionsModal } from './ImportQuestionsModal';
 
 export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) => {
   const { profile } = useAuth();
@@ -41,6 +42,32 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLockedByKeyError, setIsLockedByKeyError] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const handleImportQuestions = (importedList) => {
+    if (!importedList || importedList.length === 0) return;
+
+    setQuestions(prev => {
+      const isDefaultSingleBlank = prev.length === 1 && (!prev[0].prompt || prev[0].prompt === '3 + 4 = ?');
+      const formattedImported = importedList.map((q, idx) => ({
+        id: Date.now() + idx,
+        question_number: isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1,
+        question_type: q.question_type,
+        prompt: q.prompt,
+        options: q.options && q.options.length > 0 ? q.options : (q.question_type === 'single_choice' ? ['Lựa chọn A', 'Lựa chọn B'] : []),
+        correct_answer: q.correct_answer,
+        points: q.points || 1
+      }));
+
+      if (isDefaultSingleBlank) {
+        return formattedImported;
+      } else {
+        const existingKeys = new Set(prev.map(p => `${p.question_type}:::${p.prompt.trim().toLowerCase()}`));
+        const nonDuplicates = formattedImported.filter(q => !existingKeys.has(`${q.question_type}:::${q.prompt.trim().toLowerCase()}`));
+        return [...prev, ...nonDuplicates];
+      }
+    });
+  };
 
   useEffect(() => {
     fetchTeacherClasses();
@@ -221,8 +248,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-3xl rounded-3xl border-4 border-amber-300 shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-[60] bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-hidden">
+      <div className="bg-white w-full max-w-3xl rounded-3xl border-4 border-amber-300 shadow-2xl p-5 sm:p-7 animate-fadeIn max-h-[92vh] flex flex-col overflow-hidden">
         
         {/* HEADER */}
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
@@ -367,16 +394,25 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
           {/* DANH SÁCH CÂU HỎI */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-black text-slate-800">Danh Sách Câu Hỏi ({questions.length} câu)</h3>
               {!hasSubmissions && (
-                <button
-                  type="button"
-                  onClick={handleAddQuestion}
-                  className="px-3 py-1.5 bg-sky-100 text-sky-900 hover:bg-sky-200 font-extrabold text-xs rounded-xl border border-sky-300 flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Thêm Câu Hỏi
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setIsImportModalOpen(true)}
+                    className="px-3 py-1.5 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 font-extrabold text-xs rounded-xl border border-emerald-300 flex items-center gap-1.5 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" /> Nhập Từ Tệp (Excel/Word)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddQuestion}
+                    className="px-3 py-1.5 bg-sky-100 text-sky-900 hover:bg-sky-200 font-extrabold text-xs rounded-xl border border-sky-300 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Thêm Câu Hỏi
+                  </button>
+                </div>
               )}
             </div>
 
@@ -591,6 +627,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           </div>
 
         </form>
+
+        {/* MODAL NHẬP CÂU HỎI TỪ TỆP */}
+        <ImportQuestionsModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          onImportQuestions={handleImportQuestions}
+        />
 
       </div>
     </div>
