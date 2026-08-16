@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { formatClassLabel } from '../../utils/helpers';
 
 export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList = [], onSaved }) => {
   const { profile } = useAuth();
@@ -352,7 +353,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
                 <option value="">🌐 Dành cho Tất cả các lớp</option>
                 {classesList.map(c => (
                   <option key={c.id} value={c.id}>
-                    🏫 {c.name} (Khối {c.grade_level})
+                    🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
                   </option>
                 ))}
               </select>

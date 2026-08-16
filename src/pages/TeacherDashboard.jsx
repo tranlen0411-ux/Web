@@ -26,6 +26,7 @@ import { EditAssignmentModal } from '../components/dashboard/EditAssignmentModal
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
+import { formatClassLabel } from '../utils/helpers';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 
 export const TeacherDashboard = () => {
@@ -441,7 +442,7 @@ export const TeacherDashboard = () => {
                             />
                             <span>{asg.games?.title || 'Trò chơi'}</span>
                           </td>
-                          <td className="p-3 text-sky-700 font-black">Lớp {asg.classes?.name}</td>
+                          <td className="p-3 text-sky-700 font-black">{formatClassLabel(asg.classes?.name)}</td>
                           <td className="p-3 text-amber-600 font-black">+{asg.reward_stars} 🌟</td>
                           <td className="p-3 text-slate-500">
                             {asg.due_date ? new Date(asg.due_date).toLocaleDateString('vi-VN') : 'Không hạn'}

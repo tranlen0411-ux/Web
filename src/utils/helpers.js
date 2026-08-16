@@ -29,9 +29,7 @@ export const SUBJECT_ICONS = {
 
 export const formatClassLabel = (name) => {
   if (!name) return '';
-  const trimmed = name.trim();
-  if (/^Lớp\b/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `Lớp ${trimmed}`;
+  const trimmed = String(name).trim();
+  const normalized = trimmed.replace(/^(?:lớp\s+)+/iu, '').trim();
+  return normalized ? `Lớp ${normalized}` : 'Lớp';
 };

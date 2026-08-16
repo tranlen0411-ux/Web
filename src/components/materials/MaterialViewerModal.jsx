@@ -17,6 +17,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { formatClassLabel } from '../../utils/helpers';
 
 export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [signedUrl, setSignedUrl] = useState(null);
@@ -181,7 +182,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         <div className="flex items-center justify-between border-b-2 border-amber-100 pb-4 mb-4">
           <div className="pr-8">
             <span className="px-3 py-1 bg-amber-100 text-amber-900 text-[11px] font-black rounded-xl border border-amber-300 uppercase inline-block mb-1">
-              📖 {material.subject} {material.className ? `• Lớp ${material.className}` : ''}
+              📖 {material.subject} {material.className ? `• ${formatClassLabel(material.className)}` : ''}
             </span>
             <h3 className="text-lg sm:text-xl font-black text-amber-950 line-clamp-1">
               {material.title}

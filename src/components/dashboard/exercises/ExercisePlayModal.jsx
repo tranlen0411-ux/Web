@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
+import { formatClassLabel } from '../../../utils/helpers';
 
 export const ExercisePlayModal = ({ exercise, onClose }) => {
   const { profile } = useAuth();
@@ -369,7 +370,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
           <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100">
             <div>
               <span className="px-3 py-1 bg-amber-100 text-amber-900 font-black text-xs rounded-xl border border-amber-300">
-                Môn {exercise.subject} - {exercise.classes?.name ? `Lớp ${exercise.classes.name}` : 'Mọi lớp'}
+                Môn {exercise.subject} - {exercise.classes?.name ? formatClassLabel(exercise.classes.name) : 'Mọi lớp'}
               </span>
               <h2 className="text-xl font-black text-slate-800 mt-2">{exercise.title}</h2>
             </div>

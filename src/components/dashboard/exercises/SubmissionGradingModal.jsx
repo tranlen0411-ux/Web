@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, CheckCircle2, RotateCcw, Save, FileText, AlertCircle, Loader2, Star, Eye } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
+import { formatClassLabel } from '../../../utils/helpers';
 
 export const SubmissionGradingModal = ({ exercise, onClose }) => {
   const [submissions, setSubmissions] = useState([]);
@@ -114,7 +115,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
           <div>
             <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg">
-              {exercise.classes?.name ? `Lớp ${exercise.classes.name}` : (exercise.is_global ? 'Toàn trường' : 'Lớp học')} - Môn {exercise.subject}
+              {exercise.classes?.name ? formatClassLabel(exercise.classes.name) : (exercise.is_global ? 'Toàn trường' : 'Lớp học')} - Môn {exercise.subject}
             </span>
             <h2 className="text-xl font-black text-slate-800 mt-1">Quản Lý & Chấm Bài: {exercise.title}</h2>
           </div>

@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
 import { useSound } from '../../context/SoundContext';
+import { formatClassLabel } from '../../utils/helpers';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { supabase } from '../../lib/supabase';
 
@@ -208,7 +209,7 @@ export const Navbar = () => {
                 <option value="NO_CLASS">📌 Bài giảng chung</option>
                 {headerClasses.map(c => (
                   <option key={c.id} value={c.id}>
-                    🏫 Lớp {c.name}
+                    🏫 {formatClassLabel(c.name)}
                   </option>
                 ))}
               </select>
