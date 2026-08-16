@@ -26,6 +26,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../context/SoundContext';
+import { formatClassLabel } from '../utils/helpers';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { MaterialViewerModal } from '../components/materials/MaterialViewerModal';
 import { MaterialFormModal } from '../components/materials/MaterialFormModal';
@@ -340,7 +341,7 @@ export const MaterialsView = () => {
               <option value="NO_CLASS">📌 Bài giảng chung (Tất cả lớp)</option>
               {classes.map(c => (
                 <option key={c.id} value={c.id}>
-                  🏫 Lớp {c.name} (Khối {c.grade_level})
+                  🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
                 </option>
               ))}
             </select>
@@ -413,7 +414,7 @@ export const MaterialsView = () => {
                   {/* LỚP HỌC ÁP DỤNG */}
                   <div className="mb-2">
                     <span className="text-[11px] font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg border border-sky-200 inline-block">
-                      🏫 {item.className ? `Lớp ${item.className}` : 'Dành cho Tất cả các lớp'}
+                      🏫 {item.className ? formatClassLabel(item.className) : 'Dành cho Tất cả các lớp'}
                     </span>
                   </div>
 

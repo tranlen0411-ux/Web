@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
+import { formatClassLabel } from '../../../utils/helpers';
 import { CreateExerciseModal } from './CreateExerciseModal';
 import { ExercisePlayModal } from './ExercisePlayModal';
 import { SubmissionGradingModal } from './SubmissionGradingModal';
@@ -173,7 +174,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-[11px] rounded-lg border border-amber-300">
-                      Môn {ex.subject} - {ex.classes?.name ? `Lớp ${ex.classes.name}` : (ex.is_global ? 'Toàn trường' : 'Lớp học')}
+                      Môn {ex.subject} - {ex.classes?.name ? formatClassLabel(ex.classes.name) : (ex.is_global ? 'Toàn trường' : 'Lớp học')}
                     </span>
                     <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5" /> Hạn: {ex.due_date ? new Date(ex.due_date).toLocaleDateString('vi-VN') : 'Không giới hạn'}

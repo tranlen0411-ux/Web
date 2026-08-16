@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock, ShieldAlert } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
+import { formatClassLabel } from '../../../utils/helpers';
 
 export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) => {
   const { profile } = useAuth();
@@ -289,7 +290,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               >
                 {classesList.map(c => (
                   <option key={c.id} value={c.id}>
-                    🏫 Lớp {c.name} (Khối {c.grade_level})
+                    🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
                   </option>
                 ))}
               </select>

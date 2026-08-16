@@ -26,3 +26,12 @@ export const SUBJECT_ICONS = {
   'Lịch sử & Địa lý': 'Globe',
   'Tin học': 'Laptop',
 };
+
+export const formatClassLabel = (name) => {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (/^Lớp\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `Lớp ${trimmed}`;
+};
