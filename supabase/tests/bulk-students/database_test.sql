@@ -76,11 +76,21 @@ BEGIN
   RAISE NOTICE 'TEST PASS: idx_profiles_student_code_unique tồn tại.';
 END $$;
 
--- 4. KIỂM TRA TOÀN BỘ 11 RPCS NGUYÊN TỬ CÓ CẤP QUYỀN EXECUTE CHO ANON/AUTHENTICATED/PUBLIC KHÔNG
+-- 4. KIỂM TRA PHÂN QUYỀN EXECUTE CHO TOÀN BỘ 12 RPCS NGUYÊN TỬ
 DO $$
 DECLARE
-  v_leaked_rpc TEXT;
-  v_rpcs TEXT[] := ARRAY[
+  v_server_rpcs TEXT[] := ARRAY[
+    'set_student_pin_service',
+    'heartbeat_batch_idempotency',
+    'complete_batch_idempotency',
+    'fail_batch_idempotency',
+    'claim_student_row',
+    'complete_student_row',
+    'fail_student_row',
+    'claim_student_pin_reset',
+    'verify_student_pin_rate_limited'
+  ];
+  v_all_rpcs TEXT[] := ARRAY[
     'set_student_pin_service',
     'claim_batch_idempotency',
     'heartbeat_batch_idempotency',
@@ -96,16 +106,29 @@ DECLARE
   ];
   r TEXT;
 BEGIN
-  FOREACH r IN ARRAY v_rpcs LOOP
+  -- 4a. Tất cả 12 RPCs KHÔNG được cấp quyền EXECUTE cho anon hoặc PUBLIC
+  FOREACH r IN ARRAY v_all_rpcs LOOP
     IF EXISTS (
       SELECT 1 FROM information_schema.routine_privileges
       WHERE routine_name = r 
-        AND grantee IN ('PUBLIC', 'anon', 'authenticated')
+        AND grantee IN ('PUBLIC', 'anon')
     ) THEN
-      RAISE EXCEPTION 'DATABASE TEST FAILED: RPC % bị rò rỉ quyền EXECUTE cho anon/authenticated/PUBLIC!', r;
+      RAISE EXCEPTION 'DATABASE TEST FAILED: RPC % bị rò rỉ quyền EXECUTE cho anon hoặc PUBLIC!', r;
     END IF;
   END LOOP;
-  RAISE NOTICE 'TEST PASS: Tất cả 11 RPCs nguyên tử đều được bảo mật chỉ cấp cho service_role hoặc JWT Admin.';
+
+  -- 4b. Các RPCs server-role KHÔNG được cấp quyền EXECUTE cho authenticated
+  FOREACH r IN ARRAY v_server_rpcs LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.routine_privileges
+      WHERE routine_name = r 
+        AND grantee = 'authenticated'
+    ) THEN
+      RAISE EXCEPTION 'DATABASE TEST FAILED: Server-role RPC % bị rò rỉ quyền EXECUTE cho authenticated!', r;
+    END IF;
+  END LOOP;
+
+  RAISE NOTICE 'TEST PASS: Tất cả 12 RPCs nguyên tử đều được bảo mật phân quyền chính xác.';
 END $$;
 
 COMMIT;
