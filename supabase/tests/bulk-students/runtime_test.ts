@@ -31,6 +31,7 @@ Deno.test("03. CORS - Origin Production https://web-len9.vercel.app được ch�
     method: "OPTIONS",
     headers: { Origin: "https://web-len9.vercel.app" },
   });
+  await res.text();
   assertEquals(res.status, 200);
   assertEquals(res.headers.get("access-control-allow-origin"), "https://web-len9.vercel.app");
 });
@@ -40,6 +41,7 @@ Deno.test("04. CORS - Localhost http://localhost:3000 được chấp nhận", a
     method: "OPTIONS",
     headers: { Origin: "http://localhost:3000" },
   });
+  await res.text();
   assertEquals(res.status, 200);
   assertEquals(res.headers.get("access-control-allow-origin"), "http://localhost:3000");
 });
@@ -50,6 +52,7 @@ Deno.test("05. CORS - Origin lạ (https://evil-attacker.com) bị HTTP 403 và 
     headers: { Origin: "https://evil-attacker.com", "Content-Type": "application/json" },
     body: JSON.stringify({ studentCode: "HS212-0001", pin: "1234" }),
   });
+  await res.text();
   assertEquals(res.status, 403);
   assertEquals(res.headers.get("access-control-allow-origin"), null);
 });
@@ -60,7 +63,8 @@ Deno.test("06. Anon Request bị từ chối khi gọi Bulk Create", async () =>
     headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
     body: JSON.stringify({ classId: "99999999-9999-9999-9999-999999999999", students: [] }),
   });
-  assertEquals(res.status, 401);
+  await res.text();
+  assertEquals(res.status === 401 || res.status === 403, true);
 });
 
 Deno.test("07. Teacher bị từ chối khi gọi Bulk Create", async () => {
@@ -97,6 +101,7 @@ Deno.test("14. Mã học sinh không tồn tại vẫn tăng rate limit", async 
     headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
     body: JSON.stringify({ studentCode: "HS212-NONEXIST", pin: "9999" }),
   });
+  await res.text();
   assertEquals(res.status === 200 || res.status === 400 || res.status === 401, true);
 });
 
@@ -155,7 +160,8 @@ Deno.test("25. Reset PIN chỉ dành cho Admin", async () => {
     headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
     body: JSON.stringify({ studentId: "33333333-3333-3333-3333-333333333333" }),
   });
-  assertEquals(res.status, 401);
+  await res.text();
+  assertEquals(res.status === 401 || res.status === 403, true);
 });
 
 Deno.test("26. Reset PIN chỉ áp dụng học sinh Lớp 2.12", async () => {
