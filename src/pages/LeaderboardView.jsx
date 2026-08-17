@@ -10,28 +10,32 @@ export const LeaderboardView = () => {
   // Tab chế độ: 'game' (Xếp hạng Trò chơi) | 'academic' (Xếp hạng Học thuật)
   const [activeTab, setActiveTab] = useState('game');
 
+  // --- THÔNG TIN THÀNH VIÊN VÀ TOÀN BỘ LỚP TRONG HỆ THỐNG ---
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [allSystemClasses, setAllSystemClasses] = useState([]);
+  const [userMyClasses, setUserMyClasses] = useState([]);
+
   // --- STATE DÀNH CHO TAB TRÒ CHƠI ---
   const [gameGradeFilter, setGameGradeFilter] = useState('ALL');
+  const [gameClassFilter, setGameClassFilter] = useState('ALL_IN_GRADE');
   const [gameStudents, setGameStudents] = useState([]);
   const [loadingGame, setLoadingGame] = useState(false);
 
   // --- STATE DÀNH CHO TAB HỌC THUẬT ---
-  const [currentUser, setCurrentUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [userClasses, setUserClasses] = useState([]);
-  const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedAcademicClassId, setSelectedAcademicClassId] = useState('');
   const [academicSubject, setAcademicSubject] = useState('ALL');
   const [academicTimeRange, setAcademicTimeRange] = useState('ALL');
   const [academicData, setAcademicData] = useState(null);
   const [loadingAcademic, setLoadingAcademic] = useState(false);
   const [academicError, setAcademicError] = useState('');
 
-  // 1. Load thông tin User đăng nhập
+  // 1. Load thông tin User đăng nhập & Toàn bộ danh sách Lớp học
   useEffect(() => {
-    fetchUserProfile();
+    fetchUserProfileAndClasses();
   }, []);
 
-  const fetchUserProfile = async () => {
+  const fetchUserProfileAndClasses = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -45,65 +49,129 @@ export const LeaderboardView = () => {
 
       setUserProfile(profile);
 
-      // Lấy danh sách lớp phù hợp với vai trò
+      // Tải tất cả các lớp trong hệ thống
+      const { data: sysClasses } = await supabase
+        .from('classes')
+        .select('*')
+        .order('grade_level', { ascending: true })
+        .order('name', { ascending: true });
+
+      setAllSystemClasses(sysClasses || []);
+
+      // Xác định các lớp gắn liền với vai trò người dùng
       if (profile?.role === 'student') {
         const { data: cm } = await supabase
           .from('class_members')
           .select('class_id, classes(*)')
           .eq('student_id', user.id);
 
-        const classes = (cm || []).map(item => item.classes).filter(Boolean);
-        setUserClasses(classes);
-        if (classes.length > 0) setSelectedClassId(classes[0].id);
+        const myClasses = (cm || []).map(item => item.classes).filter(Boolean);
+        setUserMyClasses(myClasses);
+        if (myClasses.length > 0) {
+          setSelectedAcademicClassId(myClasses[0].id);
+        }
+        if (profile?.grade_level) {
+          setGameGradeFilter(profile.grade_level);
+        }
 
       } else if (profile?.role === 'teacher') {
-        const { data: classes } = await supabase
-          .from('classes')
-          .select('*')
-          .eq('teacher_id', user.id)
-          .order('name');
-
-        setUserClasses(classes || []);
-        if (classes && classes.length > 0) setSelectedClassId(classes[0].id);
+        const myClasses = (sysClasses || []).filter(c => c.teacher_id === user.id);
+        setUserMyClasses(myClasses);
+        if (myClasses.length > 0) {
+          setSelectedAcademicClassId(myClasses[0].id);
+        }
 
       } else if (profile?.role === 'admin') {
-        const { data: classes } = await supabase
-          .from('classes')
-          .select('*')
-          .order('grade_level', { ascending: true })
-          .order('name', { ascending: true });
-
-        setUserClasses(classes || []);
-        if (classes && classes.length > 0) setSelectedClassId(classes[0].id);
+        setUserMyClasses(sysClasses || []);
+        if (sysClasses && sysClasses.length > 0) {
+          setSelectedAcademicClassId(sysClasses[0].id);
+        }
       }
     } catch (err) {
-      console.error('Fetch user profile error:', err);
+      console.error('Fetch user profile and classes error:', err);
     }
   };
 
-  // 2. Fetch Leaderboard Trò chơi
+  // 2. TỰ ĐỘNG RESET BỘ LỌC LỚP TRÒ CHƠI KHI ĐỔI KHỐI (RESET CLASS FILTER ON GRADE CHANGE)
+  const handleGameGradeChange = (newGrade) => {
+    setGameGradeFilter(newGrade);
+    setGameClassFilter('ALL_IN_GRADE'); // Đặt lại bộ lọc lớp về "Tất cả các lớp trong khối"
+    triggerSound('click');
+  };
+
+  // 3. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (SAO THƯỞNG & XU)
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
     }
-  }, [activeTab, gameGradeFilter]);
+  }, [activeTab, gameGradeFilter, gameClassFilter]);
 
   const fetchGameLeaderboard = async () => {
     setLoadingGame(true);
     try {
-      let query = supabase
-        .from('profiles')
-        .select('*')
-        .eq('role', 'student')
-        .order('total_stars', { ascending: false })
-        .limit(20);
+      let resultStudents = [];
 
-      if (gameGradeFilter !== 'ALL') {
-        query = query.eq('grade_level', parseInt(gameGradeFilter));
+      // TRƯỜNG HỢP A: Chọn 1 Lớp cụ thể (VD: Lớp 1A)
+      if (gameClassFilter !== 'ALL_IN_GRADE') {
+        // Kiểm tra phân quyền Giáo viên: nếu Giáo viên lọc riêng lớp, kiểm tra đúng quyền
+        if (userProfile?.role === 'teacher') {
+          const isManaged = userMyClasses.some(c => c.id === gameClassFilter);
+          if (!isManaged) {
+            setGameStudents([]);
+            setLoadingGame(false);
+            return;
+          }
+        }
+
+        const { data: members } = await supabase
+          .from('class_members')
+          .select('student_id, class_id, profiles!inner(*), classes!inner(name, grade_level)')
+          .eq('class_id', gameClassFilter)
+          .eq('profiles.role', 'student');
+
+        resultStudents = (members || []).map(m => ({
+          ...m.profiles,
+          class_name: m.classes?.name,
+          grade_level: m.classes?.grade_level || m.profiles?.grade_level
+        })).sort((a, b) => (b.total_stars || 0) - (a.total_stars || 0) || (b.total_coins || 0) - (a.total_coins || 0));
+
+      } else {
+        // TRƯỜNG HỢP B & C: Chọn "Tất cả các lớp trong Khối" hoặc "Toàn Trường"
+        let query = supabase
+          .from('profiles')
+          .select('*')
+          .eq('role', 'student')
+          .order('total_stars', { ascending: false })
+          .order('total_coins', { ascending: false })
+          .limit(30);
+
+        if (gameGradeFilter !== 'ALL') {
+          query = query.eq('grade_level', parseInt(gameGradeFilter));
+        }
+
+        const { data: profiles } = await query;
+
+        // Lấy thông tin Tên lớp cho từng học sinh từ class_members để hiển thị
+        if (profiles && profiles.length > 0) {
+          const studentIds = profiles.map(p => p.id);
+          const { data: members } = await supabase
+            .from('class_members')
+            .select('student_id, classes(name)')
+            .in('student_id', studentIds);
+
+          const studentClassMap = {};
+          (members || []).forEach(m => {
+            if (m.classes?.name) studentClassMap[m.student_id] = m.classes.name;
+          });
+
+          resultStudents = profiles.map(p => ({
+            ...p,
+            class_name: studentClassMap[p.id] || null
+          }));
+        }
       }
 
-      const { data } = await query;
-      setGameStudents(data || []);
+      setGameStudents(resultStudents);
     } catch (err) {
       console.error('Fetch game leaderboard error:', err);
     } finally {
@@ -111,21 +179,21 @@ export const LeaderboardView = () => {
     }
   };
 
-  // 3. Fetch Leaderboard Học thuật
+  // 4. FETCH BẢNG XẾP HẠNG HỌC THUẬT (GIỮ NGUYÊN 100% CÔNG THỨC VÀ RPC HỌC THUẬT)
   useEffect(() => {
-    if (activeTab === 'academic' && selectedClassId) {
+    if (activeTab === 'academic' && selectedAcademicClassId) {
       fetchAcademicLeaderboard();
     }
-  }, [activeTab, selectedClassId, academicSubject, academicTimeRange]);
+  }, [activeTab, selectedAcademicClassId, academicSubject, academicTimeRange]);
 
   const fetchAcademicLeaderboard = async () => {
-    if (!selectedClassId) return;
+    if (!selectedAcademicClassId) return;
     setLoadingAcademic(true);
     setAcademicError('');
 
     try {
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('get_academic_class_leaderboard', {
-        p_class_id: selectedClassId,
+        p_class_id: selectedAcademicClassId,
         p_time_range: academicTimeRange,
         p_subject: academicSubject
       });
@@ -155,6 +223,36 @@ export const LeaderboardView = () => {
     if (!name) return 'Lớp Học';
     if (name.toLowerCase().startsWith('lớp') || name.toLowerCase().startsWith('khối')) return name;
     return `Lớp ${name}`;
+  };
+
+  // Danh sách các Lớp có sẵn theo Khối đã chọn cho Tab Trò chơi
+  const getGameClassesForSelectedGrade = () => {
+    if (gameGradeFilter === 'ALL') return [];
+
+    const gradeInt = parseInt(gameGradeFilter);
+    const classesInGrade = allSystemClasses.filter(c => c.grade_level === gradeInt);
+
+    if (userProfile?.role === 'teacher') {
+      // Giáo viên: Khi lọc riêng từng lớp, chỉ hiển thị lớp giáo viên phụ trách
+      return classesInGrade.filter(c => c.teacher_id === currentUser?.id);
+    } else if (userProfile?.role === 'student') {
+      // Học sinh: Chỉ hiển thị lớp học của học sinh trong khối đó
+      return classesInGrade.filter(c => userMyClasses.some(mc => mc.id === c.id));
+    }
+    // Admin: Xem được tất cả các lớp trong khối
+    return classesInGrade;
+  };
+
+  // Tiêu đề động cho Bảng xếp hạng Trò chơi
+  const getGameLeaderboardTitle = () => {
+    if (gameGradeFilter === 'ALL') {
+      return '🎮 Bảng Xếp Hạng Trò Chơi – Toàn Trường';
+    }
+    if (gameClassFilter === 'ALL_IN_GRADE') {
+      return `🎮 Bảng Xếp Hạng Trò Chơi – Khối ${gameGradeFilter} (Tất cả các lớp)`;
+    }
+    const targetClass = allSystemClasses.find(c => c.id === gameClassFilter);
+    return `🎮 Bảng Xếp Hạng Trò Chơi – ${formatClassLabel(targetClass?.name)}`;
   };
 
   const getRankBadge = (rank, isTied = false) => {
@@ -232,31 +330,84 @@ export const LeaderboardView = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* TAB 1: BẢNG XẾP HẠNG TRÒ CHƠI (SAO & XU TÍCH LŨY)                         */}
+      {/* TAB 1: BẢNG XẾP HẠNG TRÒ CHƠI (BỘ LỌC PHỤ THUỘC: KHỐI & LỚP)             */}
       {/* ========================================================================= */}
       {activeTab === 'game' && (
         <div className="space-y-6">
-          {/* LỌC KHỐI LỚP TRÒ CHƠI */}
-          <div className="flex justify-center items-center gap-2 flex-wrap bg-amber-50 p-4 rounded-2xl border border-amber-200">
-            <span className="text-xs font-black text-amber-900 flex items-center gap-1">
-              <Filter className="w-3.5 h-3.5" /> Khối Lớp:
-            </span>
-            {['ALL', 1, 2, 3, 4, 5].map((g) => (
-              <button
-                key={g}
-                onClick={() => { setGameGradeFilter(g); triggerSound('click'); }}
-                className={`px-3.5 py-1.5 rounded-xl font-black text-xs transition-all ${
-                  gameGradeFilter == g
-                    ? 'bg-amber-950 text-amber-300 border border-amber-900 shadow-sm'
-                    : 'bg-white text-amber-900 hover:bg-amber-100 border border-amber-200'
-                }`}
-              >
-                {g === 'ALL' ? 'Toàn Trường' : `Khối ${g}`}
-              </button>
-            ))}
+          
+          {/* BỘ LỌC KHỐI & LỚP CHO TRÒ CHƠI */}
+          <div className="bg-amber-50/80 p-5 rounded-3xl border-2 border-amber-200 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between border-b border-amber-200/60 pb-3">
+              <h3 className="text-sm font-black text-amber-950 flex items-center gap-1.5">
+                <Gamepad2 className="w-4 h-4 text-amber-600" /> {getGameLeaderboardTitle()}
+              </h3>
+              <span className="text-[11px] font-bold bg-amber-200 text-amber-950 px-2.5 py-0.5 rounded-full">
+                Xếp hạng theo Sao 🌟 & Xu 🪙
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              
+              {/* 1. BỘ LỌC KHỐI */}
+              <div>
+                <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
+                  <Filter className="w-3.5 h-3.5 text-amber-600" /> Chọn Khối Lớp:
+                </label>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(userProfile?.role === 'admin' ? ['ALL', 1, 2, 3, 4, 5] : [1, 2, 3, 4, 5]).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => handleGameGradeChange(g)}
+                      className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
+                        gameGradeFilter == g
+                          ? 'bg-amber-950 text-amber-300 border-2 border-amber-900 shadow-sm'
+                          : 'bg-white text-amber-900 hover:bg-amber-100 border border-amber-200'
+                      }`}
+                    >
+                      {g === 'ALL' ? 'Toàn Trường' : `Khối ${g}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 2. BỘ LỌC LỚP PHỤ THUỘC THEO KHỐI ĐÃ CHỌN */}
+              <div>
+                <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-amber-600" /> Chọn Lớp Thuộc Khối:
+                </label>
+
+                {gameGradeFilter === 'ALL' ? (
+                  <div className="p-2.5 bg-amber-100/60 border border-amber-200 rounded-2xl text-xs font-bold text-amber-900 flex items-center justify-between">
+                    <span>Đang xem xếp hạng chung Toàn Trường</span>
+                    <span className="text-[10px] text-amber-700 font-extrabold">Tất cả các lớp</span>
+                  </div>
+                ) : (
+                  <select
+                    value={gameClassFilter}
+                    onChange={(e) => {
+                      setGameClassFilter(e.target.value);
+                      triggerSound('click');
+                    }}
+                    className="w-full p-2.5 bg-white border-2 border-amber-300 rounded-2xl font-extrabold text-xs text-amber-950 focus:ring-2 focus:ring-amber-500 focus:outline-none shadow-sm"
+                  >
+                    <option value="ALL_IN_GRADE">
+                      🏫 Tất cả các lớp trong Khối {gameGradeFilter}
+                    </option>
+
+                    {getGameClassesForSelectedGrade().map((c) => (
+                      <option key={c.id} value={c.id}>
+                        📍 {formatClassLabel(c.name)} {c.teacher_id === currentUser?.id ? '(Lớp bạn phụ trách)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+            </div>
           </div>
 
-          {/* DANH SÁCH TOP TRÒ CHƠI */}
+          {/* DANH SÁCH TOP HỌC SINH TRÒ CHƠI */}
           {loadingGame ? (
             <LoadingSkeleton type="page" />
           ) : gameStudents.length > 0 ? (
@@ -266,7 +417,7 @@ export const LeaderboardView = () => {
                   key={st.id || idx}
                   className={`p-4 rounded-3xl border-4 transition-all flex items-center justify-between shadow-sm ${
                     idx === 0
-                      ? 'bg-gradient-to-r from-amber-100 to-yellow-100 border-amber-400 shadow-md scale-[1.02]'
+                      ? 'bg-gradient-to-r from-amber-100 to-yellow-100 border-amber-400 shadow-md scale-[1.01]'
                       : idx === 1
                       ? 'bg-gradient-to-r from-slate-100 to-slate-200 border-slate-300'
                       : idx === 2
@@ -282,14 +433,26 @@ export const LeaderboardView = () => {
                     <img
                       src={st.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
                       alt=""
-                      className="w-12 h-12 rounded-2xl border-2 border-amber-300 bg-white"
+                      className="w-12 h-12 rounded-2xl border-2 border-amber-300 bg-white shrink-0"
                     />
 
                     <div>
-                      <h4 className="text-base font-black text-slate-800">{st.full_name || 'Học Sinh'}</h4>
-                      <span className="inline-block px-2 py-0.5 bg-amber-200 text-amber-900 font-extrabold text-[10px] rounded-lg">
-                        Lớp {st.grade_level || 1}
-                      </span>
+                      <h4 className="text-base font-black text-slate-800 flex items-center gap-2">
+                        {st.full_name || 'Học Sinh'}
+                      </h4>
+
+                      {/* KHỦNG HIỂN THỊ CỘT TÊN LỚP NẾU XEM TOÀN KHỐI / TOÀN TRƯỜNG */}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {st.class_name ? (
+                          <span className="inline-block px-2.5 py-0.5 bg-amber-200 text-amber-950 font-black text-[11px] rounded-lg border border-amber-300">
+                            🏫 {formatClassLabel(st.class_name)}
+                          </span>
+                        ) : (
+                          <span className="inline-block px-2 py-0.5 bg-amber-100 text-amber-900 font-extrabold text-[10px] rounded-lg">
+                            Khối {st.grade_level || 1}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -315,7 +478,7 @@ export const LeaderboardView = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: BẢNG XẾP HẠNG HỌC THUẬT (TÍNH THEO LỚP & ĐIỂM BÀI TẬP CHÍNH THỨC)    */}
+      {/* TAB 2: BẢNG XẾP HẠNG HỌC THUẬT (GIỮ NGUYÊN 100% QUY TẮC & RPC HỌC THUẬT)      */}
       {/* ========================================================================= */}
       {activeTab === 'academic' && (
         <div className="space-y-6">
@@ -331,19 +494,19 @@ export const LeaderboardView = () => {
                 </label>
                 {userProfile?.role === 'student' ? (
                   <div className="p-2.5 bg-white border border-indigo-200 rounded-2xl text-xs font-black text-indigo-900 flex items-center justify-between">
-                    <span>🏫 {selectedClassId ? formatClassLabel(userClasses.find(c => c.id === selectedClassId)?.name) : 'Chưa xếp lớp'}</span>
+                    <span>🏫 {selectedAcademicClassId ? formatClassLabel(userMyClasses.find(c => c.id === selectedAcademicClassId)?.name) : 'Chưa xếp lớp'}</span>
                     <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-bold">Lớp của bạn</span>
                   </div>
                 ) : (
                   <select
-                    value={selectedClassId}
-                    onChange={(e) => setSelectedClassId(e.target.value)}
+                    value={selectedAcademicClassId}
+                    onChange={(e) => setSelectedAcademicClassId(e.target.value)}
                     className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
                   >
-                    {userClasses.length === 0 ? (
+                    {userMyClasses.length === 0 ? (
                       <option value="">Chưa có lớp nào</option>
                     ) : (
-                      userClasses.map(c => (
+                      userMyClasses.map(c => (
                         <option key={c.id} value={c.id}>
                           🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
                         </option>
@@ -407,7 +570,7 @@ export const LeaderboardView = () => {
           {/* DANH SÁCH XẾP HẠNG HỌC THUẬT */}
           {loadingAcademic ? (
             <LoadingSkeleton type="page" />
-          ) : !selectedClassId ? (
+          ) : !selectedAcademicClassId ? (
             <div className="text-center py-12 bg-white rounded-3xl border-4 border-indigo-200">
               <Users className="w-12 h-12 text-indigo-400 mx-auto mb-2" />
               <h3 className="text-lg font-black text-indigo-900">Vui lòng chọn Lớp học</h3>
