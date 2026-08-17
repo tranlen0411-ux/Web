@@ -120,21 +120,16 @@ export function AssignTeacherModal({ isOpen, onClose, onSaved }) {
 
       const targetClass = classesList.find(c => c.id === selectedClassId);
 
-      // Gọi RPC admin_assign_teacher_to_class
+      // Gọi duy nhất RPC admin_assign_teacher_to_class
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_assign_teacher_to_class', {
         p_class_id: selectedClassId,
         p_teacher_id: newTeacherId
       });
 
       if (rpcErr) {
-        // Fallback nếu RPC chưa được áp dụng trên local DB: Cập nhật duy nhất classes.teacher_id (KHÔNG SET updated_at)
-        const { error: directErr } = await supabase
-          .from('classes')
-          .update({ teacher_id: newTeacherId })
-          .eq('id', selectedClassId);
-
-        if (directErr) throw directErr;
-      } else if (rpcRes && !rpcRes.success) {
+        throw rpcErr;
+      }
+      if (rpcRes && !rpcRes.success) {
         throw new Error(rpcRes.message || 'Phân công không thành công từ RPC server.');
       }
 
