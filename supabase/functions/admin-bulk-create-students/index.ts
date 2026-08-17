@@ -100,6 +100,18 @@ serve(async (req) => {
 
     const { classId, students, dryRun = false, idempotencyKey } = body;
 
+    // FEATURE FLAG SERVER-SIDE: VÔ HIỆU HÓA TẠO THẬT NẾU CHƯA BẬT BẬC THỰC THI PROD
+    const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
+    if (!dryRun && !isAllowProductionBulkCreate) {
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          message: 'Từ chối thực thi: Biến môi trường ALLOW_PRODUCTION_BULK_CREATE chưa được bật trên Server Production. Nút tạo thật bị khóa!' 
+        }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (!classId || !students || !Array.isArray(students) || students.length === 0) {
       return new Response(
         JSON.stringify({ success: false, message: 'Vui lòng cung cấp mã Lớp học và danh sách học sinh hợp lệ.' }),
@@ -107,7 +119,6 @@ serve(async (req) => {
       );
     }
 
-    // YÊU CẦU BẮT BUỘC: IdempotencyKey cho thao tác tạo thật Production
     if (!dryRun && (!idempotencyKey || typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '')) {
       return new Response(
         JSON.stringify({ success: false, message: 'Thiếu idempotencyKey hợp lệ cho thao tác tạo thật trên Production.' }),
@@ -122,7 +133,6 @@ serve(async (req) => {
       );
     }
 
-    // XÁC MINH SERVER LỚP ĐÍCH KHỚP ĐỦ 4 ĐIỀU KIỆN LỚP 2.12
     const { data: targetClass, error: classErr } = await supabaseAdmin
       .from('classes')
       .select('id, name, grade_level, code, teacher_id')
@@ -182,9 +192,8 @@ serve(async (req) => {
       );
     }
 
-    // CHUẨN HÓA VÀ HASH FINGERPRINT PAYLOAD BẰNG WEB CRYPTO SHA-256
     const seenNamesInBatch = new Set<string>();
-    const cleanedStudentsInput: Array<{ stt: number; fullName: string; isDuplicateInBatch: boolean }> = [];
+    const cleanedStudentsInput: Array<{ stt: number; fullName: string; isDuplicateInBatch: boolean; isInvalidInput: boolean }> = [];
 
     for (let i = 0; i < students.length; i++) {
       const item = students[i];
@@ -192,7 +201,10 @@ serve(async (req) => {
       const rawName = item.fullName || item.full_name || '';
       const cleanName = rawName.trim().replace(/\s+/g, ' ');
 
-      if (!cleanName || cleanName.length > 100) continue;
+      if (!cleanName || cleanName.length > 100) {
+        cleanedStudentsInput.push({ stt, fullName: rawName || 'Tên rỗng', isDuplicateInBatch: false, isInvalidInput: true });
+        continue;
+      }
 
       const lowerName = cleanName.toLowerCase();
       let isDup = false;
@@ -202,7 +214,7 @@ serve(async (req) => {
         seenNamesInBatch.add(lowerName);
       }
 
-      cleanedStudentsInput.push({ stt, fullName: cleanName, isDuplicateInBatch: isDup });
+      cleanedStudentsInput.push({ stt, fullName: cleanName, isDuplicateInBatch: isDup, isInvalidInput: false });
     }
 
     const sortedNamesString = cleanedStudentsInput.map(s => s.fullName).sort().join('|');
@@ -213,7 +225,6 @@ serve(async (req) => {
 
     let claimToken: string | null = null;
 
-    // XỬ LÝ CLAIM RPC FAIL-CLOSED
     if (idempotencyKey && typeof idempotencyKey === 'string') {
       const { data: claimRes, error: claimErr } = await supabaseCaller.rpc('claim_batch_idempotency', {
         p_idempotency_key: idempotencyKey,
@@ -267,6 +278,19 @@ serve(async (req) => {
       let reviewRequiredCount = 0;
 
       for (const item of cleanedStudentsInput) {
+        if (item.isInvalidInput) {
+          dryResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'INVALID_INPUT',
+            studentCode: '-',
+            studentId: '-',
+            note: 'Dữ liệu tên học sinh bị rỗng hoặc quá độ dài cho phép.',
+          });
+          reviewRequiredCount++;
+          continue;
+        }
+
         if (item.isDuplicateInBatch) {
           dryResults.push({
             stt: item.stt,
@@ -370,7 +394,6 @@ serve(async (req) => {
       );
     }
 
-    // THỰC THI THẬT PRODUCTION
     const finalResults: Array<{
       stt: number;
       fullName: string;
@@ -386,7 +409,6 @@ serve(async (req) => {
     let failedCount = 0;
 
     for (const item of cleanedStudentsInput) {
-      // HEARTBEAT KIỂM TRA LEASE VÀ CLAIM_TOKEN TRƯỚC MỖI HỌC SINH
       if (idempotencyKey && claimToken) {
         const { data: hbOk, error: hbErr } = await supabaseAdmin.rpc('heartbeat_batch_idempotency', {
           p_idempotency_key: idempotencyKey,
@@ -402,6 +424,17 @@ serve(async (req) => {
             { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
+      }
+
+      if (item.isInvalidInput) {
+        finalResults.push({
+          stt: item.stt,
+          fullName: item.fullName,
+          status: 'SKIPPED_INVALID_INPUT',
+          note: 'Bỏ qua do dữ liệu rỗng hoặc sai độ dài.',
+        });
+        failedCount++;
+        continue;
       }
 
       if (item.isDuplicateInBatch) {
@@ -432,7 +465,6 @@ serve(async (req) => {
         continue;
       }
 
-      // CHƯA CÓ TÀI KHOẢN -> TẠO MỚI 100% VỚI KHUÔN MẪU BẢO MẬT & CLEANUP CHẶT CHẼ
       let newlyCreatedUserId: string | null = null;
       let successFullyCreated = false;
 
@@ -504,7 +536,6 @@ serve(async (req) => {
           break;
         }
 
-        // ĐẶT MÃ PIN HASH QUA RPC SET_STUDENT_PIN (NẾU LỖI -> HỦY THÀNH CÔNG VÀ DỌN DẸP)
         const { error: pinErr } = await supabaseAdmin.rpc('set_student_pin', {
           p_student_id: newlyCreatedUserId,
           p_pin: pin,
@@ -524,7 +555,6 @@ serve(async (req) => {
           break;
         }
 
-        // THÊM VÀO CLASS_MEMBERS
         const { error: cmErr } = await supabaseAdmin
           .from('class_members')
           .insert({
