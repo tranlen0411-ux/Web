@@ -699,42 +699,6 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     `DELETE FROM app_private.student_pin_reset_logs;`
   );
   
-  const adminProfCheck = await client.queryObject<{ id: string; role: string; is_disabled: boolean }>(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [adminAuth.userId]);
-  const studentProfCheck = await client.queryObject<{ id: string; role: string; is_disabled: boolean }>(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [studentId]);
-  const adminLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE admin_id = $1;`, [adminAuth.userId]);
-  const studentLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE student_id = $1;`, [studentId]);
-  const membershipCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM public.class_members WHERE student_id = $1 AND class_id = $2;`, [studentId, classId]);
-
-  await client.queryObject(`BEGIN;`);
-  let rpcResult: boolean | null = null;
-  let rpcError: string | null = null;
-  try {
-    const resRpc = await client.queryObject<{ claim_student_pin_reset: boolean }>(
-      `SELECT public.claim_student_pin_reset($1, $2);`,
-      [adminAuth.userId, studentId]
-    );
-    rpcResult = resRpc.rows[0]?.claim_student_pin_reset ?? null;
-  } catch (err: any) {
-    rpcError = err?.message || String(err);
-  } finally {
-    await client.queryObject(`ROLLBACK;`);
-  }
-
-  console.log("=== TEST 27 DIAGNOSTIC LOGS ===");
-  console.log("Admin ID:", adminAuth.userId);
-  console.log("Admin Profile Exists:", adminProfCheck.rows.length > 0);
-  console.log("Admin Role:", adminProfCheck.rows[0]?.role);
-  console.log("Student ID:", studentId);
-  console.log("Student Profile Exists:", studentProfCheck.rows.length > 0);
-  console.log("Student Role:", studentProfCheck.rows[0]?.role);
-  console.log("Student is_disabled:", studentProfCheck.rows[0]?.is_disabled);
-  console.log("Admin Reset Log Count:", adminLogsCheck.rows[0]?.count);
-  console.log("Student Reset Log Count:", studentLogsCheck.rows[0]?.count);
-  console.log("Membership Count (Lớp 2.12):", membershipCheck.rows[0]?.count);
-  console.log("RPC claim_student_pin_reset Result:", rpcResult);
-  console.log("RPC claim_student_pin_reset Error:", rpcError);
-  console.log("===============================");
-
   const res1 = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
     headers: {

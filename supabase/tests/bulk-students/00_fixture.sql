@@ -47,10 +47,11 @@ CREATE TABLE IF NOT EXISTS app_private.student_login_credentials (
 
 CREATE TABLE IF NOT EXISTS app_private.student_pin_reset_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  admin_id UUID NOT NULL,
+  admin_id UUID NOT NULL REFERENCES public.profiles(id),
   student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE app_private.student_pin_reset_logs ADD COLUMN IF NOT EXISTS reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- Lớp 2.12 Test Local
 INSERT INTO public.classes (id, name, grade_level, code)
