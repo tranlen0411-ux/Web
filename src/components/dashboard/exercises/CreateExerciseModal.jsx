@@ -19,11 +19,14 @@ import {
   Award,
   Calendar,
   Layers,
-  Check
+  Check,
+  AlertTriangle,
+  Edit3
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
+import { getQuestionValidationErrors } from '../../../utils/questionFileParsers';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
 
 export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) => {
@@ -57,7 +60,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       prompt: '3 + 4 = ?',
       options: ['5', '6', '7', '8'],
       correct_answer: '7',
-      points: 1
+      points: 1,
+      source_row: null
     }
   ]);
 
@@ -66,10 +70,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [validationErrors, setValidationErrors] = useState([]);
   const [isLockedByKeyError, setIsLockedByKeyError] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  // 1. KHÓA CUỘN TRANG NỀN KHI MỞ MODAL VÀ RESET TẬP TRUNG
+  // 1. KHÓA CUỘN TRANG NỀN KHI MỞ MODAL VÀ RESET SCROLLTOP = 0
   useEffect(() => {
     if (isOpen) {
       const originalOverflow = document.body.style.overflow;
@@ -141,12 +146,14 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           prompt: '3 + 4 = ?',
           options: ['5', '6', '7', '8'],
           correct_answer: '7',
-          points: 1
+          points: 1,
+          source_row: null
         }
       ]);
       setHasSubmissions(false);
       setSubmissionCount(0);
       setErrorMsg('');
+      setValidationErrors([]);
       setIsLockedByKeyError(false);
     }
   }, [isOpen, exerciseToEdit]);
@@ -221,12 +228,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           prompt: q.prompt,
           options: q.options || [],
           correct_answer: correctVal,
-          points: q.points || 1
+          points: q.points || 1,
+          source_row: null
         };
       });
 
       setQuestions(formattedQuestions.length > 0 ? formattedQuestions : [
-        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], correct_answer: 'A', points: 1 }
+        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], correct_answer: 'A', points: 1, source_row: null }
       ]);
 
     } catch (err) {
@@ -248,9 +256,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         question_number: isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1,
         question_type: q.question_type,
         prompt: q.prompt,
-        options: q.options && q.options.length > 0 ? q.options : (q.question_type === 'single_choice' ? ['Lựa chọn A', 'Lựa chọn B'] : []),
+        options: q.options && q.options.length > 0
+          ? q.options.map(o => String(o || '').trim()).filter(Boolean)
+          : (q.question_type === 'single_choice' ? ['Lựa chọn A', 'Lựa chọn B'] : []),
         correct_answer: q.correct_answer,
-        points: q.points || 1
+        points: q.points || 1,
+        source_row: q.source_row || null
       }));
 
       if (isDefaultSingleBlank) {
@@ -261,6 +272,10 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         return [...prev, ...nonDuplicates];
       }
     });
+
+    // Reset danh sách lỗi sau khi nhập mới
+    setValidationErrors([]);
+    setErrorMsg('');
   };
 
   // 5. THÊM / XÓA CÂU HỎI THỦ CÔNG
@@ -276,7 +291,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         prompt: '',
         options: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
         correct_answer: 'Lựa chọn A',
-        points: 1
+        points: 1,
+        source_row: null
       }
     ]);
   };
@@ -284,6 +300,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const handleRemoveQuestion = (index) => {
     if (hasSubmissions || questions.length <= 1) return;
     setQuestions(prev => prev.filter((_, i) => i !== index));
+    setValidationErrors([]);
   };
 
   // 6. TÍNH TỔNG ĐIỂM
@@ -316,9 +333,21 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, isDirty, isImportModalOpen, isSubmitting]);
 
-  // 9. XÁC MINH THEO TỪNG BƯỚC WIZARD
+  // 9. CUỘN TRỰC TIẾP ĐẾN THẺ CÂU HỎI LỖI
+  const scrollToQuestion = (idx) => {
+    setCurrentStep(2);
+    setTimeout(() => {
+      const el = document.getElementById(`question-card-${idx}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+  };
+
+  // 10. XÁC MINH THEO TỪNG BƯỚC WIZARD
   const validateStep = (stepNumber) => {
     setErrorMsg('');
+    setValidationErrors([]);
 
     if (stepNumber === 1) {
       if (!title.trim()) {
@@ -332,33 +361,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       return true;
     }
 
-    if (stepNumber === 2) {
-      if (!hasSubmissions) {
-        for (let i = 0; i < questions.length; i++) {
-          const q = questions[i];
-          if (!q.prompt.trim()) {
-            setErrorMsg(`Câu hỏi số ${i + 1} chưa có nội dung đề bài.`);
-            return false;
-          }
-          if (q.question_type === 'single_choice') {
-            if (!q.options || q.options.length < 2) {
-              setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm) phải có ít nhất 2 lựa chọn.`);
-              return false;
-            }
-            if (!q.correct_answer || !q.options.includes(q.correct_answer)) {
-              setErrorMsg(`Câu hỏi số ${i + 1} có đáp án đúng không khớp với danh sách lựa chọn.`);
-              return false;
-            }
-          }
-          if (q.question_type === 'fill_blank' && !q.correct_answer) {
-            setErrorMsg(`Câu hỏi số ${i + 1} (Điền từ) chưa có đáp án đúng.`);
-            return false;
-          }
-          if (!q.points || parseFloat(q.points) <= 0) {
-            setErrorMsg(`Điểm số của câu hỏi ${i + 1} phải lớn hơn 0.`);
-            return false;
-          }
-        }
+    if (stepNumber === 2 || stepNumber === 3) {
+      const qErrors = getQuestionValidationErrors(questions, hasSubmissions);
+      if (qErrors.length > 0) {
+        setValidationErrors(qErrors);
+        setErrorMsg(`Phát hiện ${qErrors.length} lỗi trong danh sách câu hỏi. Vui lòng kiểm tra và sửa lỗi bên dưới.`);
+        return false;
       }
       return true;
     }
@@ -377,7 +385,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     setCurrentStep(prev => Math.max(prev - 1, 1));
   };
 
-  // 10. GỬI BÀI TẬP LÊN SUPABASE RPC
+  // 11. GỬI BÀI TẬP LÊN SUPABASE RPC
   const handleSubmit = async (submitStatus) => {
     if (isSubmitting || isLockedByKeyError) return;
 
@@ -411,10 +419,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         question_number: idx + 1,
         question_type: q.question_type,
         prompt: q.prompt.trim(),
-        options: ['single_choice', 'multiple_choice'].includes(q.question_type) ? q.options : null,
+        options: ['single_choice', 'multiple_choice'].includes(q.question_type)
+          ? (q.options || []).map(o => String(o || '').trim()).filter(Boolean)
+          : null,
         points: parseFloat(q.points) || 1,
         answer_key: {
-          accepted_answers: Array.isArray(q.correct_answer) ? q.correct_answer : [q.correct_answer],
+          accepted_answers: Array.isArray(q.correct_answer) ? q.correct_answer : [String(q.correct_answer || '').trim()],
           case_sensitive: false
         }
       }));
@@ -541,6 +551,30 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
             <div className="p-3.5 bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl text-xs font-bold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* DANH SÁCH CÁC LỖI VALIDATION CHI TIẾT */}
+          {validationErrors.length > 0 && (
+            <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl space-y-2 text-xs">
+              <p className="font-black text-rose-950 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                Vui lòng chỉnh sửa các lỗi sau trong danh sách câu hỏi:
+              </p>
+              <div className="max-h-40 overflow-y-auto space-y-1.5 pl-2 custom-scrollbar">
+                {validationErrors.map((err, errIdx) => (
+                  <div key={errIdx} className="flex items-center justify-between gap-2 p-2 bg-white rounded-xl border border-rose-200">
+                    <span className="font-bold text-rose-900">• {err.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => scrollToQuestion(err.index)}
+                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] rounded-lg shadow-sm shrink-0 flex items-center gap-1 transition-colors"
+                    >
+                      <Edit3 className="w-3 h-3" /> Sửa ngay
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -700,198 +734,246 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
               {/* DANH SÁCH CÂU HỎI CHI TIẾT */}
               <div className="space-y-3.5">
-                {questions.map((q, idx) => (
-                  <div key={q.id || idx} className={`p-4 sm:p-5 rounded-3xl border-2 bg-white space-y-3.5 transition-all ${hasSubmissions ? 'border-slate-300 opacity-90' : 'border-amber-200 shadow-sm hover:border-amber-400'}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="px-3 py-1 bg-slate-800 text-white font-black text-xs rounded-xl">
-                          Câu {idx + 1}
-                        </span>
-                        <span className="text-xs font-black text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-lg">
-                          {q.points || 1} điểm
-                        </span>
+                {questions.map((q, idx) => {
+                  const cardErrors = validationErrors.filter(e => e.index === idx);
+                  const hasErr = cardErrors.length > 0;
+
+                  return (
+                    <div
+                      key={q.id || idx}
+                      id={`question-card-${idx}`}
+                      className={`p-4 sm:p-5 rounded-3xl border-2 bg-white space-y-3.5 transition-all ${
+                        hasErr
+                          ? 'border-rose-400 bg-rose-50/40 shadow-md ring-2 ring-rose-300/50'
+                          : hasSubmissions
+                          ? 'border-slate-300 opacity-90'
+                          : 'border-amber-200 shadow-sm hover:border-amber-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="px-3 py-1 bg-slate-800 text-white font-black text-xs rounded-xl flex items-center gap-1">
+                            Câu {idx + 1}
+                            {q.source_row ? (
+                              <span className="text-[10px] text-amber-300 font-normal">
+                                (Dòng Excel {q.source_row})
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="text-xs font-black text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-lg">
+                            {q.points || 1} điểm
+                          </span>
+                          {hasErr && (
+                            <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5" /> Có {cardErrors.length} lỗi
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={q.question_type}
+                            disabled={hasSubmissions}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => {
+                                if (i === idx) {
+                                  let initCorrect = 'Lựa chọn A';
+                                  if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
+                                  return { ...item, question_type: val, correct_answer: initCorrect };
+                                }
+                                return item;
+                              }));
+                              setValidationErrors([]);
+                            }}
+                            className="px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                          >
+                            <option value="single_choice">Trắc nghiệm 1 đáp án</option>
+                            <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+                            <option value="fill_blank">Điền từ / điền số</option>
+                            <option value="short_answer">Trả lời ngắn</option>
+                            <option value="essay">Tự luận</option>
+                          </select>
+
+                          {!hasSubmissions && questions.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveQuestion(idx)}
+                              aria-label={`Xóa câu hỏi ${idx + 1}`}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={q.question_type}
+                      {/* KHỐI CẢNH BÁO LỖI RIÊNG CHO CÂU NÀY */}
+                      {hasErr && (
+                        <div className="p-3 bg-rose-100/90 border border-rose-300 rounded-2xl text-xs font-bold text-rose-900 space-y-1">
+                          {cardErrors.map((err, errIdx) => (
+                            <p key={errIdx} className="flex items-center gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              <span>{err.message}</span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
+                      <div>
+                        <input
+                          type="text"
+                          required
                           disabled={hasSubmissions}
+                          placeholder="Nhập nội dung đề bài câu hỏi..."
+                          value={q.prompt}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setQuestions(prev => prev.map((item, i) => {
-                              if (i === idx) {
-                                let initCorrect = 'Lựa chọn A';
-                                if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
-                                return { ...item, question_type: val, correct_answer: initCorrect };
-                              }
-                              return item;
-                            }));
+                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, prompt: val } : item));
+                            setValidationErrors([]);
                           }}
-                          className="px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
-                        >
-                          <option value="single_choice">Trắc nghiệm 1 đáp án</option>
-                          <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
-                          <option value="fill_blank">Điền từ / điền số</option>
-                          <option value="short_answer">Trả lời ngắn</option>
-                          <option value="essay">Tự luận</option>
-                        </select>
-
-                        {!hasSubmissions && questions.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveQuestion(idx)}
-                            aria-label={`Xóa câu hỏi ${idx + 1}`}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                          className={`w-full p-3 bg-amber-50/50 border rounded-2xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400 ${
+                            cardErrors.some(e => e.field === 'prompt') ? 'border-rose-400 bg-rose-50/50' : 'border-amber-200'
+                          }`}
+                        />
                       </div>
-                    </div>
 
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        disabled={hasSubmissions}
-                        placeholder="Nhập nội dung đề bài câu hỏi..."
-                        value={q.prompt}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, prompt: val } : item));
-                        }}
-                        className="w-full p-3 bg-amber-50/50 border border-amber-200 rounded-2xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
-                      />
-                    </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-600">Thang điểm:</label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0.5"
+                          max="100"
+                          disabled={hasSubmissions}
+                          value={q.points}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, points: val } : item));
+                            setValidationErrors([]);
+                          }}
+                          className="w-20 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 text-center"
+                        />
+                      </div>
 
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-bold text-slate-600">Thang điểm:</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0.5"
-                        max="100"
-                        disabled={hasSubmissions}
-                        value={q.points}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, points: val } : item));
-                        }}
-                        className="w-20 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 text-center"
-                      />
-                    </div>
-
-                    {q.question_type === 'single_choice' && (
-                      <div className="space-y-2 pt-2 border-t border-amber-100">
-                        <p className="text-xs font-black text-slate-700">Các Lựa Chọn (Tích tròn để chọn đáp án đúng):</p>
-                        {q.options?.map((opt, optIdx) => (
-                          <div key={optIdx} className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name={`correct_choice_step2_${q.id || idx}`}
-                              checked={q.correct_answer === opt}
-                              disabled={hasSubmissions}
-                              onChange={() => {
-                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: opt } : item));
-                              }}
-                              className="w-4 h-4 text-amber-500 cursor-pointer"
-                            />
-                            <input
-                              type="text"
-                              disabled={hasSubmissions}
-                              value={opt}
-                              onChange={(e) => {
-                                const newOptions = [...q.options];
-                                const oldVal = newOptions[optIdx];
-                                newOptions[optIdx] = e.target.value;
-                                setQuestions(prev => prev.map((item, i) => {
-                                  if (i === idx) {
-                                    const wasSelected = item.correct_answer === oldVal;
-                                    return {
-                                      ...item,
-                                      options: newOptions,
-                                      correct_answer: wasSelected ? e.target.value : item.correct_answer
-                                    };
-                                  }
-                                  return item;
-                                }));
-                              }}
-                              className="flex-1 p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
-                            />
-                            {!hasSubmissions && q.options.length > 2 && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const newOptions = q.options.filter((_, oI) => oI !== optIdx);
+                      {['single_choice', 'multiple_choice'].includes(q.question_type) && (
+                        <div className="space-y-2 pt-2 border-t border-amber-100">
+                          <p className="text-xs font-black text-slate-700">Các Lựa Chọn (Tích tròn để chọn đáp án đúng):</p>
+                          {q.options?.map((opt, optIdx) => (
+                            <div key={optIdx} className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name={`correct_choice_step2_${q.id || idx}`}
+                                checked={q.correct_answer === opt}
+                                disabled={hasSubmissions}
+                                onChange={() => {
+                                  setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: opt } : item));
+                                  setValidationErrors([]);
+                                }}
+                                className="w-4 h-4 text-amber-500 cursor-pointer"
+                              />
+                              <input
+                                type="text"
+                                disabled={hasSubmissions}
+                                value={opt}
+                                onChange={(e) => {
+                                  const newOptions = [...q.options];
+                                  const oldVal = newOptions[optIdx];
+                                  newOptions[optIdx] = e.target.value;
                                   setQuestions(prev => prev.map((item, i) => {
                                     if (i === idx) {
+                                      const wasSelected = item.correct_answer === oldVal;
                                       return {
                                         ...item,
                                         options: newOptions,
-                                        correct_answer: item.correct_answer === opt ? newOptions[0] : item.correct_answer
+                                        correct_answer: wasSelected ? e.target.value : item.correct_answer
                                       };
                                     }
                                     return item;
                                   }));
+                                  setValidationErrors([]);
                                 }}
-                                className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        ))}
+                                className="flex-1 p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                              />
+                              {!hasSubmissions && q.options.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newOptions = q.options.filter((_, oI) => oI !== optIdx);
+                                    setQuestions(prev => prev.map((item, i) => {
+                                      if (i === idx) {
+                                        return {
+                                          ...item,
+                                          options: newOptions,
+                                          correct_answer: item.correct_answer === opt ? newOptions[0] : item.correct_answer
+                                        };
+                                      }
+                                      return item;
+                                    }));
+                                    setValidationErrors([]);
+                                  }}
+                                  className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
 
-                        {!hasSubmissions && q.options.length < 6 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newOptions = [...q.options, `Lựa chọn ${String.fromCharCode(65 + q.options.length)}`];
-                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions } : item));
+                          {!hasSubmissions && q.options.length < 6 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newOptions = [...q.options, `Lựa chọn ${String.fromCharCode(65 + q.options.length)}`];
+                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions } : item));
+                                setValidationErrors([]);
+                              }}
+                              className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Thêm lựa chọn
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {['fill_blank', 'short_answer'].includes(q.question_type) && (
+                        <div className="pt-2 border-t border-amber-100">
+                          <label className="block text-xs font-black text-slate-700 mb-1">Đáp án đúng chính xác:</label>
+                          <input
+                            type="text"
+                            disabled={hasSubmissions}
+                            placeholder="Nhập từ hoặc số đáp án đúng..."
+                            value={q.correct_answer}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
+                              setValidationErrors([]);
                             }}
-                            className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
-                          >
-                            <Plus className="w-3.5 h-3.5" /> Thêm lựa chọn
-                          </button>
-                        )}
-                      </div>
-                    )}
+                            className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                      )}
 
-                    {['fill_blank', 'short_answer'].includes(q.question_type) && (
-                      <div className="pt-2 border-t border-amber-100">
-                        <label className="block text-xs font-black text-slate-700 mb-1">Đáp án đúng chính xác:</label>
-                        <input
-                          type="text"
-                          disabled={hasSubmissions}
-                          placeholder="Nhập từ hoặc số đáp án đúng..."
-                          value={q.correct_answer}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
-                          }}
-                          className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
-                        />
-                      </div>
-                    )}
-
-                    {q.question_type === 'essay' && (
-                      <div className="pt-2 border-t border-amber-100">
-                        <label className="block text-xs font-black text-slate-700 mb-1">Hướng dẫn chấm / Đáp án tham khảo:</label>
-                        <input
-                          type="text"
-                          disabled={hasSubmissions}
-                          placeholder="Nhập hướng dẫn chấm bài cho giáo viên..."
-                          value={q.correct_answer}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
-                          }}
-                          className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
-                        />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      {q.question_type === 'essay' && (
+                        <div className="pt-2 border-t border-amber-100">
+                          <label className="block text-xs font-black text-slate-700 mb-1">Hướng dẫn chấm / Đáp án tham khảo:</label>
+                          <input
+                            type="text"
+                            disabled={hasSubmissions}
+                            placeholder="Nhập hướng dẫn chấm bài cho giáo viên..."
+                            value={q.correct_answer}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
+                              setValidationErrors([]);
+                            }}
+                            className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -935,8 +1017,19 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   {questions.map((q, idx) => (
                     <div key={idx} className="p-3 bg-amber-50/60 rounded-2xl border border-amber-200 text-xs font-bold text-slate-800 space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="font-black text-slate-900">Câu {idx + 1}: {q.prompt}</span>
-                        <span className="text-amber-700 font-black">({q.points}đ)</span>
+                        <span className="font-black text-slate-900">
+                          Câu {idx + 1}{q.source_row ? ` (Dòng Excel ${q.source_row})` : ''}: {q.prompt}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-700 font-black">({q.points}đ)</span>
+                          <button
+                            type="button"
+                            onClick={() => scrollToQuestion(idx)}
+                            className="text-xs text-sky-700 hover:underline font-bold flex items-center gap-0.5"
+                          >
+                            <Edit3 className="w-3 h-3" /> Sửa
+                          </button>
+                        </div>
                       </div>
                       {q.options && q.options.length > 0 && (
                         <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {q.options.join(' | ')}</p>
