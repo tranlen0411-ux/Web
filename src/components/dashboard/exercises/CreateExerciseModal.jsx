@@ -36,6 +36,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [showScoreAfterSubmit, setShowScoreAfterSubmit] = useState(true);
   const [showCorrectAnswers, setShowCorrectAnswers] = useState(false);
+  const [countsTowardRanking, setCountsTowardRanking] = useState(true);
 
   const [questions, setQuestions] = useState([
     {
@@ -98,16 +99,17 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       setDueDate(exerciseToEdit.due_date ? new Date(exerciseToEdit.due_date).toISOString().slice(0, 16) : '');
       setMaxAttempts(exerciseToEdit.max_attempts || 1);
       setShowScoreAfterSubmit(exerciseToEdit.show_score_after_submit ?? true);
-      setShowCorrectAnswers(exerciseToEdit.show_correct_answers ?? false);
+      setShowCorrectAnswers(exerciseToEdit.show_correct_answers ?? true);
+      setCountsTowardRanking(exerciseToEdit.counts_toward_ranking ?? true);
       fetchExistingQuestionsWithKeys(exerciseToEdit.id);
     } else if (isOpen && !exerciseToEdit) {
       setCurrentStep(1);
       setTitle('');
       setDescription('');
-      setSelectedClassId('');
+      setSelectedClassId(classesList[0]?.id || '');
       setSelectedClassIds([]);
       setIsGlobal(false);
-      setGradeLevel(1);
+      setGradeLevel(profile?.grade_level || 1);
       setSubject('Toán');
       setExerciseType('mixed');
       setStatus('draft');
@@ -115,7 +117,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       setDueDate('');
       setMaxAttempts(1);
       setShowScoreAfterSubmit(true);
-      setShowCorrectAnswers(false);
+      setShowCorrectAnswers(true);
+      setCountsTowardRanking(true);
       setQuestions([
         {
           id: Date.now(),
@@ -383,7 +386,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       if (submitAction === 'publish_and_assign' && finalStatus === 'published' && targetClassesToAssign.length > 0 && savedExerciseId) {
         const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
           p_exercise_id: savedExerciseId,
-          p_class_ids: targetClassesToAssign
+          p_class_ids: targetClassesToAssign,
+          p_counts_toward_ranking: countsTowardRanking
         });
 
         if (rpcErr) {
@@ -522,6 +526,22 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                       ))}
                     </select>
                   )}
+                </div>
+
+                {/* CỜ TÍNH XẾP HẠNG HỌC THUẬT */}
+                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200">
+                  <label className="flex items-center gap-2 text-xs font-black text-amber-950 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={countsTowardRanking}
+                      onChange={(e) => setCountsTowardRanking(e.target.checked)}
+                      className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500"
+                    />
+                    <span>📘 Tính kết quả bài này vào Bảng xếp hạng Học thuật của lớp</span>
+                  </label>
+                  <p className="text-[11px] text-slate-500 font-medium mt-1 pl-6">
+                    Bật tùy chọn này để bài làm của học sinh được cộng vào Bảng xếp hạng Học thuật theo lớp.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

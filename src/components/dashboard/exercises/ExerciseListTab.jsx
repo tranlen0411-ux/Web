@@ -32,6 +32,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   const [assignModalExercise, setAssignModalExercise] = useState(null);
   const [availableClasses, setAvailableClasses] = useState([]);
   const [selectedClassIdsToAssign, setSelectedClassIdsToAssign] = useState([]);
+  const [assignCountsTowardRanking, setAssignCountsTowardRanking] = useState(true);
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignError, setAssignError] = useState('');
 
@@ -197,7 +198,8 @@ export const ExerciseListTab = ({ role = 'student' }) => {
       // 1. Gọi RPC assign_exercise_to_classes kiểm tra phân quyền chặt chẽ trên Database
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
         p_exercise_id: assignModalExercise.id,
-        p_class_ids: selectedClassIdsToAssign
+        p_class_ids: selectedClassIdsToAssign,
+        p_counts_toward_ranking: assignCountsTowardRanking
       });
 
       if (rpcErr) {
@@ -552,6 +554,19 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                   );
                 })
               )}
+            </div>
+
+            {/* CỜ TÍNH XẾP HẠNG HỌC THUẬT */}
+            <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200">
+              <label className="flex items-center gap-2 text-xs font-black text-amber-950 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={assignCountsTowardRanking}
+                  onChange={(e) => setAssignCountsTowardRanking(e.target.checked)}
+                  className="w-4 h-4 text-amber-600 rounded focus:ring-amber-500"
+                />
+                <span>📘 Tính kết quả bài này vào Bảng xếp hạng Học thuật của lớp</span>
+              </label>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
