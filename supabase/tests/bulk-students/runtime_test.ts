@@ -84,9 +84,18 @@ async function getRealGoTrueUserToken(
     await client.queryObject(
       `INSERT INTO public.profiles (id, email, full_name, role, is_disabled)
        VALUES ($1, $2, $3, $4, FALSE)
-       ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, email = EXCLUDED.email;`,
+       ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, email = EXCLUDED.email, full_name = EXCLUDED.full_name;`,
       [userId, email, fullName, roleName]
     );
+
+    // Gán teacher_id cho Lớp 2.12 nếu là Giáo viên
+    if (roleName === "teacher") {
+      await client.queryObject(
+        `UPDATE public.classes SET teacher_id = $1 WHERE id = '99999999-9999-9999-9999-999999999999';`,
+        [userId]
+      );
+    }
+
     await client.end();
   }
 
@@ -562,6 +571,7 @@ Deno.test("22. Row Progress Concurrency - Hai worker claim cùng row_key chỉ 1
 });
 
 Deno.test("23. Row Progress Retry - Re-claim dòng đã COMPLETED trả status COMPLETED và không trùng lặp dòng", async () => {
+  const studentAuth = await getRealGoTrueUserToken("hs_test1@local.dev", "student", "Trần Lê Hoàng An");
   const client = await createAdminDbClient();
 
   const testKey = `row-retry-${Date.now()}`;
@@ -572,7 +582,7 @@ Deno.test("23. Row Progress Retry - Re-claim dòng đã COMPLETED trả status C
   const rowKey = "row-key-retry";
 
   await client.queryObject(`SELECT public.claim_student_row($1, $2, $3, 1, 'Học Sinh B');`, [batchId, claimToken, rowKey]);
-  await client.queryObject(`SELECT public.complete_student_row($1, $2, $3, '33333333-3333-3333-3333-333333333333', 'HS212-0001');`, [batchId, claimToken, rowKey]);
+  await client.queryObject(`SELECT public.complete_student_row($1, $2, $3, $4, 'HS212-0001');`, [batchId, claimToken, rowKey, studentAuth.userId]);
 
   const retryRes = await client.queryObject<any>(`SELECT public.claim_student_row($1, $2, $3, 1, 'Học Sinh B') as res;`, [batchId, claimToken, rowKey]);
   const r = parseRpcResult(retryRes.rows[0].res);
@@ -622,15 +632,15 @@ Deno.test("24. Whitelist Whitelist Sanitization DB Check - Khử toàn bộ trư
 });
 
 Deno.test("25. Reset PIN Auth Check - Anon/Teacher/Student bị từ chối 401 hoặc 403", async () => {
-  const studentJWT = await generateTestJWT("33333333-3333-3333-3333-333333333333", "hs_test1@local.dev", "student");
+  const studentAuth = await getRealGoTrueUserToken("hs_test1@local.dev", "student", "Trần Lê Hoàng An");
   const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
     headers: {
       Origin: "http://localhost:3000",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${studentJWT}`,
+      Authorization: `Bearer ${studentAuth.token}`,
     },
-    body: JSON.stringify({ studentId: "33333333-3333-3333-3333-333333333333" }),
+    body: JSON.stringify({ studentId: studentAuth.userId }),
   });
   const data = await res.json();
   assertEquals(res.status, 403);
@@ -638,15 +648,16 @@ Deno.test("25. Reset PIN Auth Check - Anon/Teacher/Student bị từ chối 401 
 });
 
 Deno.test("26. Reset PIN Class Check - Từ chối cấp lại PIN học sinh ngoài Lớp 2.12", async () => {
-  const adminJWT = await generateTestJWT(MOCK_ADMIN_ID, "admin_test@local.dev", "admin");
+  const disabledAuth = await getRealGoTrueUserToken("hs_disabled@local.dev", "student", "Học Sinh Bị Khóa");
+  const adminAuth = await getRealGoTrueUserToken("admin_test@local.dev", "admin", "Quản Trị Viên Test Local");
   const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
     headers: {
       Origin: "http://localhost:3000",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${adminJWT}`,
+      Authorization: `Bearer ${adminAuth.token}`,
     },
-    body: JSON.stringify({ studentId: "44444444-4444-4444-4444-444444444444" }),
+    body: JSON.stringify({ studentId: disabledAuth.userId }),
   });
   const data = await res.json();
   assertEquals(res.status, 400);
@@ -654,24 +665,25 @@ Deno.test("26. Reset PIN Class Check - Từ chối cấp lại PIN học sinh ng
 });
 
 Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log và lưu ý repeat reset tạo PIN mới (Thiết kế hiện tại không có replay lock)", async () => {
+  const studentAuth = await getRealGoTrueUserToken("hs_test1@local.dev", "student", "Trần Lê Hoàng An");
+  const adminAuth = await getRealGoTrueUserToken("admin_test@local.dev", "admin", "Quản Trị Viên Test Local");
+
   const client = new Client(DB_URL);
   await client.connect();
 
-  const studentId = "33333333-3333-3333-3333-333333333333";
+  const studentId = studentAuth.userId;
   const classId = "99999999-9999-9999-9999-999999999999";
   await client.queryObject(
     `INSERT INTO public.class_members (class_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`,
     [classId, studentId]
   );
-
-  const adminJWT = await generateTestJWT(MOCK_ADMIN_ID, "admin_test@local.dev", "admin");
   
   const res1 = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
     headers: {
       Origin: "http://localhost:3000",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${adminJWT}`,
+      Authorization: `Bearer ${adminAuth.token}`,
     },
     body: JSON.stringify({ studentId: studentId }),
   });
@@ -690,13 +702,13 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
 });
 
 Deno.test("28. Rollback Fault Injection - Giả lập lỗi profile tự động rollback xóa sạch tài khoản", async () => {
-  const adminJWT = await generateTestJWT(MOCK_ADMIN_ID, "admin_test@local.dev", "admin");
+  const adminAuth = await getRealGoTrueUserToken("admin_test@local.dev", "admin", "Quản Trị Viên Test Local");
   const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-bulk-create-students`, {
     method: "POST",
     headers: {
       Origin: "http://localhost:3000",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${adminJWT}`,
+      Authorization: `Bearer ${adminAuth.token}`,
       "x-idempotency-key": `fault-test-${Date.now()}`,
       "x-ci-fault-injection": "profile",
     },
@@ -718,11 +730,13 @@ Deno.test("28. Rollback Fault Injection - Giả lập lỗi profile tự động
 });
 
 Deno.test("29. Rollback Protection Check - Rollback không xóa tài khoản đã tồn tại từ trước", async () => {
+  const studentAuth = await getRealGoTrueUserToken("hs_test1@local.dev", "student", "Trần Lê Hoàng An");
   const client = new Client(DB_URL);
   await client.connect();
 
   const existingRes = await client.queryObject<{ count: bigint }>(
-    `SELECT COUNT(*) as count FROM public.profiles WHERE id = '33333333-3333-3333-3333-333333333333';`
+    `SELECT COUNT(*) as count FROM public.profiles WHERE id = $1;`,
+    [studentAuth.userId]
   );
   await client.end();
 
