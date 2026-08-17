@@ -255,6 +255,7 @@ Deno.test("08. Phân quyền Auth - Student JWT bị từ chối 403 khi gọi B
 });
 
 Deno.test("09. Dry-run Thực Tế - Admin JWT gửi 34 học sinh Dry-run thành công", async () => {
+  await getRealGoTrueUserToken("teacher_test@local.dev", "teacher", "Lã Nguyễn Diễm Hương");
   const adminJWT = await generateTestJWT(MOCK_ADMIN_ID, "admin_test@local.dev", "admin");
   const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-bulk-create-students`, {
     method: "POST",
@@ -678,6 +679,8 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     [classId, studentId]
   );
   
+  await new Promise((r) => setTimeout(r, 1200));
+
   const res1 = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
     headers: {
