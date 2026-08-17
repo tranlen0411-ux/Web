@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { 
-  Sparkles, 
-  Trophy, 
-  Award, 
-  BookOpen, 
-  Gamepad2, 
-  GraduationCap, 
-  CheckCircle2, 
-  Clock, 
+import {
+  Sparkles,
+  Trophy,
+  Award,
+  BookOpen,
+  Gamepad2,
+  GraduationCap,
+  CheckCircle2,
+  Clock,
   Star,
   Users
 } from 'lucide-react';
@@ -28,19 +28,27 @@ export const StudentDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
-    if (tabParam === 'exercises') return 'exercises';
-    if (tabParam === 'learning') return 'assignments';
-    if (tabParam === 'games') return 'library';
+    if (tabParam === 'exercises' || tabParam === 'academic_exercises' || tabParam === 'academic-assignments') return 'academic_exercises';
+    if (tabParam === 'learning' || tabParam === 'assignments') return 'assignments';
+    if (tabParam === 'badges') return 'badges';
+    if (tabParam === 'history') return 'history';
+    if (tabParam === 'games' || tabParam === 'library') return 'library';
     return 'library';
   });
 
-  // Tự động đồng bộ tab parameter từ URL
+  // Tự động đồng bộ tab parameter từ URL cho Học sinh
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games') {
+    if (tab === 'games' || tab === 'library') {
       setActiveTab('library');
-    } else if (tab === 'learning') {
-      setActiveTab(prev => (prev === 'library' ? 'assignments' : prev));
+    } else if (tab === 'exercises' || tab === 'academic_exercises' || tab === 'academic-assignments') {
+      setActiveTab('academic_exercises');
+    } else if (tab === 'learning' || tab === 'assignments') {
+      setActiveTab('assignments');
+    } else if (tab === 'badges') {
+      setActiveTab('badges');
+    } else if (tab === 'history') {
+      setActiveTab('history');
     } else {
       setSearchParams({ tab: 'games' }, { replace: true });
     }
@@ -48,13 +56,13 @@ export const StudentDashboard = () => {
 
   const [selectedGrade, setSelectedGrade] = useState(profile?.grade_level || 1);
   const [selectedSubject, setSelectedSubject] = useState('ALL');
-  
+
   const [games, setGames] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [badges, setBadges] = useState([]);
   const [studentBadges, setStudentBadges] = useState([]);
   const [history, setHistory] = useState([]);
-  
+
   const [classCodeInput, setClassCodeInput] = useState('');
   const [joinMsg, setJoinMsg] = useState('');
   const [loading, setLoading] = useState(true);
@@ -211,7 +219,7 @@ export const StudentDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
+
       {/* BANNER NỀN BỐ CỤC CHUẨN ĐẸP CÂN ĐỐI NẰM DƯỚI LỐI ĐI SÂN TRƯỜNG */}
       <div className="relative overflow-hidden rounded-3xl border-4 border-amber-400 shadow-xl mb-8 h-[220px] sm:h-[260px]">
         {/* 1. ẢNH NỀN BANNER CHÍNH THỨC DÙNG CHUNG */}
@@ -349,7 +357,7 @@ export const StudentDashboard = () => {
           onClick={() => {
             setActiveTab('badges');
             triggerSound('click');
-            setSearchParams({ tab: 'learning' }, { replace: true });
+            setSearchParams({ tab: 'badges' }, { replace: true });
           }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'badges'
@@ -364,7 +372,7 @@ export const StudentDashboard = () => {
           onClick={() => {
             setActiveTab('history');
             triggerSound('click');
-            setSearchParams({ tab: 'learning' }, { replace: true });
+            setSearchParams({ tab: 'history' }, { replace: true });
           }}
           className={`flex-1 min-w-[120px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeTab === 'history'
