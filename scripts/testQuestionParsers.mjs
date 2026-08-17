@@ -1,8 +1,9 @@
-import * as XLSX from 'xlsx';
+﻿import * as XLSX from 'xlsx';
 import {
   parseExcelQuestions,
   sanitizeText,
-  getQuestionValidationErrors
+  getQuestionValidationErrors,
+  normalizeQuestionOptions
 } from '../src/utils/questionFileParsers.js';
 
 console.log('=== RUNNING COMPREHENSIVE EXCEL & TEXT PARSER TESTS ===\n');
@@ -120,7 +121,56 @@ async function runTests() {
   assert(validationErrs[0].message.includes('dòng Excel 2') && validationErrs[0].message.includes('chỉ có 1 lựa chọn'), 'Pinpointed exact Row 2 for < 2 options error');
   assert(validationErrs[1].message.includes('dòng Excel 3') && validationErrs[1].message.includes('không thuộc danh sách lựa chọn'), 'Pinpointed exact Row 3 for unmatched correct_answer error');
 
-  // Test 10: Word (.docx) Parsing Simulation with standard structure
+  // Test 10: INTEGRATION TEST FOR EXACT 9-QUESTION FILE STRUCTURE
+  console.log('\n--- TESTING INTEGRATION FOR EXACT 9-QUESTION STRUCTURE (4 single_choice, 3 fill_blank, 2 essay) ---');
+  const exact9Rows = [
+    ['type', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer'],
+    // 4 single_choice questions
+    ['single_choice', 'Câu 1: 3 + 4 = ?', '6', '7', '8', '9', 'B'],
+    ['single_choice', 'Câu 2: Số nào lớn nhất?', '10', '15', '20', '25', 'D'],
+    ['single_choice', 'Câu 3: 5 * 5 = ?', '20', '25', '30', '35', '25'],
+    ['single_choice', 'Câu 4: Thủ đô Việt Nam?', 'Hà Nội', 'Đà Nẵng', 'TP.HCM', 'Cần Thơ', 'A'],
+    // 3 fill_blank questions (no options)
+    ['fill_blank', 'Câu 5: 10 - 4 = ...', '', '', '', '', '6'],
+    ['fill_blank', 'Câu 6: Điền chữ: Bông ... chăn trâu', '', '', '', '', 'cỏ'],
+    ['fill_blank', 'Câu 7: 15 + 15 = ...', '', '', '', '', '30'],
+    // 2 essay questions (no options)
+    ['essay', 'Câu 8: Hãy nêu quy tắc cộng hai số tự nhiên', '', '', '', '', 'Cộng từ phải sang trái'],
+    ['essay', 'Câu 9: Đặt 1 câu cảm thán về thời tiết hôm nay', '', '', '', '', 'Trời hôm nay đẹp quá!']
+  ];
+
+  const exact9Buf = createWorkbookBuffer(exact9Rows);
+  const resExact9 = await parseExcelQuestions(exact9Buf, '74881fc6-8a16-433d-88ac-0a1425967c73.xlsx');
+
+  assert(resExact9.success === true, 'Parse exact 9-question Excel file successfully');
+  assert(resExact9.questions.length === 9, 'Parsed exactly 9 questions');
+
+  // Build RPC payload simulation
+  const payloadExact9 = resExact9.questions.map(q => {
+    const normOpts = normalizeQuestionOptions(q);
+    return {
+      question_type: q.question_type,
+      prompt: q.prompt,
+      options: normOpts,
+      options_json: normOpts,
+      points: q.points || 1
+    };
+  });
+
+  assert(payloadExact9.length === 9, 'Payload contains exactly 9 questions');
+
+  const singleChoices = payloadExact9.filter(q => q.question_type === 'single_choice');
+  assert(singleChoices.length === 4, 'Payload contains 4 single_choice questions');
+  assert(singleChoices.every(q => Array.isArray(q.options_json) && q.options_json.length === 4), 'All 4 single_choice questions have options_json.length = 4');
+
+  const otherQuestions = payloadExact9.filter(q => ['fill_blank', 'essay'].includes(q.question_type));
+  assert(otherQuestions.length === 5, 'Payload contains 5 fill_blank and essay questions');
+  assert(otherQuestions.every(q => Array.isArray(q.options_json) && q.options_json.length === 0), 'All fill_blank and essay questions have options_json = []');
+
+  const totalPointsExact9 = payloadExact9.reduce((sum, q) => sum + q.points, 0);
+  assert(totalPointsExact9 === 9, 'Total default points equals 9 when points column is omitted');
+
+  // Test 11: Word (.docx) Parsing Simulation with standard structure
   console.log('\n--- TESTING WORD PARSER ---');
   const sampleWordText = `[TRẮC NGHIỆM]
 Câu hỏi: 3 + 4 = ?
@@ -142,7 +192,7 @@ Câu hỏi: Bé có 5 quả bóng, mẹ cho thêm 3 quả bóng nữa. Hỏi bé
 Điểm: 2
 `;
 
-  // Test 11: Word rejection of old .doc binary files
+  // Test 12: Word rejection of old .doc binary files
   const dummyBuf = Buffer.from(sampleWordText);
   const { parseWordQuestions } = await import('../src/utils/questionFileParsers.js');
   const resDocOld = await parseWordQuestions(dummyBuf, 'bai_tap.doc');
@@ -152,7 +202,7 @@ Câu hỏi: Bé có 5 quả bóng, mẹ cho thêm 3 quả bóng nữa. Hỏi bé
   console.log(`\n========================================`);
   console.log(`TOTAL TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${totalTests - passedTests}`);
   if (passedTests === totalTests) {
-    console.log('🎉 ALL PARSER & VALIDATOR TESTS PASSED 100%!');
+    console.log('🎉 ALL PARSER, VALIDATOR & INTEGRATION TESTS PASSED 100%!');
   } else {
     process.exit(1);
   }

@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+﻿import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 
 /**
@@ -47,6 +47,33 @@ const normalizeType = (typeStr) => {
   if (clean.includes('dienkhuyet') || clean.includes('dientu') || clean.includes('blank') || clean === 'fill') return 'fill_blank';
   if (clean.includes('tuluan') || clean === 'essay' || clean === 'text') return 'essay';
   return null;
+};
+
+/**
+ * HÀM CHUẨN HÓA NGUYÊN MẪU LỰA CHỌN (OPTIONS) DUY NHẤT DÙNG CHUNG
+ * - Ưu tiên q.options nếu là Array
+ * - Nếu không có thì lấy q.options_json nếu là Array
+ * - Trim từng lựa chọn
+ * - Loại bỏ null, undefined và chuỗi rỗng
+ * - Với single_choice/multiple_choice trả về mảng chuỗi đã làm sạch
+ * - Với fill_blank và essay trả về mảng rỗng []
+ */
+export const normalizeQuestionOptions = (q) => {
+  if (!q) return [];
+  const qType = q.question_type || q.type;
+
+  // Với fill_blank và essay trả về mảng rỗng []
+  if (!['single_choice', 'multiple_choice'].includes(qType)) {
+    return [];
+  }
+
+  const rawOpts = Array.isArray(q.options)
+    ? q.options
+    : (Array.isArray(q.options_json) ? q.options_json : []);
+
+  return rawOpts
+    .map(o => String(o === null || o === undefined ? '' : o).trim())
+    .filter(o => o.length > 0);
 };
 
 /**
@@ -156,9 +183,9 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
       // Kiểm tra loại câu hợp lệ
       const normalizedType = normalizeType(typeRaw);
       if (!normalizedType) {
-        errors.push({ 
-          row: rowNumber, 
-          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), fill_blank (điền từ), essay (tự luận).` 
+        errors.push({
+          row: rowNumber,
+          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), fill_blank (điền từ), essay (tự luận).`
         });
         continue;
       }
@@ -183,7 +210,7 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
 
         const rawOptions = [optA, optB, optC, optD].map(o => String(o || '').trim()).filter(o => o.length > 0);
         if (rawOptions.length < 2) {
-          errors.push({ row: rowNumber, message: `Câu ${rowNumber - 1} (dòng Excel ${rowNumber}): câu trắc nghiệm chỉ có ${rawOptions.length} lựa chọn; cần ít nhất 2 lựa chọn.` });
+          errors.push({ row: rowNumber, message: `Câu ${parsedQuestions.length + 1} – dòng Excel ${rowNumber}: câu trắc nghiệm chỉ có ${rawOptions.length} lựa chọn; cần ít nhất 2 lựa chọn.` });
           continue;
         }
 
@@ -216,22 +243,37 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
           if (matchOpt) {
             resolvedCorrectAnswer = matchOpt;
           } else {
-            errors.push({ 
-              row: rowNumber, 
-              message: `Đáp án đúng "${rawCorrect}" không khớp với bất kỳ lựa chọn nào trong [${rawOptions.join(', ')}].` 
+            errors.push({
+              row: rowNumber,
+              message: `Đáp án đúng "${rawCorrect}" không khớp với bất kỳ lựa chọn nào trong [${rawOptions.join(', ')}].`
             });
             continue;
           }
         }
 
-        parsedQuestions.push({
+        const qObj = {
           question_type: 'single_choice',
           prompt: questionText,
           options: rawOptions,
+          options_json: rawOptions,
           correct_answer: resolvedCorrectAnswer,
           points: points,
           source_row: rowNumber
+        };
+
+        // STAGE A LOG (Safe metadata without answer keys)
+        console.log('[EXERCISE_FLOW_METADATA]', {
+          stage: 'PARSER_EXCEL',
+          question_index: parsedQuestions.length + 1,
+          source_row: rowNumber,
+          question_type: 'single_choice',
+          is_options_array: Array.isArray(rawOptions),
+          options_count: rawOptions.length,
+          is_options_json_array: Array.isArray(rawOptions),
+          options_json_count: rawOptions.length
         });
+
+        parsedQuestions.push(qObj);
 
       } else if (normalizedType === 'fill_blank') {
         const rawCorrect = (rowObj.correct_answer || rowObj.reference_answer || '').trim();
@@ -240,26 +282,54 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
           continue;
         }
 
-        parsedQuestions.push({
+        const qObj = {
           question_type: 'fill_blank',
           prompt: questionText,
           options: [],
+          options_json: [],
           correct_answer: rawCorrect,
           points: points,
           source_row: rowNumber
+        };
+
+        console.log('[EXERCISE_FLOW_METADATA]', {
+          stage: 'PARSER_EXCEL',
+          question_index: parsedQuestions.length + 1,
+          source_row: rowNumber,
+          question_type: 'fill_blank',
+          is_options_array: true,
+          options_count: 0,
+          is_options_json_array: true,
+          options_json_count: 0
         });
+
+        parsedQuestions.push(qObj);
 
       } else if (normalizedType === 'essay') {
         const refAnswer = (rowObj.reference_answer || rowObj.correct_answer || '').trim();
 
-        parsedQuestions.push({
+        const qObj = {
           question_type: 'essay',
           prompt: questionText,
           options: [],
+          options_json: [],
           correct_answer: refAnswer || 'Xem hướng dẫn chấm của giáo viên',
           points: points,
           source_row: rowNumber
+        };
+
+        console.log('[EXERCISE_FLOW_METADATA]', {
+          stage: 'PARSER_EXCEL',
+          question_index: parsedQuestions.length + 1,
+          source_row: rowNumber,
+          question_type: 'essay',
+          is_options_array: true,
+          options_count: 0,
+          is_options_json_array: true,
+          options_json_count: 0
         });
+
+        parsedQuestions.push(qObj);
       }
     }
 
@@ -437,6 +507,7 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
           question_type: 'single_choice',
           prompt: questionPrompt,
           options: validOptions,
+          options_json: validOptions,
           correct_answer: resolvedCorrect,
           points: points,
           source_row: null
@@ -452,6 +523,7 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
           question_type: 'fill_blank',
           prompt: questionPrompt,
           options: [],
+          options_json: [],
           correct_answer: correctAnswer,
           points: points,
           source_row: null
@@ -462,6 +534,7 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
           question_type: 'essay',
           prompt: questionPrompt,
           options: [],
+          options_json: [],
           correct_answer: referenceAnswer || 'Xem hướng dẫn chấm của giáo viên',
           points: points,
           source_row: null
@@ -497,8 +570,21 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
 
   questionsList.forEach((q, idx) => {
     const qNum = idx + 1;
-    const rowInfo = q.source_row ? ` (dòng Excel ${q.source_row})` : '';
+    const rowInfo = q.source_row ? ` – dòng Excel ${q.source_row}` : '';
     const qPrefix = `Câu ${qNum}${rowInfo}`;
+
+    const validOptions = normalizeQuestionOptions(q);
+
+    console.log('[EXERCISE_FLOW_METADATA]', {
+      stage: 'VALIDATION_CHECK',
+      question_index: qNum,
+      source_row: q.source_row || null,
+      question_type: q.question_type,
+      is_options_array: Array.isArray(validOptions),
+      options_count: validOptions.length,
+      is_options_json_array: Array.isArray(validOptions),
+      options_json_count: validOptions.length
+    });
 
     // 1. Đề bài không được rỗng
     if (!q.prompt || !String(q.prompt).trim()) {
@@ -515,10 +601,6 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
 
     // 2. Kiểm tra câu trắc nghiệm (single_choice / multiple_choice)
     if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
-      const validOptions = (q.options || [])
-        .map(o => String(o || '').trim())
-        .filter(o => o.length > 0);
-
       if (validOptions.length < 2) {
         errors.push({
           index: idx,
@@ -526,7 +608,7 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
           source_row: q.source_row || null,
           question_type: q.question_type,
           field: 'options',
-          message: `${qPrefix}: câu trắc nghiệm chỉ có ${validOptions.length} lựa chọn; cần ít nhất 2 lựa chọn.`
+          message: `${qPrefix}: options_json chỉ có ${validOptions.length} lựa chọn; cần ít nhất 2 lựa chọn.`
         });
       }
 
@@ -556,7 +638,7 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
         }
       }
     } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-      // 3. Câu điền khuyết / trả lời ngắn: KHÔNG kiểm tra tối thiểu 2 lựa chọn
+      // 3. Câu điền khuyết / trả lời ngắn: KHÔNG áp dụng điều kiện ít nhất 2 lựa chọn
       const trimmedCorrect = String(q.correct_answer || '').trim();
       if (!trimmedCorrect) {
         errors.push({

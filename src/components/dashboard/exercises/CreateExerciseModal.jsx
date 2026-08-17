@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -26,7 +26,10 @@ import {
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
-import { getQuestionValidationErrors } from '../../../utils/questionFileParsers';
+import {
+  getQuestionValidationErrors,
+  normalizeQuestionOptions
+} from '../../../utils/questionFileParsers';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
 
 export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) => {
@@ -59,6 +62,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       question_type: 'single_choice',
       prompt: '3 + 4 = ?',
       options: ['5', '6', '7', '8'],
+      options_json: ['5', '6', '7', '8'],
       correct_answer: '7',
       points: 1,
       source_row: null
@@ -145,6 +149,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           question_type: 'single_choice',
           prompt: '3 + 4 = ?',
           options: ['5', '6', '7', '8'],
+          options_json: ['5', '6', '7', '8'],
           correct_answer: '7',
           points: 1,
           source_row: null
@@ -221,12 +226,15 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           correctVal = q.question_type === 'multiple_choice' ? accAnswers : accAnswers[0];
         }
 
+        const normOpts = normalizeQuestionOptions(q);
+
         return {
           id: q.id,
           question_number: q.question_number,
           question_type: q.question_type,
           prompt: q.prompt,
-          options: q.options || [],
+          options: normOpts,
+          options_json: normOpts,
           correct_answer: correctVal,
           points: q.points || 1,
           source_row: null
@@ -234,7 +242,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       });
 
       setQuestions(formattedQuestions.length > 0 ? formattedQuestions : [
-        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], correct_answer: 'A', points: 1, source_row: null }
+        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], options_json: ['A', 'B'], correct_answer: 'A', points: 1, source_row: null }
       ]);
 
     } catch (err) {
@@ -251,18 +259,34 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
     setQuestions(prev => {
       const isDefaultSingleBlank = prev.length === 1 && (!prev[0].prompt || prev[0].prompt === '3 + 4 = ?');
-      const formattedImported = importedList.map((q, idx) => ({
-        id: Date.now() + idx,
-        question_number: isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1,
-        question_type: q.question_type,
-        prompt: q.prompt,
-        options: q.options && q.options.length > 0
-          ? q.options.map(o => String(o || '').trim()).filter(Boolean)
-          : (q.question_type === 'single_choice' ? ['Lựa chọn A', 'Lựa chọn B'] : []),
-        correct_answer: q.correct_answer,
-        points: q.points || 1,
-        source_row: q.source_row || null
-      }));
+      const formattedImported = importedList.map((q, idx) => {
+        const normOpts = normalizeQuestionOptions(q);
+        const qObj = {
+          id: Date.now() + idx,
+          question_number: isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1,
+          question_type: q.question_type,
+          prompt: q.prompt,
+          options: normOpts,
+          options_json: normOpts,
+          correct_answer: q.correct_answer,
+          points: q.points || 1,
+          source_row: q.source_row || null
+        };
+
+        // STAGE B LOG (Safe metadata without answer keys)
+        console.log('[EXERCISE_FLOW_METADATA]', {
+          stage: 'IMPORT_CONFIRM_STATE',
+          question_index: qObj.question_number,
+          source_row: qObj.source_row,
+          question_type: qObj.question_type,
+          is_options_array: Array.isArray(qObj.options),
+          options_count: qObj.options.length,
+          is_options_json_array: Array.isArray(qObj.options_json),
+          options_json_count: qObj.options_json.length
+        });
+
+        return qObj;
+      });
 
       if (isDefaultSingleBlank) {
         return formattedImported;
@@ -290,6 +314,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         question_type: 'single_choice',
         prompt: '',
         options: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
+        options_json: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
         correct_answer: 'Lựa chọn A',
         points: 1,
         source_row: null
@@ -414,20 +439,51 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         show_correct_answers: showCorrectAnswers
       };
 
-      const questionsPayload = questions.map((q, idx) => ({
-        id: typeof q.id === 'string' && q.id.length > 20 ? q.id : undefined,
-        question_number: idx + 1,
-        question_type: q.question_type,
-        prompt: q.prompt.trim(),
-        options: ['single_choice', 'multiple_choice'].includes(q.question_type)
-          ? (q.options || []).map(o => String(o || '').trim()).filter(Boolean)
-          : null,
-        points: parseFloat(q.points) || 1,
-        answer_key: {
-          accepted_answers: Array.isArray(q.correct_answer) ? q.correct_answer : [String(q.correct_answer || '').trim()],
-          case_sensitive: false
+      const questionsPayload = questions.map((q, idx) => {
+        const normOpts = normalizeQuestionOptions(q);
+
+        // Chuyển đáp án dạng A/B/C/D thành nội dung lựa chọn tương ứng nếu cần
+        let resolvedCorrect = q.correct_answer;
+        if (q.question_type === 'single_choice' && typeof resolvedCorrect === 'string') {
+          const upperAns = resolvedCorrect.trim().toUpperCase();
+          if (['A', 'B', 'C', 'D'].includes(upperAns) && normOpts.length >= 2) {
+            const letterIdx = upperAns.charCodeAt(0) - 65;
+            if (letterIdx >= 0 && letterIdx < normOpts.length) {
+              resolvedCorrect = normOpts[letterIdx];
+            }
+          }
         }
-      }));
+
+        const qPayloadItem = {
+          id: typeof q.id === 'string' && q.id.length > 20 ? q.id : undefined,
+          question_number: idx + 1,
+          question_type: q.question_type,
+          prompt: String(q.prompt || '').trim(),
+          options: normOpts,
+          options_json: normOpts, // BẮT BUỘC gửi MẢNG CHUỖI normOpts!
+          points: parseFloat(q.points) || 1,
+          answer_key: {
+            accepted_answers: Array.isArray(resolvedCorrect)
+              ? resolvedCorrect.map(a => String(a).trim())
+              : [String(resolvedCorrect || '').trim()],
+            case_sensitive: false
+          }
+        };
+
+        // STAGE D LOG (Safe metadata without answer keys)
+        console.log('[EXERCISE_FLOW_METADATA]', {
+          stage: 'RPC_PAYLOAD',
+          question_index: idx + 1,
+          source_row: q.source_row || null,
+          question_type: q.question_type,
+          is_options_array: Array.isArray(qPayloadItem.options),
+          options_count: qPayloadItem.options.length,
+          is_options_json_array: Array.isArray(qPayloadItem.options_json),
+          options_json_count: qPayloadItem.options_json.length
+        });
+
+        return qPayloadItem;
+      });
 
       const { data, error } = await supabase.rpc('save_exercise_with_questions_and_keys', {
         p_exercise: exercisePayload,
@@ -735,6 +791,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
               {/* DANH SÁCH CÂU HỎI CHI TIẾT */}
               <div className="space-y-3.5">
                 {questions.map((q, idx) => {
+                  const normOpts = normalizeQuestionOptions(q);
                   const cardErrors = validationErrors.filter(e => e.index === idx);
                   const hasErr = cardErrors.length > 0;
 
@@ -756,7 +813,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             Câu {idx + 1}
                             {q.source_row ? (
                               <span className="text-[10px] text-amber-300 font-normal">
-                                (Dòng Excel {q.source_row})
+                                (dòng Excel {q.source_row})
                               </span>
                             ) : null}
                           </span>
@@ -780,7 +837,14 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 if (i === idx) {
                                   let initCorrect = 'Lựa chọn A';
                                   if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
-                                  return { ...item, question_type: val, correct_answer: initCorrect };
+                                  const initOpts = ['single_choice', 'multiple_choice'].includes(val) ? ['Lựa chọn A', 'Lựa chọn B'] : [];
+                                  return {
+                                    ...item,
+                                    question_type: val,
+                                    options: initOpts,
+                                    options_json: initOpts,
+                                    correct_answer: initCorrect
+                                  };
                                 }
                                 return item;
                               }));
@@ -859,7 +923,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                       {['single_choice', 'multiple_choice'].includes(q.question_type) && (
                         <div className="space-y-2 pt-2 border-t border-amber-100">
                           <p className="text-xs font-black text-slate-700">Các Lựa Chọn (Tích tròn để chọn đáp án đúng):</p>
-                          {q.options?.map((opt, optIdx) => (
+                          {normOpts.map((opt, optIdx) => (
                             <div key={optIdx} className="flex items-center gap-2">
                               <input
                                 type="radio"
@@ -877,7 +941,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 disabled={hasSubmissions}
                                 value={opt}
                                 onChange={(e) => {
-                                  const newOptions = [...q.options];
+                                  const newOptions = [...normOpts];
                                   const oldVal = newOptions[optIdx];
                                   newOptions[optIdx] = e.target.value;
                                   setQuestions(prev => prev.map((item, i) => {
@@ -886,6 +950,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                       return {
                                         ...item,
                                         options: newOptions,
+                                        options_json: newOptions,
                                         correct_answer: wasSelected ? e.target.value : item.correct_answer
                                       };
                                     }
@@ -895,16 +960,17 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 }}
                                 className="flex-1 p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
                               />
-                              {!hasSubmissions && q.options.length > 2 && (
+                              {!hasSubmissions && normOpts.length > 2 && (
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const newOptions = q.options.filter((_, oI) => oI !== optIdx);
+                                    const newOptions = normOpts.filter((_, oI) => oI !== optIdx);
                                     setQuestions(prev => prev.map((item, i) => {
                                       if (i === idx) {
                                         return {
                                           ...item,
                                           options: newOptions,
+                                          options_json: newOptions,
                                           correct_answer: item.correct_answer === opt ? newOptions[0] : item.correct_answer
                                         };
                                       }
@@ -920,12 +986,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             </div>
                           ))}
 
-                          {!hasSubmissions && q.options.length < 6 && (
+                          {!hasSubmissions && normOpts.length < 6 && (
                             <button
                               type="button"
                               onClick={() => {
-                                const newOptions = [...q.options, `Lựa chọn ${String.fromCharCode(65 + q.options.length)}`];
-                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions } : item));
+                                const newOptions = [...normOpts, `Lựa chọn ${String.fromCharCode(65 + normOpts.length)}`];
+                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions, options_json: newOptions } : item));
                                 setValidationErrors([]);
                               }}
                               className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
@@ -1014,31 +1080,49 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   2. Xem trước danh sách câu hỏi ({questions.length} câu):
                 </h4>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-                  {questions.map((q, idx) => (
-                    <div key={idx} className="p-3 bg-amber-50/60 rounded-2xl border border-amber-200 text-xs font-bold text-slate-800 space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-black text-slate-900">
-                          Câu {idx + 1}{q.source_row ? ` (Dòng Excel ${q.source_row})` : ''}: {q.prompt}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-amber-700 font-black">({q.points}đ)</span>
-                          <button
-                            type="button"
-                            onClick={() => scrollToQuestion(idx)}
-                            className="text-xs text-sky-700 hover:underline font-bold flex items-center gap-0.5"
-                          >
-                            <Edit3 className="w-3 h-3" /> Sửa
-                          </button>
+                  {questions.map((q, idx) => {
+                    const normOpts = normalizeQuestionOptions(q);
+
+                    // Stage C Log (Safe metadata without answer keys)
+                    console.log('[EXERCISE_FLOW_METADATA]', {
+                      stage: 'PREVIEW_STEP_3',
+                      question_index: idx + 1,
+                      source_row: q.source_row || null,
+                      question_type: q.question_type,
+                      is_options_array: Array.isArray(normOpts),
+                      options_count: normOpts.length,
+                      is_options_json_array: Array.isArray(normOpts),
+                      options_json_count: normOpts.length
+                    });
+
+                    return (
+                      <div key={idx} className="p-3 bg-amber-50/60 rounded-2xl border border-amber-200 text-xs font-bold text-slate-800 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-slate-900">
+                            Câu {idx + 1}{q.source_row ? ` (dòng Excel ${q.source_row})` : ''}: {q.prompt}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-700 font-black">({q.points}đ)</span>
+                            <button
+                              type="button"
+                              onClick={() => scrollToQuestion(idx)}
+                              className="text-xs text-sky-700 hover:underline font-bold flex items-center gap-0.5"
+                            >
+                              <Edit3 className="w-3 h-3" /> Sửa
+                            </button>
+                          </div>
                         </div>
+                        {normOpts.length > 0 ? (
+                          <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {normOpts.join(' | ')}</p>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 italic pl-2">Không có lựa chọn (options = [])</p>
+                        )}
+                        <p className="text-[11px] text-emerald-700 font-black pl-2">
+                          Đáp án đúng: {Array.isArray(q.correct_answer) ? q.correct_answer.join(', ') : q.correct_answer}
+                        </p>
                       </div>
-                      {q.options && q.options.length > 0 && (
-                        <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {q.options.join(' | ')}</p>
-                      )}
-                      <p className="text-[11px] text-emerald-700 font-black pl-2">
-                        Đáp án đúng: {Array.isArray(q.correct_answer) ? q.correct_answer.join(', ') : q.correct_answer}
-                      </p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
