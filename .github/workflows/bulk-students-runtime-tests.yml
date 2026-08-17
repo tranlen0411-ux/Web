@@ -107,7 +107,7 @@ jobs:
           sleep 5
 
           # Thực thi bộ test tự động thực tế với Deno
-          deno test --allow-net --allow-env --allow-read supabase/tests/bulk-students/runtime_test.ts
+          SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_JWT}" deno test --allow-net --allow-env --allow-read supabase/tests/bulk-students/runtime_test.ts
 
       - name: Stop Supabase Local Engine
         if: always()

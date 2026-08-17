@@ -24,6 +24,29 @@ console.log(`[TEST SUITE RUNNER] Supabase Local Target Gateway: ${SUPABASE_LOCAL
 
 const userTokenCache: Record<string, { token: string; userId: string }> = {};
 
+async function getServiceRoleKey(): Promise<string> {
+  const envKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (envKey) return envKey;
+
+  const encoder = new TextEncoder();
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload = { role: "service_role", iss: "supabase", iat: 1577328000, exp: 1892904000 };
+  const b64Url = (obj: any) =>
+    btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const h = b64Url(header);
+  const p = b64Url(payload);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(JWT_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(`${h}.${p}`));
+  const s = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return `${h}.${p}.${s}`;
+}
+
 // Helper khởi tạo user chuẩn NATIVELY qua GoTrue Admin API và lấy access_token thật
 async function getRealGoTrueUserToken(
   email: string,
@@ -32,7 +55,7 @@ async function getRealGoTrueUserToken(
 ): Promise<{ token: string; userId: string }> {
   if (userTokenCache[email]) return userTokenCache[email];
 
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const serviceRoleKey = await getServiceRoleKey();
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || serviceRoleKey;
 
   // 1. Tạo user chuẩn qua GoTrue Admin API
