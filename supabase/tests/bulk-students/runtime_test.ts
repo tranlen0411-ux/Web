@@ -22,29 +22,57 @@ if (Deno.env.get("SUPABASE_ACCESS_TOKEN") || Deno.env.get("SUPABASE_DB_PASSWORD"
 
 console.log(`[TEST SUITE RUNNER] Supabase Local Target Gateway: ${SUPABASE_LOCAL_GATEWAY}`);
 
-// Helper tạo DB Client giả lập ngữ cảnh Admin JWT cho RPC check auth.uid()
-async function createAdminDbClient(): Promise<Client> {
-  const client = new Client(DB_URL);
-  await client.connect();
-  await client.queryObject(`SELECT set_config('request.jwt.claim.sub', $1, false);`, [MOCK_ADMIN_ID]);
-  return client;
-}
+const userTokenCache: Record<string, { token: string; userId: string }> = {};
 
-const jwtCache: Record<string, string> = {};
-
-// Helper lấy access_token thật từ GoTrue Auth local (đã nạp sẵn trong 00_fixture.sql)
-async function generateTestJWT(
-  _userId: string,
+// Helper khởi tạo user chuẩn NATIVELY qua GoTrue Admin API và lấy access_token thật
+async function getRealGoTrueUserToken(
   email: string,
-  _roleName: "admin" | "teacher" | "student"
-): Promise<string> {
-  if (jwtCache[email]) return jwtCache[email];
+  roleName: "admin" | "teacher" | "student",
+  fullName: string
+): Promise<{ token: string; userId: string }> {
+  if (userTokenCache[email]) return userTokenCache[email];
 
-  const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/auth/v1/token?grant_type=password`, {
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || serviceRoleKey;
+
+  // 1. Tạo user chuẩn qua GoTrue Admin API
+  const createRes = await fetch(`${SUPABASE_LOCAL_GATEWAY}/auth/v1/admin/users`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "apikey": Deno.env.get("SUPABASE_ANON_KEY") || "anon-key-local",
+      "Authorization": `Bearer ${serviceRoleKey}`,
+      "apikey": serviceRoleKey,
+    },
+    body: JSON.stringify({
+      email: email,
+      password: "Password123!",
+      email_confirm: true,
+      user_metadata: { role: roleName },
+    }),
+  });
+
+  const createData = await createRes.json();
+  const userId = createData.id || createData.user?.id;
+
+  // 2. Cập nhật profile trong public.profiles trùng id với GoTrue User ID
+  if (userId) {
+    const client = new Client(DB_URL);
+    await client.connect();
+    await client.queryObject(
+      `INSERT INTO public.profiles (id, email, full_name, role, is_disabled)
+       VALUES ($1, $2, $3, $4, FALSE)
+       ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, email = EXCLUDED.email;`,
+      [userId, email, fullName, roleName]
+    );
+    await client.end();
+  }
+
+  // 3. Đăng nhập qua GoTrue Auth để nhận access_token thật do GoTrue ký
+  const tokenRes = await fetch(`${SUPABASE_LOCAL_GATEWAY}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": anonKey,
     },
     body: JSON.stringify({
       email: email,
@@ -52,13 +80,33 @@ async function generateTestJWT(
     }),
   });
 
-  const data = await res.json();
-  if (data.access_token) {
-    jwtCache[email] = data.access_token;
-    return data.access_token;
+  const tokenData = await tokenRes.json();
+  if (tokenData.access_token && userId) {
+    userTokenCache[email] = { token: tokenData.access_token, userId };
+    return userTokenCache[email];
   }
 
-  throw new Error(`Không thể lấy access_token thật từ GoTrue cho email ${email}: ${JSON.stringify(data)}`);
+  throw new Error(`Lỗi khởi tạo GoTrue Auth User cho ${email}: createData=${JSON.stringify(createData)}, tokenData=${JSON.stringify(tokenData)}`);
+}
+
+// Helper tạo DB Client giả lập ngữ cảnh Admin JWT cho RPC check auth.uid()
+async function createAdminDbClient(): Promise<Client> {
+  const adminAuth = await getRealGoTrueUserToken("admin_test@local.dev", "admin", "Quản Trị Viên Test Local");
+  const client = new Client(DB_URL);
+  await client.connect();
+  await client.queryObject(`SELECT set_config('request.jwt.claim.sub', $1, false);`, [adminAuth.userId]);
+  return client;
+}
+
+// Helper lấy access_token thật từ GoTrue Auth local
+async function generateTestJWT(
+  _userId: string,
+  email: string,
+  roleName: "admin" | "teacher" | "student"
+): Promise<string> {
+  const fullName = roleName === "admin" ? "Quản Trị Viên Test Local" : roleName === "teacher" ? "Lã Nguyễn Diễm Hương" : "Trần Lê Hoàng An";
+  const authRes = await getRealGoTrueUserToken(email, roleName, fullName);
+  return authRes.token;
 }
 
 // Data mock 34 học sinh Lớp 2.12 chuẩn
