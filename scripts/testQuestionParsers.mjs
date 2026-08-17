@@ -3,7 +3,7 @@ import {
   parseExcelQuestions,
   sanitizeText,
   getQuestionValidationErrors,
-  normalizeQuestionOptions
+  normalizeImportedQuestion
 } from '../src/utils/questionFileParsers.js';
 
 console.log('=== RUNNING COMPREHENSIVE EXCEL & TEXT PARSER TESTS ===\n');
@@ -53,10 +53,10 @@ async function runTests() {
 
   assert(resValid.success === true, 'Parse valid Excel successfully with Vietnamese Unicode');
   assert(resValid.questions.length === 4, 'Parsed exactly 4 questions');
-  assert(resValid.questions[0].correct_answer === '7', 'Mapped correct_answer "B" to option "7"');
-  assert(resValid.questions[1].options.length === 2, 'Supported exactly 2 options for single_choice');
-  assert(resValid.questions[2].options.length === 0, 'fill_blank has empty options array');
-  assert(resValid.questions[3].options.length === 0, 'essay has empty options array');
+  assert(resValid.questions[0].correct_answer_key.correct_answer === '7', 'Mapped correct_answer "B" to option "7" in correct_answer_key');
+  assert(resValid.questions[1].options_json.length === 2, 'Supported exactly 2 options for single_choice');
+  assert(resValid.questions[2].options_json.length === 0, 'fill_blank has empty options_json array');
+  assert(resValid.questions[3].options_json.length === 0, 'essay has empty options_json array');
 
   // Test 3: Reject .xlsm files
   const resXlsm = await parseExcelQuestions(validBuf, 'dangerous.xlsm');
@@ -119,7 +119,7 @@ async function runTests() {
 
   assert(validationErrs.length === 2, 'Identified exactly 2 validation errors');
   assert(validationErrs[0].message.includes('dòng Excel 2') && validationErrs[0].message.includes('chỉ có 1 lựa chọn'), 'Pinpointed exact Row 2 for < 2 options error');
-  assert(validationErrs[1].message.includes('dòng Excel 3') && validationErrs[1].message.includes('không thuộc danh sách lựa chọn'), 'Pinpointed exact Row 3 for unmatched correct_answer error');
+  assert(validationErrs[1].message.includes('dòng Excel 3') && (validationErrs[1].message.includes('không thuộc danh sách lựa chọn') || validationErrs[1].message.includes('không ánh xạ được đáp án C')), 'Pinpointed exact Row 3 for unmatched correct_answer error');
 
   // Test 10: INTEGRATION TEST FOR EXACT 9-QUESTION FILE STRUCTURE
   console.log('\n--- TESTING INTEGRATION FOR EXACT 9-QUESTION STRUCTURE (4 single_choice, 3 fill_blank, 2 essay) ---');
@@ -145,15 +145,17 @@ async function runTests() {
   assert(resExact9.success === true, 'Parse exact 9-question Excel file successfully');
   assert(resExact9.questions.length === 9, 'Parsed exactly 9 questions');
 
-  // Build RPC payload simulation
-  const payloadExact9 = resExact9.questions.map(q => {
-    const normOpts = normalizeQuestionOptions(q);
+  // Build RPC payload simulation using normalizeImportedQuestion
+  const payloadExact9 = resExact9.questions.map((q, idx) => {
+    const normQ = normalizeImportedQuestion(q, idx);
     return {
-      question_type: q.question_type,
-      prompt: q.prompt,
-      options: normOpts,
-      options_json: normOpts,
-      points: q.points || 1
+      question_number: normQ.question_number,
+      question_type: normQ.question_type,
+      prompt: normQ.prompt,
+      options: normQ.options_json,
+      options_json: normQ.options_json,
+      points: normQ.points,
+      correct_answer_key: normQ.question_type === 'essay' ? null : normQ.correct_answer_key
     };
   });
 
@@ -162,10 +164,20 @@ async function runTests() {
   const singleChoices = payloadExact9.filter(q => q.question_type === 'single_choice');
   assert(singleChoices.length === 4, 'Payload contains 4 single_choice questions');
   assert(singleChoices.every(q => Array.isArray(q.options_json) && q.options_json.length === 4), 'All 4 single_choice questions have options_json.length = 4');
+  assert(singleChoices.every(q => q.correct_answer_key && typeof q.correct_answer_key.correct_answer === 'string' && q.options_json.includes(q.correct_answer_key.correct_answer)), 'All 4 single_choice questions have valid correct_answer_key belonging to options_json');
 
-  const otherQuestions = payloadExact9.filter(q => ['fill_blank', 'essay'].includes(q.question_type));
-  assert(otherQuestions.length === 5, 'Payload contains 5 fill_blank and essay questions');
-  assert(otherQuestions.every(q => Array.isArray(q.options_json) && q.options_json.length === 0), 'All fill_blank and essay questions have options_json = []');
+  // Test letter mapping: 'B' for '6','7','8','9' -> '7'
+  assert(payloadExact9[0].correct_answer_key.correct_answer === '7', 'Mapped letter A/B/C/D "B" to option content "7"');
+  // Test letter mapping: 'D' for '10','15','20','25' -> '25'
+  assert(payloadExact9[1].correct_answer_key.correct_answer === '25', 'Mapped letter A/B/C/D "D" to option content "25"');
+
+  const fillBlanks = payloadExact9.filter(q => q.question_type === 'fill_blank');
+  assert(fillBlanks.length === 3, 'Payload contains 3 fill_blank questions');
+  assert(fillBlanks.every(q => q.options_json.length === 0 && q.correct_answer_key && q.correct_answer_key.correct_answer !== ''), 'All fill_blank questions have options_json = [] and valid correct_answer_key');
+
+  const essays = payloadExact9.filter(q => q.question_type === 'essay');
+  assert(essays.length === 2, 'Payload contains 2 essay questions');
+  assert(essays.every(q => q.options_json.length === 0 && q.correct_answer_key === null), 'All essay questions have options_json = [] and correct_answer_key = null');
 
   const totalPointsExact9 = payloadExact9.reduce((sum, q) => sum + q.points, 0);
   assert(totalPointsExact9 === 9, 'Total default points equals 9 when points column is omitted');

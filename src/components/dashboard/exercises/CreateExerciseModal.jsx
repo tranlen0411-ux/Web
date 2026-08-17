@@ -28,6 +28,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
 import {
   getQuestionValidationErrors,
+  normalizeImportedQuestion,
   normalizeQuestionOptions
 } from '../../../utils/questionFileParsers';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
@@ -64,6 +65,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       options: ['5', '6', '7', '8'],
       options_json: ['5', '6', '7', '8'],
       correct_answer: '7',
+      correct_answer_key: {
+        correct_answer: '7',
+        accepted_answers: ['7'],
+        case_sensitive: false
+      },
       points: 1,
       source_row: null
     }
@@ -151,6 +157,11 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           options: ['5', '6', '7', '8'],
           options_json: ['5', '6', '7', '8'],
           correct_answer: '7',
+          correct_answer_key: {
+            correct_answer: '7',
+            accepted_answers: ['7'],
+            case_sensitive: false
+          },
           points: 1,
           source_row: null
         }
@@ -219,30 +230,28 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         keysMap[k.question_id] = k.accepted_answers;
       });
 
-      const formattedQuestions = (qData || []).map(q => {
+      const formattedQuestions = (qData || []).map((q, qIdx) => {
         const accAnswers = keysMap[q.id];
         let correctVal = '';
         if (Array.isArray(accAnswers) && accAnswers.length > 0) {
           correctVal = q.question_type === 'multiple_choice' ? accAnswers : accAnswers[0];
         }
 
-        const normOpts = normalizeQuestionOptions(q);
-
-        return {
+        return normalizeImportedQuestion({
           id: q.id,
           question_number: q.question_number,
           question_type: q.question_type,
           prompt: q.prompt,
-          options: normOpts,
-          options_json: normOpts,
+          options: q.options_json,
+          options_json: q.options_json,
           correct_answer: correctVal,
           points: q.points || 1,
           source_row: null
-        };
+        }, qIdx);
       });
 
       setQuestions(formattedQuestions.length > 0 ? formattedQuestions : [
-        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], options_json: ['A', 'B'], correct_answer: 'A', points: 1, source_row: null }
+        { id: Date.now(), question_number: 1, question_type: 'single_choice', prompt: '', options: ['A', 'B'], options_json: ['A', 'B'], correct_answer: 'A', correct_answer_key: { correct_answer: 'A', accepted_answers: ['A'], case_sensitive: false }, points: 1, source_row: null }
       ]);
 
     } catch (err) {
@@ -260,32 +269,22 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     setQuestions(prev => {
       const isDefaultSingleBlank = prev.length === 1 && (!prev[0].prompt || prev[0].prompt === '3 + 4 = ?');
       const formattedImported = importedList.map((q, idx) => {
-        const normOpts = normalizeQuestionOptions(q);
-        const qObj = {
-          id: Date.now() + idx,
-          question_number: isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1,
-          question_type: q.question_type,
-          prompt: q.prompt,
-          options: normOpts,
-          options_json: normOpts,
-          correct_answer: q.correct_answer,
-          points: q.points || 1,
-          source_row: q.source_row || null
-        };
+        const targetNum = isDefaultSingleBlank ? idx + 1 : prev.length + idx + 1;
+        const normQ = normalizeImportedQuestion({ ...q, question_number: targetNum }, idx);
 
         // STAGE B LOG (Safe metadata without answer keys)
         console.log('[EXERCISE_FLOW_METADATA]', {
           stage: 'IMPORT_CONFIRM_STATE',
-          question_index: qObj.question_number,
-          source_row: qObj.source_row,
-          question_type: qObj.question_type,
-          is_options_array: Array.isArray(qObj.options),
-          options_count: qObj.options.length,
-          is_options_json_array: Array.isArray(qObj.options_json),
-          options_json_count: qObj.options_json.length
+          question_index: normQ.question_number,
+          source_row: normQ.source_row,
+          question_type: normQ.question_type,
+          is_options_array: Array.isArray(normQ.options_json),
+          options_count: normQ.options_json.length,
+          has_correct_answer_key: !!normQ.correct_answer_key,
+          has_correct_answer: !!normQ.correct_answer_key?.correct_answer
         });
 
-        return qObj;
+        return normQ;
       });
 
       if (isDefaultSingleBlank) {
@@ -306,20 +305,18 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const handleAddQuestion = () => {
     if (hasSubmissions) return;
     const newId = Date.now();
-    setQuestions(prev => [
-      ...prev,
-      {
-        id: newId,
-        question_number: prev.length + 1,
-        question_type: 'single_choice',
-        prompt: '',
-        options: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
-        options_json: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
-        correct_answer: 'Lựa chọn A',
-        points: 1,
-        source_row: null
-      }
-    ]);
+    const newQ = normalizeImportedQuestion({
+      id: newId,
+      question_number: questions.length + 1,
+      question_type: 'single_choice',
+      prompt: '',
+      options: ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'],
+      correct_answer: 'Lựa chọn A',
+      points: 1,
+      source_row: null
+    }, questions.length);
+
+    setQuestions(prev => [...prev, newQ]);
   };
 
   const handleRemoveQuestion = (index) => {
@@ -440,46 +437,29 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       };
 
       const questionsPayload = questions.map((q, idx) => {
-        const normOpts = normalizeQuestionOptions(q);
-
-        // Chuyển đáp án dạng A/B/C/D thành nội dung lựa chọn tương ứng nếu cần
-        let resolvedCorrect = q.correct_answer;
-        if (q.question_type === 'single_choice' && typeof resolvedCorrect === 'string') {
-          const upperAns = resolvedCorrect.trim().toUpperCase();
-          if (['A', 'B', 'C', 'D'].includes(upperAns) && normOpts.length >= 2) {
-            const letterIdx = upperAns.charCodeAt(0) - 65;
-            if (letterIdx >= 0 && letterIdx < normOpts.length) {
-              resolvedCorrect = normOpts[letterIdx];
-            }
-          }
-        }
+        const normQ = normalizeImportedQuestion(q, idx);
 
         const qPayloadItem = {
-          id: typeof q.id === 'string' && q.id.length > 20 ? q.id : undefined,
+          id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
           question_number: idx + 1,
-          question_type: q.question_type,
-          prompt: String(q.prompt || '').trim(),
-          options: normOpts,
-          options_json: normOpts, // BẮT BUỘC gửi MẢNG CHUỖI normOpts!
-          points: parseFloat(q.points) || 1,
-          answer_key: {
-            accepted_answers: Array.isArray(resolvedCorrect)
-              ? resolvedCorrect.map(a => String(a).trim())
-              : [String(resolvedCorrect || '').trim()],
-            case_sensitive: false
-          }
+          question_type: normQ.question_type,
+          prompt: normQ.prompt,
+          options_json: normQ.options_json,
+          options: normQ.options_json,
+          points: normQ.points,
+          correct_answer_key: normQ.question_type === 'essay' ? null : normQ.correct_answer_key
         };
 
         // STAGE D LOG (Safe metadata without answer keys)
         console.log('[EXERCISE_FLOW_METADATA]', {
           stage: 'RPC_PAYLOAD',
           question_index: idx + 1,
-          source_row: q.source_row || null,
-          question_type: q.question_type,
-          is_options_array: Array.isArray(qPayloadItem.options),
-          options_count: qPayloadItem.options.length,
-          is_options_json_array: Array.isArray(qPayloadItem.options_json),
-          options_json_count: qPayloadItem.options_json.length
+          source_row: normQ.source_row || null,
+          question_type: normQ.question_type,
+          is_options_array: Array.isArray(qPayloadItem.options_json),
+          options_count: qPayloadItem.options_json.length,
+          has_correct_answer_key: !!qPayloadItem.correct_answer_key,
+          has_correct_answer: !!qPayloadItem.correct_answer_key?.correct_answer
         });
 
         return qPayloadItem;
@@ -790,14 +770,14 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
               {/* DANH SÁCH CÂU HỎI CHI TIẾT */}
               <div className="space-y-3.5">
-                {questions.map((q, idx) => {
-                  const normOpts = normalizeQuestionOptions(q);
+                {questions.map((rawQ, idx) => {
+                  const q = normalizeImportedQuestion(rawQ, idx);
                   const cardErrors = validationErrors.filter(e => e.index === idx);
                   const hasErr = cardErrors.length > 0;
 
                   return (
                     <div
-                      key={q.id || idx}
+                      key={rawQ.id || idx}
                       id={`question-card-${idx}`}
                       className={`p-4 sm:p-5 rounded-3xl border-2 bg-white space-y-3.5 transition-all ${
                         hasErr
@@ -838,13 +818,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                   let initCorrect = 'Lựa chọn A';
                                   if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
                                   const initOpts = ['single_choice', 'multiple_choice'].includes(val) ? ['Lựa chọn A', 'Lựa chọn B'] : [];
-                                  return {
+                                  return normalizeImportedQuestion({
                                     ...item,
                                     question_type: val,
                                     options: initOpts,
                                     options_json: initOpts,
                                     correct_answer: initCorrect
-                                  };
+                                  }, i);
                                 }
                                 return item;
                               }));
@@ -893,7 +873,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                           value={q.prompt}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, prompt: val } : item));
+                            setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, prompt: val }, i) : item));
                             setValidationErrors([]);
                           }}
                           className={`w-full p-3 bg-amber-50/50 border rounded-2xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400 ${
@@ -923,7 +903,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                       {['single_choice', 'multiple_choice'].includes(q.question_type) && (
                         <div className="space-y-2 pt-2 border-t border-amber-100">
                           <p className="text-xs font-black text-slate-700">Các Lựa Chọn (Tích tròn để chọn đáp án đúng):</p>
-                          {normOpts.map((opt, optIdx) => (
+                          {q.options_json.map((opt, optIdx) => (
                             <div key={optIdx} className="flex items-center gap-2">
                               <input
                                 type="radio"
@@ -931,7 +911,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 checked={q.correct_answer === opt}
                                 disabled={hasSubmissions}
                                 onChange={() => {
-                                  setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: opt } : item));
+                                  setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: opt }, i) : item));
                                   setValidationErrors([]);
                                 }}
                                 className="w-4 h-4 text-amber-500 cursor-pointer"
@@ -941,18 +921,18 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 disabled={hasSubmissions}
                                 value={opt}
                                 onChange={(e) => {
-                                  const newOptions = [...normOpts];
+                                  const newOptions = [...q.options_json];
                                   const oldVal = newOptions[optIdx];
                                   newOptions[optIdx] = e.target.value;
                                   setQuestions(prev => prev.map((item, i) => {
                                     if (i === idx) {
                                       const wasSelected = item.correct_answer === oldVal;
-                                      return {
+                                      return normalizeImportedQuestion({
                                         ...item,
                                         options: newOptions,
                                         options_json: newOptions,
                                         correct_answer: wasSelected ? e.target.value : item.correct_answer
-                                      };
+                                      }, i);
                                     }
                                     return item;
                                   }));
@@ -960,19 +940,19 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 }}
                                 className="flex-1 p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
                               />
-                              {!hasSubmissions && normOpts.length > 2 && (
+                              {!hasSubmissions && q.options_json.length > 2 && (
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const newOptions = normOpts.filter((_, oI) => oI !== optIdx);
+                                    const newOptions = q.options_json.filter((_, oI) => oI !== optIdx);
                                     setQuestions(prev => prev.map((item, i) => {
                                       if (i === idx) {
-                                        return {
+                                        return normalizeImportedQuestion({
                                           ...item,
                                           options: newOptions,
                                           options_json: newOptions,
                                           correct_answer: item.correct_answer === opt ? newOptions[0] : item.correct_answer
-                                        };
+                                        }, i);
                                       }
                                       return item;
                                     }));
@@ -986,12 +966,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             </div>
                           ))}
 
-                          {!hasSubmissions && normOpts.length < 6 && (
+                          {!hasSubmissions && q.options_json.length < 6 && (
                             <button
                               type="button"
                               onClick={() => {
-                                const newOptions = [...normOpts, `Lựa chọn ${String.fromCharCode(65 + normOpts.length)}`];
-                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions, options_json: newOptions } : item));
+                                const newOptions = [...q.options_json, `Lựa chọn ${String.fromCharCode(65 + q.options_json.length)}`];
+                                setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, options: newOptions, options_json: newOptions }, i) : item));
                                 setValidationErrors([]);
                               }}
                               className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
@@ -1012,7 +992,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             value={q.correct_answer}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
+                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
                               setValidationErrors([]);
                             }}
                             className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
@@ -1030,7 +1010,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             value={q.correct_answer}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
+                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val, reference_answer: val }, i) : item));
                               setValidationErrors([]);
                             }}
                             className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
@@ -1080,29 +1060,29 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   2. Xem trước danh sách câu hỏi ({questions.length} câu):
                 </h4>
                 <div className="space-y-3 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-                  {questions.map((q, idx) => {
-                    const normOpts = normalizeQuestionOptions(q);
+                  {questions.map((rawQ, idx) => {
+                    const normQ = normalizeImportedQuestion(rawQ, idx);
 
                     // Stage C Log (Safe metadata without answer keys)
                     console.log('[EXERCISE_FLOW_METADATA]', {
                       stage: 'PREVIEW_STEP_3',
                       question_index: idx + 1,
-                      source_row: q.source_row || null,
-                      question_type: q.question_type,
-                      is_options_array: Array.isArray(normOpts),
-                      options_count: normOpts.length,
-                      is_options_json_array: Array.isArray(normOpts),
-                      options_json_count: normOpts.length
+                      source_row: normQ.source_row || null,
+                      question_type: normQ.question_type,
+                      is_options_array: Array.isArray(normQ.options_json),
+                      options_count: normQ.options_json.length,
+                      has_correct_answer_key: !!normQ.correct_answer_key,
+                      has_correct_answer: !!normQ.correct_answer_key?.correct_answer
                     });
 
                     return (
                       <div key={idx} className="p-3 bg-amber-50/60 rounded-2xl border border-amber-200 text-xs font-bold text-slate-800 space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="font-black text-slate-900">
-                            Câu {idx + 1}{q.source_row ? ` (dòng Excel ${q.source_row})` : ''}: {q.prompt}
+                            Câu {idx + 1}{normQ.source_row ? ` (dòng Excel ${normQ.source_row})` : ''}: {normQ.prompt}
                           </span>
                           <div className="flex items-center gap-2">
-                            <span className="text-amber-700 font-black">({q.points}đ)</span>
+                            <span className="text-amber-700 font-black">({normQ.points}đ)</span>
                             <button
                               type="button"
                               onClick={() => scrollToQuestion(idx)}
@@ -1112,13 +1092,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             </button>
                           </div>
                         </div>
-                        {normOpts.length > 0 ? (
-                          <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {normOpts.join(' | ')}</p>
+                        {normQ.options_json.length > 0 ? (
+                          <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {normQ.options_json.join(' | ')}</p>
                         ) : (
                           <p className="text-[11px] text-slate-400 italic pl-2">Không có lựa chọn (options = [])</p>
                         )}
                         <p className="text-[11px] text-emerald-700 font-black pl-2">
-                          Đáp án đúng: {Array.isArray(q.correct_answer) ? q.correct_answer.join(', ') : q.correct_answer}
+                          Đáp án đúng: {Array.isArray(normQ.correct_answer) ? normQ.correct_answer.join(', ') : normQ.correct_answer}
                         </p>
                       </div>
                     );
