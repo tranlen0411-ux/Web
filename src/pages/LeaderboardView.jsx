@@ -109,11 +109,20 @@ export const LeaderboardView = () => {
   const fetchGameLeaderboard = async () => {
     setLoadingGame(true);
     try {
-      let resultStudents = [];
+      // 1. Thử gọi RPC SECURITY DEFINER get_game_leaderboard kiểm tra phân quyền chặt chẽ phía Supabase
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('get_game_leaderboard', {
+        p_grade_filter: gameGradeFilter.toString(),
+        p_class_id: gameClassFilter.toString()
+      });
 
-      // TRƯỜNG HỢP A: Chọn 1 Lớp cụ thể (VD: Lớp 1A)
+      if (!rpcErr && rpcRes && rpcRes.success) {
+        setGameStudents(rpcRes.leaderboard || []);
+        return;
+      }
+
+      // 2. Dự phòng truy vấn dữ liệu từ client nếu RPC chưa nạp trên CSDL Supabase
+      let resultStudents = [];
       if (gameClassFilter !== 'ALL_IN_GRADE') {
-        // Kiểm tra phân quyền Giáo viên: nếu Giáo viên lọc riêng lớp, kiểm tra đúng quyền
         if (userProfile?.role === 'teacher') {
           const isManaged = userMyClasses.some(c => c.id === gameClassFilter);
           if (!isManaged) {
@@ -136,7 +145,6 @@ export const LeaderboardView = () => {
         })).sort((a, b) => (b.total_stars || 0) - (a.total_stars || 0) || (b.total_coins || 0) - (a.total_coins || 0));
 
       } else {
-        // TRƯỜNG HỢP B & C: Chọn "Tất cả các lớp trong Khối" hoặc "Toàn Trường"
         let query = supabase
           .from('profiles')
           .select('*')
@@ -151,7 +159,6 @@ export const LeaderboardView = () => {
 
         const { data: profiles } = await query;
 
-        // Lấy thông tin Tên lớp cho từng học sinh từ class_members để hiển thị
         if (profiles && profiles.length > 0) {
           const studentIds = profiles.map(p => p.id);
           const { data: members } = await supabase
@@ -225,6 +232,19 @@ export const LeaderboardView = () => {
     return `Lớp ${name}`;
   };
 
+  // Danh sách các Khối có sẵn phù hợp với Vai trò người dùng
+  const getGameAvailableGrades = () => {
+    if (userProfile?.role === 'admin') {
+      return ['ALL', 1, 2, 3, 4, 5];
+    } else if (userProfile?.role === 'teacher') {
+      return [1, 2, 3, 4, 5];
+    } else if (userProfile?.role === 'student') {
+      // Học sinh chỉ được xem khối của mình (không được xem Toàn trường)
+      return [userProfile?.grade_level || 1];
+    }
+    return [1, 2, 3, 4, 5];
+  };
+
   // Danh sách các Lớp có sẵn theo Khối đã chọn cho Tab Trò chơi
   const getGameClassesForSelectedGrade = () => {
     if (gameGradeFilter === 'ALL') return [];
@@ -233,13 +253,13 @@ export const LeaderboardView = () => {
     const classesInGrade = allSystemClasses.filter(c => c.grade_level === gradeInt);
 
     if (userProfile?.role === 'teacher') {
-      // Giáo viên: Khi lọc riêng từng lớp, chỉ hiển thị lớp giáo viên phụ trách
+      // Giáo viên: Chỉ được chọn các lớp do mình phụ trách
       return classesInGrade.filter(c => c.teacher_id === currentUser?.id);
     } else if (userProfile?.role === 'student') {
-      // Học sinh: Chỉ hiển thị lớp học của học sinh trong khối đó
-      return classesInGrade.filter(c => userMyClasses.some(mc => mc.id === c.id));
+      // Học sinh: CHỈ ĐƯỢC CHỌN LỚP CỦA CHÍNH MÌNH (không được chọn riêng lớp khác trong cùng khối)
+      return userMyClasses.filter(c => c.grade_level === gradeInt);
     }
-    // Admin: Xem được tất cả các lớp trong khối
+    // Admin: Được chọn tất cả các lớp trong khối
     return classesInGrade;
   };
 
@@ -354,7 +374,7 @@ export const LeaderboardView = () => {
                   <Filter className="w-3.5 h-3.5 text-amber-600" /> Chọn Khối Lớp:
                 </label>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {(userProfile?.role === 'admin' ? ['ALL', 1, 2, 3, 4, 5] : [1, 2, 3, 4, 5]).map((g) => (
+                  {getGameAvailableGrades().map((g) => (
                     <button
                       key={g}
                       type="button"
