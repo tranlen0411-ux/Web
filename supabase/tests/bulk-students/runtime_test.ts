@@ -692,8 +692,7 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     [classId, studentId]
   );
   await client.queryObject(
-    `DELETE FROM app_private.student_pin_reset_logs WHERE admin_id = $1 OR student_id = $2;`,
-    [adminAuth.userId, studentId]
+    `DELETE FROM app_private.student_pin_reset_logs;`
   );
   
   await new Promise((r) => setTimeout(r, 5000));
