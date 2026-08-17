@@ -1,25 +1,52 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+// 1. CẤU HÌNH HEADERS & CORS AN TOÀN (CÓ NO-STORE CHO PHẢN HỒI NẠP THÔNG TIN)
+const getCorsHeaders = (origin: string | null) => {
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+  ];
+  
+  let allowOrigin = '*';
+  if (origin) {
+    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      allowOrigin = origin;
+    }
+  }
+
+  return {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  };
 };
 
 serve(async (req) => {
+  const origin = req.headers.get('origin');
+  const corsHeaders = getCorsHeaders(origin);
+
+  // Xử lý Preflight CORS OPTIONS
   if (req.method === 'OPTIONS') {
     return new Response('ok', { status: 200, headers: corsHeaders });
   }
 
   try {
-    // 1. Kiểm tra JWT Authorization Header
+    // =========================================================================
+    // 2. XÁC THỰC ADMIN CHẶT CHẼ TỪ JWT AUTHORIZATION HEADER
+    // (TUYỆT ĐỐI KHÔNG LOG JWT HOẶC HEADER BẢO MẬT)
+    // =========================================================================
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ success: false, message: 'Chưa đăng nhập.' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Từ chối truy cập: Chưa cung cấp token xác thực JWT.' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -33,37 +60,42 @@ serve(async (req) => {
       );
     }
 
-    // 2. Xác thực Caller bằng Anon Client + Authorization JWT
+    // Xác minh chữ ký & token expiry bằng Supabase Anon Client + User JWT
     const supabaseCaller = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
     const { data: { user: caller }, error: callerError } = await supabaseCaller.auth.getUser();
     if (callerError || !caller) {
-      return new Response(JSON.stringify({ success: false, message: 'Phiên làm việc hết hạn.' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ success: false, message: 'Từ chối truy cập: Mã token JWT không hợp lệ hoặc đã hết hạn.' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    // 3. Khởi tạo Admin Client bằng Service Role Key (Chạy an toàn trên Server)
+    // LẤY VÀ XÁC MINH USER ID TRỰC TIẾP TỪ JWT ĐÃ XÁC THỰC (KHÔNG LẤY TỪ REQUEST BODY)
+    const verifiedAdminUserId = caller.id;
+
+    // Khởi tạo Supabase Admin Client bằng Service Role Key (Chỉ sử dụng phía Server)
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. Phân quyền: Chỉ cho phép profiles.role = 'admin' (Từ chối teacher, student, anon, role NULL)
+    // Tra cứu vai trò từ public.profiles bằng verifiedAdminUserId
     const { data: callerProfile } = await supabaseAdmin
       .from('profiles')
       .select('role')
-      .eq('id', caller.id)
+      .eq('id', verifiedAdminUserId)
       .maybeSingle();
 
     if (!callerProfile || callerProfile.role !== 'admin') {
       return new Response(
-        JSON.stringify({ success: false, message: 'Từ chối truy cập: Chỉ Quản trị viên mới có quyền tạo học sinh hàng loạt.' }),
+        JSON.stringify({ success: false, message: 'Từ chối truy cập: Chỉ tài khoản Quản trị viên (Admin) mới có quyền nhập học sinh hàng loạt.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 5. Đọc Dữ Liệu Đầu Vào
+    // =========================================================================
+    // 3. ĐỌC & KIỂM TRA BATCH ĐẦU VÀO (GIỚI HẠN TỐI ĐA 50 DÒNG)
+    // =========================================================================
     let body: any = {};
     try {
       body = await req.json();
@@ -74,16 +106,25 @@ serve(async (req) => {
       );
     }
 
-    const { classId, students } = body;
+    const { classId, students, dryRun = false } = body;
 
     if (!classId || !students || !Array.isArray(students) || students.length === 0) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Vui lòng cung cấp Lớp học và danh sách học sinh hợp lệ.' }),
+        JSON.stringify({ success: false, message: 'Vui lòng cung cấp mã Lớp học và danh sách học sinh hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 6. Kiểm tra Lớp Đích Tồn Tại
+    if (students.length > 50) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mỗi đợt nhập hàng loạt chỉ được tối đa 50 học sinh.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================================================
+    // 4. XÁC MINH CHÍNH XÁC LỚP ĐÍCH THUỘC "LỚP 2.12" (KHỐI 2, MÃ LOP212-3A5818)
+    // =========================================================================
     const { data: targetClass, error: classErr } = await supabaseAdmin
       .from('classes')
       .select('id, name, grade_level, code, teacher_id')
@@ -97,43 +138,199 @@ serve(async (req) => {
       );
     }
 
-    const targetGrade = targetClass.grade_level || 2;
+    const normClassName = targetClass.name.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (normClassName !== 'lớp 2.12' || targetClass.grade_level !== 2 || targetClass.code !== 'LOP212-3A5818') {
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          message: `Lớp chọn không đúng thông tin Lớp 2.12 chính thức (Yêu cầu: Lớp 2.12, Khối 2, Mã: LOP212-3A5818. Hiện tại: "${targetClass.name}", Khối ${targetClass.grade_level}, Mã: "${targetClass.code}").` 
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-    // 7. Lấy danh sách student_code hiện có để tạo mã không trùng
-    const { data: existingProfiles } = await supabaseAdmin
-      .from('profiles')
-      .select('student_code')
-      .eq('role', 'student')
-      .not('student_code', 'is', null);
+    // Lấy tên Giáo viên phụ trách để hiển thị báo cáo
+    let teacherFullName = 'Lã Nguyễn Diễm Hương';
+    if (targetClass.teacher_id) {
+      const { data: teacherProf } = await supabaseAdmin
+        .from('profiles')
+        .select('full_name')
+        .eq('id', targetClass.teacher_id)
+        .maybeSingle();
+      if (teacherProf?.full_name) {
+        teacherFullName = teacherProf.full_name;
+      }
+    }
 
-    const usedCodes = new Set<string>();
-    let maxNumericCode = 200;
+    // =========================================================================
+    // 5. LOẠI BỎ DÒNG TRÙNG VÀ DÒNG KHÔNG HỢP LỆ NỘI BỘ BATCH
+    // =========================================================================
+    const seenNamesInBatch = new Set<string>();
+    const cleanedStudentsInput: Array<{ stt: number; fullName: string; isDuplicateInBatch: boolean }> = [];
 
-    (existingProfiles || []).forEach((p: any) => {
-      if (p.student_code) {
-        const codeStr = p.student_code.trim().toUpperCase();
-        usedCodes.add(codeStr);
-        const match = codeStr.match(/^HS(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (!isNaN(num) && num > maxNumericCode) {
-            maxNumericCode = num;
+    for (let i = 0; i < students.length; i++) {
+      const item = students[i];
+      const stt = item.stt || i + 1;
+      const rawName = item.fullName || item.full_name || '';
+      const cleanName = rawName.trim().replace(/\s+/g, ' ');
+
+      if (!cleanName || cleanName.length > 100) {
+        continue;
+      }
+
+      const lowerName = cleanName.toLowerCase();
+      let isDup = false;
+      if (seenNamesInBatch.has(lowerName)) {
+        isDup = true;
+      } else {
+        seenNamesInBatch.add(lowerName);
+      }
+
+      cleanedStudentsInput.push({
+        stt,
+        fullName: cleanName,
+        isDuplicateInBatch: isDup,
+      });
+    }
+
+    // =========================================================================
+    // 6. CHẾ ĐỘ DRY-RUN (PREVIEW BẢN XEM TRƯỚC - CHƯA TẠO DỮ LIỆU)
+    // =========================================================================
+    if (dryRun === true) {
+      const dryResults: Array<{
+        stt: number;
+        fullName: string;
+        status: string;
+        studentCode: string;
+        studentId: string;
+        note: string;
+      }> = [];
+
+      let readyCount = 0;
+      let alreadyInClassCount = 0;
+      let reviewRequiredCount = 0;
+
+      for (const item of cleanedStudentsInput) {
+        if (item.isDuplicateInBatch) {
+          dryResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'DUPLICATE_IN_BATCH',
+            studentCode: '-',
+            studentId: '-',
+            note: 'Phát hiện họ tên bị trùng lặp trong cùng batch gửi lên.',
+          });
+          reviewRequiredCount++;
+          continue;
+        }
+
+        // Truy vấn profiles theo tên tiếng Việt đã gộp khoảng trắng
+        const { data: matchedProfiles } = await supabaseAdmin
+          .from('profiles')
+          .select('id, student_code, email')
+          .eq('role', 'student')
+          .ilike('full_name', item.fullName);
+
+        if (!matchedProfiles || matchedProfiles.length === 0) {
+          dryResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'READY_TO_CREATE',
+            studentCode: 'Dự kiến sinh mới',
+            studentId: '-',
+            note: 'Chưa có tài khoản. Sẵn sàng tạo mới Auth + Profile + PIN và gán Lớp 2.12.',
+          });
+          readyCount++;
+        } else if (matchedProfiles.length === 1) {
+          const prof = matchedProfiles[0];
+          // Kiểm tra xem đã có trong class_members Lớp 2.12 chưa
+          const { data: cmRec } = await supabaseAdmin
+            .from('class_members')
+            .select('id')
+            .eq('class_id', classId)
+            .eq('student_id', prof.id)
+            .maybeSingle();
+
+          if (cmRec) {
+            dryResults.push({
+              stt: item.stt,
+              fullName: item.fullName,
+              status: 'ALREADY_IN_CLASS_212',
+              studentCode: prof.student_code || '-',
+              studentId: prof.id,
+              note: 'Đã có tài khoản duy nhất và đã thuộc Lớp 2.12 từ trước.',
+            });
+            alreadyInClassCount++;
+          } else {
+            dryResults.push({
+              stt: item.stt,
+              fullName: item.fullName,
+              status: 'EXISTING_USER_READY_TO_ASSIGN',
+              studentCode: prof.student_code || '-',
+              studentId: prof.id,
+              note: 'Đã có tài khoản duy nhất, sẵn sàng gán thêm vào Lớp 2.12.',
+            });
+            readyCount++;
           }
+        } else {
+          dryResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'DUPLICATE_REQUIRES_REVIEW',
+            studentCode: '-',
+            studentId: '-',
+            note: `Phát hiện ${matchedProfiles.length} tài khoản trùng tên trên nền tảng. Cần Admin xác minh UUID.`,
+          });
+          reviewRequiredCount++;
         }
       }
-    });
 
-    const generateUniqueStudentCode = (): string => {
-      let candidate = '';
-      do {
-        maxNumericCode++;
-        candidate = `HS${maxNumericCode}`;
-      } while (usedCodes.has(candidate));
-      usedCodes.add(candidate);
-      return candidate;
+      return new Response(
+        JSON.stringify({
+          success: true,
+          dryRun: true,
+          message: `Bản xem trước Dry-Run hoàn tất cho ${cleanedStudentsInput.length} học sinh Lớp 2.12.`,
+          className: targetClass.name,
+          classCode: targetClass.code,
+          teacherName: teacherFullName,
+          summary: {
+            total: cleanedStudentsInput.length,
+            readyToCreate: readyCount,
+            alreadyInClass: alreadyInClassCount,
+            reviewRequired: reviewRequiredCount,
+          },
+          results: dryResults,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================================================
+    // 7. THỰC THI THẬT (PRODUCTION EXECUTION WITH CLEANUP COMPENSATION)
+    // =========================================================================
+    // Hàm sinh mã student_code độc nhất chống trùng bằng vòng lặp EXISTS trên DB
+    const generateSafeStudentCode = async (): Promise<string> => {
+      let attempts = 0;
+      while (attempts < 10) {
+        attempts++;
+        const randomNum = Math.floor(100 + Math.random() * 899); // 3 chữ số ngẫu nhiên
+        const candidate = `HS212-${randomNum}`;
+        
+        const { data: exists } = await supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .eq('student_code', candidate)
+          .maybeSingle();
+
+        if (!exists) {
+          return candidate;
+        }
+      }
+      // Fallback timestamp nếu quá 10 lần trùng
+      return `HS${Date.now().toString().slice(-6)}`;
     };
 
-    const results: Array<{
+    const finalResults: Array<{
       stt: number;
       fullName: string;
       status: string;
@@ -144,181 +341,204 @@ serve(async (req) => {
     }> = [];
 
     let createdCount = 0;
-    let alreadyExistsCount = 0;
+    let assignedExistingCount = 0;
     let failedCount = 0;
 
-    // 8. Vòng Lặp Xử Lý Từng Học Sinh Trong Batch
-    for (const item of students) {
-      const stt = item.stt || results.length + 1;
-      const rawName = item.fullName || item.full_name || '';
-      const cleanName = rawName.trim().replace(/\s+/g, ' ');
-
-      if (!cleanName) {
-        results.push({
-          stt,
-          fullName: 'Chưa đặt tên',
-          status: 'FAILED_VALIDATION',
-          note: 'Họ và tên không được để trống.',
+    for (const item of cleanedStudentsInput) {
+      if (item.isDuplicateInBatch) {
+        finalResults.push({
+          stt: item.stt,
+          fullName: item.fullName,
+          status: 'SKIPPED_DUPLICATE_IN_BATCH',
+          note: 'Bỏ qua do bị trùng họ tên với dòng khác trong cùng batch.',
         });
         failedCount++;
         continue;
       }
 
-      // Kiểm tra xem đã có profile học sinh khớp họ tên hay chưa
+      // Kiểm tra profile học sinh sẵn có
       const { data: matchedProfiles } = await supabaseAdmin
         .from('profiles')
         .select('id, student_code, email')
         .eq('role', 'student')
-        .ilike('full_name', cleanName);
+        .ilike('full_name', item.fullName);
 
-      if (matchedProfiles && matchedProfiles.length > 0) {
-        const existingProfile = matchedProfiles[0];
-        
-        // Kiểm tra xem đã gia nhập lớp chưa
-        const { data: memberRecord } = await supabaseAdmin
-          .from('class_members')
-          .select('id')
-          .eq('class_id', classId)
-          .eq('student_id', existingProfile.id)
-          .maybeSingle();
-
-        if (!memberRecord) {
-          // Thêm vào class_members của lớp đích
-          await supabaseAdmin
-            .from('class_members')
-            .insert({
-              class_id: classId,
-              student_id: existingProfile.id,
-              joined_at: new Date().toISOString(),
-            });
-        }
-
-        results.push({
-          stt,
-          fullName: cleanName,
-          status: 'ALREADY_EXISTS',
-          studentCode: existingProfile.student_code || '-',
-          studentId: existingProfile.id,
-          note: memberRecord ? 'Tài khoản đã tồn tại và đã ở trong lớp.' : 'Tài khoản đã tồn tại, vừa gán vào lớp.',
-        });
-        alreadyExistsCount++;
-        continue;
-      }
-
-      // Chưa có tài khoản -> Tạo mới Auth User + Profile + PIN + Class Member
-      const studentCode = generateUniqueStudentCode();
-      const pin = Math.floor(1000 + Math.random() * 9000).toString(); // PIN 4 chữ số
-      const internalEmail = `hs_${studentCode.toLowerCase()}@hoclapvui.edu.vn`;
-      const internalPassword = `Pin_${pin}_Auth!`;
-
-      // 8.A: Tạo Auth User
-      const { data: authData, error: createAuthErr } = await supabaseAdmin.auth.admin.createUser({
-        email: internalEmail,
-        password: internalPassword,
-        email_confirm: true,
-        user_metadata: {
-          full_name: cleanName,
-          role: 'student',
-          grade_level: targetGrade,
-          student_code: studentCode,
-        },
-      });
-
-      if (createAuthErr || !authData?.user) {
-        results.push({
-          stt,
-          fullName: cleanName,
-          status: 'FAILED_AUTH',
-          note: `Lỗi tạo Auth: ${createAuthErr?.message || 'Không thể khởi tạo Auth User'}`,
+      if (matchedProfiles && matchedProfiles.length > 1) {
+        finalResults.push({
+          stt: item.stt,
+          fullName: item.fullName,
+          status: 'SKIPPED_DUPLICATE_REQUIRES_REVIEW',
+          note: `Phát hiện ${matchedProfiles.length} tài khoản trùng tên nền tảng. Cần xác minh thủ công.`,
         });
         failedCount++;
         continue;
       }
 
-      const newUserId = authData.user.id;
+      if (matchedProfiles && matchedProfiles.length === 1) {
+        const existingProf = matchedProfiles[0];
+        // Kiểm tra xem đã gia nhập lớp chưa
+        const { data: cmRec } = await supabaseAdmin
+          .from('class_members')
+          .select('id')
+          .eq('class_id', classId)
+          .eq('student_id', existingProf.id)
+          .maybeSingle();
+
+        if (!cmRec) {
+          await supabaseAdmin
+            .from('class_members')
+            .insert({
+              class_id: classId,
+              student_id: existingProf.id,
+              joined_at: new Date().toISOString(),
+            });
+          
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'ALREADY_EXISTS_ASSIGNED_TO_CLASS',
+            studentCode: existingProf.student_code || '-',
+            studentId: existingProf.id,
+            note: 'Đã có tài khoản từ trước, đã gán vào Lớp 2.12.',
+          });
+          assignedExistingCount++;
+        } else {
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'ALREADY_IN_CLASS',
+            studentCode: existingProf.student_code || '-',
+            studentId: existingProf.id,
+            note: 'Đã có tài khoản và đã thuộc Lớp 2.12 từ trước.',
+          });
+          assignedExistingCount++;
+        }
+        continue;
+      }
+
+      // NẾU CHƯA CÓ TÀI KHOẢN -> KHỞI TẠO TÀI KHOẢN MỚI 100% VỚI CLEANUP COMPENSATION
+      const studentCode = await generateSafeStudentCode();
+      const pin = Math.floor(1000 + Math.random() * 9000).toString(); // PIN 4 chữ số
+      const internalEmail = `hs_${studentCode.toLowerCase()}@hoclapvui.edu.vn`;
+      const internalPassword = `Pin_${pin}_Auth!`;
+
+      let newlyCreatedUserId: string | null = null;
 
       try {
-        // 8.B: Đợi trigger tự động khởi tạo profile và cập nhật thông tin chuẩn
+        // Bước 1: Tạo Auth User
+        const { data: authData, error: createAuthErr } = await supabaseAdmin.auth.admin.createUser({
+          email: internalEmail,
+          password: internalPassword,
+          email_confirm: true,
+          user_metadata: {
+            full_name: item.fullName,
+            role: 'student',
+            grade_level: 2,
+            student_code: studentCode,
+          },
+        });
+
+        if (createAuthErr || !authData?.user) {
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'FAILED_AUTH_CREATION',
+            note: `Lỗi tạo Auth: ${createAuthErr?.message || 'Không thể tạo Auth User'}`,
+          });
+          failedCount++;
+          continue;
+        }
+
+        newlyCreatedUserId = authData.user.id;
+
+        // Đợi 200ms cho trigger handle_new_user
         await new Promise((res) => setTimeout(res, 200));
 
+        // Bước 2: Upsert public.profiles
         const { error: profileErr } = await supabaseAdmin
           .from('profiles')
           .upsert({
-            id: newUserId,
+            id: newlyCreatedUserId,
             email: internalEmail,
-            full_name: cleanName,
+            full_name: item.fullName,
             role: 'student',
-            grade_level: targetGrade,
+            grade_level: 2,
             student_code: studentCode,
             is_disabled: false,
             updated_at: new Date().toISOString(),
           });
 
         if (profileErr) {
-          // Cleanup compensation: Xóa Auth User mồ côi nếu tạo Profile thất bại
-          await supabaseAdmin.auth.admin.deleteUser(newUserId);
-          results.push({
-            stt,
-            fullName: cleanName,
-            status: 'FAILED_PROFILE',
-            note: `Lỗi tạo Profile: ${profileErr.message}. Đã rollback Auth User.`,
+          // CLEANUP COMPENSATION: Xóa Auth User mới tạo nếu Profile thất bại
+          await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: 'FAILED_PROFILE_CREATION',
+            note: `Lỗi tạo Profile: ${profileErr.message}. Đã dọn dẹp Auth User mồ côi.`,
           });
           failedCount++;
           continue;
         }
 
-        // 8.C: Đặt mã PIN Hash bằng RPC set_student_pin
+        // Bước 3: Đặt PIN Hash qua RPC set_student_pin
         const { error: pinErr } = await supabaseAdmin.rpc('set_student_pin', {
-          p_student_id: newUserId,
+          p_student_id: newlyCreatedUserId,
           p_pin: pin,
         });
 
         if (pinErr) {
-          console.error(`Warning setting PIN for ${studentCode}:`, pinErr.message);
+          console.error(`Lỗi gán PIN cho ${studentCode}:`, pinErr.message);
         }
 
-        // 8.D: Gán vào class_members
+        // Bước 4: Thêm vào class_members
         const { error: cmErr } = await supabaseAdmin
           .from('class_members')
           .insert({
             class_id: classId,
-            student_id: newUserId,
+            student_id: newlyCreatedUserId,
             joined_at: new Date().toISOString(),
           });
 
         if (cmErr) {
-          // Rollback nếu gán lớp thất bại
-          await supabaseAdmin.auth.admin.deleteUser(newUserId);
-          results.push({
-            stt,
-            fullName: cleanName,
+          // CLEANUP COMPENSATION: Xóa Auth User & Profile mới tạo nếu Class Member thất bại
+          await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId);
+          await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
             status: 'FAILED_CLASS_ASSIGNMENT',
-            note: `Lỗi gán lớp: ${cmErr.message}. Đã rollback tài khoản.`,
+            note: `Lỗi gán lớp: ${cmErr.message}. Đã dọn dẹp tài khoản mồ côi.`,
           });
           failedCount++;
           continue;
         }
 
-        // Thành công 100%! Trả về thông tin đăng nhập CHỈ TRONG HTTP RESPONSE (Không log)
-        results.push({
-          stt,
-          fullName: cleanName,
+        // HOÀN TẤT THÀNH CÔNG 100%
+        finalResults.push({
+          stt: item.stt,
+          fullName: item.fullName,
           status: 'CREATED_AND_ASSIGNED',
           studentCode,
-          pin,
-          studentId: newUserId,
-          note: 'Tạo tài khoản và gán lớp 2.12 thành công!',
+          pin, // Trả về PIN duy nhất 1 lần trong HTTP response có no-store
+          studentId: newlyCreatedUserId,
+          note: 'Tạo tài khoản và gán vào Lớp 2.12 thành công!',
         });
         createdCount++;
 
       } catch (procErr: any) {
-        // Rollback an toàn nếu có exception bất ngờ
-        await supabaseAdmin.auth.admin.deleteUser(newUserId).catch(() => {});
-        results.push({
-          stt,
-          fullName: cleanName,
+        // Cleanup compensation an toàn nếu gặp exception ngoài dự kiến
+        if (newlyCreatedUserId) {
+          try { await supabaseAdmin.from('class_members').delete().eq('student_id', newlyCreatedUserId); } catch (_e) {}
+          try { await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId); } catch (_e) {}
+          try { await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId); } catch (_e) {}
+        }
+
+        finalResults.push({
+          stt: item.stt,
+          fullName: item.fullName,
           status: 'FAILED_PROCESS',
-          note: `Lỗi xử lý: ${procErr.message || 'Lỗi server-side'}. Đã rollback tài khoản.`,
+          note: `Lỗi bất ngờ: ${procErr.message || 'Lỗi server'}. Đã dọn dẹp tài khoản mồ côi.`,
         });
         failedCount++;
       }
@@ -327,16 +547,17 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        message: `Đã hoàn tất xử lý batch ${students.length} học sinh.`,
-        summary: {
-          total: students.length,
-          created: createdCount,
-          alreadyExists: alreadyExistsCount,
-          failed: failedCount,
-        },
+        dryRun: false,
+        message: `Đã hoàn thành thực thi tạo batch cho Lớp 2.12.`,
         className: targetClass.name,
         classCode: targetClass.code,
-        results,
+        summary: {
+          total: cleanedStudentsInput.length,
+          created: createdCount,
+          assignedExisting: assignedExistingCount,
+          failed: failedCount,
+        },
+        results: finalResults,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
