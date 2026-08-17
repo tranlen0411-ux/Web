@@ -82,7 +82,7 @@ async function getRealGoTrueUserToken(
     const client = new Client(DB_URL);
     await client.connect();
     const res = await client.queryObject<{ id: string }>(
-      `SELECT id FROM public.profiles WHERE email = $1 UNION SELECT id FROM auth.users WHERE email = $1 LIMIT 1;`,
+      `SELECT id FROM auth.users WHERE email = $1 UNION SELECT id FROM public.profiles WHERE email = $1 LIMIT 1;`,
       [email]
     );
     await client.end();
