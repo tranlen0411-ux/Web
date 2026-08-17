@@ -81,6 +81,21 @@ jobs:
           echo "ALLOW_PRODUCTION_BULK_CREATE=true" >> supabase/.env.local
           echo "JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long" >> supabase/.env.local
 
+          SERVICE_ROLE_JWT=$(deno eval '
+            const encoder = new TextEncoder();
+            const secret = "super-secret-jwt-token-with-at-least-32-characters-long";
+            const header = { alg: "HS256", typ: "JWT" };
+            const payload = { role: "service_role", iss: "supabase", iat: 1577328000, exp: 1892904000 };
+            const b64Url = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+            const h = b64Url(header);
+            const p = b64Url(payload);
+            const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(`${h}.${p}`));
+            const s = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+            console.log(`${h}.${p}.${s}`);
+          ')
+          echo "SUPABASE_SERVICE_ROLE_KEY=${SERVICE_ROLE_JWT}" >> supabase/.env.local
+
       - name: Serve Edge Functions & Execute Runtime Tests
         run: |
           # Bắt đầu serve Edge Functions trong background trên runner ubuntu-latest local
