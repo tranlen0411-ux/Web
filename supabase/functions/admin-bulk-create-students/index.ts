@@ -65,34 +65,15 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    let verifiedAdminUserId: string | null = null;
-    const { data: { user: caller } } = await supabaseCaller.auth.getUser();
-    if (caller?.id) {
-      verifiedAdminUserId = caller.id;
-    } else if (authHeader) {
-      try {
-        const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-        const parts = token.split('.');
-        if (parts.length === 3) {
-          let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-          while (b64.length % 4 !== 0) {
-            b64 += '=';
-          }
-          const payload = JSON.parse(atob(b64));
-          if (payload.sub && typeof payload.sub === 'string' && payload.exp && payload.exp > Math.floor(Date.now() / 1000)) {
-            verifiedAdminUserId = payload.sub;
-          }
-        }
-      } catch (_err) {}
-    }
-
-    if (!verifiedAdminUserId) {
+    const { data: { user: caller }, error: callerError } = await supabaseCaller.auth.getUser();
+    if (callerError || !caller) {
       return new Response(
         JSON.stringify({ success: false, message: 'Từ chối truy cập: Token JWT không hợp lệ hoặc đã hết hạn.' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    const verifiedAdminUserId = caller.id;
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     const { data: callerProfile, error: profileCheckErr } = await supabaseAdmin
@@ -101,9 +82,7 @@ serve(async (req) => {
       .eq('id', verifiedAdminUserId)
       .maybeSingle();
 
-    const isAdmin = callerProfile?.role === 'admin' || verifiedAdminUserId === '11111111-1111-1111-1111-111111111111';
-
-    if (!isAdmin) {
+    if (profileCheckErr || !callerProfile || callerProfile.role !== 'admin') {
       return new Response(
         JSON.stringify({ success: false, message: 'Từ chối truy cập: Chỉ Quản trị viên (Admin) mới có quyền nhập học sinh hàng loạt.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -120,21 +99,9 @@ serve(async (req) => {
       );
     }
 
-    const rawIdempotencyKey = body.idempotencyKey || req.headers.get('x-idempotency-key') || req.headers.get('idempotency-key');
-    const { classId, students, dryRun = false } = body;
-    const idempotencyKey = typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : '';
+    const { classId, students, dryRun = false, idempotencyKey } = body;
 
     const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
-    const ciFaultInjection = req.headers.get('x-ci-fault-injection');
-
-    if (ciFaultInjection === 'profile' && isAllowProductionBulkCreate) {
-      // Giả lập lỗi profile trong môi trường CI để test rollback
-      return new Response(
-        JSON.stringify({ success: false, message: 'Simulated fault-injection: Profile creation failure.' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     if (!dryRun && !isAllowProductionBulkCreate) {
       return new Response(
         JSON.stringify({ 

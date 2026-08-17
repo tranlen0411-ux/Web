@@ -602,7 +602,7 @@ Deno.test("26. Reset PIN Class Check - Từ chối cấp lại PIN học sinh ng
   assertEquals(data.success, false);
 });
 
-Deno.test("27. Reset PIN Idempotency & Replay Inspection - Phát hiện sinh PIN mới khi gọi lại (Design Finding)", async () => {
+Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log và lưu ý repeat reset tạo PIN mới (Thiết kế hiện tại không có replay lock)", async () => {
   const client = new Client(DB_URL);
   await client.connect();
 

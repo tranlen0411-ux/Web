@@ -21,30 +21,10 @@ serve(async (req) => {
   if (!url||!anon||!service) return new Response(JSON.stringify({success:false,message:'Cấu hình máy chủ chưa hoàn tất.'}),{status:500,headers});
   const callerClient=createClient(url,anon,{global:{headers:{Authorization:authHeader}}});
   const adminClient=createClient(url,service);
-  let callerUserId: string | null = null;
-  const {data:{user}}=await callerClient.auth.getUser();
-  if (user?.id) {
-    callerUserId = user.id;
-  } else if (authHeader) {
-    try {
-      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-      const parts = token.split('.');
-      if (parts.length === 3) {
-        let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4 !== 0) {
-          b64 += '=';
-        }
-        const payload = JSON.parse(atob(b64));
-        if (payload.sub && typeof payload.sub === 'string' && payload.exp && payload.exp > Math.floor(Date.now() / 1000)) {
-          callerUserId = payload.sub;
-        }
-      }
-    } catch (_e) {}
-  }
-  if (!callerUserId) return new Response(JSON.stringify({success:false,message:'Phiên đăng nhập không hợp lệ.'}),{status:401,headers});
-  const {data:adminProfile,error:adminErr}=await adminClient.from('profiles').select('role').eq('id',callerUserId).maybeSingle();
-  const isAdmin = adminProfile?.role === 'admin' || callerUserId === '11111111-1111-1111-1111-111111111111';
-  if (!isAdmin) return new Response(JSON.stringify({success:false,message:'Chỉ Admin được cấp lại PIN.'}),{status:403,headers});
+  const {data:{user},error:userErr}=await callerClient.auth.getUser();
+  if (userErr||!user) return new Response(JSON.stringify({success:false,message:'Phiên đăng nhập không hợp lệ.'}),{status:401,headers});
+  const {data:adminProfile,error:adminErr}=await adminClient.from('profiles').select('role').eq('id',user.id).maybeSingle();
+  if (adminErr||adminProfile?.role!=='admin') return new Response(JSON.stringify({success:false,message:'Chỉ Admin được cấp lại PIN.'}),{status:403,headers});
   let body: {studentId?: string}; try { body=await req.json(); } catch { return new Response(JSON.stringify({success:false,message:'Dữ liệu không hợp lệ.'}),{status:400,headers}); }
   if (!body.studentId || !/^[0-9a-f-]{36}$/i.test(body.studentId)) return new Response(JSON.stringify({success:false,message:'Học sinh không hợp lệ.'}),{status:400,headers});
   const {data:student,error:studentErr}=await adminClient.from('profiles').select('id,role,is_disabled').eq('id',body.studentId).maybeSingle();
@@ -56,7 +36,7 @@ serve(async (req) => {
     .eq('classes.grade_level',2)
     .maybeSingle();
   if (membershipErr||!membership) return new Response(JSON.stringify({success:false,message:'Học sinh không thuộc Lớp 2.12.'}),{status:400,headers});
-  const {data:allowed,error:limitErr}=await adminClient.rpc('claim_student_pin_reset',{p_admin_id:callerUserId,p_student_id:student.id});
+  const {data:allowed,error:limitErr}=await adminClient.rpc('claim_student_pin_reset',{p_admin_id:user.id,p_student_id:student.id});
   if (limitErr||allowed!==true) return new Response(JSON.stringify({success:false,message:'Đã vượt giới hạn cấp lại PIN. Vui lòng thử sau.'}),{status:429,headers});
   const pin=crypto.getRandomValues(new Uint32Array(1))[0].toString().padStart(10,'0').slice(-4);
   const {data:pinOk,error:pinErr}=await adminClient.rpc('set_student_pin_service',{p_student_id:student.id,p_pin:pin});
