@@ -280,6 +280,7 @@ Deno.test("09. Dry-run Thực Tế - Admin JWT gửi 34 học sinh Dry-run thàn
     body: JSON.stringify({
       classId: "99999999-9999-9999-9999-999999999999",
       dryRun: true,
+      idempotencyKey: `dryrun-test-${Date.now()}`,
       students: MOCK_34_STUDENTS,
     }),
   });
@@ -689,6 +690,10 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
   await client.queryObject(
     `INSERT INTO public.class_members (class_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;`,
     [classId, studentId]
+  );
+  await client.queryObject(
+    `DELETE FROM app_private.student_pin_reset_logs WHERE student_id = $1;`,
+    [studentId]
   );
   
   await new Promise((r) => setTimeout(r, 5000));
