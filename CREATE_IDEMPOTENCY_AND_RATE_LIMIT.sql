@@ -1,6 +1,6 @@
 -- ============================================================================
--- SQL MIGRATION BẢO MẬT CẤP ENTERPRISE: BẢNG & RPC IDEMPOTENCY CÓ CLAIM TOKEN VÀ LEASE
--- + RATE LIMIT NGUYÊN TỬ NÂNG CAO (UPSERT + ROW-LEVEL LOCKING ORDER BY ASC FOR UPDATE)
+-- SQL MIGRATION BẢO MẬT CẤP ENTERPRISE: IDEMPOTENCY DB VỚI CLAIM TOKEN, LEASE,
+-- WHITELIST SANITIZATION VÀ SERVICE_ROLE LOCKING CHÍNH XÁC 100%
 -- ============================================================================
 
 BEGIN;
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
 
 REVOKE ALL ON TABLE app_private.batch_idempotency_logs FROM PUBLIC, anon, authenticated;
 
--- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (FAIL-CLOSED VỚI CLAIM TOKEN & LEASE)
+-- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (GỌI TỪ JWT CALLER ADMIN)
 CREATE OR REPLACE FUNCTION public.claim_batch_idempotency(
   p_idempotency_key TEXT,
   p_payload_fingerprint TEXT
@@ -43,7 +43,7 @@ DECLARE
   v_rec RECORD;
   v_new_claim_token UUID;
 BEGIN
-  -- 1. Xác thực caller từ auth.uid()
+  -- 1. Xác thực caller từ auth.uid() của JWT Admin
   v_caller_id := (SELECT auth.uid());
   IF v_caller_id IS NULL THEN
     RETURN jsonb_build_object('status', 'UNAUTHORIZED', 'message', 'Chưa đăng nhập.');
@@ -61,7 +61,7 @@ BEGIN
 
   v_new_claim_token := gen_random_uuid();
 
-  -- 3. Atomically Insert claim mới
+  -- 3. Insert claim mới
   INSERT INTO app_private.batch_idempotency_logs (
     admin_id, idempotency_key, claim_token, payload_fingerprint, status, processing_started_at, lease_expires_at
   ) VALUES (
@@ -89,7 +89,7 @@ BEGIN
     IF NOW() < v_rec.lease_expires_at THEN
       RETURN jsonb_build_object('status', 'PROCESSING_LEASE_ACTIVE', 'message', 'Yêu cầu batch này đang được hệ thống xử lý, vui lòng chờ.');
     ELSE
-      -- Lease đã hết hạn (Edge function timeout/crash) -> Reclaim an toàn với claim_token mới
+      -- Lease đã hết hạn -> Reclaim an toàn với claim_token mới
       UPDATE app_private.batch_idempotency_logs
       SET claim_token = v_new_claim_token,
           processing_started_at = NOW(),
@@ -120,7 +120,7 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) TO authenticated;
 
--- 3. HÀM RPC HEARTBEAT GIA HẠN LEASE IDEMPOTENCY (CHỈ CHO SERVICE_ROLE / CALLER THẬT KIỂM TRA LEASE)
+-- 3. HÀM RPC HEARTBEAT DÙNG SERVICE_ROLE (XÁC MINH THEO IDEMPOTENCY_KEY VÀ CLAIM_TOKEN, KHÔNG PHỤ THUỘC AUTH.UID())
 CREATE OR REPLACE FUNCTION public.heartbeat_batch_idempotency(
   p_idempotency_key TEXT,
   p_claim_token UUID
@@ -130,17 +130,13 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-DECLARE
-  v_caller_id UUID;
 BEGIN
-  v_caller_id := (SELECT auth.uid());
-  IF v_caller_id IS NULL THEN RETURN FALSE; END IF;
+  IF p_idempotency_key IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
 
   UPDATE app_private.batch_idempotency_logs
   SET lease_expires_at = NOW() + INTERVAL '3 minutes',
       updated_at = NOW()
-  WHERE admin_id = v_caller_id 
-    AND idempotency_key = p_idempotency_key 
+  WHERE idempotency_key = p_idempotency_key 
     AND claim_token = p_claim_token 
     AND status = 'PROCESSING'
     AND NOW() < lease_expires_at;
@@ -152,7 +148,7 @@ $$;
 REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) TO service_role;
 
--- 4. HÀM RPC HOÀN TẤT BATCH IDEMPOTENCY (SANITY CHECK: KHÔNG CHO LƯU PIN/SECRET TRONG RESPONSE_DATA)
+-- 4. HÀM RPC HOÀN TẤT BATCH DÙNG SERVICE_ROLE (STRICT WHITELIST SANITIZATION)
 CREATE OR REPLACE FUNCTION public.complete_batch_idempotency(
   p_idempotency_key TEXT,
   p_claim_token UUID,
@@ -165,35 +161,44 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_caller_id UUID;
-  v_sanitized_data JSONB;
+  v_sanitized_results JSONB := '[]'::jsonb;
+  v_sanitized_response JSONB;
 BEGIN
-  v_caller_id := (SELECT auth.uid());
-  IF v_caller_id IS NULL THEN RETURN FALSE; END IF;
+  IF p_idempotency_key IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
 
-  -- LÀM SẠCH TUYỆT ĐỐI MỌI THÔNG TIN BẢO MẬT (PIN, JWT, EMAIL_PASS) TRƯỚC KHI LƯU VÀO CSDL LOGS
-  v_sanitized_data := p_response_data #- '{results}';
-  IF p_response_data ? 'results' THEN
-    SELECT jsonb_set(
-      p_response_data,
-      '{results}',
-      (
-        SELECT COALESCE(jsonb_agg(
-          elem - 'pin' - 'password' - 'jwt' - 'token'
-        ), '[]'::jsonb)
-        FROM jsonb_array_elements(p_response_data->'results') AS elem
+  -- BẮT BUỘC SANITIZE BẰNG WHITELIST 100%: CHỈ GIỮ CÁC TRƯỜNG AN TOÀN CHO DB LOGS
+  IF p_response_data ? 'results' AND jsonb_typeof(p_response_data->'results') = 'array' THEN
+    SELECT COALESCE(jsonb_agg(
+      jsonb_build_object(
+        'stt', elem->'stt',
+        'fullName', elem->'fullName',
+        'status', elem->'status',
+        'studentCode', COALESCE(elem->'studentCode', '-'::jsonb),
+        'studentId', COALESCE(elem->'studentId', '-'::jsonb),
+        'note', COALESCE(elem->'note', ''::jsonb)
       )
-    ) INTO v_sanitized_data;
+    ), '[]'::jsonb)
+    INTO v_sanitized_results
+    FROM jsonb_array_elements(p_response_data->'results') AS elem;
   END IF;
+
+  v_sanitized_response := jsonb_build_object(
+    'success', COALESCE(p_response_data->'success', 'true'::jsonb),
+    'dryRun', COALESCE(p_response_data->'dryRun', 'false'::jsonb),
+    'message', COALESCE(p_response_data->'message', ''::jsonb),
+    'className', COALESCE(p_response_data->'className', ''::jsonb),
+    'classCode', COALESCE(p_response_data->'classCode', ''::jsonb),
+    'summary', COALESCE(p_response_data->'summary', '{}'::jsonb),
+    'results', v_sanitized_results
+  );
 
   IF p_is_success THEN
     UPDATE app_private.batch_idempotency_logs
     SET status = 'COMPLETED',
         completed_at = NOW(),
-        response_data = v_sanitized_data,
+        response_data = v_sanitized_response,
         updated_at = NOW()
-    WHERE admin_id = v_caller_id 
-      AND idempotency_key = p_idempotency_key 
+    WHERE idempotency_key = p_idempotency_key 
       AND claim_token = p_claim_token
       AND status = 'PROCESSING'
       AND NOW() < lease_expires_at;
@@ -202,9 +207,9 @@ BEGIN
     SET status = 'FAILED',
         failed_at = NOW(),
         updated_at = NOW()
-    WHERE admin_id = v_caller_id 
-      AND idempotency_key = p_idempotency_key 
-      AND claim_token = p_claim_token;
+    WHERE idempotency_key = p_idempotency_key 
+      AND claim_token = p_claim_token
+      AND status = 'PROCESSING';
   END IF;
 
   RETURN FOUND;
@@ -249,7 +254,6 @@ BEGIN
   v_clean_code := UPPER(TRIM(p_student_code));
   v_code_identifier := 'code:' || v_clean_code;
 
-  -- 1. ATOMIC UPSERT CẢ 2 IDENTIFIERS VÀO TABLE ĐỂ ĐẢM BẢO DÒNG LUÔN LÔN TỒN TẠI TRƯỚC KHÓA
   IF v_code_identifier IS NOT NULL AND v_code_identifier <> '' THEN
     INSERT INTO app_private.login_rate_limits (identifier, failed_attempts, last_attempt_at)
     VALUES (v_code_identifier, 0, NOW())
@@ -262,7 +266,6 @@ BEGIN
     ON CONFLICT (identifier) DO UPDATE SET last_attempt_at = NOW();
   END IF;
 
-  -- 2. KHÓA DÒNG NGUYÊN TỬ THEO THỨ TỰ SẮP XẾP CỐ ĐỊNH (ORDER BY identifier ASC FOR UPDATE) TRÁNH DEADLOCK
   FOR v_rate_rec IN 
     SELECT * FROM app_private.login_rate_limits
     WHERE identifier IN (v_code_identifier, p_ip_identifier)
@@ -274,17 +277,14 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Nếu 1 trong 2 identifier bị khóa -> Trả về lỗi BLOCKED ngay lập tức
   IF v_is_blocked THEN
     RETURN jsonb_build_object('success', false, 'reason', 'BLOCKED');
   END IF;
 
-  -- 3. TRA CỨU HỌC SINH TỪ SCHEMAS PUBLIC BẰNG SECURITY DEFINER
   SELECT id, email INTO v_student_id, v_email
   FROM public.profiles
   WHERE student_code = v_clean_code AND role = 'student';
 
-  -- 4. XÁC MINH MÃ PIN HASH TRONG SCHEMAS APP_PRIVATE
   IF v_student_id IS NOT NULL THEN
     SELECT pin_hash INTO v_pin_hash
     FROM app_private.student_login_credentials
@@ -295,9 +295,7 @@ BEGIN
     END IF;
   END IF;
 
-  -- 5. CẬP NHẬT TRẠNG THÁI RATE LIMIT CHO CẢ CODE VÀ IP IDENTIFIERS
   IF v_is_valid THEN
-    -- Đúng PIN -> Reset số lần thử sai của code_identifier về 0, giảm IP attempts
     UPDATE app_private.login_rate_limits 
     SET failed_attempts = 0, blocked_until = NULL, last_attempt_at = NOW()
     WHERE identifier = v_code_identifier;
@@ -314,12 +312,10 @@ BEGIN
       'email', v_email
     );
   ELSE
-    -- Sai PIN HOẶC MÃ CHƯA TỒN TẠI -> Tăng số lần thử sai của cả Code và IP và áp dụng Exponential Backoff
     UPDATE app_private.login_rate_limits 
     SET failed_attempts = failed_attempts + 1, last_attempt_at = NOW()
     WHERE identifier IN (v_code_identifier, p_ip_identifier);
 
-    -- Khóa 5 phút nếu sai >= 5 lần; khóa 30 phút nếu sai >= 10 lần
     UPDATE app_private.login_rate_limits 
     SET blocked_until = NOW() + INTERVAL '30 minutes'
     WHERE identifier IN (v_code_identifier, p_ip_identifier) AND failed_attempts >= 10;
@@ -333,11 +329,9 @@ BEGIN
 END;
 $$;
 
--- CHỈ GRANT EXECUTE CHO SERVICE_ROLE (EDGE FUNCTION)
 REVOKE ALL ON FUNCTION public.verify_student_pin_rate_limited(TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.verify_student_pin_rate_limited(TEXT, TEXT, TEXT) TO service_role;
 
--- 7. KIỂM TRA & TẠO CHÍNH THỨC UNIQUE INDEX TRÊN PUBLIC.PROFILES.STUDENT_CODE
 DO $$
 DECLARE
   v_duplicate_count INT;
@@ -350,7 +344,7 @@ BEGIN
   ) dups;
 
   IF v_duplicate_count > 0 THEN
-    RAISE EXCEPTION 'MIGRATION STOPPED: Phát hiện % mã student_code bị trùng trong database! Cần làm sạch trước khi áp UNIQUE INDEX.', v_duplicate_count;
+    RAISE EXCEPTION 'MIGRATION STOPPED: Phát hiện % mã student_code bị trùng trong database!', v_duplicate_count;
   END IF;
 END $$;
 
