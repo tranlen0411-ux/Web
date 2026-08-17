@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS app_private.batch_student_rows (
 
 REVOKE ALL ON TABLE app_private.batch_student_rows FROM PUBLIC, anon, authenticated;
 
+-- 2.1 BẢNG LƯU TRỮ CREDENTIALS MẬT KHẨU PIN HỌC SINH
+CREATE TABLE IF NOT EXISTS app_private.student_login_credentials (
+  student_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+  pin_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+REVOKE ALL ON TABLE app_private.student_login_credentials FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.set_student_pin_service(p_student_id UUID, p_pin TEXT)
 RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
