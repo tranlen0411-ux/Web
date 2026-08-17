@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { 
-  Gamepad2, 
-  Trophy, 
-  User, 
-  LogOut, 
-  BookOpen, 
-  Sparkles, 
-  ShieldCheck, 
+import {
+  Gamepad2,
+  Trophy,
+  User,
+  LogOut,
+  BookOpen,
+  Sparkles,
+  ShieldCheck,
   GraduationCap,
   ChevronDown,
   Lock,
@@ -149,14 +149,14 @@ export const Navbar = () => {
   const searchParams = new URLSearchParams(location.search);
   const currentTab = searchParams.get('tab');
 
-  const isGamesActive = 
+  const isGamesActive =
     (role === 'admin' && location.pathname === '/admin' && currentTab === 'games') ||
     (role === 'teacher' && location.pathname === '/teacher' && currentTab === 'games') ||
     (role === 'student' && location.pathname === '/student' && (currentTab === 'games' || !currentTab));
 
-  const isDashboardActive = 
-    (role === 'admin' && location.pathname === '/admin' && currentTab === 'users') ||
-    (role === 'teacher' && location.pathname === '/teacher' && currentTab === 'classes') ||
+  const isDashboardActive =
+    (role === 'admin' && location.pathname === '/admin' && (currentTab === 'users' || currentTab === 'exercises' || currentTab === 'academic-assignments')) ||
+    (role === 'teacher' && location.pathname === '/teacher' && (currentTab === 'classes' || currentTab === 'exercises' || currentTab === 'academic-assignments')) ||
     (role === 'student' && location.pathname === '/student' && currentTab === 'learning');
 
   const isLeaderboardActive = location.pathname === '/leaderboard';
@@ -165,10 +165,10 @@ export const Navbar = () => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-4 border-amber-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
-        
+
         {/* LOGO CÚ TIỂU HỌC HỌC VUI */}
-        <a 
-          href="/" 
+        <a
+          href="/"
           onClick={(e) => {
             e.preventDefault();
             handleGamesNavClick();
@@ -191,7 +191,7 @@ export const Navbar = () => {
         {/* ĐIỀU HƯỚNG CHÍNH MÀN HÌNH MÁY TÍNH (DESKTOP >= lg) */}
         {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Bảng Xếp Hạng ➔ Dashboard theo role ➔ Góc Tài Liệu */}
         <nav className="hidden lg:flex items-center gap-2">
-          
+
           {/* BỘ LỌC LỚP HEADER TOÀN CỤC MÁY TÍNH */}
           {user && (
             <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-2xl border-2 border-amber-200 mr-1">
@@ -221,7 +221,7 @@ export const Navbar = () => {
             onClick={handleGamesNavClick}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
               isGamesActive
-                ? 'bg-sky-500 text-white border-sky-600 shadow-sm' 
+                ? 'bg-sky-500 text-white border-sky-600 shadow-sm'
                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-sky-50 hover:text-sky-600'
             }`}
           >
@@ -233,7 +233,7 @@ export const Navbar = () => {
             onClick={() => handleNavClick('/leaderboard')}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
               isLeaderboardActive
-                ? 'bg-amber-500 text-white border-amber-600 shadow-sm' 
+                ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-600'
             }`}
           >

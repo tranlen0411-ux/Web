@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { 
-  ShieldCheck, 
-  Users, 
-  Gamepad2, 
-  GraduationCap, 
-  Plus, 
-  Trash2, 
-  Edit2, 
-  Lock, 
+import {
+  ShieldCheck,
+  Users,
+  Gamepad2,
+  GraduationCap,
+  Plus,
+  Trash2,
+  Edit2,
+  Lock,
   UserPlus,
   Info,
   KeyRound
@@ -29,16 +29,16 @@ export const AdminDashboard = () => {
   const { triggerSound } = useSound();
   const [searchParams] = useSearchParams();
 
-  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=exercises
+  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=academic-assignments
   const tabParam = searchParams.get('tab');
   const [activeAdminTab, setActiveAdminTab] = useState(
-    tabParam === 'exercises' ? 'exercises' : tabParam === 'games' ? 'games' : 'users'
+    (tabParam === 'exercises' || tabParam === 'academic-assignments') ? 'academic-assignments' : tabParam === 'games' ? 'games' : 'users'
   );
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'users' || tab === 'exercises') {
-      setActiveAdminTab(tab);
+    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments') {
+      setActiveAdminTab(tab === 'exercises' ? 'academic-assignments' : tab);
     }
   }, [searchParams]);
 
@@ -106,7 +106,7 @@ export const AdminDashboard = () => {
         .from('games')
         .select('*')
         .order('created_at', { ascending: false });
-      
+
       setGamesList(gData || []);
     } catch (err) {
       console.error('Fetch admin data error:', err);
@@ -117,7 +117,7 @@ export const AdminDashboard = () => {
 
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
-    
+
     triggerSound('click');
     try {
       const { data: rpcRes, error: rpcErr } = await supabase.rpc('delete_game_safely', { p_game_id: gameId });
@@ -139,7 +139,7 @@ export const AdminDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
+
       {/* TOAST FEEDBACK NOTIFICATION */}
       {toastMsg && (
         <div className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">

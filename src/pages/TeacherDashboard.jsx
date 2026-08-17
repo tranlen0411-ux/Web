@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { 
-  GraduationCap, 
-  Plus, 
-  Users, 
-  Gamepad2, 
-  Award, 
-  BarChart2, 
+import {
+  GraduationCap,
+  Plus,
+  Users,
+  Gamepad2,
+  Award,
+  BarChart2,
   BookOpen,
   Info,
   ShieldCheck,
@@ -36,7 +36,7 @@ export const TeacherDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
-    if (tabParam === 'exercises') return 'exercises';
+    if (tabParam === 'academic-assignments' || tabParam === 'exercises') return 'academic-assignments';
     if (tabParam === 'games') return 'games';
     if (tabParam === 'classes') return 'classes';
     return 'classes';
@@ -47,6 +47,8 @@ export const TeacherDashboard = () => {
     const tab = searchParams.get('tab');
     if (tab === 'games' || tab === 'classes') {
       setActiveTab(tab);
+    } else if (tab === 'academic-assignments' || tab === 'exercises') {
+      setActiveTab('academic-assignments');
     } else {
       setSearchParams({ tab: 'classes' }, { replace: true });
     }
@@ -57,7 +59,7 @@ export const TeacherDashboard = () => {
   const [assignments, setAssignments] = useState([]);
   const [studentProgressList, setStudentProgressList] = useState([]);
   const [managedStudents, setManagedStudents] = useState([]);
-  
+
   const [isClassModalOpen, setIsClassModalOpen] = useState(false);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isAddGameModalOpen, setIsAddGameModalOpen] = useState(false);
@@ -76,7 +78,7 @@ export const TeacherDashboard = () => {
   const [userForPin, setUserForPin] = useState(null);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
-  
+
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -93,7 +95,7 @@ export const TeacherDashboard = () => {
         .from('classes')
         .select('*')
         .eq('teacher_id', profile.id);
-      
+
       setClasses(classData || []);
 
       const classIds = (classData || []).map(c => c.id);
@@ -139,7 +141,7 @@ export const TeacherDashboard = () => {
         .from('games')
         .select('*')
         .order('created_at', { ascending: false });
-      
+
       setGames(gameData || []);
 
       // 4. Lấy danh sách lượt giao bài của các lớp do Giáo viên này phụ trách
@@ -191,7 +193,7 @@ export const TeacherDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
+
       {/* TOAST FEEDBACK NOTIFICATION */}
       {toastMsg && (
         <div className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
@@ -264,12 +266,12 @@ export const TeacherDashboard = () => {
 
         <button
           onClick={() => {
-            setActiveTab('exercises');
+            setActiveTab('academic-assignments');
             triggerSound('click');
-            setSearchParams({ tab: 'exercises' }, { replace: true });
+            setSearchParams({ tab: 'academic-assignments' }, { replace: true });
           }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'exercises'
+            (activeTab === 'academic-assignments' || activeTab === 'exercises')
               ? 'bg-amber-500 text-white shadow-md border-b-4 border-amber-700'
               : 'text-slate-600 hover:bg-amber-50'
           }`}
@@ -278,7 +280,7 @@ export const TeacherDashboard = () => {
         </button>
       </div>
 
-      {activeTab === 'exercises' && (
+      {(activeTab === 'academic-assignments' || activeTab === 'exercises') && (
         <ExerciseListTab role="teacher" />
       )}
 
@@ -412,7 +414,7 @@ export const TeacherDashboard = () => {
             <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
               <RefreshCw className="w-6 h-6 text-amber-600" /> Danh Sách Lượt Giao Bài & Thay Trò Chơi Đã Giao ({assignments.length})
             </h3>
-            
+
             <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
               {assignments.length > 0 ? (
                 <table className="w-full text-left text-xs font-bold whitespace-nowrap">
@@ -509,7 +511,7 @@ export const TeacherDashboard = () => {
 
                 return (
                   <div key={game.id} className="bg-white p-4 rounded-3xl border-4 border-amber-200 shadow-sm flex flex-col justify-between relative group">
-                    
+
                     {/* NÚT SỬA TRÒ CHƠI NGUỒN CHO GIÁO VIÊN TẠO GAME */}
                     {isAuthor && (
                       <button
