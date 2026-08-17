@@ -1,0 +1,101 @@
+name: Bulk Students Runtime Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "CREATE_IDEMPOTENCY_AND_RATE_LIMIT.sql"
+      - "TEST_CONCURRENCY_ROW_CLAIM.sql"
+      - "supabase/functions/student-quick-login/**"
+      - "supabase/functions/admin-bulk-create-students/**"
+      - "supabase/functions/admin-reset-student-pin/**"
+      - "src/components/dashboard/ImportStudentsModal.jsx"
+      - "supabase/tests/bulk-students/**"
+      - ".github/workflows/bulk-students-runtime-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Build Frontend (Vite)
+        run: npm run build
+
+      - name: Deno Check Edge Functions
+        run: |
+          deno check supabase/functions/student-quick-login/index.ts
+          deno check supabase/functions/admin-bulk-create-students/index.ts
+          deno check supabase/functions/admin-reset-student-pin/index.ts
+
+      - name: Start Supabase Local Engine
+        run: supabase start
+
+      - name: Load Fixture SQL (Local PostgreSQL Only)
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/bulk-students/00_fixture.sql
+
+      - name: Apply Migration SQL (Local PostgreSQL Only)
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -f CREATE_IDEMPOTENCY_AND_RATE_LIMIT.sql
+
+      - name: Execute Database SQL Tests (Local PostgreSQL Only)
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/bulk-students/database_test.sql
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 \
+            -f TEST_CONCURRENCY_ROW_CLAIM.sql
+
+      - name: Prepare Local Secrets File
+        run: |
+          PEPPER_VAL="$(openssl rand -hex 32)"
+          echo "IP_HASH_PEPPER=${PEPPER_VAL}" > supabase/.env.local
+          echo "ALLOW_PRODUCTION_BULK_CREATE=true" >> supabase/.env.local
+
+      - name: Serve Edge Functions & Execute Runtime Tests
+        run: |
+          # Bắt đầu serve Edge Functions trong background trên runner ubuntu-latest local
+          supabase functions serve student-quick-login --env-file supabase/.env.local &
+          supabase functions serve admin-bulk-create-students --env-file supabase/.env.local &
+          supabase functions serve admin-reset-student-pin --env-file supabase/.env.local &
+
+          # Chờ Edge Functions gateway khởi động
+          sleep 5
+
+          # Thực thi bộ test tự động với Deno
+          deno test --allow-net --allow-env supabase/tests/bulk-students/runtime_test.ts
+
+      - name: Stop Supabase Local Engine
+        if: always()
+        run: supabase stop --no-backup
