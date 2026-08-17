@@ -75,7 +75,19 @@ async function getRealGoTrueUserToken(
   });
 
   const createData = await createRes.json();
-  const userId = createData.id || createData.user?.id;
+  let userId = createData.id || createData.user?.id;
+
+  // Fallback lấy userId từ DB nếu user đã tồn tại từ trước
+  if (!userId) {
+    const client = new Client(DB_URL);
+    await client.connect();
+    const res = await client.queryObject<{ id: string }>(
+      `SELECT id FROM public.profiles WHERE email = $1 UNION SELECT id FROM auth.users WHERE email = $1 LIMIT 1;`,
+      [email]
+    );
+    await client.end();
+    userId = res.rows[0]?.id;
+  }
 
   // 2. Cập nhật profile trong public.profiles trùng id với GoTrue User ID
   if (userId) {
@@ -679,7 +691,7 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     [classId, studentId]
   );
   
-  await new Promise((r) => setTimeout(r, 1200));
+  await new Promise((r) => setTimeout(r, 5000));
 
   const res1 = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
