@@ -43,22 +43,32 @@ serve(async (req) => {
   }
 
   try {
-    // 2. Hash IP client an toàn bằng SHA-256 + Server Pepper (KHÔNG lưu IP thô)
-    const rawClientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown_ip';
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-
-    if (!supabaseUrl || !supabaseServiceKey) {
+    // 2. LẤY CLIENT IP TỪ GATEWAY HEADER ĐÁNG TIN CẬY VÀ HASH HMAC SHA-256 VỚI SECRET IP_HASH_PEPPER
+    const ipHashPepper = Deno.env.get('IP_HASH_PEPPER') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!ipHashPepper) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Cấu hình Server Env chưa hoàn tất.' }),
+        JSON.stringify({ success: false, message: 'Cấu hình Server Env IP_HASH_PEPPER chưa hoàn tất.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const encoder = new TextEncoder();
-    const pepper = supabaseServiceKey.slice(0, 32);
-    const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(rawClientIp + pepper));
-    const ipHashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+    // Quy tắc lấy IP từ Gateway header chính thức
+    const rawClientIp = req.headers.get('x-real-ip') || 
+                        req.headers.get('cf-connecting-ip') || 
+                        req.headers.get('x-forwarded-for')?.split(',').pop()?.trim() || 
+                        'unknown_client_ip';
+
+    const textEncoder = new TextEncoder();
+    const hmacKey = await crypto.subtle.importKey(
+      'raw',
+      textEncoder.encode(ipHashPepper),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+
+    const signature = await crypto.subtle.sign('HMAC', hmacKey, textEncoder.encode(rawClientIp));
+    const ipHashHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
     const ipIdentifier = `ip:${ipHashHex}`;
 
     // 3. Đọc dữ liệu studentCode + pin
@@ -91,40 +101,23 @@ serve(async (req) => {
       );
     }
 
-    const codeIdentifier = `code:${cleanCode}`;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Cấu hình Server Env chưa hoàn tất.' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     // Khởi tạo Supabase Admin Client bằng Service Role Key
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. Tìm học sinh trong public.profiles theo student_code chính thức
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('id, email, full_name, role')
-      .eq('student_code', cleanCode)
-      .eq('role', 'student')
-      .maybeSingle();
-
-    if (!profile || !profile.email) {
-      return new Response(
-        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // 5. Kiểm tra Auth User hiện có trong auth.users bằng Admin API
-    const { data: authUserData, error: authUserErr } = await supabaseAdmin.auth.admin.getUserById(profile.id);
-    if (authUserErr || !authUserData?.user || authUserData.user.id !== profile.id) {
-      return new Response(
-        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // 6. Xác minh PIN bằng RPC verify_student_pin_rate_limited trong CSDL
+    // 4. XÁC MINH MÃ HỌC SINH + PIN HASH BÊN TRONG RPC SECURITY DEFINER
     const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin_rate_limited', {
-      p_student_id: profile.id,
+      p_student_code: cleanCode,
       p_pin: cleanPin,
-      p_code_identifier: codeIdentifier,
       p_ip_identifier: ipIdentifier,
     });
 
@@ -142,17 +135,29 @@ serve(async (req) => {
       );
     }
 
-    if (rpcRes.success !== true) {
+    if (rpcRes.success !== true || !rpcRes.student_id || !rpcRes.email) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // 7. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần
+    const studentId = rpcRes.student_id;
+    const studentEmail = rpcRes.email;
+
+    // 5. Kiểm tra Auth User trong auth.users bằng Admin API
+    const { data: authUserData, error: authUserErr } = await supabaseAdmin.auth.admin.getUserById(studentId);
+    if (authUserErr || !authUserData?.user || authUserData.user.id !== studentId) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Mã học sinh hoặc PIN không hợp lệ.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
-      email: profile.email,
+      email: studentEmail,
     });
 
     if (linkErr || !linkData?.properties?.hashed_token) {
@@ -164,7 +169,7 @@ serve(async (req) => {
 
     const hashedToken = linkData.properties.hashed_token;
 
-    // 8. Phản hồi thành công CHỈ TRẢ VỀ token_hash
+    // 7. Phản hồi thành công CHỈ TRẢ VỀ token_hash với header Cache-Control no-store
     return new Response(
       JSON.stringify({
         success: true,

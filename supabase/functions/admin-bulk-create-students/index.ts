@@ -12,7 +12,7 @@ const STRICT_EXACT_ORIGINS = [
 
 const getStrictCorsHeaders = (origin: string | null) => {
   if (!origin || !STRICT_EXACT_ORIGINS.includes(origin)) {
-    return null; // Từ chối origin không nằm trong whitelist
+    return null; // Từ chối origin không thuộc whitelist
   }
 
   return {
@@ -99,7 +99,7 @@ serve(async (req) => {
     }
 
     // =========================================================================
-    // 3. ĐỌC BATCH VÀ XỬ LÝ IDEMPOTENCY KEY BỀN VỮNG TRONG DATABASE
+    // 3. ĐỌC BATCH VÀ XỬ LÝ IDEMPOTENCY CÓ CLAIM TOKEN & LEASE TRONG DATABASE
     // =========================================================================
     let body: any = {};
     try {
@@ -127,8 +127,8 @@ serve(async (req) => {
       );
     }
 
-    // Chuẩn hóa fingerprint payload dựa trên classId và họ tên học sinh
     const payloadFingerprint = `${classId}_${students.map((s: any) => (s.fullName || s.full_name || '').trim()).sort().join('|')}`;
+    let claimToken: string | null = null;
 
     // Kiểm tra Idempotency Key bằng RPC claim_batch_idempotency trong Database
     if (idempotencyKey && typeof idempotencyKey === 'string') {
@@ -144,16 +144,18 @@ serve(async (req) => {
             { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         } else if (claimRes.status === 'COMPLETED') {
-          // Trả về kết quả cached từ DB (đã sanitize không có PIN)
+          // Trả về kết quả cached từ DB (đã sanitize xóa bỏ PIN)
           return new Response(
             JSON.stringify(claimRes.response_data),
             { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
-        } else if (claimRes.status === 'PROCESSING') {
+        } else if (claimRes.status === 'PROCESSING_LEASE_ACTIVE') {
           return new Response(
             JSON.stringify({ success: false, message: claimRes.message }),
             { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
+        } else if (claimRes.claim_token) {
+          claimToken = claimRes.claim_token;
         }
       }
     }
@@ -361,10 +363,12 @@ serve(async (req) => {
         results: dryResults,
       };
 
-      if (idempotencyKey) {
+      if (idempotencyKey && claimToken) {
         await supabaseCaller.rpc('complete_batch_idempotency', {
           p_idempotency_key: idempotencyKey,
+          p_claim_token: claimToken,
           p_response_data: dryRunResponse,
+          p_is_success: true,
         });
       }
 
@@ -390,8 +394,19 @@ serve(async (req) => {
     let createdCount = 0;
     let assignedExistingCount = 0;
     let failedCount = 0;
+    let processedIndex = 0;
 
     for (const item of cleanedStudentsInput) {
+      processedIndex++;
+
+      // Heartbeat gia hạn lease idempotency mỗi khi xong 10 học sinh
+      if (processedIndex % 10 === 0 && idempotencyKey && claimToken) {
+        await supabaseCaller.rpc('heartbeat_batch_idempotency', {
+          p_idempotency_key: idempotencyKey,
+          p_claim_token: claimToken,
+        });
+      }
+
       if (item.isDuplicateInBatch) {
         finalResults.push({
           stt: item.stt,
@@ -530,7 +545,6 @@ serve(async (req) => {
           });
 
         if (profileErr) {
-          // Bắt mã lỗi Unique Constraint Violation 23505 trên profiles.student_code
           if (profileErr.code === '23505' && attempt < 5) {
             const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
             if (delAuthErr) console.error(`Cleanup auth user error (attempt ${attempt}):`, delAuthErr.message, 'User ID:', newlyCreatedUserId);
@@ -647,7 +661,7 @@ serve(async (req) => {
       results: finalResults,
     };
 
-    if (idempotencyKey) {
+    if (idempotencyKey && claimToken) {
       const sanitizedResponse = {
         ...prodResponse,
         results: sanitizedResultsForCache,
@@ -655,7 +669,9 @@ serve(async (req) => {
 
       await supabaseCaller.rpc('complete_batch_idempotency', {
         p_idempotency_key: idempotencyKey,
+        p_claim_token: claimToken,
         p_response_data: sanitizedResponse,
+        p_is_success: true,
       });
     }
 
