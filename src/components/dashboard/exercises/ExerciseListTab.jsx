@@ -217,7 +217,14 @@ export const ExerciseListTab = ({ role = 'student' }) => {
       }
 
       const assignedClassNames = rpcRes.assigned_classes || [];
-      showToast(`🎉 Đã xuất bản và giao bài cho lớp [${assignedClassNames.join(', ')}] thành công!`);
+      const failedClassNames = rpcRes.failed_classes || [];
+
+      let toastNotice = `🎉 Đã xuất bản và giao bài cho lớp [${assignedClassNames.join(', ')}] thành công!`;
+      if (failedClassNames.length > 0) {
+        toastNotice += ` (⚠️ Lớp chưa được giao do không phụ trách: [${failedClassNames.join(', ')}])`;
+      }
+
+      showToast(toastNotice);
       setAssignModalExercise(null);
       fetchData();
 

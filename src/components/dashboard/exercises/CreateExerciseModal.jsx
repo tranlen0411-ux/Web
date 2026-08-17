@@ -403,6 +403,10 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         }
 
         assignedClassNames = rpcRes.assigned_classes || [];
+        const failedClassNames = rpcRes.failed_classes || [];
+        if (failedClassNames.length > 0) {
+          assignedClassNames = [...assignedClassNames, `⚠️ Lớp chưa được giao do không phụ trách: ${failedClassNames.join(', ')}`];
+        }
       }
 
       // Xác định thông báo thành công chuẩn xác theo nghiệp vụ
