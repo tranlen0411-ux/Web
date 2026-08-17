@@ -1,9 +1,10 @@
 -- ============================================================================
 -- SCRIPT MIGRATION TẠO BẢNG PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS HỢP CHUẨN
--- DÙNG CHẠY TRÊN SUPABASE SQL EDITOR ĐỂ SỬA DẦU VẾT SCHEMA CACHE LỖI PGRST205
+-- ĐÃ KHẮC PHỤC TRIỆT ĐỂ LỖI RECURSIVE RLS POLICY VÀ CHUẨN HÓA PRIVILEGES
 -- ============================================================================
 
 BEGIN;
+SET LOCAL lock_timeout = '10s';
 
 -- 1. TẠO BẢNG PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS
 CREATE TABLE IF NOT EXISTS public.academic_exercise_assignments (
@@ -21,9 +22,11 @@ CREATE TABLE IF NOT EXISTS public.academic_exercise_assignments (
 CREATE INDEX IF NOT EXISTS idx_academic_assignments_exercise ON public.academic_exercise_assignments(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_academic_assignments_class ON public.academic_exercise_assignments(class_id);
 
--- 3. CẤP QUYỀN TRUY CẬP CHO BẢNG PUBLIC
+-- 3. CẤP QUYỀN TRUY CẬP THEO QUY TẮC PHÂN QUYỀN TỐI THIỂU (LEAST PRIVILEGE)
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
-GRANT ALL ON public.academic_exercise_assignments TO anon, authenticated, service_role, postgres;
+GRANT SELECT ON public.academic_exercise_assignments TO anon, authenticated;
+GRANT INSERT, UPDATE, DELETE ON public.academic_exercise_assignments TO authenticated;
+GRANT ALL ON public.academic_exercise_assignments TO service_role, postgres;
 
 -- 4. CHUYỂN DỮ LIỆU CÁC BÀI ĐÃ XUẤT BẢN HIỆN CÓ SANG BẢNG GIAO BÀI (KHÔNG MẤT DỮ LIỆU CŨ)
 INSERT INTO public.academic_exercise_assignments (exercise_id, class_id, assigned_by, assigned_at, due_date)
@@ -39,7 +42,7 @@ WHERE e.class_id IS NOT NULL
   AND e.status = 'published'
 ON CONFLICT (exercise_id, class_id) DO NOTHING;
 
--- 5. BẬT RLS VÀ CÀI ĐẶT POLICY AN TOÀN TRÊN ACADEMIC_EXERCISE_ASSIGNMENTS
+-- 5. BẬT RLS VÀ CÀI ĐẶT POLICY AN TOÀN KHÔNG ĐỆ QUY VÒNG (NO RECURSIVE LOOP)
 ALTER TABLE public.academic_exercise_assignments ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Academic assignments select policy" ON public.academic_exercise_assignments;
@@ -48,12 +51,12 @@ DROP POLICY IF EXISTS "Academic assignments delete policy" ON public.academic_ex
 
 -- SELECT POLICY:
 -- Admin: xem tất cả.
--- Teacher: xem các bài do mình tạo hoặc giao cho lớp mình quản lý.
+-- Teacher: xem các bài do mình trực tiếp giao (assigned_by) hoặc giao cho lớp do mình phụ trách (classes.teacher_id).
 -- Student: xem bài giao cho các lớp mình gia nhập trong class_members.
 CREATE POLICY "Academic assignments select policy" ON public.academic_exercise_assignments
 FOR SELECT USING (
   EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR EXISTS (SELECT 1 FROM public.academic_exercises e WHERE e.id = exercise_id AND e.teacher_id = auth.uid())
+  OR assigned_by = auth.uid()
   OR EXISTS (SELECT 1 FROM public.classes c WHERE c.id = class_id AND c.teacher_id = auth.uid())
   OR EXISTS (
     SELECT 1 FROM public.class_members cm 
@@ -78,6 +81,7 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "Academic assignments delete policy" ON public.academic_exercise_assignments
 FOR DELETE USING (
   EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
+  OR assigned_by = auth.uid()
   OR EXISTS (
     SELECT 1 FROM public.classes c 
     WHERE c.id = class_id AND c.teacher_id = auth.uid()
@@ -137,7 +141,7 @@ FOR SELECT USING (
   )
 );
 
--- 8. RPC DEFINATION: GIAO BÀI TẬP CHO NHIỀU LỚP
+-- 8. RPC DEFINITION: GIAO BÀI TẬP CHO NHIỀU LỚP ATOMIC
 CREATE OR REPLACE FUNCTION public.assign_exercise_to_classes(
   p_exercise_id UUID,
   p_class_ids UUID[]
