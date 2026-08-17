@@ -640,6 +640,7 @@ Deno.test("28. Rollback Fault Injection - Giả lập lỗi profile tự động
       students: [{ stt: 1, fullName: "Rollback Test Student", studentCode: "HS212-ROLLBACK" }],
     }),
   });
+  await res.json();
 
   const client = new Client(DB_URL);
   await client.connect();
