@@ -89,7 +89,6 @@ serve(async (req) => {
       );
     }
 
-    const verifiedAdminUserId = caller.id;
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     const { data: callerProfile, error: profileCheckErr } = await supabaseAdmin
