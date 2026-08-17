@@ -2,7 +2,7 @@
 -- SCRIPT THỰC THI DỮ LIỆU: NHẬP DANH SÁCH LỚP 2.12 VÀ 34 HỌC SINH VÀO SUPABASE
 -- LƯU Ý: ĐÂY LÀ SCRIPT THỰC THI CÓ GHI DỮ LIỆU HỢP LỆ (KHÔNG PHẢI PREFLIGHT THUẦN TÚY)
 -- TỰ ĐỘNG ROLLBACK TOÀN BỘ TRANSACTION NẾU GIÁO VIÊN HOẶC LỚP HỌC KHÔNG HỢP LỆ
--- CHỈ GÁN CÁC HỌC SINH ĐÃ CÓ ĐÚNG 1 PROFILE VÀ CHƯA THUỘC LỚP NÀO VÀO LỚP 2.12
+-- ĐÃ KHẮC PHỤC TRIỆT ĐỂ LỖI ERROR 42883: FUNCTION MAX(UUID) DOES NOT EXIST
 -- ============================================================================
 
 BEGIN;
@@ -97,18 +97,29 @@ BEGIN
 
   -- =========================================================================
   -- BƯỚC I: XÁC ĐỊNH DUY NHẤT GIÁO VIÊN "Lã Nguyễn Diễm Hương"
+  -- (KHÔNG DÙNG MAX(uuid) TRÁNH LỖI ERROR 42883 ON POSTGRES)
   -- =========================================================================
-  SELECT COUNT(*), MAX(id), MAX(full_name), MAX(email)
-  INTO v_teacher_count, v_teacher_id, v_teacher_full_name, v_teacher_email
+  -- Bước I.A: Đếm số lượng Giáo viên khớp tên
+  SELECT COUNT(*)
+  INTO v_teacher_count
   FROM public.profiles
   WHERE role = 'teacher'
     AND LOWER(TRIM(regexp_replace(full_name, '\s+', ' ', 'g'))) = v_teacher_name_norm;
 
+  -- Kiểm tra số lượng kết quả
   IF v_teacher_count = 0 THEN
     RAISE EXCEPTION 'TRANSACTION ROLLBACK: Không tìm thấy hồ sơ Giáo viên "Lã Nguyễn Diễm Hương" (role = teacher) trong bảng public.profiles.';
   ELSIF v_teacher_count > 1 THEN
     RAISE EXCEPTION 'TRANSACTION ROLLBACK: Phát hiện % hồ sơ Giáo viên trùng tên "Lã Nguyễn Diễm Hương". Cần xác minh ID thủ công trước khi gán lớp.', v_teacher_count;
   END IF;
+
+  -- Bước I.B: Chỉ khi v_teacher_count = 1 mới SELECT chi tiết UUID
+  SELECT id, full_name, email
+  INTO v_teacher_id, v_teacher_full_name, v_teacher_email
+  FROM public.profiles
+  WHERE role = 'teacher'
+    AND LOWER(TRIM(regexp_replace(full_name, '\s+', ' ', 'g'))) = v_teacher_name_norm
+  LIMIT 1;
 
   RAISE NOTICE 'XÁC NHẬN GIÁO VIÊN DUY NHẤT: ID=%, Name="%", Email=%', v_teacher_id, v_teacher_full_name, v_teacher_email;
 
@@ -127,7 +138,8 @@ BEGIN
     SELECT id, teacher_id INTO v_class_id, v_existing_teacher_id
     FROM public.classes
     WHERE LOWER(TRIM(regexp_replace(name, '\s+', ' ', 'g'))) = v_class_name_norm
-      AND grade_level = v_grade_level;
+      AND grade_level = v_grade_level
+    LIMIT 1;
 
     -- Kiểm tra Giáo viên hiện tại của Lớp 2.12
     IF v_existing_teacher_id IS NULL THEN
@@ -168,15 +180,16 @@ BEGIN
 
   -- =========================================================================
   -- BƯỚC III: ĐỐI CHIẾU KIỂM TRA TOÀN BỘ BẢN GHI CLASS_MEMBERS CHO 34 HỌC SINH
+  -- (KHÔNG DÙNG MAX(uuid) TRÁNH LỖI ERROR 42883 ON POSTGRES)
   -- =========================================================================
   FOREACH v_name IN ARRAY v_student_names
   LOOP
     v_idx := v_idx + 1;
     v_norm_name := LOWER(TRIM(regexp_replace(v_name, '\s+', ' ', 'g')));
 
-    -- Tìm số lượng profile học sinh trùng tên chuẩn hóa
-    SELECT COUNT(*), MAX(id)
-    INTO v_matching_students_count, v_matched_id
+    -- Bước III.A: Đếm số lượng profile học sinh trùng tên chuẩn hóa
+    SELECT COUNT(*)
+    INTO v_matching_students_count
     FROM public.profiles
     WHERE role = 'student'
       AND LOWER(TRIM(regexp_replace(full_name, '\s+', ' ', 'g'))) = v_norm_name;
@@ -194,7 +207,15 @@ BEGIN
       VALUES (v_idx, v_name, 'TRÙNG_TÊN_NỀN_TẢNG', NULL, '-', 'Phát hiện ' || v_matching_students_count || ' tài khoản trùng tên, cần xác minh UUID');
 
     ELSE
-      -- TRƯỜNG HỢP 3: Khớp duy nhất 1 profile -> Kiểm tra TOÀN BỘ bản ghi class_members
+      -- TRƯỜNG HỢP 3: Khớp duy nhất 1 profile -> SELECT UUID độc nhất
+      SELECT id
+      INTO v_matched_id
+      FROM public.profiles
+      WHERE role = 'student'
+        AND LOWER(TRIM(regexp_replace(full_name, '\s+', ' ', 'g'))) = v_norm_name
+      LIMIT 1;
+
+      -- Kiểm tra TOÀN BỘ bản ghi class_members của v_matched_id
       SELECT 
         ARRAY_AGG(c.name),
         BOOL_OR(cm.class_id = v_class_id),
