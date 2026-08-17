@@ -38,6 +38,24 @@ const OFFICIAL_CLASS_212_STUDENTS = [
   "Đặng Yến Vy"
 ];
 
+const parseApiResponse = async (response) => {
+  const rawText = await response.text();
+
+  if (!rawText || rawText.trim() === '') {
+    throw new Error(
+      `Server trả về phản hồi rỗng (HTTP ${response.status}).`
+    );
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    throw new Error(
+      `Server trả về dữ liệu không hợp lệ (HTTP ${response.status}).`
+    );
+  }
+};
+
 export function ImportStudentsModal({ isOpen, onClose }) {
   const bulkCreateEnabled = import.meta.env.VITE_ENABLE_BULK_CREATE === 'true';
   const [step, setStep] = useState(1);
