@@ -12,7 +12,8 @@ import {
   UserPlus,
   Info,
   KeyRound,
-  FileSpreadsheet
+  FileSpreadsheet,
+  UserCheck
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -22,6 +23,7 @@ import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
+import { AssignTeacherModal } from '../components/dashboard/AssignTeacherModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
@@ -65,6 +67,7 @@ export const AdminDashboard = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
   const [isImportStudentsOpen, setIsImportStudentsOpen] = useState(false);
+  const [isAssignTeacherOpen, setIsAssignTeacherOpen] = useState(false);
 
   useEffect(() => {
     fetchAdminData();
@@ -240,6 +243,16 @@ export const AdminDashboard = () => {
                 className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
               >
                 <FileSpreadsheet className="w-4 h-4 text-amber-300" /> 📥 Nhập Danh Sách Học Sinh
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsAssignTeacherOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <UserCheck className="w-4 h-4 text-sky-200" /> 👩‍🏫 Phân Công Giáo Viên
               </button>
 
               <button
@@ -515,6 +528,12 @@ export const AdminDashboard = () => {
         isOpen={isImportStudentsOpen}
         onClose={() => setIsImportStudentsOpen(false)}
         onImportCompleted={() => fetchAdminData()}
+      />
+
+      <AssignTeacherModal
+        isOpen={isAssignTeacherOpen}
+        onClose={() => setIsAssignTeacherOpen(false)}
+        onSaved={() => fetchAdminData()}
       />
 
     </div>
