@@ -10,13 +10,18 @@ DO $$
 DECLARE
   v_rule TEXT;
 BEGIN
-  SELECT rc.delete_rule INTO v_rule
+  SELECT UPPER(rc.delete_rule) INTO v_rule
   FROM information_schema.table_constraints AS tc
-  JOIN information_schema.referential_constraints AS rc ON tc.constraint_name = rc.constraint_name
-  WHERE tc.table_schema = 'app_private' AND tc.table_name = 'student_login_credentials';
+  JOIN information_schema.referential_constraints AS rc 
+    ON tc.constraint_name = rc.constraint_name 
+   AND tc.constraint_schema = rc.constraint_schema
+  WHERE tc.constraint_type = 'FOREIGN KEY'
+    AND tc.table_schema = 'app_private' 
+    AND tc.table_name = 'student_login_credentials'
+  LIMIT 1;
 
   IF v_rule IS DISTINCT FROM 'CASCADE' THEN
-    RAISE EXCEPTION 'DATABASE TEST FAILED: student_login_credentials.student_id thiếu ON DELETE CASCADE!';
+    RAISE EXCEPTION 'DATABASE TEST FAILED: student_login_credentials.student_id thiếu ON DELETE CASCADE (đọc được: %)!', v_rule;
   END IF;
   RAISE NOTICE 'TEST PASS: student_login_credentials.student_id có ON DELETE CASCADE.';
 END $$;
@@ -26,14 +31,22 @@ DO $$
 DECLARE
   v_rule TEXT;
 BEGIN
-  SELECT rc.delete_rule INTO v_rule
+  SELECT UPPER(rc.delete_rule) INTO v_rule
   FROM information_schema.table_constraints AS tc
-  JOIN information_schema.referential_constraints AS rc ON tc.constraint_name = rc.constraint_name
-  JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name
-  WHERE tc.table_schema = 'public' AND tc.table_name = 'class_members' AND kcu.column_name = 'student_id';
+  JOIN information_schema.referential_constraints AS rc 
+    ON tc.constraint_name = rc.constraint_name 
+   AND tc.constraint_schema = rc.constraint_schema
+  JOIN information_schema.key_column_usage AS kcu 
+    ON tc.constraint_name = kcu.constraint_name 
+   AND tc.constraint_schema = kcu.constraint_schema
+  WHERE tc.constraint_type = 'FOREIGN KEY'
+    AND tc.table_schema = 'public' 
+    AND tc.table_name = 'class_members' 
+    AND kcu.column_name = 'student_id'
+  LIMIT 1;
 
   IF v_rule IS DISTINCT FROM 'CASCADE' THEN
-    RAISE EXCEPTION 'DATABASE TEST FAILED: class_members.student_id thiếu ON DELETE CASCADE!';
+    RAISE EXCEPTION 'DATABASE TEST FAILED: class_members.student_id thiếu ON DELETE CASCADE (đọc được: %)!', v_rule;
   END IF;
   RAISE NOTICE 'TEST PASS: class_members.student_id có ON DELETE CASCADE.';
 END $$;
@@ -61,7 +74,9 @@ DECLARE
 BEGIN
   SELECT EXISTS (
     SELECT 1 FROM information_schema.routine_privileges
-    WHERE routine_schema = 'public' AND routine_name = 'set_student_pin' AND grantee IN ('PUBLIC', 'anon', 'authenticated')
+    WHERE routine_schema = 'public' 
+      AND routine_name = 'set_student_pin' 
+      AND grantee IN ('PUBLIC', 'anon', 'authenticated')
   ) INTO v_anon_grant;
 
   IF v_anon_grant THEN
