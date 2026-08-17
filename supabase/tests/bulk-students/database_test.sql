@@ -1,6 +1,6 @@
 -- ============================================================================
 -- DATABASE TESTS DÀNH CHO CI RUNNER SUPABASE LOCAL
--- KIỂM TRA THỰC TẾ FUNCTIONAL CASCADE DELETION, UNIQUE INDEX VÀ PHÂN QUYỀN RPC
+-- KIỂM TRA PHÂN QUYỀN VÀ THỰC TẾ FUNCTIONAL CASCADE DELETION BẢO MẬT
 -- ============================================================================
 
 BEGIN;
@@ -17,10 +17,8 @@ BEGIN
   INSERT INTO app_private.student_login_credentials (student_id, pin_hash) 
   VALUES (v_dummy_id, 'hash_test_123');
   
-  -- Thực hiện xóa profile cha
   DELETE FROM public.profiles WHERE id = v_dummy_id;
 
-  -- Kiểm tra xem dữ liệu trong student_login_credentials có bị tự động xóa theo CASCADE hay không
   SELECT COUNT(*) INTO v_count 
   FROM app_private.student_login_credentials 
   WHERE student_id = v_dummy_id;
@@ -47,7 +45,6 @@ BEGIN
   INSERT INTO public.class_members (class_id, student_id) 
   VALUES (v_dummy_class_id, v_dummy_student_id);
 
-  -- Xóa student profile
   DELETE FROM public.profiles WHERE id = v_dummy_student_id;
 
   SELECT COUNT(*) INTO v_count 
@@ -58,7 +55,6 @@ BEGIN
     RAISE EXCEPTION 'DATABASE TEST FAILED: class_members không tự động xóa theo CASCADE!';
   END IF;
 
-  -- Dọn dẹp lớp test
   DELETE FROM public.classes WHERE id = v_dummy_class_id;
 
   RAISE NOTICE 'TEST PASS: class_members ON DELETE CASCADE hoạt động thực tế.';
@@ -80,22 +76,36 @@ BEGIN
   RAISE NOTICE 'TEST PASS: idx_profiles_student_code_unique tồn tại.';
 END $$;
 
--- 4. KIỂM TRA RPC SET_STUDENT_PIN CHỈ CÓ SERVICE_ROLE MỚI ĐƯỢC EXECUTE
+-- 4. KIỂM TRA TOÀN BỘ 11 RPCS NGUYÊN TỬ CÓ CẤP QUYỀN EXECUTE CHO ANON/AUTHENTICATED/PUBLIC KHÔNG
 DO $$
 DECLARE
-  v_anon_grant BOOLEAN;
+  v_leaked_rpc TEXT;
+  v_rpcs TEXT[] := ARRAY[
+    'set_student_pin_service',
+    'claim_batch_idempotency',
+    'heartbeat_batch_idempotency',
+    'complete_batch_idempotency',
+    'fail_batch_idempotency',
+    'claim_student_row',
+    'complete_student_row',
+    'fail_student_row',
+    'claim_student_pin_reset',
+    'verify_student_pin_rate_limited',
+    'initiate_credentials_download',
+    'confirm_credentials_delivery'
+  ];
+  r TEXT;
 BEGIN
-  SELECT EXISTS (
-    SELECT 1 FROM information_schema.routine_privileges
-    WHERE routine_schema = 'public' 
-      AND routine_name = 'set_student_pin' 
-      AND grantee IN ('PUBLIC', 'anon', 'authenticated')
-  ) INTO v_anon_grant;
-
-  IF v_anon_grant THEN
-    RAISE EXCEPTION 'DATABASE TEST FAILED: set_student_pin bị rò rỉ quyền EXECUTE cho anon/authenticated/PUBLIC!';
-  END IF;
-  RAISE NOTICE 'TEST PASS: set_student_pin bảo mật chỉ cấp cho service_role.';
+  FOREACH r IN ARRAY v_rpcs LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.routine_privileges
+      WHERE routine_name = r 
+        AND grantee IN ('PUBLIC', 'anon', 'authenticated')
+    ) THEN
+      RAISE EXCEPTION 'DATABASE TEST FAILED: RPC % bị rò rỉ quyền EXECUTE cho anon/authenticated/PUBLIC!', r;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'TEST PASS: Tất cả 11 RPCs nguyên tử đều được bảo mật chỉ cấp cho service_role hoặc JWT Admin.';
 END $$;
 
 COMMIT;

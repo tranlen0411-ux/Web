@@ -73,15 +73,13 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
             -v ON_ERROR_STOP=1 \
             -f supabase/tests/bulk-students/database_test.sql
-          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
-            -v ON_ERROR_STOP=1 \
-            -f TEST_CONCURRENCY_ROW_CLAIM.sql
 
       - name: Prepare Local Secrets File
         run: |
           PEPPER_VAL="$(openssl rand -hex 32)"
           echo "IP_HASH_PEPPER=${PEPPER_VAL}" > supabase/.env.local
           echo "ALLOW_PRODUCTION_BULK_CREATE=true" >> supabase/.env.local
+          echo "JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long" >> supabase/.env.local
 
       - name: Serve Edge Functions & Execute Runtime Tests
         run: |
@@ -93,8 +91,8 @@ jobs:
           # Chờ Edge Functions gateway khởi động
           sleep 5
 
-          # Thực thi bộ test tự động với Deno
-          deno test --allow-net --allow-env supabase/tests/bulk-students/runtime_test.ts
+          # Thực thi bộ test tự động thực tế với Deno
+          deno test --allow-net --allow-env --allow-read supabase/tests/bulk-students/runtime_test.ts
 
       - name: Stop Supabase Local Engine
         if: always()

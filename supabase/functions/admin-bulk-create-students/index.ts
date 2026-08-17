@@ -99,9 +99,21 @@ serve(async (req) => {
       );
     }
 
-    const { classId, students, dryRun = false, idempotencyKey } = body;
+    const rawIdempotencyKey = body.idempotencyKey || req.headers.get('x-idempotency-key') || req.headers.get('idempotency-key');
+    const { classId, students, dryRun = false } = body;
+    const idempotencyKey = typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : '';
 
     const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
+    const ciFaultInjection = req.headers.get('x-ci-fault-injection');
+
+    if (ciFaultInjection === 'profile' && isAllowProductionBulkCreate) {
+      // Giả lập lỗi profile trong môi trường CI để test rollback
+      return new Response(
+        JSON.stringify({ success: false, message: 'Simulated fault-injection: Profile creation failure.' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (!dryRun && !isAllowProductionBulkCreate) {
       return new Response(
         JSON.stringify({ 
