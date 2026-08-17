@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ShieldCheck,
@@ -11,7 +11,8 @@ import {
   Lock,
   UserPlus,
   Info,
-  KeyRound
+  KeyRound,
+  FileSpreadsheet
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +21,7 @@ import { EditGameModal } from '../components/dashboard/EditGameModal';
 import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
+import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
@@ -62,6 +64,7 @@ export const AdminDashboard = () => {
   const [userToEdit, setUserToEdit] = useState(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
+  const [isImportStudentsOpen, setIsImportStudentsOpen] = useState(false);
 
   useEffect(() => {
     fetchAdminData();
@@ -228,16 +231,28 @@ export const AdminDashboard = () => {
               <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({usersList.length})
             </h3>
 
-            <button
-              onClick={() => {
-                setUserToEdit(null);
-                setIsFormModalOpen(true);
-                triggerSound('click');
-              }}
-              className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
-            >
-              <UserPlus className="w-4 h-4" /> + Tạo Tài Khoản Mới
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setIsImportStudentsOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-amber-300" /> 📥 Nhập Danh Sách Học Sinh
+              </button>
+
+              <button
+                onClick={() => {
+                  setUserToEdit(null);
+                  setIsFormModalOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <UserPlus className="w-4 h-4" /> + Tạo Tài Khoản Mới
+              </button>
+            </div>
           </div>
 
           <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
@@ -494,6 +509,12 @@ export const AdminDashboard = () => {
           setToastMsg(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
           setTimeout(() => setToastMsg(''), 3500);
         }}
+      />
+
+      <ImportStudentsModal
+        isOpen={isImportStudentsOpen}
+        onClose={() => setIsImportStudentsOpen(false)}
+        onImportCompleted={() => fetchAdminData()}
       />
 
     </div>
