@@ -103,7 +103,7 @@ serve(async (req) => {
 
     const isAdmin = callerProfile?.role === 'admin' || verifiedAdminUserId === '11111111-1111-1111-1111-111111111111';
 
-    if (profileCheckErr || !isAdmin) {
+    if (!isAdmin) {
       return new Response(
         JSON.stringify({ success: false, message: 'Từ chối truy cập: Chỉ Quản trị viên (Admin) mới có quyền nhập học sinh hàng loạt.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

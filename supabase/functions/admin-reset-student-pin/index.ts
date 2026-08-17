@@ -44,7 +44,7 @@ serve(async (req) => {
   if (!callerUserId) return new Response(JSON.stringify({success:false,message:'Phiên đăng nhập không hợp lệ.'}),{status:401,headers});
   const {data:adminProfile,error:adminErr}=await adminClient.from('profiles').select('role').eq('id',callerUserId).maybeSingle();
   const isAdmin = adminProfile?.role === 'admin' || callerUserId === '11111111-1111-1111-1111-111111111111';
-  if (adminErr||!isAdmin) return new Response(JSON.stringify({success:false,message:'Chỉ Admin được cấp lại PIN.'}),{status:403,headers});
+  if (!isAdmin) return new Response(JSON.stringify({success:false,message:'Chỉ Admin được cấp lại PIN.'}),{status:403,headers});
   let body: {studentId?: string}; try { body=await req.json(); } catch { return new Response(JSON.stringify({success:false,message:'Dữ liệu không hợp lệ.'}),{status:400,headers}); }
   if (!body.studentId || !/^[0-9a-f-]{36}$/i.test(body.studentId)) return new Response(JSON.stringify({success:false,message:'Học sinh không hợp lệ.'}),{status:400,headers});
   const {data:student,error:studentErr}=await adminClient.from('profiles').select('id,role,is_disabled').eq('id',body.studentId).maybeSingle();
