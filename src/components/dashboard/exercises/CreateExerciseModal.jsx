@@ -416,8 +416,15 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
           if (upsertErr) {
             // NẾU TẠO BẢN GHI GIAO BÀI THẤT BẠI: BÁO LỖI NGAY, KHÔNG ĐƯỢC GIẢ BÁO THÀNH CÔNG!
+            let userErrMsg = upsertErr.message || assignErrorMessage || 'Lỗi hệ thống.';
+            if (userErrMsg.includes('academic_exercise_assignments') || upsertErr.code === 'PGRST205' || userErrMsg.includes('schema cache')) {
+              userErrMsg = '❌ CSDL Supabase chưa tạo bảng [academic_exercise_assignments]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
+            } else {
+              userErrMsg = 'Lỗi khi tạo bản ghi giao bài tập cho lớp: ' + userErrMsg;
+            }
+
             console.error('Assign exercise error:', upsertErr);
-            setErrorMsg('Lỗi khi tạo bản ghi giao bài tập cho lớp: ' + (upsertErr.message || assignErrorMessage || 'Lỗi hệ thống.'));
+            setErrorMsg(userErrMsg);
             setIsSubmitting(false);
             return;
           }

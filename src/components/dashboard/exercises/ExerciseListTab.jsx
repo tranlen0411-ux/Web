@@ -229,9 +229,16 @@ export const ExerciseListTab = ({ role = 'student' }) => {
           .upsert(insertPayloads, { onConflict: 'exercise_id,class_id' });
 
         if (insertErr) {
-          // NẾU TẠO BẢN GHI GIAO BÀI THẤT BẠI: BÁO LỖI RÕ RÀNG, KHÔNG ĐƯỢC GIẢ BÁO THÀNH CÔNG!
+          // Bắt lỗi nếu bảng academic_exercise_assignments chưa tồn tại trên Database Supabase
+          let userErrMsg = insertErr.message || rpcErrorMessage || 'Lỗi hệ thống.';
+          if (userErrMsg.includes('academic_exercise_assignments') || insertErr.code === 'PGRST205' || userErrMsg.includes('schema cache')) {
+            userErrMsg = '❌ CSDL Supabase chưa tạo bảng [academic_exercise_assignments]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
+          } else {
+            userErrMsg = 'Lỗi khi tạo bản ghi giao bài cho lớp: ' + userErrMsg;
+          }
+
           console.error('Insert assignment error:', insertErr);
-          setAssignError('Lỗi khi tạo bản ghi giao bài cho lớp: ' + (insertErr.message || rpcErrorMessage || 'Lỗi hệ thống.'));
+          setAssignError(userErrMsg);
           setIsAssigning(false);
           return;
         }
