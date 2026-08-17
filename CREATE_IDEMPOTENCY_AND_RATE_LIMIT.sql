@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
   payload_fingerprint TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('PROCESSING', 'COMPLETED', 'FAILED')),
   credentials_delivery_status TEXT NOT NULL DEFAULT 'PENDING_DELIVERY' CHECK (credentials_delivery_status IN ('PENDING_DELIVERY', 'DELIVERED')),
+  download_initiated_at TIMESTAMPTZ,
+  credentials_confirmed_at TIMESTAMPTZ,
   credentials_delivered_at TIMESTAMPTZ,
   processing_started_at TIMESTAMPTZ DEFAULT NOW(),
   lease_expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '5 minutes'),
@@ -27,6 +29,24 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT uq_admin_idempotency UNIQUE (admin_id, idempotency_key)
 );
+
+ALTER TABLE app_private.batch_idempotency_logs
+  ADD COLUMN IF NOT EXISTS claim_token UUID NOT NULL DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS payload_fingerprint TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'PROCESSING',
+  ADD COLUMN IF NOT EXISTS credentials_delivery_status TEXT NOT NULL DEFAULT 'PENDING_DELIVERY',
+  ADD COLUMN IF NOT EXISTS download_initiated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS credentials_confirmed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS credentials_delivered_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '5 minutes'),
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS response_data JSONB,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_batch_admin_idempotency
+ON app_private.batch_idempotency_logs(admin_id, idempotency_key);
 
 REVOKE ALL ON TABLE app_private.batch_idempotency_logs FROM PUBLIC, anon, authenticated;
 
@@ -48,6 +68,20 @@ CREATE TABLE IF NOT EXISTS app_private.batch_student_rows (
 );
 
 REVOKE ALL ON TABLE app_private.batch_student_rows FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.set_student_pin_service(p_student_id UUID, p_pin TEXT)
+RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF p_pin IS NULL OR trim(p_pin) !~ '^[0-9]{4,6}$' THEN RETURN FALSE; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id=p_student_id AND role='student') THEN RETURN FALSE; END IF;
+  INSERT INTO app_private.student_login_credentials(student_id,pin_hash,updated_at)
+  VALUES(p_student_id, extensions.crypt(trim(p_pin),extensions.gen_salt('bf')),NOW())
+  ON CONFLICT(student_id) DO UPDATE SET pin_hash=EXCLUDED.pin_hash,updated_at=NOW();
+  RETURN TRUE;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.set_student_pin_service(UUID,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.set_student_pin_service(UUID,TEXT) TO service_role;
 
 -- 3. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (TRẢ VỀ BATCH_ID VÀ CLAIM_TOKEN)
 CREATE OR REPLACE FUNCTION public.claim_batch_idempotency(
@@ -151,10 +185,33 @@ REVOKE ALL ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) FROM PUBLIC, a
 GRANT EXECUTE ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) TO authenticated;
 
 -- 4. RPC CONFIRM CREDENTIALS DELIVERY (XÁC NHẬN ĐÃ TẢI FILE CSV TỪ FRONTEND)
-CREATE OR REPLACE FUNCTION public.confirm_credentials_delivery(
-  p_batch_id UUID,
-  p_claim_token UUID
-)
+CREATE OR REPLACE FUNCTION public.initiate_credentials_download(p_batch_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+BEGIN
+  v_caller_id := (SELECT auth.uid());
+  IF v_caller_id IS NULL THEN RETURN FALSE; END IF;
+
+  UPDATE app_private.batch_idempotency_logs
+  SET download_initiated_at = COALESCE(download_initiated_at, NOW()),
+      updated_at = NOW()
+  WHERE id = p_batch_id
+    AND admin_id = v_caller_id
+    AND status = 'COMPLETED';
+
+  RETURN FOUND;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.initiate_credentials_download(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.initiate_credentials_download(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.confirm_credentials_delivery(p_batch_id UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -168,11 +225,14 @@ BEGIN
 
   UPDATE app_private.batch_idempotency_logs
   SET credentials_delivery_status = 'DELIVERED',
-      credentials_delivered_at = NOW(),
+      credentials_delivered_at = COALESCE(credentials_delivered_at, NOW()),
+      credentials_confirmed_at = COALESCE(credentials_confirmed_at, NOW()),
       updated_at = NOW()
-  WHERE id = p_batch_id 
+  WHERE id = p_batch_id
     AND admin_id = v_caller_id
-    AND claim_token = p_claim_token;
+    AND status = 'COMPLETED'
+    AND download_initiated_at IS NOT NULL
+    AND credentials_delivery_status = 'PENDING_DELIVERY';
 
   IF FOUND THEN
     UPDATE app_private.batch_student_rows
@@ -187,8 +247,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.confirm_credentials_delivery(UUID, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.confirm_credentials_delivery(UUID, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.confirm_credentials_delivery(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.confirm_credentials_delivery(UUID) TO authenticated;
 
 -- 5. RPC HEARTBEAT DÙNG SERVICE_ROLE
 CREATE OR REPLACE FUNCTION public.heartbeat_batch_idempotency(
@@ -242,9 +302,9 @@ BEGIN
         'stt', elem->'stt',
         'fullName', elem->'fullName',
         'status', elem->'status',
-        'studentCode', COALESCE(elem->'studentCode', '-'::jsonb),
-        'studentId', COALESCE(elem->'studentId', '-'::jsonb),
-        'note', COALESCE(elem->'note', ''::jsonb)
+        'studentCode', COALESCE(elem->'studentCode', to_jsonb('-'::text)),
+        'studentId', COALESCE(elem->'studentId', to_jsonb('-'::text)),
+        'note', COALESCE(elem->'note', to_jsonb(''::text))
       )
     ), '[]'::jsonb)
     INTO v_sanitized_results
@@ -254,9 +314,9 @@ BEGIN
   v_sanitized_response := jsonb_build_object(
     'success', COALESCE(p_response_data->'success', 'true'::jsonb),
     'dryRun', COALESCE(p_response_data->'dryRun', 'false'::jsonb),
-    'message', COALESCE(p_response_data->'message', ''::jsonb),
-    'className', COALESCE(p_response_data->'className', ''::jsonb),
-    'classCode', COALESCE(p_response_data->'classCode', ''::jsonb),
+    'message', COALESCE(p_response_data->'message', to_jsonb(''::text)),
+    'className', COALESCE(p_response_data->'className', to_jsonb(''::text)),
+    'classCode', COALESCE(p_response_data->'classCode', to_jsonb(''::text)),
     'summary', COALESCE(p_response_data->'summary', '{}'::jsonb),
     'results', v_sanitized_results
   );
@@ -288,6 +348,87 @@ $$;
 REVOKE ALL ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) TO service_role;
 
+CREATE OR REPLACE FUNCTION public.fail_batch_idempotency(
+  p_batch_id UUID,
+  p_claim_token UUID
+)
+RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  UPDATE app_private.batch_idempotency_logs
+  SET status = 'FAILED', failed_at = NOW(), updated_at = NOW()
+  WHERE id = p_batch_id AND claim_token = p_claim_token
+    AND status = 'PROCESSING' AND NOW() < lease_expires_at;
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.fail_batch_idempotency(UUID, UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fail_batch_idempotency(UUID, UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.claim_student_row(
+  p_batch_id UUID, p_claim_token UUID, p_row_key TEXT, p_stt INT, p_full_name TEXT
+)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_row app_private.batch_student_rows%ROWTYPE;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM app_private.batch_idempotency_logs
+    WHERE id = p_batch_id AND claim_token = p_claim_token
+      AND status = 'PROCESSING' AND NOW() < lease_expires_at
+  ) THEN RETURN jsonb_build_object('claimed', false, 'reason', 'LEASE_INVALID'); END IF;
+
+  INSERT INTO app_private.batch_student_rows(batch_id,row_key,stt,full_name,status)
+  VALUES(p_batch_id,p_row_key,p_stt,p_full_name,'PROCESSING')
+  ON CONFLICT(batch_id,row_key) DO UPDATE
+    SET status='PROCESSING', updated_at=NOW()
+    WHERE app_private.batch_student_rows.status IN ('PENDING','FAILED')
+  RETURNING * INTO v_row;
+
+  IF NOT FOUND THEN
+    SELECT * INTO v_row FROM app_private.batch_student_rows
+    WHERE batch_id=p_batch_id AND row_key=p_row_key;
+    RETURN jsonb_build_object('claimed', false, 'status', v_row.status,
+      'student_id', v_row.student_id, 'student_code', v_row.student_code);
+  END IF;
+  RETURN jsonb_build_object('claimed', true, 'row_id', v_row.id);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.claim_student_row(UUID,UUID,TEXT,INT,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_student_row(UUID,UUID,TEXT,INT,TEXT) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.complete_student_row(
+  p_batch_id UUID, p_claim_token UUID, p_row_key TEXT,
+  p_student_id UUID, p_student_code TEXT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_private.batch_idempotency_logs
+    WHERE id=p_batch_id AND claim_token=p_claim_token AND status='PROCESSING'
+      AND NOW()<lease_expires_at) THEN RETURN FALSE; END IF;
+  UPDATE app_private.batch_student_rows
+  SET status='COMPLETED', student_id=p_student_id, student_code=p_student_code, updated_at=NOW()
+  WHERE batch_id=p_batch_id AND row_key=p_row_key AND status='PROCESSING';
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.complete_student_row(UUID,UUID,TEXT,UUID,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_student_row(UUID,UUID,TEXT,UUID,TEXT) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.fail_student_row(
+  p_batch_id UUID, p_claim_token UUID, p_row_key TEXT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_private.batch_idempotency_logs
+    WHERE id=p_batch_id AND claim_token=p_claim_token AND status='PROCESSING'
+      AND NOW()<lease_expires_at) THEN RETURN FALSE; END IF;
+  UPDATE app_private.batch_student_rows SET status='FAILED', updated_at=NOW()
+  WHERE batch_id=p_batch_id AND row_key=p_row_key AND status='PROCESSING';
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.fail_student_row(UUID,UUID,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.fail_student_row(UUID,UUID,TEXT) TO service_role;
+
 -- 7. BẢNG BỀN VỮNG LƯU TRỮ RATE LIMIT ĐĂNG NHẬP PIN
 CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -298,6 +439,28 @@ CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (
 );
 
 REVOKE ALL ON TABLE app_private.login_rate_limits FROM PUBLIC, anon, authenticated;
+
+CREATE TABLE IF NOT EXISTS app_private.student_pin_reset_logs(
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), admin_id UUID NOT NULL REFERENCES public.profiles(id),
+  student_id UUID NOT NULL REFERENCES public.profiles(id), reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+REVOKE ALL ON TABLE app_private.student_pin_reset_logs FROM PUBLIC,anon,authenticated;
+
+CREATE OR REPLACE FUNCTION public.claim_student_pin_reset(p_admin_id UUID,p_student_id UUID)
+RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
+DECLARE v_admin_count INT; v_student_count INT;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM public.profiles WHERE id=p_admin_id AND role='admin') THEN RETURN FALSE; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.profiles WHERE id=p_student_id AND role='student' AND COALESCE(is_disabled,false)=false) THEN RETURN FALSE; END IF;
+  SELECT COUNT(*) INTO v_admin_count FROM app_private.student_pin_reset_logs WHERE admin_id=p_admin_id AND reset_at>NOW()-INTERVAL '5 minutes';
+  SELECT COUNT(*) INTO v_student_count FROM app_private.student_pin_reset_logs WHERE student_id=p_student_id AND reset_at>NOW()-INTERVAL '5 minutes';
+  IF v_admin_count>=15 OR v_student_count>=3 THEN RETURN FALSE; END IF;
+  INSERT INTO app_private.student_pin_reset_logs(admin_id,student_id) VALUES(p_admin_id,p_student_id);
+  RETURN TRUE;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.claim_student_pin_reset(UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_student_pin_reset(UUID,UUID) TO service_role;
 
 -- 8. RPC VERIFY PIN NGUYÊN TỬ VỚI UPSERT TRƯỚC VÀ LOCKING CÓ THỨ TỰ SẮP XẾP (ORDER BY ASC FOR UPDATE)
 CREATE OR REPLACE FUNCTION public.verify_student_pin_rate_limited(

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../../config/supabaseClient';
+import { supabase } from '../../lib/supabase';
 
 const OFFICIAL_CLASS_212_STUDENTS = [
   "Trần Lê Hoàng An",
@@ -38,7 +38,8 @@ const OFFICIAL_CLASS_212_STUDENTS = [
   "Đặng Yến Vy"
 ];
 
-export default function ImportStudentsModal({ isOpen, onClose }) {
+export function ImportStudentsModal({ isOpen, onClose }) {
+  const bulkCreateEnabled = import.meta.env.VITE_ENABLE_BULK_CREATE === 'true';
   const [step, setStep] = useState(1);
   const [classesList, setClassesList] = useState([]);
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -53,6 +54,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
   const [isConfirmChecked, setIsConfirmChecked] = useState(false);
   const [hasExecutedProd, setHasExecutedProd] = useState(false);
   const [hasDownloadedCSV, setHasDownloadedCSV] = useState(false);
+  const [hasConfirmedDelivery, setHasConfirmedDelivery] = useState(false);
 
   const [idempotencyKey] = useState(() => `batch_212_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
 
@@ -67,6 +69,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
       setIsConfirmChecked(false);
       setHasExecutedProd(false);
       setHasDownloadedCSV(false);
+      setHasConfirmedDelivery(false);
     }
   }, [isOpen]);
 
@@ -175,6 +178,10 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
   };
 
   const handleExecuteProduction = async () => {
+    if (!bulkCreateEnabled) {
+      setErrorMessage('Chức năng tạo thật đang bị khóa để chờ kiểm thử Runtime.');
+      return;
+    }
     if (!isConfirmChecked || hasExecutedProd) return;
 
     if (rawNamesText !== lastDryRunNamesText) {
@@ -241,7 +248,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
       r.stt,
       r.fullName,
       r.studentCode || '-',
-      r.pin || 'Không công khai lại',
+      r.pin || '',
       r.status,
       r.note
     ]);
@@ -264,23 +271,32 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
       URL.revokeObjectURL(url);
     }, 1000);
 
-    setHasDownloadedCSV(true);
-
-    // MỤC 12: XÁC NHẬN BÀN GIAO CREDENTIALS BẰNG RPC VỚI DB
-    if (prodResult.batchId && prodResult.claimToken) {
-      try {
-        await supabase.rpc('confirm_credentials_delivery', {
-          p_batch_id: prodResult.batchId,
-          p_claim_token: prodResult.claimToken
-        });
-      } catch (err) {
-        console.error('Lỗi gọi RPC confirm_credentials_delivery:', err);
+    if (!prodResult.batchId) {
+      setErrorMessage('Thiếu mã batch nên không thể ghi nhận việc bàn giao thông tin đăng nhập.');
+      return;
+    }
+    if (prodResult.batchId) {
+      const { data, error } = await supabase.rpc('initiate_credentials_download', { p_batch_id: prodResult.batchId });
+      if (error || data !== true) {
+        setErrorMessage('File đã được tạo nhưng chưa ghi nhận được lượt tải. Vui lòng chưa đóng cửa sổ.');
+        return;
       }
     }
+    setHasDownloadedCSV(true);
+  };
+
+  const handleConfirmDelivery = async () => {
+    if (!prodResult?.batchId || !hasDownloadedCSV) return;
+    const { data, error } = await supabase.rpc('confirm_credentials_delivery', { p_batch_id: prodResult.batchId });
+    if (error || data !== true) {
+      setErrorMessage('Không thể xác nhận đã lưu thông tin đăng nhập.');
+      return;
+    }
+    setHasConfirmedDelivery(true);
   };
 
   const handleSafeClose = () => {
-    if (step === 4 && hasExecutedProd && !hasDownloadedCSV) {
+    if (step === 4 && hasExecutedProd && !hasConfirmedDelivery) {
       if (!window.confirm('CẢNH BÁO BẢO MẬT: Bạn chưa tải xuống file CSV chứa Mật khẩu PIN của học sinh! Mật khẩu PIN sẽ không thể lấy lại nếu bạn đóng cửa sổ này. Bạn có chắc chắn muốn đóng?')) {
         return;
       }
@@ -291,6 +307,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   const isProdDisabled = !dryRunData || 
+    !bulkCreateEnabled ||
     dryRunData.summary.reviewRequired > 0 || 
     dryRunData.results.length !== parsedStudents.length ||
     rawNamesText !== lastDryRunNamesText ||
@@ -322,6 +339,12 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
         {errorMessage && (
           <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300 rounded-xl text-sm font-medium flex items-center gap-2">
             <span>⚠️</span> {errorMessage}
+          </div>
+        )}
+
+        {!bulkCreateEnabled && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-sm">
+            Tạo tài khoản thật đang khóa. Dry-run vẫn dùng được để kiểm tra danh sách.
           </div>
         )}
 
@@ -540,10 +563,17 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
             <div className="flex justify-end gap-3 pt-3">
               <button
                 onClick={handleDownloadCSV}
+                disabled={prodResult.replayed || hasConfirmedDelivery}
                 className="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2"
               >
-                <span>💾</span> {hasDownloadedCSV ? '✓ Đã Bàn Giao & Tải CSV' : 'Tải File CSV Mật Khẩu PIN Học Sinh'}
+                <span>💾</span> {hasDownloadedCSV ? '✓ Đã bắt đầu tải CSV' : 'Tải File CSV Mật Khẩu PIN Học Sinh'}
               </button>
+              {hasDownloadedCSV && !hasConfirmedDelivery && (
+                <button onClick={handleConfirmDelivery}
+                  className="px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm">
+                  Tôi xác nhận đã lưu file
+                </button>
+              )}
               <button
                 onClick={handleSafeClose}
                 className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white font-bold text-sm"
@@ -557,4 +587,3 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
     </div>
   );
 }
-```,Description:

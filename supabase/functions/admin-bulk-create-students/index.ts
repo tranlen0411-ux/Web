@@ -119,9 +119,9 @@ serve(async (req) => {
       );
     }
 
-    if (!dryRun && (!idempotencyKey || typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '')) {
+    if (!idempotencyKey || typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '') {
       return new Response(
-        JSON.stringify({ success: false, message: 'Thiếu idempotencyKey hợp lệ cho thao tác tạo thật trên Production.' }),
+        JSON.stringify({ success: false, message: 'Thiếu idempotencyKey hợp lệ cho yêu cầu xử lý.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -249,9 +249,22 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({
             ...claimRes.response_data,
+            batchId: claimRes.batch_id,
             replayed: true,
             credentialsAvailable: false,
             message: 'Batch này đã hoàn tất từ trước. Mã PIN không thể lấy lại từ yêu cầu lặp.'
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else if (claimRes.status === 'COMPLETED_PENDING_DELIVERY') {
+        return new Response(
+          JSON.stringify({
+            ...claimRes.response_data,
+            batchId: claimRes.batch_id,
+            replayed: true,
+            credentialsAvailable: false,
+            requiresPinReset: true,
+            message: 'Batch đã hoàn tất nhưng PIN không được phát lại. Hãy dùng quy trình cấp lại PIN.'
           }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
@@ -312,11 +325,16 @@ serve(async (req) => {
           continue;
         }
 
-        const { data: matchedProfiles } = await supabaseAdmin
+        const { data: matchedProfiles, error: matchedProfilesErr } = await supabaseAdmin
           .from('profiles')
           .select('id, student_code, email')
           .eq('role', 'student')
           .ilike('full_name', item.fullName);
+
+        if (matchedProfilesErr) {
+          return new Response(JSON.stringify({ success: false, message: 'Không thể đối chiếu hồ sơ học sinh.' }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
 
         if (!matchedProfiles || matchedProfiles.length === 0) {
           dryResults.push({
@@ -330,12 +348,17 @@ serve(async (req) => {
           readyCount++;
         } else if (matchedProfiles.length === 1) {
           const prof = matchedProfiles[0];
-          const { data: cmRec } = await supabaseAdmin
+          const { data: cmRec, error: cmLookupErr } = await supabaseAdmin
             .from('class_members')
             .select('id')
             .eq('class_id', classId)
             .eq('student_id', prof.id)
             .maybeSingle();
+
+          if (cmLookupErr) {
+            return new Response(JSON.stringify({ success: false, message: 'Không thể đối chiếu lớp hiện tại của học sinh.' }),
+              { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
 
           if (cmRec) {
             dryResults.push({
@@ -388,12 +411,16 @@ serve(async (req) => {
       };
 
       if (idempotencyKey && batchId && claimToken) {
-        await supabaseAdmin.rpc('complete_batch_idempotency', {
+        const { data: compOk, error: compErr } = await supabaseAdmin.rpc('complete_batch_idempotency', {
           p_batch_id: batchId,
           p_claim_token: claimToken,
           p_response_data: dryRunResponse,
           p_is_success: true,
         });
+        if (compErr || compOk !== true) {
+          return new Response(JSON.stringify({ success: false, message: 'Không thể hoàn tất nhật ký Dry-run.' }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
       }
 
       return new Response(
@@ -415,6 +442,23 @@ serve(async (req) => {
     let createdCount = 0;
     let assignedExistingCount = 0;
     let failedCount = 0;
+
+    if (!batchId || !claimToken) {
+      return new Response(JSON.stringify({ success: false, message: 'Batch Production không có quyền sở hữu hợp lệ.' }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const failRow = async (rowKey: string) => {
+      const { data, error } = await supabaseAdmin.rpc('fail_student_row', {
+        p_batch_id: batchId,
+        p_claim_token: claimToken,
+        p_row_key: rowKey,
+      });
+      if (error || data !== true) {
+        throw new Error('ROW_STATE_UPDATE_FAILED');
+      }
+      return true;
+    };
 
     for (const item of cleanedStudentsInput) {
       if (idempotencyKey && batchId && claimToken) {
@@ -456,13 +500,49 @@ serve(async (req) => {
         continue;
       }
 
-      const { data: matchedProfiles } = await supabaseAdmin
+      const rowMaterial = `${batchId}|${item.stt}|${item.fullName.trim().toLowerCase().replace(/\s+/g, ' ')}`;
+      const rowDigest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rowMaterial));
+      const rowKey = Array.from(new Uint8Array(rowDigest)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      const { data: rowClaim, error: rowClaimErr } = await supabaseAdmin.rpc('claim_student_row', {
+        p_batch_id: batchId,
+        p_claim_token: claimToken,
+        p_row_key: rowKey,
+        p_stt: item.stt,
+        p_full_name: item.fullName,
+      });
+      if (rowClaimErr || !rowClaim?.claimed) {
+        if (rowClaim?.status === 'COMPLETED') {
+          finalResults.push({ stt: item.stt, fullName: item.fullName,
+            status: 'ALREADY_COMPLETED_NO_CREDENTIALS', studentCode: rowClaim.student_code || '-',
+            studentId: rowClaim.student_id || '-', note: 'Dòng đã hoàn tất trước đó; cần cấp lại PIN nếu chưa nhận được.' });
+          continue;
+        }
+        return new Response(JSON.stringify({ success: false, message: 'Không thể sở hữu dòng xử lý; batch đã dừng an toàn.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      const { data: matchedProfiles, error: matchedProfilesErr } = await supabaseAdmin
         .from('profiles')
         .select('id, student_code, email')
         .eq('role', 'student')
         .ilike('full_name', item.fullName);
 
+      if (matchedProfilesErr) {
+        const rowFailed = await failRow(rowKey);
+        if (!rowFailed) {
+          return new Response(JSON.stringify({ success: false, message: 'Không thể ghi trạng thái dòng sau lỗi đối chiếu.' }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ success: false, message: 'Không thể đối chiếu hồ sơ học sinh.' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       if (matchedProfiles && matchedProfiles.length > 0) {
+        if (!(await failRow(rowKey))) {
+          return new Response(JSON.stringify({ success: false, message: 'Không thể ghi trạng thái dòng cần xác minh.' }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
         finalResults.push({
           stt: item.stt,
           fullName: item.fullName,
@@ -475,13 +555,15 @@ serve(async (req) => {
 
       let newlyCreatedUserId: string | null = null;
       let successFullyCreated = false;
+      let resultRecorded = false;
 
       for (let attempt = 1; attempt <= 5; attempt++) {
-        const randomCodeNum = Math.floor(1000 + Math.random() * 8999);
+        const randomCodeNum = 1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000);
         const studentCode = `HS212-${randomCodeNum}`;
-        const pin = Math.floor(1000 + Math.random() * 9000).toString();
+        const pin = (1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000)).toString();
         const internalEmail = `hs_${studentCode.toLowerCase()}@hoclapvui.edu.vn`;
-        const internalPassword = `Pin_${pin}_Auth!`;
+        const passwordBytes = crypto.getRandomValues(new Uint8Array(24));
+        const internalPassword = Array.from(passwordBytes, b => b.toString(16).padStart(2, '0')).join('');
 
         const { data: authData, error: createAuthErr } = await supabaseAdmin.auth.admin.createUser({
           email: internalEmail,
@@ -505,7 +587,9 @@ serve(async (req) => {
             status: 'FAILED_AUTH_CREATION',
             note: 'Không thể khởi tạo tài khoản đăng nhập.',
           });
+          await failRow(rowKey);
           failedCount++;
+          resultRecorded = true;
           break;
         }
 
@@ -528,7 +612,13 @@ serve(async (req) => {
         if (profileErr) {
           if (profileErr.code === '23505' && attempt < 5) {
             const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
-            if (delAuthErr) console.error(`[CLEANUP_AUTH_RETRY_ERR] User ${newlyCreatedUserId}:`, delAuthErr.message);
+            if (delAuthErr) {
+              await failRow(rowKey);
+              finalResults.push({ stt: item.stt, fullName: item.fullName, status: 'CLEANUP_FAILED', note: 'Không thể dọn Auth sau lỗi trùng mã.' });
+              failedCount++;
+              resultRecorded = true;
+              break;
+            }
             newlyCreatedUserId = null;
             continue;
           }
@@ -540,16 +630,18 @@ serve(async (req) => {
             status: delAuthErr ? 'CLEANUP_FAILED' : 'FAILED_PROFILE_CREATION',
             note: delAuthErr ? 'Không thể dọn dẹp tài khoản Auth mồ côi.' : 'Lỗi khởi tạo hồ sơ học sinh.',
           });
+          await failRow(rowKey);
           failedCount++;
+          resultRecorded = true;
           break;
         }
 
-        const { error: pinErr } = await supabaseAdmin.rpc('set_student_pin', {
+        const { data: pinOk, error: pinErr } = await supabaseAdmin.rpc('set_student_pin_service', {
           p_student_id: newlyCreatedUserId,
           p_pin: pin,
         });
 
-        if (pinErr) {
+        if (pinErr || pinOk !== true) {
           const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId);
           const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
 
@@ -559,7 +651,9 @@ serve(async (req) => {
             status: (delProfErr || delAuthErr) ? 'CLEANUP_FAILED' : 'FAILED_PIN_SETTING',
             note: (delProfErr || delAuthErr) ? 'Dọn dẹp tài khoản lỗi PIN thất bại.' : 'Lỗi khởi tạo mã PIN bảo mật.',
           });
+          await failRow(rowKey);
           failedCount++;
+          resultRecorded = true;
           break;
         }
 
@@ -581,7 +675,30 @@ serve(async (req) => {
             status: (delProfErr || delAuthErr) ? 'CLEANUP_FAILED' : 'FAILED_CLASS_ASSIGNMENT',
             note: (delProfErr || delAuthErr) ? 'Dọn dẹp tài khoản lỗi gán lớp thất bại.' : 'Lỗi gán học sinh vào Lớp 2.12.',
           });
+          await failRow(rowKey);
           failedCount++;
+          resultRecorded = true;
+          break;
+        }
+
+        const { data: rowCompleted, error: rowCompleteErr } = await supabaseAdmin.rpc('complete_student_row', {
+          p_batch_id: batchId,
+          p_claim_token: claimToken,
+          p_row_key: rowKey,
+          p_student_id: newlyCreatedUserId,
+          p_student_code: studentCode,
+        });
+        if (rowCompleteErr || rowCompleted !== true) {
+          const { error: delCmErr } = await supabaseAdmin.from('class_members').delete()
+            .eq('class_id', classId).eq('student_id', newlyCreatedUserId);
+          const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId);
+          const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
+          await failRow(rowKey);
+          finalResults.push({ stt: item.stt, fullName: item.fullName,
+            status: (delCmErr || delProfErr || delAuthErr) ? 'CLEANUP_FAILED' : 'FAILED_ROW_COMPLETION',
+            note: 'Không thể xác nhận tiến độ dòng; tài khoản vừa tạo đã được thu hồi.' });
+          failedCount++;
+          resultRecorded = true;
           break;
         }
 
@@ -596,10 +713,11 @@ serve(async (req) => {
         });
         createdCount++;
         successFullyCreated = true;
+        resultRecorded = true;
         break;
       }
 
-      if (!successFullyCreated && newlyCreatedUserId === null && finalResults.length < item.stt) {
+      if (!successFullyCreated && !resultRecorded) {
         finalResults.push({
           stt: item.stt,
           fullName: item.fullName,
@@ -618,6 +736,7 @@ serve(async (req) => {
       message: `Đã hoàn thành thực thi nạp batch cho Lớp 2.12.`,
       className: targetClass.name,
       classCode: targetClass.code,
+      batchId,
       summary: {
         total: cleanedStudentsInput.length,
         created: createdCount,
@@ -628,12 +747,16 @@ serve(async (req) => {
     };
 
     if (idempotencyKey && batchId && claimToken) {
-      await supabaseAdmin.rpc('complete_batch_idempotency', {
+      const { data: compOk, error: compErr } = await supabaseAdmin.rpc('complete_batch_idempotency', {
         p_batch_id: batchId,
         p_claim_token: claimToken,
         p_response_data: prodResponse,
         p_is_success: true,
       });
+      if (compErr || compOk !== true) {
+        return new Response(JSON.stringify({ success: false, message: 'Tài khoản đã xử lý nhưng không thể hoàn tất batch; cần Admin kiểm tra.' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
     }
 
     return new Response(
