@@ -711,6 +711,9 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     body: JSON.stringify({ studentId: studentId }),
   });
   const data1 = await res1.json();
+  if (res1.status !== 200) {
+    console.log("TEST 27 DEBUG:", res1.status, JSON.stringify(data1), "adminId:", adminAuth.userId, "studentId:", studentId);
+  }
 
   const logRes = await client.queryObject<{ count: bigint }>(
     `SELECT COUNT(*) as count FROM app_private.student_pin_reset_logs WHERE student_id = $1;`,
