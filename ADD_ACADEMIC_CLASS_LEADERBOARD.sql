@@ -10,7 +10,7 @@ SET LOCAL lock_timeout = '10s';
 ALTER TABLE public.academic_exercise_assignments 
 ADD COLUMN IF NOT EXISTS counts_toward_ranking BOOLEAN NOT NULL DEFAULT TRUE;
 
--- 2. DROP HÀM CŨ 2 THAM SỐ ĐỂ TRÁNH LỖI OVERLOAD MO HƠ (PGRST203)
+-- 2. DROP HÀM CŨ 2 THAM SỐ ĐỂ TRÁNH LỖI OVERLOAD MƠ HỒ (PGRST203)
 DROP FUNCTION IF EXISTS public.assign_exercise_to_classes(UUID, UUID[]);
 DROP FUNCTION IF EXISTS public.assign_exercise_to_classes(UUID, UUID[], BOOLEAN);
 
@@ -275,7 +275,7 @@ BEGIN
       END AS avg_score_pct
     FROM students_in_class sc
     CROSS JOIN class_totals ct
-    LEFT JOIN student_best_scores_per_ex: student_best_per_exercise sbpe ON sbpe.student_id = sc.student_id
+    LEFT JOIN student_best_per_exercise sbpe ON sbpe.student_id = sc.student_id
     GROUP BY sc.student_id, sc.full_name, sc.avatar_url, ct.valid_count, ct.total_max_score
   ),
   ranked_students AS (
@@ -336,7 +336,7 @@ $$;
 REVOKE ALL ON FUNCTION public.get_academic_class_leaderboard(UUID, TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_academic_class_leaderboard(UUID, TEXT, TEXT) TO authenticated;
 
--- 5. RPC SECURITY DEFINER: LẤY BẢNG XẾP HẠNG TRÒ CHƠI CÓ KIỂM TRA PHÂN QUYỀN CHẶT CHẼ TRÊN POSTGRES
+-- 5. RPC SECURITY DEFINER: LẤY BẢNG XẾP HẠNG TRÒ CHƠI CHUẨN XÁC NGUỒN CLASS_MEMBERS VÀ PHÂN QUYỀN POSTGRES
 DROP FUNCTION IF EXISTS public.get_game_leaderboard(TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION public.get_game_leaderboard(
@@ -351,54 +351,103 @@ AS $$
 DECLARE
   v_caller_id UUID;
   v_caller_role TEXT;
-  v_caller_grade INT;
   v_caller_class_id UUID;
-  v_target_grade TEXT := p_grade_filter;
-  v_target_class TEXT := p_class_id;
+  v_caller_grade INT;
+  v_requested_grade_int INT := NULL;
+  v_requested_class_uuid UUID := NULL;
+  v_target_class_record RECORD;
   v_result_json JSONB;
 BEGIN
+  -- 1. Đăng nhập check
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Chưa đăng nhập.');
   END IF;
 
-  SELECT role, grade_level INTO v_caller_role, v_caller_grade FROM public.profiles WHERE id = v_caller_id;
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
   IF v_caller_role IS NULL OR v_caller_role NOT IN ('admin', 'teacher', 'student') THEN
     RETURN jsonb_build_object('success', false, 'message', 'Bạn không có quyền xem Bảng xếp hạng Trò chơi.');
   END IF;
 
-  -- Lấy class_id chính thức của caller từ class_members nếu có
-  SELECT cm.class_id INTO v_caller_class_id 
-  FROM public.class_members cm 
-  WHERE cm.student_id = v_caller_id 
-  LIMIT 1;
+  -- 2. Validate & Cast tham số p_grade_filter an toàn
+  IF p_grade_filter <> 'ALL' THEN
+    BEGIN
+      v_requested_grade_int := p_grade_filter::INT;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Tham số Khối lớp không hợp lệ.');
+    END;
+  END IF;
 
-  -- XỬ LÝ PHÂN QUYỀN HỌC SINH: ÉP XEM DỮ LIỆU ĐÚNG QUYỀN
+  -- Chỉ Admin mới được phép lọc 'ALL' (Toàn trường)
+  IF p_grade_filter = 'ALL' AND v_caller_role <> 'admin' THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Chỉ Quản trị viên mới được phép xem Bảng xếp hạng Toàn trường.');
+  END IF;
+
+  -- 3. Validate & Cast tham số p_class_id an toàn
+  IF p_class_id <> 'ALL_IN_GRADE' THEN
+    BEGIN
+      v_requested_class_uuid := p_class_id::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Tham số Lớp học không hợp lệ.');
+    END;
+
+    -- Kiểm tra lớp tồn tại và lấy thông tin lớp từ bảng classes
+    SELECT * INTO v_target_class_record FROM public.classes WHERE id = v_requested_class_uuid;
+    IF v_target_class_record.id IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lớp học không tồn tại.');
+    END IF;
+
+    -- Đảm bảo không mismatch khối/lớp
+    IF v_requested_grade_int IS NOT NULL AND v_target_class_record.grade_level <> v_requested_grade_int THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lớp được chọn không thuộc Khối đã lọc.');
+    END IF;
+    
+    v_requested_grade_int := v_target_class_record.grade_level;
+  END IF;
+
+  -- 4. Xử lý phân quyền cho HỌC SINH (Student)
   IF v_caller_role = 'student' THEN
-    -- Học sinh không được xem Toàn trường, ép về khối của học sinh
-    IF v_caller_grade IS NOT NULL THEN
-      v_target_grade := v_caller_grade::text;
+    -- Xác định Lớp và Khối thực tế của Học sinh từ class_members + classes (joined_at mới nhất)
+    SELECT cm.class_id, c.grade_level INTO v_caller_class_id, v_caller_grade
+    FROM public.class_members cm
+    JOIN public.classes c ON c.id = cm.class_id
+    WHERE cm.student_id = v_caller_id
+    ORDER BY cm.joined_at DESC
+    LIMIT 1;
+
+    -- Học sinh không có lớp hợp lệ -> Báo lỗi từ chối ngay lập tức
+    IF v_caller_class_id IS NULL OR v_caller_grade IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Tài khoản học sinh chưa được phân lớp.');
     END IF;
 
-    -- Học sinh chỉ được xem ALL_IN_GRADE hoặc Lớp của chính mình (v_caller_class_id)
-    IF v_target_class <> 'ALL_IN_GRADE' AND (v_caller_class_id IS NULL OR v_target_class <> v_caller_class_id::text) THEN
-      RETURN jsonb_build_object('success', false, 'message', 'Học sinh chỉ được xem xếp hạng toàn khối hoặc lớp của mình.');
+    -- Ép Khối yêu cầu về đúng Khối của Học sinh
+    v_requested_grade_int := v_caller_grade;
+
+    -- Học sinh chỉ được xem ALL_IN_GRADE (Toàn khối của tôi) hoặc Lớp của chính mình
+    IF v_requested_class_uuid IS NOT NULL AND v_requested_class_uuid <> v_caller_class_id THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Học sinh chỉ được xem Bảng xếp hạng của lớp mình.');
     END IF;
 
-  -- XỬ LÝ PHÂN QUYỀN GIÁO VIÊN: KIỂM TRA LỚP PHỤ TRÁCH
+  -- 5. Xử lý phân quyền cho GIÁO VIÊN (Teacher)
   ELSIF v_caller_role = 'teacher' THEN
-    IF v_target_class <> 'ALL_IN_GRADE' THEN
+    IF v_requested_class_uuid IS NOT NULL THEN
+      -- Xem riêng 1 lớp: Giáo viên phải phụ trách lớp đó
+      IF v_target_class_record.teacher_id IS DISTINCT FROM v_caller_id THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Giáo viên chỉ có quyền xem lớp do mình phụ trách.');
+      END IF;
+    ELSE
+      -- Xem toàn khối (ALL_IN_GRADE): Giáo viên phải phụ trách ít nhất 1 lớp trong khối đó
       IF NOT EXISTS (
         SELECT 1 FROM public.classes c 
-        WHERE c.id::text = v_target_class AND c.teacher_id = v_caller_id
+        WHERE c.teacher_id = v_caller_id AND c.grade_level = v_requested_grade_int
       ) THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Giáo viên chỉ có quyền xem lớp do mình phụ trách.');
+        RETURN jsonb_build_object('success', false, 'message', 'Giáo viên chỉ có quyền xem Khối có lớp do mình phụ trách.');
       END IF;
     END IF;
   END IF;
 
-  -- QUERY LẤY DANH SÁCH HỌC SINH VÀ LỚP HỌC (LOẠI BỎ TRÙNG LẶP DO MULTIPLE CLASS_MEMBERS)
-  WITH unique_student_classes AS (
+  -- 6. QUERY LẤY BẢNG XẾP HẠNG TRÒ CHƠI HỢP LỆ VÀ XẾP HẠNG DENSE_RANK UNIFIED
+  WITH current_student_classes AS (
     SELECT DISTINCT ON (cm.student_id)
       cm.student_id,
       c.id AS class_id,
@@ -408,50 +457,66 @@ BEGIN
     JOIN public.classes c ON c.id = cm.class_id
     ORDER BY cm.student_id, cm.joined_at DESC
   ),
-  filtered_students AS (
+  valid_game_students AS (
     SELECT 
       p.id AS student_id,
       p.full_name,
       p.avatar_url,
       COALESCE(p.total_stars, 0) AS total_stars,
       COALESCE(p.total_coins, 0) AS total_coins,
-      COALESCE(usc.class_grade, p.grade_level, 1) AS grade_level,
-      usc.class_name
+      csc.class_grade AS grade_level,
+      csc.class_name
     FROM public.profiles p
-    LEFT JOIN unique_student_classes usc ON usc.student_id = p.id
+    JOIN current_student_classes csc ON csc.student_id = p.id
     WHERE p.role = 'student'
       AND (
-        v_target_class <> 'ALL_IN_GRADE' AND usc.class_id::text = v_target_class
+        v_requested_class_uuid IS NOT NULL AND csc.class_id = v_requested_class_uuid
         OR (
-          v_target_class = 'ALL_IN_GRADE' AND (
-            v_target_grade = 'ALL'
-            OR COALESCE(usc.class_grade, p.grade_level) = v_target_grade::int
+          v_requested_class_uuid IS NULL AND (
+            v_requested_grade_int IS NULL
+            OR csc.class_grade = v_requested_grade_int
           )
         )
       )
-    ORDER BY COALESCE(p.total_stars, 0) DESC, COALESCE(p.total_coins, 0) DESC
-    LIMIT 50
+  ),
+  ranked_game_students AS (
+    SELECT 
+      vgs.*,
+      DENSE_RANK() OVER (
+        ORDER BY vgs.total_stars DESC, vgs.total_coins DESC
+      ) AS rank_pos,
+      COUNT(*) OVER (
+        PARTITION BY vgs.total_stars, vgs.total_coins
+      ) AS tie_count
+    FROM valid_game_students vgs
   )
   SELECT jsonb_build_object(
     'success', true,
-    'grade_filter', v_target_grade,
-    'class_filter', v_target_class,
+    'grade_filter', COALESCE(v_requested_grade_int::text, 'ALL'),
+    'class_filter', COALESCE(v_requested_class_uuid::text, 'ALL_IN_GRADE'),
     'leaderboard', COALESCE(
       jsonb_agg(
         jsonb_build_object(
-          'student_id', fs.student_id,
-          'full_name', fs.full_name,
-          'avatar_url', fs.avatar_url,
-          'total_stars', fs.total_stars,
-          'total_coins', fs.total_coins,
-          'grade_level', fs.grade_level,
-          'class_name', fs.class_name
+          'rank', r.rank_pos,
+          'is_tied', (r.tie_count > 1),
+          'student_id', r.student_id,
+          'full_name', r.full_name,
+          'avatar_url', r.avatar_url,
+          'total_stars', r.total_stars,
+          'total_coins', r.total_coins,
+          'grade_level', r.grade_level,
+          'class_name', r.class_name
         )
+        ORDER BY r.rank_pos ASC, r.full_name ASC, r.student_id ASC
       ),
       '[]'::jsonb
     )
   ) INTO v_result_json
-  FROM filtered_students fs;
+  FROM (
+    SELECT * FROM ranked_game_students 
+    ORDER BY rank_pos ASC, full_name ASC, student_id ASC 
+    LIMIT 50
+  ) r;
 
   RETURN v_result_json;
 END;
