@@ -699,7 +699,16 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
     `DELETE FROM app_private.student_pin_reset_logs;`
   );
   
-  await new Promise((r) => setTimeout(r, 5000));
+  const adminProfCheck = await client.queryObject(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [adminAuth.userId]);
+  const studentProfCheck = await client.queryObject(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [studentId]);
+  const adminLogsCheck = await client.queryObject(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE admin_id = $1;`, [adminAuth.userId]);
+  const studentLogsCheck = await client.queryObject(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE student_id = $1;`, [studentId]);
+  console.log("TEST 27 DB AUDIT:", JSON.stringify({
+    adminProf: adminProfCheck.rows,
+    studentProf: studentProfCheck.rows,
+    adminLogs: adminLogsCheck.rows,
+    studentLogs: studentLogsCheck.rows,
+  }));
 
   const res1 = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/admin-reset-student-pin`, {
     method: "POST",
