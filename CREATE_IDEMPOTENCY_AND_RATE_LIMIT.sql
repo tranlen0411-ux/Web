@@ -1,11 +1,11 @@
 -- ============================================================================
--- SQL MIGRATION BẢO MẬT CẤP ENTERPRISE: IDEMPOTENCY DB VỚI CLAIM TOKEN, LEASE,
--- WHITELIST SANITIZATION VÀ SERVICE_ROLE LOCKING CHÍNH XÁC 100%
+-- SQL MIGRATION BẢO MẬT CẤP ENTERPRISE: BẢNG IDEMPOTENCY THEO BATCH_ID VÀ CLAIM_TOKEN
+-- CHẤP NHẬN BATCH_ID + CLAIM_TOKEN TRONG RPC VÀ SANITIZE MỘT LẦN DÙNG SERVICE_ROLE
 -- ============================================================================
 
 BEGIN;
 
--- 1. BẢNG APP_PRIVATE LƯU TRỮ IDEMPOTENCY LOGS CÓ CLAIM TOKEN VÀ LEASE
+-- 1. BẢNG APP_PRIVATE LƯU TRỮ IDEMPOTENCY LOGS THEO BATCH_ID VÀ CLAIM_TOKEN
 CREATE SCHEMA IF NOT EXISTS app_private;
 
 CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
 
 REVOKE ALL ON TABLE app_private.batch_idempotency_logs FROM PUBLIC, anon, authenticated;
 
--- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (GỌI TỪ JWT CALLER ADMIN)
+-- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (TRẢ VỀ CẢ BATCH_ID VÀ CLAIM_TOKEN)
 CREATE OR REPLACE FUNCTION public.claim_batch_idempotency(
   p_idempotency_key TEXT,
   p_payload_fingerprint TEXT
@@ -43,7 +43,7 @@ DECLARE
   v_rec RECORD;
   v_new_claim_token UUID;
 BEGIN
-  -- 1. Xác thực caller từ auth.uid() của JWT Admin
+  -- 1. Lấy admin_id duy nhất từ JWT đã được Supabase xác minh
   v_caller_id := (SELECT auth.uid());
   IF v_caller_id IS NULL THEN
     RETURN jsonb_build_object('status', 'UNAUTHORIZED', 'message', 'Chưa đăng nhập.');
@@ -61,7 +61,7 @@ BEGIN
 
   v_new_claim_token := gen_random_uuid();
 
-  -- 3. Insert claim mới
+  -- 3. Insert claim mới theo cặp (admin_id, idempotency_key)
   INSERT INTO app_private.batch_idempotency_logs (
     admin_id, idempotency_key, claim_token, payload_fingerprint, status, processing_started_at, lease_expires_at
   ) VALUES (
@@ -75,7 +75,11 @@ BEGIN
   FOR UPDATE;
 
   IF v_rec.claim_token = v_new_claim_token AND v_rec.status = 'PROCESSING' THEN
-    RETURN jsonb_build_object('status', 'CLAIMED', 'claim_token', v_new_claim_token);
+    RETURN jsonb_build_object(
+      'status', 'CLAIMED', 
+      'batch_id', v_rec.id, 
+      'claim_token', v_new_claim_token
+    );
   END IF;
 
   IF v_rec.payload_fingerprint <> p_payload_fingerprint THEN
@@ -83,34 +87,29 @@ BEGIN
   END IF;
 
   IF v_rec.status = 'COMPLETED' THEN
-    RETURN jsonb_build_object('status', 'COMPLETED', 'response_data', v_rec.response_data);
+    -- Ghi nhận Request lặp -> Thêm cờ replayed: true và credentialsAvailable: false
+    RETURN jsonb_build_object(
+      'status', 'COMPLETED', 
+      'batch_id', v_rec.id,
+      'replayed', true,
+      'credentialsAvailable', false,
+      'response_data', v_rec.response_data
+    );
   
   ELSIF v_rec.status = 'PROCESSING' THEN
     IF NOW() < v_rec.lease_expires_at THEN
       RETURN jsonb_build_object('status', 'PROCESSING_LEASE_ACTIVE', 'message', 'Yêu cầu batch này đang được hệ thống xử lý, vui lòng chờ.');
     ELSE
-      -- Lease đã hết hạn -> Reclaim an toàn với claim_token mới
+      -- Khóa hoàn toàn reclaim tự động khi batch Production bị dở dang để bảo vệ toàn vẹn dữ liệu
       UPDATE app_private.batch_idempotency_logs
-      SET claim_token = v_new_claim_token,
-          processing_started_at = NOW(),
-          lease_expires_at = NOW() + INTERVAL '5 minutes',
-          updated_at = NOW()
+      SET status = 'FAILED', failed_at = NOW(), updated_at = NOW()
       WHERE id = v_rec.id;
 
-      RETURN jsonb_build_object('status', 'CLAIMED_LEASE_RENEWED', 'claim_token', v_new_claim_token);
+      RETURN jsonb_build_object('status', 'LEASE_EXPIRED_REQUIRES_ADMIN_REVIEW', 'message', 'Batch trước đó bị đứt đoạn dở dang. Đã đánh dấu FAILED để Admin xác minh.');
     END IF;
 
   ELSIF v_rec.status = 'FAILED' THEN
-    UPDATE app_private.batch_idempotency_logs
-    SET status = 'PROCESSING',
-        claim_token = v_new_claim_token,
-        processing_started_at = NOW(),
-        lease_expires_at = NOW() + INTERVAL '5 minutes',
-        failed_at = NULL,
-        updated_at = NOW()
-    WHERE id = v_rec.id;
-
-    RETURN jsonb_build_object('status', 'CLAIMED_RETRY', 'claim_token', v_new_claim_token);
+    RETURN jsonb_build_object('status', 'BATCH_FAILED_REQUIRES_ADMIN_REVIEW', 'message', 'Batch này đã bị thất bại ở lần chạy trước. Yêu cầu tạo IdempotencyKey mới.');
   END IF;
 
   RETURN jsonb_build_object('status', 'ERROR', 'message', 'Không thể xác định trạng thái idempotency.');
@@ -120,9 +119,9 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) TO authenticated;
 
--- 3. HÀM RPC HEARTBEAT DÙNG SERVICE_ROLE (XÁC MINH THEO IDEMPOTENCY_KEY VÀ CLAIM_TOKEN, KHÔNG PHỤ THUỘC AUTH.UID())
+-- 3. HÀM RPC HEARTBEAT DÙNG SERVICE_ROLE (XÁC MINH CHÍNH XÁC CẢ BATCH_ID VÀ CLAIM_TOKEN)
 CREATE OR REPLACE FUNCTION public.heartbeat_batch_idempotency(
-  p_idempotency_key TEXT,
+  p_batch_id UUID,
   p_claim_token UUID
 )
 RETURNS BOOLEAN
@@ -131,12 +130,12 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF p_idempotency_key IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
+  IF p_batch_id IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
 
   UPDATE app_private.batch_idempotency_logs
   SET lease_expires_at = NOW() + INTERVAL '3 minutes',
       updated_at = NOW()
-  WHERE idempotency_key = p_idempotency_key 
+  WHERE id = p_batch_id 
     AND claim_token = p_claim_token 
     AND status = 'PROCESSING'
     AND NOW() < lease_expires_at;
@@ -145,12 +144,12 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) TO service_role;
+REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(UUID, UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(UUID, UUID) TO service_role;
 
--- 4. HÀM RPC HOÀN TẤT BATCH DÙNG SERVICE_ROLE (STRICT WHITELIST SANITIZATION)
+-- 4. HÀM RPC HOÀN TẤT BATCH DÙNG SERVICE_ROLE (NHẬN BATCH_ID, CLAIM_TOKEN VÀ SANITIZE)
 CREATE OR REPLACE FUNCTION public.complete_batch_idempotency(
-  p_idempotency_key TEXT,
+  p_batch_id UUID,
   p_claim_token UUID,
   p_response_data JSONB,
   p_is_success BOOLEAN DEFAULT TRUE
@@ -164,9 +163,9 @@ DECLARE
   v_sanitized_results JSONB := '[]'::jsonb;
   v_sanitized_response JSONB;
 BEGIN
-  IF p_idempotency_key IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
+  IF p_batch_id IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
 
-  -- BẮT BUỘC SANITIZE BẰNG WHITELIST 100%: CHỈ GIỮ CÁC TRƯỜNG AN TOÀN CHO DB LOGS
+  -- BẮT BUỘC SANITIZE BẰNG WHITELIST 100%: KHÔNG LƯU MÃ PIN VÀO CSDL LOGS
   IF p_response_data ? 'results' AND jsonb_typeof(p_response_data->'results') = 'array' THEN
     SELECT COALESCE(jsonb_agg(
       jsonb_build_object(
@@ -198,7 +197,7 @@ BEGIN
         completed_at = NOW(),
         response_data = v_sanitized_response,
         updated_at = NOW()
-    WHERE idempotency_key = p_idempotency_key 
+    WHERE id = p_batch_id 
       AND claim_token = p_claim_token
       AND status = 'PROCESSING'
       AND NOW() < lease_expires_at;
@@ -207,7 +206,7 @@ BEGIN
     SET status = 'FAILED',
         failed_at = NOW(),
         updated_at = NOW()
-    WHERE idempotency_key = p_idempotency_key 
+    WHERE id = p_batch_id 
       AND claim_token = p_claim_token
       AND status = 'PROCESSING';
   END IF;
@@ -216,8 +215,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) TO service_role;
+REVOKE ALL ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) TO service_role;
 
 -- 5. BẢNG BỀN VỮNG LƯU TRỮ RATE LIMIT ĐĂNG NHẬP PIN
 CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (

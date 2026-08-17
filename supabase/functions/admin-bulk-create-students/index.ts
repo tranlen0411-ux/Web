@@ -60,6 +60,7 @@ serve(async (req) => {
       );
     }
 
+    // LẤY ADMIN_ID DUY NHẤT TỪ JWT ĐÃ ĐƯỢC SUPABASE XÁC MINH (KHÔNG TIN CLIENT)
     const supabaseCaller = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -100,7 +101,6 @@ serve(async (req) => {
 
     const { classId, students, dryRun = false, idempotencyKey } = body;
 
-    // FEATURE FLAG SERVER-SIDE: VÔ HIỆU HÓA TẠO THẬT NẾU CHƯA BẬT BẬC THỰC THI PROD
     const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
     if (!dryRun && !isAllowProductionBulkCreate) {
       return new Response(
@@ -223,6 +223,7 @@ serve(async (req) => {
     const hashBuffer = await crypto.subtle.digest('SHA-256', textEncoder.encode(rawFingerprintText));
     const payloadFingerprint = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
+    let batchId: string | null = null;
     let claimToken: string | null = null;
 
     if (idempotencyKey && typeof idempotencyKey === 'string') {
@@ -244,8 +245,14 @@ serve(async (req) => {
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } else if (claimRes.status === 'COMPLETED') {
+        // REQUEST REPLAYED: KHÔNG TRẢ LẠI PIN, TRẢ RESPONSE SANITIZED KÈM REPLAYED: TRUE
         return new Response(
-          JSON.stringify(claimRes.response_data),
+          JSON.stringify({
+            ...claimRes.response_data,
+            replayed: true,
+            credentialsAvailable: false,
+            message: 'Batch này đã hoàn tất từ trước. Mã PIN không thể lấy lại từ yêu cầu lặp.'
+          }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } else if (claimRes.status === 'PROCESSING_LEASE_ACTIVE') {
@@ -253,11 +260,12 @@ serve(async (req) => {
           JSON.stringify({ success: false, message: claimRes.message }),
           { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
-      } else if (claimRes.claim_token) {
+      } else if (claimRes.claim_token && claimRes.batch_id) {
+        batchId = claimRes.batch_id;
         claimToken = claimRes.claim_token;
       } else {
         return new Response(
-          JSON.stringify({ success: false, message: 'Không thể sở hữu claim_token xử lý batch.' }),
+          JSON.stringify({ success: false, message: claimRes.message || 'Không thể sở hữu claim_token xử lý batch.' }),
           { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -379,9 +387,9 @@ serve(async (req) => {
         results: dryResults,
       };
 
-      if (idempotencyKey && claimToken) {
+      if (idempotencyKey && batchId && claimToken) {
         await supabaseAdmin.rpc('complete_batch_idempotency', {
-          p_idempotency_key: idempotencyKey,
+          p_batch_id: batchId,
           p_claim_token: claimToken,
           p_response_data: dryRunResponse,
           p_is_success: true,
@@ -409,9 +417,9 @@ serve(async (req) => {
     let failedCount = 0;
 
     for (const item of cleanedStudentsInput) {
-      if (idempotencyKey && claimToken) {
+      if (idempotencyKey && batchId && claimToken) {
         const { data: hbOk, error: hbErr } = await supabaseAdmin.rpc('heartbeat_batch_idempotency', {
-          p_idempotency_key: idempotencyKey,
+          p_batch_id: batchId,
           p_claim_token: claimToken,
         });
 
@@ -605,6 +613,8 @@ serve(async (req) => {
     const prodResponse = {
       success: true,
       dryRun: false,
+      replayed: false,
+      credentialsAvailable: true,
       message: `Đã hoàn thành thực thi nạp batch cho Lớp 2.12.`,
       className: targetClass.name,
       classCode: targetClass.code,
@@ -617,9 +627,9 @@ serve(async (req) => {
       results: finalResults,
     };
 
-    if (idempotencyKey && claimToken) {
+    if (idempotencyKey && batchId && claimToken) {
       await supabaseAdmin.rpc('complete_batch_idempotency', {
-        p_idempotency_key: idempotencyKey,
+        p_batch_id: batchId,
         p_claim_token: claimToken,
         p_response_data: prodResponse,
         p_is_success: true,
