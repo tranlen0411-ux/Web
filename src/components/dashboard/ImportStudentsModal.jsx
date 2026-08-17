@@ -52,6 +52,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
   const [prodResult, setProdResult] = useState(null);
   const [isConfirmChecked, setIsConfirmChecked] = useState(false);
   const [hasExecutedProd, setHasExecutedProd] = useState(false);
+  const [hasDownloadedCSV, setHasDownloadedCSV] = useState(false);
 
   const [idempotencyKey] = useState(() => `batch_212_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
 
@@ -65,6 +66,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
       setErrorMessage('');
       setIsConfirmChecked(false);
       setHasExecutedProd(false);
+      setHasDownloadedCSV(false);
     }
   }, [isOpen]);
 
@@ -231,7 +233,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
     return `"${str.replace(/"/g, '""')}"`;
   };
 
-  const handleDownloadCSV = () => {
+  const handleDownloadCSV = async () => {
     if (!prodResult || !prodResult.results) return;
 
     const headers = ['STT', 'Họ Và Tên', 'Mã Học Sinh', 'Mã PIN Đăng Nhập', 'Trạng Thái', 'Ghi Chú'];
@@ -239,7 +241,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
       r.stt,
       r.fullName,
       r.studentCode || '-',
-      r.pin || 'Đã có sẵn',
+      r.pin || 'Không công khai lại',
       r.status,
       r.note
     ]);
@@ -258,15 +260,36 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
     link.click();
     document.body.removeChild(link);
     
-    // Thu hồi URL Blob giải phóng bộ nhớ RAM
     setTimeout(() => {
       URL.revokeObjectURL(url);
     }, 1000);
+
+    setHasDownloadedCSV(true);
+
+    // MỤC 12: XÁC NHẬN BÀN GIAO CREDENTIALS BẰNG RPC VỚI DB
+    if (prodResult.batchId && prodResult.claimToken) {
+      try {
+        await supabase.rpc('confirm_credentials_delivery', {
+          p_batch_id: prodResult.batchId,
+          p_claim_token: prodResult.claimToken
+        });
+      } catch (err) {
+        console.error('Lỗi gọi RPC confirm_credentials_delivery:', err);
+      }
+    }
+  };
+
+  const handleSafeClose = () => {
+    if (step === 4 && hasExecutedProd && !hasDownloadedCSV) {
+      if (!window.confirm('CẢNH BÁO BẢO MẬT: Bạn chưa tải xuống file CSV chứa Mật khẩu PIN của học sinh! Mật khẩu PIN sẽ không thể lấy lại nếu bạn đóng cửa sổ này. Bạn có chắc chắn muốn đóng?')) {
+        return;
+      }
+    }
+    onClose();
   };
 
   if (!isOpen) return null;
 
-  // Kiểm tra điều kiện khóa nút Tạo Thật Production
   const isProdDisabled = !dryRunData || 
     dryRunData.summary.reviewRequired > 0 || 
     dryRunData.results.length !== parsedStudents.length ||
@@ -288,7 +311,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
             </p>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleSafeClose}
             disabled={isLoading}
             className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg"
           >
@@ -336,7 +359,7 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
 
             <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={onClose}
+                onClick={handleSafeClose}
                 className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm transition-all"
               >
                 Hủy
@@ -495,22 +518,34 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
               </p>
             </div>
 
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium flex items-center gap-2">
-              <span>⚠️</span> 
-              <span>
-                <strong>Cảnh báo bảo mật:</strong> Hãy tải ngay file CSV mật khẩu PIN bên dưới trước khi đóng modal! Mã PIN sẽ bị xóa khỏi bộ nhớ RAM để bảo mật.
-              </span>
-            </div>
+            {prodResult.replayed && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800 font-medium flex items-center gap-2">
+                <span>ℹ️</span> 
+                <span>
+                  <strong>Yêu cầu lặp (Replayed):</strong> Batch này đã hoàn tất từ trước. Mã PIN không được công khai lại để bảo mật.
+                  {prodResult.requiresPinReset && " Vui lòng bấm nút 'Cấp lại PIN' bên dưới nếu tài khoản chưa hoàn tất nhận mật khẩu."}
+                </span>
+              </div>
+            )}
+
+            {!prodResult.replayed && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium flex items-center gap-2">
+                <span>⚠️</span> 
+                <span>
+                  <strong>Cảnh báo bảo mật:</strong> Mã PIN chỉ hiển thị một lần duy nhất này. Vui lòng bấm Tải CSV bên dưới ngay bây giờ!
+                </span>
+              </div>
+            )}
 
             <div className="flex justify-end gap-3 pt-3">
               <button
                 onClick={handleDownloadCSV}
                 className="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2"
               >
-                <span>💾</span> Tải File CSV Mật Khẩu PIN Học Sinh
+                <span>💾</span> {hasDownloadedCSV ? '✓ Đã Bàn Giao & Tải CSV' : 'Tải File CSV Mật Khẩu PIN Học Sinh'}
               </button>
               <button
-                onClick={onClose}
+                onClick={handleSafeClose}
                 className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white font-bold text-sm"
               >
                 Đóng
@@ -522,4 +557,4 @@ export default function ImportStudentsModal({ isOpen, onClose }) {
     </div>
   );
 }
-``` protocol
+```,Description:

@@ -1,6 +1,7 @@
 -- ============================================================================
 -- SQL MIGRATION BẢO MẬT CẤP ENTERPRISE: BẢNG IDEMPOTENCY THEO BATCH_ID VÀ CLAIM_TOKEN
--- CHẤP NHẬN BATCH_ID + CLAIM_TOKEN TRONG RPC VÀ SANITIZE MỘT LẦN DÙNG SERVICE_ROLE
+-- + TIẾN ĐỘ DÒNG CÓ SHA-256 UNIQUE(BATCH_ID, ROW_KEY), TRẠNG THÁI BÀN GIAO CREDENTIALS
+-- VÀ HÀM CONFIRM_CREDENTIALS_DELIVERY CÙNG SECURE PIN RESET
 -- ============================================================================
 
 BEGIN;
@@ -15,6 +16,8 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
   claim_token UUID NOT NULL DEFAULT gen_random_uuid(),
   payload_fingerprint TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('PROCESSING', 'COMPLETED', 'FAILED')),
+  credentials_delivery_status TEXT NOT NULL DEFAULT 'PENDING_DELIVERY' CHECK (credentials_delivery_status IN ('PENDING_DELIVERY', 'DELIVERED')),
+  credentials_delivered_at TIMESTAMPTZ,
   processing_started_at TIMESTAMPTZ DEFAULT NOW(),
   lease_expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '5 minutes'),
   completed_at TIMESTAMPTZ,
@@ -27,7 +30,26 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
 
 REVOKE ALL ON TABLE app_private.batch_idempotency_logs FROM PUBLIC, anon, authenticated;
 
--- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (TRẢ VỀ CẢ BATCH_ID VÀ CLAIM_TOKEN)
+-- 2. BẢNG TIẾN ĐỘ TỪNG DÒNG VỚI UNIQUE(BATCH_ID, ROW_KEY) BẰNG SHA-256
+CREATE TABLE IF NOT EXISTS app_private.batch_student_rows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id UUID NOT NULL REFERENCES app_private.batch_idempotency_logs(id) ON DELETE CASCADE,
+  row_key TEXT NOT NULL,
+  stt INT NOT NULL,
+  full_name TEXT NOT NULL,
+  student_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  student_code TEXT,
+  status TEXT NOT NULL CHECK (status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'SKIPPED')),
+  credentials_delivery_status TEXT NOT NULL DEFAULT 'PENDING_DELIVERY' CHECK (credentials_delivery_status IN ('PENDING_DELIVERY', 'DELIVERED')),
+  credentials_delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_batch_row_key UNIQUE (batch_id, row_key)
+);
+
+REVOKE ALL ON TABLE app_private.batch_student_rows FROM PUBLIC, anon, authenticated;
+
+-- 3. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (TRẢ VỀ BATCH_ID VÀ CLAIM_TOKEN)
 CREATE OR REPLACE FUNCTION public.claim_batch_idempotency(
   p_idempotency_key TEXT,
   p_payload_fingerprint TEXT
@@ -43,13 +65,12 @@ DECLARE
   v_rec RECORD;
   v_new_claim_token UUID;
 BEGIN
-  -- 1. Lấy admin_id duy nhất từ JWT đã được Supabase xác minh
+  -- Lấy admin_id duy nhất từ JWT xác minh
   v_caller_id := (SELECT auth.uid());
   IF v_caller_id IS NULL THEN
     RETURN jsonb_build_object('status', 'UNAUTHORIZED', 'message', 'Chưa đăng nhập.');
   END IF;
 
-  -- 2. Phân quyền Admin
   SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
   IF v_caller_role IS DISTINCT FROM 'admin' THEN
     RETURN jsonb_build_object('status', 'FORBIDDEN', 'message', 'Từ chối truy cập: Chỉ Admin mới được thực hiện.');
@@ -61,14 +82,12 @@ BEGIN
 
   v_new_claim_token := gen_random_uuid();
 
-  -- 3. Insert claim mới theo cặp (admin_id, idempotency_key)
   INSERT INTO app_private.batch_idempotency_logs (
     admin_id, idempotency_key, claim_token, payload_fingerprint, status, processing_started_at, lease_expires_at
   ) VALUES (
     v_caller_id, p_idempotency_key, v_new_claim_token, p_payload_fingerprint, 'PROCESSING', NOW(), NOW() + INTERVAL '5 minutes'
   ) ON CONFLICT (admin_id, idempotency_key) DO NOTHING;
 
-  -- 4. Khóa hàng bằng FOR UPDATE để kiểm tra trạng thái và lease
   SELECT * INTO v_rec
   FROM app_private.batch_idempotency_logs
   WHERE admin_id = v_caller_id AND idempotency_key = p_idempotency_key
@@ -87,20 +106,32 @@ BEGIN
   END IF;
 
   IF v_rec.status = 'COMPLETED' THEN
-    -- Ghi nhận Request lặp -> Thêm cờ replayed: true và credentialsAvailable: false
-    RETURN jsonb_build_object(
-      'status', 'COMPLETED', 
-      'batch_id', v_rec.id,
-      'replayed', true,
-      'credentialsAvailable', false,
-      'response_data', v_rec.response_data
-    );
-  
+    IF v_rec.credentials_delivery_status = 'DELIVERED' THEN
+      RETURN jsonb_build_object(
+        'status', 'COMPLETED', 
+        'batch_id', v_rec.id,
+        'replayed', true,
+        'credentialsAvailable', false,
+        'requiresPinReset', false,
+        'response_data', v_rec.response_data
+      );
+    ELSE
+      -- ĐÃ COMPLETED NHƯNG BÀN GIAO CHƯA XÁC NHẬN -> YÊU CẦU RESET PIN BẢO MẬT
+      RETURN jsonb_build_object(
+        'status', 'COMPLETED_PENDING_DELIVERY', 
+        'batch_id', v_rec.id,
+        'replayed', true,
+        'credentialsAvailable', false,
+        'requiresPinReset', true,
+        'message', 'Tài khoản đã tạo nhưng Admin chưa tải CSV mật khẩu. Cần thực hiện cấp lại PIN bảo mật.',
+        'response_data', v_rec.response_data
+      );
+    END IF;
+
   ELSIF v_rec.status = 'PROCESSING' THEN
     IF NOW() < v_rec.lease_expires_at THEN
       RETURN jsonb_build_object('status', 'PROCESSING_LEASE_ACTIVE', 'message', 'Yêu cầu batch này đang được hệ thống xử lý, vui lòng chờ.');
     ELSE
-      -- Khóa hoàn toàn reclaim tự động khi batch Production bị dở dang để bảo vệ toàn vẹn dữ liệu
       UPDATE app_private.batch_idempotency_logs
       SET status = 'FAILED', failed_at = NOW(), updated_at = NOW()
       WHERE id = v_rec.id;
@@ -119,7 +150,47 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) TO authenticated;
 
--- 3. HÀM RPC HEARTBEAT DÙNG SERVICE_ROLE (XÁC MINH CHÍNH XÁC CẢ BATCH_ID VÀ CLAIM_TOKEN)
+-- 4. RPC CONFIRM CREDENTIALS DELIVERY (XÁC NHẬN ĐÃ TẢI FILE CSV TỪ FRONTEND)
+CREATE OR REPLACE FUNCTION public.confirm_credentials_delivery(
+  p_batch_id UUID,
+  p_claim_token UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_caller_id UUID;
+BEGIN
+  v_caller_id := (SELECT auth.uid());
+  IF v_caller_id IS NULL THEN RETURN FALSE; END IF;
+
+  UPDATE app_private.batch_idempotency_logs
+  SET credentials_delivery_status = 'DELIVERED',
+      credentials_delivered_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_batch_id 
+    AND admin_id = v_caller_id
+    AND claim_token = p_claim_token;
+
+  IF FOUND THEN
+    UPDATE app_private.batch_student_rows
+    SET credentials_delivery_status = 'DELIVERED',
+        credentials_delivered_at = NOW(),
+        updated_at = NOW()
+    WHERE batch_id = p_batch_id;
+    RETURN TRUE;
+  END IF;
+
+  RETURN FALSE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.confirm_credentials_delivery(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.confirm_credentials_delivery(UUID, UUID) TO authenticated;
+
+-- 5. RPC HEARTBEAT DÙNG SERVICE_ROLE
 CREATE OR REPLACE FUNCTION public.heartbeat_batch_idempotency(
   p_batch_id UUID,
   p_claim_token UUID
@@ -147,7 +218,7 @@ $$;
 REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(UUID, UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(UUID, UUID) TO service_role;
 
--- 4. HÀM RPC HOÀN TẤT BATCH DÙNG SERVICE_ROLE (NHẬN BATCH_ID, CLAIM_TOKEN VÀ SANITIZE)
+-- 6. RPC COMPLETE BATCH DÙNG SERVICE_ROLE (WHITELIST SANITIZATION)
 CREATE OR REPLACE FUNCTION public.complete_batch_idempotency(
   p_batch_id UUID,
   p_claim_token UUID,
@@ -165,7 +236,6 @@ DECLARE
 BEGIN
   IF p_batch_id IS NULL OR p_claim_token IS NULL THEN RETURN FALSE; END IF;
 
-  -- BẮT BUỘC SANITIZE BẰNG WHITELIST 100%: KHÔNG LƯU MÃ PIN VÀO CSDL LOGS
   IF p_response_data ? 'results' AND jsonb_typeof(p_response_data->'results') = 'array' THEN
     SELECT COALESCE(jsonb_agg(
       jsonb_build_object(
@@ -218,7 +288,7 @@ $$;
 REVOKE ALL ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(UUID, UUID, JSONB, BOOLEAN) TO service_role;
 
--- 5. BẢNG BỀN VỮNG LƯU TRỮ RATE LIMIT ĐĂNG NHẬP PIN
+-- 7. BẢNG BỀN VỮNG LƯU TRỮ RATE LIMIT ĐĂNG NHẬP PIN
 CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   identifier TEXT NOT NULL UNIQUE,
@@ -229,7 +299,7 @@ CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (
 
 REVOKE ALL ON TABLE app_private.login_rate_limits FROM PUBLIC, anon, authenticated;
 
--- 6. RPC VERIFY PIN NGUYÊN TỬ VỚI UPSERT TRƯỚC VÀ LOCKING CÓ THỨ TỰ SẮP XẾP (ORDER BY ASC FOR UPDATE)
+-- 8. RPC VERIFY PIN NGUYÊN TỬ VỚI UPSERT TRƯỚC VÀ LOCKING CÓ THỨ TỰ SẮP XẾP (ORDER BY ASC FOR UPDATE)
 CREATE OR REPLACE FUNCTION public.verify_student_pin_rate_limited(
   p_student_code TEXT,
   p_pin TEXT,
@@ -331,6 +401,7 @@ $$;
 REVOKE ALL ON FUNCTION public.verify_student_pin_rate_limited(TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.verify_student_pin_rate_limited(TEXT, TEXT, TEXT) TO service_role;
 
+-- 9. KIỂM TRA & TẠO CHÍNH THỨC UNIQUE INDEX TRÊN PUBLIC.PROFILES.STUDENT_CODE
 DO $$
 DECLARE
   v_duplicate_count INT;
