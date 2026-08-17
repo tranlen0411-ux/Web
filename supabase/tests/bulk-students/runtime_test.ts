@@ -404,11 +404,12 @@ Deno.test("17. Rate Limit Concurrency - Chạy song song 2 request gửi tới E
   const client = new Client(DB_URL);
   await client.connect();
 
-  await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/student-quick-login`, {
+  const httpRes = await fetch(`${SUPABASE_LOCAL_GATEWAY}/functions/v1/student-quick-login`, {
     method: "POST",
     headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
     body: JSON.stringify({ studentCode: concCode, pin: "1111" }),
   });
+  await httpRes.text();
 
   const queryRes = await client.queryObject<{ failed_attempts: number }>(
     `SELECT failed_attempts FROM app_private.login_rate_limits WHERE identifier = $1;`,
@@ -419,7 +420,7 @@ Deno.test("17. Rate Limit Concurrency - Chạy song song 2 request gửi tới E
   assertEquals(queryRes.rows.length >= 1, true, "Rate limit đếm thất bại phải được khởi tạo");
 });
 
-Deno.test("18. Idempotency Concurrency - Hai claim đồng thời chỉ 1 claim được cấp status PROCESSING", async () => {
+Deno.test("18. Idempotency Concurrency - Hai claim đồng thời chỉ 1 claim được cấp status CLAIMED", async () => {
   const client1 = await createAdminDbClient();
   const client2 = await createAdminDbClient();
 
@@ -436,11 +437,10 @@ Deno.test("18. Idempotency Concurrency - Hai claim đồng thời chỉ 1 claim 
   const r1 = parseRpcResult(res1.rows[0].res);
   const r2 = parseRpcResult(res2.rows[0].res);
 
-  const b1 = r1.batch_id || r1.batchId || r1.id;
-  const b2 = r2.batch_id || r2.batchId || r2.id;
+  const isOneClaimed = r1.status === "CLAIMED" || r2.status === "CLAIMED";
+  const isOneLeaseActive = r1.status === "PROCESSING_LEASE_ACTIVE" || r2.status === "PROCESSING_LEASE_ACTIVE";
 
-  assertEquals(r1.status === "CLAIMED" || r2.status === "CLAIMED" || r1.status === "PROCESSING" || r2.status === "PROCESSING", true);
-  assertEquals(b1 === b2 || typeof b1 === "string", true, "Cả hai claim phải nhận cùng batchId");
+  assertEquals(isOneClaimed && isOneLeaseActive, true, "1 worker nhận CLAIMED, 1 worker nhận PROCESSING_LEASE_ACTIVE");
 });
 
 Deno.test("19. Idempotency Fingerprint Mismatch - Cùng key khác payload trả PAYLOAD_MISMATCH", async () => {
