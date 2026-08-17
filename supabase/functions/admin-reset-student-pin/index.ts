@@ -51,7 +51,7 @@ serve(async (req) => {
     .eq('classes.grade_level',2)
     .maybeSingle();
   if (membershipErr||!membership) return new Response(JSON.stringify({success:false,message:'Học sinh không thuộc Lớp 2.12.'}),{status:400,headers});
-  const {data:allowed,error:limitErr}=await adminClient.rpc('claim_student_pin_reset',{p_admin_id:user.id,p_student_id:student.id});
+  const {data:allowed,error:limitErr}=await adminClient.rpc('claim_student_pin_reset',{p_admin_id:callerUserId,p_student_id:student.id});
   if (limitErr||allowed!==true) return new Response(JSON.stringify({success:false,message:'Đã vượt giới hạn cấp lại PIN. Vui lòng thử sau.'}),{status:429,headers});
   const pin=crypto.getRandomValues(new Uint32Array(1))[0].toString().padStart(10,'0').slice(-4);
   const {data:pinOk,error:pinErr}=await adminClient.rpc('set_student_pin_service',{p_student_id:student.id,p_pin:pin});
