@@ -182,7 +182,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
     }
   };
 
-  // Thực thi Giao bài tập cho các lớp
+  // Thực thi Giao bài tập cho các lớp qua RPC SECURITY DEFINER an toàn bảo mật
   const handleConfirmAssignClasses = async () => {
     if (!assignModalExercise) return;
     if (selectedClassIdsToAssign.length === 0) {
@@ -194,70 +194,29 @@ export const ExerciseListTab = ({ role = 'student' }) => {
     setAssignError('');
 
     try {
-      let assignedClassNames = [];
-      let assignSuccess = false;
-      let rpcErrorMessage = '';
+      // 1. Gọi RPC assign_exercise_to_classes kiểm tra phân quyền chặt chẽ trên Database
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
+        p_exercise_id: assignModalExercise.id,
+        p_class_ids: selectedClassIdsToAssign
+      });
 
-      // 1. Thử gọi RPC assign_exercise_to_classes an toàn atomic
-      try {
-        const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
-          p_exercise_id: assignModalExercise.id,
-          p_class_ids: selectedClassIdsToAssign
-        });
-
-        if (!rpcErr && rpcRes && rpcRes.success) {
-          assignSuccess = true;
-          assignedClassNames = rpcRes.assigned_classes || [];
-        } else if (rpcErr && rpcErr.message && !rpcErr.message.includes('function')) {
-          rpcErrorMessage = rpcErr.message;
+      if (rpcErr) {
+        let userErrMsg = rpcErr.message || 'Lỗi hệ thống.';
+        if (userErrMsg.includes('function') || userErrMsg.includes('schema cache') || rpcErr.code === 'PGRST202' || rpcErr.code === 'PGRST205') {
+          userErrMsg = '❌ CSDL Supabase chưa nạp RPC [assign_exercise_to_classes]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
         }
-      } catch (rpcEx) {
-        console.warn('RPC assign_exercise_to_classes warning:', rpcEx);
+        setAssignError(userErrMsg);
+        setIsAssigning(false);
+        return;
       }
 
-      // 2. Dự phòng trực tiếp nếu RPC chưa khởi chạy trên database
-      if (!assignSuccess) {
-        const insertPayloads = selectedClassIdsToAssign.map(cId => ({
-          exercise_id: assignModalExercise.id,
-          class_id: cId,
-          assigned_by: profile?.id,
-          due_date: assignModalExercise.due_date
-        }));
-
-        const { error: insertErr } = await supabase
-          .from('academic_exercise_assignments')
-          .upsert(insertPayloads, { onConflict: 'exercise_id,class_id' });
-
-        if (insertErr) {
-          // Bắt lỗi nếu bảng academic_exercise_assignments chưa tồn tại trên Database Supabase
-          let userErrMsg = insertErr.message || rpcErrorMessage || 'Lỗi hệ thống.';
-          if (userErrMsg.includes('academic_exercise_assignments') || insertErr.code === 'PGRST205' || userErrMsg.includes('schema cache')) {
-            userErrMsg = '❌ CSDL Supabase chưa tạo bảng [academic_exercise_assignments]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
-          } else {
-            userErrMsg = 'Lỗi khi tạo bản ghi giao bài cho lớp: ' + userErrMsg;
-          }
-
-          console.error('Insert assignment error:', insertErr);
-          setAssignError(userErrMsg);
-          setIsAssigning(false);
-          return;
-        }
-
-        // Cập nhật trạng thái published và class_id đại diện trên bài tập gốc
-        await supabase
-          .from('academic_exercises')
-          .update({
-            status: 'published',
-            class_id: selectedClassIdsToAssign[0],
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', assignModalExercise.id);
-
-        assignedClassNames = availableClasses
-          .filter(c => selectedClassIdsToAssign.includes(c.id))
-          .map(c => formatClassLabel(c.name));
+      if (!rpcRes || !rpcRes.success) {
+        setAssignError(rpcRes?.message || 'Không thể giao bài tập cho các lớp được chọn.');
+        setIsAssigning(false);
+        return;
       }
 
+      const assignedClassNames = rpcRes.assigned_classes || [];
       showToast(`🎉 Đã xuất bản và giao bài cho lớp [${assignedClassNames.join(', ')}] thành công!`);
       setAssignModalExercise(null);
       fetchData();

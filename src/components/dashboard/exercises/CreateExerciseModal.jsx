@@ -381,64 +381,28 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
       // 2. Nếu là hành động "Xuất bản & Giao bài" và có lớp được chọn
       let assignedClassNames = [];
       if (submitAction === 'publish_and_assign' && finalStatus === 'published' && targetClassesToAssign.length > 0 && savedExerciseId) {
-        let assignSuccess = false;
-        let assignErrorMessage = '';
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
+          p_exercise_id: savedExerciseId,
+          p_class_ids: targetClassesToAssign
+        });
 
-        // Thử 1: Gọi RPC assign_exercise_to_classes
-        try {
-          const { data: rpcRes, error: rpcErr } = await supabase.rpc('assign_exercise_to_classes', {
-            p_exercise_id: savedExerciseId,
-            p_class_ids: targetClassesToAssign
-          });
-
-          if (!rpcErr && rpcRes && rpcRes.success) {
-            assignSuccess = true;
-            assignedClassNames = rpcRes.assigned_classes || [];
-          } else if (rpcErr && rpcErr.message && !rpcErr.message.includes('function')) {
-            assignErrorMessage = rpcErr.message;
+        if (rpcErr) {
+          let userErrMsg = rpcErr.message || 'Lỗi hệ thống khi giao bài.';
+          if (userErrMsg.includes('function') || userErrMsg.includes('schema cache') || rpcErr.code === 'PGRST202' || rpcErr.code === 'PGRST205') {
+            userErrMsg = '❌ CSDL Supabase chưa nạp RPC [assign_exercise_to_classes]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
           }
-        } catch (rpcEx) {
-          console.warn('RPC assign_exercise_to_classes warning:', rpcEx);
+          setErrorMsg(userErrMsg);
+          setIsSubmitting(false);
+          return;
         }
 
-        // Thử 2: Dự phòng trực tiếp nếu RPC chưa khởi chạy hoặc lỗi
-        if (!assignSuccess) {
-          const insertPayloads = targetClassesToAssign.map(cId => ({
-            exercise_id: savedExerciseId,
-            class_id: cId,
-            assigned_by: profile?.id,
-            due_date: dueDate ? new Date(dueDate).toISOString() : null
-          }));
-
-          const { error: upsertErr } = await supabase
-            .from('academic_exercise_assignments')
-            .upsert(insertPayloads, { onConflict: 'exercise_id,class_id' });
-
-          if (upsertErr) {
-            // NẾU TẠO BẢN GHI GIAO BÀI THẤT BẠI: BÁO LỖI NGAY, KHÔNG ĐƯỢC GIẢ BÁO THÀNH CÔNG!
-            let userErrMsg = upsertErr.message || assignErrorMessage || 'Lỗi hệ thống.';
-            if (userErrMsg.includes('academic_exercise_assignments') || upsertErr.code === 'PGRST205' || userErrMsg.includes('schema cache')) {
-              userErrMsg = '❌ CSDL Supabase chưa tạo bảng [academic_exercise_assignments]. Vui lòng chạy file CREATE_ACADEMIC_EXERCISE_ASSIGNMENTS_TABLE.sql trong Supabase SQL Editor!';
-            } else {
-              userErrMsg = 'Lỗi khi tạo bản ghi giao bài tập cho lớp: ' + userErrMsg;
-            }
-
-            console.error('Assign exercise error:', upsertErr);
-            setErrorMsg(userErrMsg);
-            setIsSubmitting(false);
-            return;
-          }
-
-          // Cập nhật class_id đại diện trên bài tập gốc
-          await supabase
-            .from('academic_exercises')
-            .update({ class_id: targetClassesToAssign[0] })
-            .eq('id', savedExerciseId);
-
-          assignedClassNames = classesList
-            .filter(c => targetClassesToAssign.includes(c.id))
-            .map(c => formatClassLabel(c.name));
+        if (!rpcRes || !rpcRes.success) {
+          setErrorMsg(rpcRes?.message || 'Không thể giao bài tập cho các lớp được chọn.');
+          setIsSubmitting(false);
+          return;
         }
+
+        assignedClassNames = rpcRes.assigned_classes || [];
       }
 
       // Xác định thông báo thành công chuẩn xác theo nghiệp vụ

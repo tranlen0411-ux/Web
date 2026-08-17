@@ -1,6 +1,6 @@
 -- ============================================================================
--- SCRIPT MIGRATION TẠO BẢNG PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS HỢP CHUẨN
--- ĐÃ KHẮC PHỤC TRIỆT ĐỂ LỖI RECURSIVE RLS POLICY VÀ CHUẨN HÓA PRIVILEGES
+-- SCRIPT MIGRATION TẠO BẢNG PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS VÀ RPC BẢO MẬT
+-- CHỈ CHO PHÉP GIAO BÀI QUA RPC SECURITY DEFINER (KHÓA INSERT/UPDATE DIRECT)
 -- ============================================================================
 
 BEGIN;
@@ -22,13 +22,14 @@ CREATE TABLE IF NOT EXISTS public.academic_exercise_assignments (
 CREATE INDEX IF NOT EXISTS idx_academic_assignments_exercise ON public.academic_exercise_assignments(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_academic_assignments_class ON public.academic_exercise_assignments(class_id);
 
--- 3. CẤP QUYỀN TRUY CẬP THEO QUY TẮC PHÂN QUYỀN TỐI THIỂU (LEAST PRIVILEGE)
+-- 3. CẤP QUYỀN TRUY CẬP AN TOÀN - REVOKE DANGEROUS WRITE PERMISSIONS FROM ANON/AUTHENTICATED
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
+REVOKE ALL ON public.academic_exercise_assignments FROM PUBLIC, anon;
+REVOKE INSERT, UPDATE, DELETE ON public.academic_exercise_assignments FROM authenticated;
 GRANT SELECT ON public.academic_exercise_assignments TO anon, authenticated;
-GRANT INSERT, UPDATE, DELETE ON public.academic_exercise_assignments TO authenticated;
 GRANT ALL ON public.academic_exercise_assignments TO service_role, postgres;
 
--- 4. CHUYỂN DỮ LIỆU CÁC BÀI ĐÃ XUẤT BẢN HIỆN CÓ SANG BẢNG GIAO BÀI (KHÔNG MẤT DỮ LIỆU CŨ)
+-- 4. CHUYỂN DỮ LIỆU CÁC BÀI ĐÃ XUẤT BẢN HIỆN CÓ SANG BẢNG GIAO BÀI (KHÔNG MẤT DỮ LIỆU CỦ)
 INSERT INTO public.academic_exercise_assignments (exercise_id, class_id, assigned_by, assigned_at, due_date)
 SELECT 
   e.id AS exercise_id,
@@ -61,30 +62,6 @@ FOR SELECT USING (
   OR EXISTS (
     SELECT 1 FROM public.class_members cm 
     WHERE cm.class_id = academic_exercise_assignments.class_id AND cm.student_id = auth.uid()
-  )
-);
-
--- INSERT POLICY:
--- Admin: giao bài cho bất kỳ lớp nào.
--- Teacher: chỉ được giao bài cho lớp do mình phụ trách (classes.teacher_id = auth.uid()).
-CREATE POLICY "Academic assignments insert policy" ON public.academic_exercise_assignments
-FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR EXISTS (
-    SELECT 1 FROM public.classes c 
-    WHERE c.id = class_id AND c.teacher_id = auth.uid()
-  )
-);
-
--- DELETE POLICY:
--- Admin hoặc Giáo viên phụ trách lớp được thu hồi bài đã giao.
-CREATE POLICY "Academic assignments delete policy" ON public.academic_exercise_assignments
-FOR DELETE USING (
-  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  OR assigned_by = auth.uid()
-  OR EXISTS (
-    SELECT 1 FROM public.classes c 
-    WHERE c.id = class_id AND c.teacher_id = auth.uid()
   )
 );
 
@@ -141,7 +118,7 @@ FOR SELECT USING (
   )
 );
 
--- 8. RPC DEFINITION: GIAO BÀI TẬP CHO NHIỀU LỚP ATOMIC
+-- 8. RPC DEFINITION: GIAO BÀI TẬP CHO NHIỀU LỚP ATOMIC CHUẨN BẢO MẬT
 CREATE OR REPLACE FUNCTION public.assign_exercise_to_classes(
   p_exercise_id UUID,
   p_class_ids UUID[]
@@ -229,6 +206,10 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- SIẾT BẢO MẬT RPC - CHỈ CHO PHÉP TÀI KHOẢN ĐÃ XÁC THỰC (AUTHENTICATED) GỌI HÀM
+REVOKE ALL ON FUNCTION public.assign_exercise_to_classes(UUID, UUID[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.assign_exercise_to_classes(UUID, UUID[]) TO authenticated;
 
 COMMIT;
 
