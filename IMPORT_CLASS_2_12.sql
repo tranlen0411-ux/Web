@@ -1,7 +1,8 @@
 -- ============================================================================
 -- SCRIPT THỰC THI DỮ LIỆU: NHẬP DANH SÁCH LỚP 2.12 VÀ 34 HỌC SINH VÀO SUPABASE
--- LƯU Ý: ĐÂY LA SCRIPT THỰC THI CÓ GHI DỮ LIỆU HỢP LỆ (KHÔNG PHẢI PREFLIGHT THUẦN TÚY)
+-- LƯU Ý: ĐÂY LÀ SCRIPT THỰC THI CÓ GHI DỮ LIỆU HỢP LỆ (KHÔNG PHẢI PREFLIGHT THUẦN TÚY)
 -- TỰ ĐỘNG ROLLBACK TOÀN BỘ TRANSACTION NẾU GIÁO VIÊN HOẶC LỚP HỌC KHÔNG HỢP LỆ
+-- CHỈ GÁN CÁC HỌC SINH ĐÃ CÓ ĐÚNG 1 PROFILE VÀ CHƯA THUỘC LỚP NÀO VÀO LỚP 2.12
 -- ============================================================================
 
 BEGIN;
@@ -26,11 +27,13 @@ DECLARE
   v_teacher_email TEXT;
   
   v_class_name TEXT := 'Lớp 2.12';
+  v_class_name_norm TEXT;
   v_grade_level INT := 2;
   v_matching_classes_count INT := 0;
   v_class_id UUID := NULL;
   v_class_is_new BOOLEAN := FALSE;
   v_class_code TEXT;
+  v_code_exists BOOLEAN := TRUE;
   v_existing_teacher_id UUID;
   v_existing_teacher_name TEXT;
 
@@ -89,6 +92,9 @@ DECLARE
   v_no_account INT := 0;
   v_duplicate_name INT := 0;
 BEGIN
+  -- Chuẩn hóa tên lớp cần tìm (gộp mọi khoảng trắng thừa)
+  v_class_name_norm := LOWER(TRIM(regexp_replace(v_class_name, '\s+', ' ', 'g')));
+
   -- =========================================================================
   -- BƯỚC I: XÁC ĐỊNH DUY NHẤT GIÁO VIÊN "Lã Nguyễn Diễm Hương"
   -- =========================================================================
@@ -107,20 +113,20 @@ BEGIN
   RAISE NOTICE 'XÁC NHẬN GIÁO VIÊN DUY NHẤT: ID=%, Name="%", Email=%', v_teacher_id, v_teacher_full_name, v_teacher_email;
 
   -- =========================================================================
-  -- BƯỚC II: KIỂM TRA SỐ LƯỢNG VÀ BẢO VỆ GIAO VIÊN LỚP 2.12
+  -- BƯỚC II: KIỂM TRA CHUẨN HÓA TÊN LỚP VÀ BẢO VỆ GIÁO VIÊN LỚP 2.12
   -- =========================================================================
   SELECT COUNT(*) INTO v_matching_classes_count
   FROM public.classes
-  WHERE LOWER(TRIM(name)) = LOWER(TRIM(v_class_name))
+  WHERE LOWER(TRIM(regexp_replace(name, '\s+', ' ', 'g'))) = v_class_name_norm
     AND grade_level = v_grade_level;
 
   IF v_matching_classes_count > 1 THEN
-    RAISE EXCEPTION 'TRANSACTION ROLLBACK: Phát hiện % Lớp cùng có tên "%" và grade_level = %. Cần kiểm tra trùng lớp thủ công!', v_matching_classes_count, v_class_name, v_grade_level;
+    RAISE EXCEPTION 'TRANSACTION ROLLBACK: Phát hiện % Lớp trùng tên (sau khi gộp khoảng trắng) "%" và grade_level = %. Cần kiểm tra gộp lớp thủ công!', v_matching_classes_count, v_class_name, v_grade_level;
   ELSIF v_matching_classes_count = 1 THEN
     v_class_is_new := FALSE;
     SELECT id, teacher_id INTO v_class_id, v_existing_teacher_id
     FROM public.classes
-    WHERE LOWER(TRIM(name)) = LOWER(TRIM(v_class_name))
+    WHERE LOWER(TRIM(regexp_replace(name, '\s+', ' ', 'g'))) = v_class_name_norm
       AND grade_level = v_grade_level;
 
     -- Kiểm tra Giáo viên hiện tại của Lớp 2.12
@@ -132,7 +138,7 @@ BEGIN
       RAISE NOTICE 'LỚP 2.12 ĐÃ TỒN TẠI VÀ CHƯA CÓ GIÁO VIÊN -> ĐÃ GÁN CHO CÔ LÃ NGUYỄN DIỄM HƯƠNG (Class ID=%)', v_class_id;
 
     ELSIF v_existing_teacher_id = v_teacher_id THEN
-      -- Nếu đã đúng ID cô Hương -> Giữ nguyên
+      -- Nếu đã đúng ID cô Hương -> Giữ nguyên (không ghi đè mã lớp cũ)
       RAISE NOTICE 'LỚP 2.12 ĐÃ TỒN TẠI VÀ ĐÃ ĐÚNG CÔ LÃ NGUYỄN DIỄM HƯƠNG PHỤ TRÁCH (Class ID=%)', v_class_id;
 
     ELSE
@@ -145,9 +151,13 @@ BEGIN
     END IF;
 
   ELSE
-    -- Chưa có Lớp 2.12 -> Tạo mới với mã code độc nhất
+    -- Chưa có Lớp 2.12 -> Tạo mới với mã code kiểm tra độc nhất tuyệt đối
     v_class_is_new := TRUE;
-    v_class_code := 'LOP212-' || UPPER(SUBSTRING(md5(random()::text) FROM 1 FOR 6));
+    
+    WHILE v_code_exists LOOP
+      v_class_code := 'LOP212-' || UPPER(SUBSTRING(md5(random()::text) FROM 1 FOR 6));
+      SELECT EXISTS (SELECT 1 FROM public.classes WHERE code = v_class_code) INTO v_code_exists;
+    END LOOP;
     
     INSERT INTO public.classes (name, grade_level, code, teacher_id)
     VALUES (v_class_name, v_grade_level, v_class_code, v_teacher_id)
@@ -172,10 +182,10 @@ BEGIN
       AND LOWER(TRIM(regexp_replace(full_name, '\s+', ' ', 'g'))) = v_norm_name;
 
     IF v_matching_students_count = 0 THEN
-      -- TRƯỜNG HỢP 1: Chưa có tài khoản profile -> Không tự INSERT profile rời
+      -- TRƯỜNG HỢP 1: Chưa có tài khoản profile -> Không tự tạo profile hay thêm lớp
       v_no_account := v_no_account + 1;
       INSERT INTO temp_import_report (stt, input_name, status, matched_student_id, current_classes, note)
-      VALUES (v_idx, v_name, 'CHƯA_CÓ_TÀI_KHOẢN', NULL, '-', 'Cần tạo tài khoản Auth + Profile + PIN trước');
+      VALUES (v_idx, v_name, 'CHƯA_CÓ_TÀI_KHOẢN', NULL, '-', 'Chưa tạo tài khoản và chưa thêm vào lớp (Cần tạo Auth/Profile trước)');
 
     ELSIF v_matching_students_count > 1 THEN
       -- TRƯỜNG HỢP 2: Có nhiều profile trùng tên -> Cần xác minh ID
@@ -197,7 +207,7 @@ BEGIN
       v_classes_str := COALESCE(array_to_string(v_all_member_classes, ', '), 'Chưa có lớp');
 
       IF v_all_member_classes IS NULL OR array_length(v_all_member_classes, 1) IS NULL THEN
-        -- Học sinh CHƯA THUỘC BẤT KỲ LỚP NÀO -> Đủ điều kiện thêm vào Lớp 2.12
+        -- Học sinh CHƯA THUỘC BẤT KỲ LỚP NÀO -> Đủ điều kiện duy nhất để thêm vào Lớp 2.12
         INSERT INTO public.class_members (class_id, student_id, joined_at)
         VALUES (v_class_id, v_matched_id, NOW())
         ON CONFLICT (class_id, student_id) DO NOTHING;
@@ -210,7 +220,7 @@ BEGIN
         -- Học sinh thuộc Lớp 2.12 VÀ ĐỒNG THỜI thuộc lớp khác -> Báo cần xác minh
         v_in_multiple_classes := v_in_multiple_classes + 1;
         INSERT INTO temp_import_report (stt, input_name, status, matched_student_id, current_classes, note)
-        VALUES (v_idx, v_name, 'THUỘC_NHIỀU_LỚP_CẦN_XÁC_MINH', v_matched_id, v_classes_str, 'Đã ở trong Lớp 2.12 nhưng đồng thời thuộc các lớp: ' || v_classes_str);
+        VALUES (v_idx, v_name, 'THUỘC_NHIỀU_LỚP_CẦN_XÁC_MINH', v_matched_id, v_classes_str, 'Thuộc nhiều lớp gồm Lớp 2.12 và: ' || v_classes_str);
 
       ELSIF v_in_212 IS TRUE AND v_other_classes_count = 0 THEN
         -- Học sinh chỉ thuộc duy nhất Lớp 2.12 từ trước
@@ -228,16 +238,16 @@ BEGIN
   END LOOP;
 
   RAISE NOTICE '=======================================================';
-  RAISE NOTICE 'BÁO CÁO THỰC THI THAY ĐỔI DỮ LIỆU LỚP 2.12:';
+  RAISE NOTICE 'BÁO CÁO PHẠM VI THỰC THI THAY ĐỔI DỮ LIỆU LỚP 2.12:';
   RAISE NOTICE ' - Giáo viên phụ trách: 1/1 (ID: %, Name: "%")', v_teacher_id, v_teacher_full_name;
   RAISE NOTICE ' - Lớp 2.12: % (ID: %)', CASE WHEN v_class_is_new THEN 'TẠO MỚI' ELSE 'TÁI SỬ DỤNG' END, v_class_id;
-  RAISE NOTICE ' - Tổng danh sách học sinh: 34';
-  RAISE NOTICE ' - Học sinh đủ điều kiện đã gán mới vào Lớp 2.12: %', v_added_count;
+  RAISE NOTICE ' - Tổng danh sách học sinh yêu cầu đối chiếu: 34';
+  RAISE NOTICE ' - Học sinh đủ điều kiện (có 1 profile & chưa có lớp) ĐÃ GÁN VÀO LỚP 2.12: %', v_added_count;
   RAISE NOTICE ' - Học sinh ở duy nhất Lớp 2.12 từ trước: %', v_already_in_212_only;
-  RAISE NOTICE ' - Học sinh thuộc nhiều lớp (gồm Lớp 2.12): %', v_in_multiple_classes;
-  RAISE NOTICE ' - Học sinh đang thuộc lớp khác (không tự thêm): %', v_in_other_class;
-  RAISE NOTICE ' - Học sinh chưa có tài khoản: %', v_no_account;
-  RAISE NOTICE ' - Học sinh trùng tên cần xác minh: %', v_duplicate_name;
+  RAISE NOTICE ' - Học sinh thuộc nhiều lớp (gồm Lớp 2.12) [CHƯA XỬ LÝ]: %', v_in_multiple_classes;
+  RAISE NOTICE ' - Học sinh đang thuộc lớp khác [CHƯA TỰ ĐỔI LỚP]: %', v_in_other_class;
+  RAISE NOTICE ' - Học sinh chưa có tài khoản [CHƯA TẠO PROFILE/LỚP]: %', v_no_account;
+  RAISE NOTICE ' - Học sinh trùng tên [CHƯA XÁC MINH ID]: %', v_duplicate_name;
   RAISE NOTICE '=======================================================';
 END $$;
 
@@ -245,10 +255,10 @@ END $$;
 SELECT 
   stt AS "STT",
   input_name AS "Họ và Tên Học Sinh",
-  status AS "Trạng Thái Báo Cáo",
+  status AS "Trạng Thái Báo Cáo Phân Loại",
   matched_student_id AS "UUID Hồ Sơ",
   current_classes AS "Danh Sách Lớp Hiện Tại",
-  note AS "Ghi Chú & Hướng Xử Lý"
+  note AS "Ghi Chú Phạm Vi Xử Lý"
 FROM temp_import_report
 ORDER BY stt ASC;
 
