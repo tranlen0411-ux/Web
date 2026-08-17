@@ -145,11 +145,13 @@ export const ImportStudentsModal = ({ isOpen, onClose, onImportCompleted }) => {
     setErrorMsg('');
 
     try {
+      const idempotencyKey = `dryrun_${selectedClassId}_${parsedStudents.length}_${Date.now()}`;
       const { data, error } = await supabase.functions.invoke('admin-bulk-create-students', {
         body: {
           classId: selectedClassId,
           students: parsedStudents,
           dryRun: true, // KIỂM TRA DRY-RUN KHÔNG TẠO DỮ LIỆU
+          idempotencyKey,
         },
       });
 
@@ -185,11 +187,13 @@ export const ImportStudentsModal = ({ isOpen, onClose, onImportCompleted }) => {
     setErrorMsg('');
 
     try {
+      const idempotencyKey = `prod_${selectedClassId}_${parsedStudents.length}_${Date.now()}`;
       const { data, error } = await supabase.functions.invoke('admin-bulk-create-students', {
         body: {
           classId: selectedClassId,
           students: parsedStudents,
           dryRun: false, // THỰC THI THẬT TRÊN PRODUCTION
+          idempotencyKey,
         },
       });
 
