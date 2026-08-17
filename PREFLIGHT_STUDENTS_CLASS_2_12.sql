@@ -1,15 +1,18 @@
 -- ============================================================================
 -- SCRIPT PREFLIGHT CHỈ ĐỌC (READ-ONLY) CHUẨN HÓA & ĐỐI CHIẾU 34 HỌC SINH LỚP 2.12
 -- KHÔNG DÙNG TEMP TABLE | KHÔNG THAY ĐỔI DỮ LIỆU | MỘT CÂU SELECT/CTE DUY NHẤT
+-- ĐÃ KHẮC PHỤC TRIỆT ĐỂ LỖI ERROR 42883: MAX(UUID) BẰNG ARRAY_AGG FILTER
 -- LỚP 2.12 HIỆN TẠI: GRADE 2 | CÔ LÃ NGUYỄN DIỄM HƯƠNG | MÃ LỚP: LOP212-3A5818
 -- ============================================================================
 
-WITH target_class AS (
-  SELECT id AS class_id, name AS class_name, grade_level, code, teacher_id
+WITH target_class_check AS (
+  SELECT 
+    COUNT(*)::INT AS target_class_count,
+    (ARRAY_AGG(id) FILTER (WHERE id IS NOT NULL))[1] AS target_class_id,
+    (ARRAY_AGG(code) FILTER (WHERE id IS NOT NULL))[1] AS target_class_code
   FROM public.classes
   WHERE LOWER(TRIM(regexp_replace(name, '\s+', ' ', 'g'))) = 'lớp 2.12'
     AND grade_level = 2
-  LIMIT 1
 ),
 input_students(input_stt, input_name) AS (
   VALUES 
@@ -55,19 +58,27 @@ normalized_inputs AS (
     LOWER(TRIM(regexp_replace(input_name, '\s+', ' ', 'g'))) AS norm_name
   FROM input_students
 ),
+-- ĐỐI CHIẾU PROFILE HỌC SINH DÙNG ARRAY_AGG FILTER (TỪ BỎ MAX(UUID) TRÁNH ERROR 42883)
 student_matches AS (
   SELECT 
     ni.input_stt,
     ni.input_name,
     ni.norm_name,
     COUNT(p.id)::INT AS matched_count,
-    CASE WHEN COUNT(p.id) = 1 THEN MAX(p.id) ELSE NULL END AS matched_student_id,
-    CASE WHEN COUNT(p.id) = 1 THEN MAX(p.student_code) ELSE NULL END AS matched_student_code
+    CASE 
+      WHEN COUNT(p.id) = 1 THEN (ARRAY_AGG(p.id) FILTER (WHERE p.id IS NOT NULL))[1]
+      ELSE NULL 
+    END AS matched_student_id,
+    CASE 
+      WHEN COUNT(p.id) = 1 THEN (ARRAY_AGG(p.student_code) FILTER (WHERE p.id IS NOT NULL))[1]
+      ELSE NULL 
+    END AS matched_student_code
   FROM normalized_inputs ni
   LEFT JOIN public.profiles p ON p.role = 'student'
     AND LOWER(TRIM(regexp_replace(p.full_name, '\s+', ' ', 'g'))) = ni.norm_name
   GROUP BY ni.input_stt, ni.input_name, ni.norm_name
 ),
+-- DÙNG ARRAY_AGG(c.name) FILTER (WHERE c.id IS NOT NULL) ĐỂ MẢNG KHÔNG CHỨA NULL
 student_class_details AS (
   SELECT 
     sm.input_stt,
@@ -75,15 +86,17 @@ student_class_details AS (
     sm.matched_count,
     sm.matched_student_id,
     sm.matched_student_code,
-    COALESCE(array_to_string(array_agg(c.name ORDER BY cm.joined_at DESC), ', '), '-') AS current_classes,
+    tc.target_class_count,
+    tc.target_class_id,
+    COALESCE(array_to_string(ARRAY_AGG(c.name ORDER BY cm.joined_at DESC) FILTER (WHERE c.id IS NOT NULL), ', '), '-') AS current_classes,
     COUNT(cm.class_id)::INT AS total_class_count,
-    COUNT(CASE WHEN cm.class_id = tc.class_id THEN 1 END)::INT AS in_target_212_count,
-    COUNT(CASE WHEN cm.class_id <> tc.class_id THEN 1 END)::INT AS in_other_class_count
+    COUNT(CASE WHEN cm.class_id = tc.target_class_id THEN 1 END)::INT AS in_target_212_count,
+    COUNT(CASE WHEN tc.target_class_id IS NOT NULL AND cm.class_id <> tc.target_class_id THEN 1 END)::INT AS in_other_class_count
   FROM student_matches sm
-  CROSS JOIN target_class tc
+  CROSS JOIN target_class_check tc
   LEFT JOIN public.class_members cm ON cm.student_id = sm.matched_student_id
   LEFT JOIN public.classes c ON c.id = cm.class_id
-  GROUP BY sm.input_stt, sm.input_name, sm.matched_count, sm.matched_student_id, sm.matched_student_code
+  GROUP BY sm.input_stt, sm.input_name, sm.matched_count, sm.matched_student_id, sm.matched_student_code, tc.target_class_count, tc.target_class_id
 ),
 classified_results AS (
   SELECT 
@@ -94,6 +107,8 @@ classified_results AS (
     COALESCE(scd.matched_student_code, '-') AS "Mã Học Sinh",
     scd.current_classes AS "Các Lớp Hiện Tại",
     CASE 
+      WHEN scd.target_class_count = 0 THEN 'LỖI_LỚP_2.12_KHÔNG_TỒN_TẠI'
+      WHEN scd.target_class_count > 1 THEN 'LỖI_CÓ_NHIỀU_LỚP_2.12_TRÙNG_NỀN_TẢNG'
       WHEN scd.matched_count = 0 THEN 'CHƯA_CÓ_TÀI_KHOẢN'
       WHEN scd.matched_count > 1 THEN 'TRÙNG_TÊN'
       WHEN scd.total_class_count > 1 THEN 'THUỘC_NHIỀU_LỚP'
