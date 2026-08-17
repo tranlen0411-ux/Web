@@ -43,8 +43,8 @@ serve(async (req) => {
   }
 
   try {
-    // 2. LẤY CLIENT IP TỪ GATEWAY HEADER ĐÁNG TIN CẬY VÀ HASH HMAC SHA-256 VỚI SECRET IP_HASH_PEPPER
-    const ipHashPepper = Deno.env.get('IP_HASH_PEPPER') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    // 2. LẤY SECRET BÍ MẬT IP_HASH_PEPPER (TUYỆT ĐỐI KHÔNG FALLBACK SANG SERVICE ROLE KEY)
+    const ipHashPepper = Deno.env.get('IP_HASH_PEPPER');
     if (!ipHashPepper) {
       return new Response(
         JSON.stringify({ success: false, message: 'Cấu hình Server Env IP_HASH_PEPPER chưa hoàn tất.' }),
@@ -52,24 +52,25 @@ serve(async (req) => {
       );
     }
 
-    // Quy tắc lấy IP từ Gateway header chính thức
-    const rawClientIp = req.headers.get('x-real-ip') || 
-                        req.headers.get('cf-connecting-ip') || 
-                        req.headers.get('x-forwarded-for')?.split(',').pop()?.trim() || 
-                        'unknown_client_ip';
+    // Quy tắc lấy IP từ Supabase Gateway Header chính thức (x-real-ip / cf-connecting-ip)
+    // Nếu không có header gateway đáng tin cậy -> Đặt null (không dùng chuỗi cố định tránh khóa chung)
+    const rawGatewayIp = req.headers.get('x-real-ip') || req.headers.get('cf-connecting-ip');
+    let ipIdentifier: string | null = null;
 
-    const textEncoder = new TextEncoder();
-    const hmacKey = await crypto.subtle.importKey(
-      'raw',
-      textEncoder.encode(ipHashPepper),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
+    if (rawGatewayIp) {
+      const textEncoder = new TextEncoder();
+      const hmacKey = await crypto.subtle.importKey(
+        'raw',
+        textEncoder.encode(ipHashPepper),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
 
-    const signature = await crypto.subtle.sign('HMAC', hmacKey, textEncoder.encode(rawClientIp));
-    const ipHashHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
-    const ipIdentifier = `ip:${ipHashHex}`;
+      const signature = await crypto.subtle.sign('HMAC', hmacKey, textEncoder.encode(rawGatewayIp.trim()));
+      const ipHashHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+      ipIdentifier = `ip:${ipHashHex}`;
+    }
 
     // 3. Đọc dữ liệu studentCode + pin
     let body: any = {};
@@ -114,7 +115,7 @@ serve(async (req) => {
     // Khởi tạo Supabase Admin Client bằng Service Role Key
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. XÁC MINH MÃ HỌC SINH + PIN HASH BÊN TRONG RPC SECURITY DEFINER
+    // 4. XÁC MINH MÃ HỌC SINH + PIN HASH BẰNG RPC NGUYÊN TỬ CÓ RATE LIMIT KỂ CẢ KHI MÃ CHƯA TỒN TẠI
     const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('verify_student_pin_rate_limited', {
       p_student_code: cleanCode,
       p_pin: cleanPin,
@@ -154,7 +155,7 @@ serve(async (req) => {
       );
     }
 
-    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần
+    // 6. Mã PIN ĐÚNG -> Tạo Magic Link token xác thực 1 lần bằng Supabase Auth Admin API
     const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
       email: studentEmail,
