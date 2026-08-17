@@ -132,7 +132,11 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
   const handleRunDryRun = async () => {
     if (!selectedClassId) {
-      setErrorMessage('Vui lòng chọn Lớp 2.12 để tiếp tục.');
+      setErrorMessage('Vui lòng chọn Lớp học.');
+      return;
+    }
+    if (parsedStudents.length === 0) {
+      setErrorMessage('Danh sách học sinh không hợp lệ.');
       return;
     }
 
@@ -162,7 +166,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
         }
       );
 
-      const resData = await response.json();
+      const resData = await parseApiResponse(response);
       if (!response.ok || !resData.success) {
         throw new Error(resData.message || 'Lỗi kiểm tra Dry-Run từ server.');
       }
@@ -216,7 +220,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
         }
       );
 
-      const resData = await response.json();
+      const resData = await parseApiResponse(response);
       if (!response.ok || !resData.success) {
         throw new Error(resData.message || 'Lỗi thực thi nhập danh sách từ server.');
       }
