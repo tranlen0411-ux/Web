@@ -1,7 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-// 1. CẤU HÌNH CORS EXACT WHITELIST (BÁN `*`, BÁN REFLECT TỦY Ý)
 const STRICT_EXACT_ORIGINS = [
   'https://web-len9.vercel.app',
   'http://localhost:3000',
@@ -12,7 +11,7 @@ const STRICT_EXACT_ORIGINS = [
 
 const getStrictCorsHeaders = (origin: string | null) => {
   if (!origin || !STRICT_EXACT_ORIGINS.includes(origin)) {
-    return null; // Từ chối origin không thuộc whitelist
+    return null;
   }
 
   return {
@@ -30,7 +29,6 @@ serve(async (req) => {
   const origin = req.headers.get('origin');
   const corsHeaders = getStrictCorsHeaders(origin);
 
-  // Từ chối ngay nếu Origin không thuộc whitelist
   if (!corsHeaders) {
     return new Response(
       JSON.stringify({ success: false, message: 'Từ chối truy cập: Origin không thuộc danh sách được phép.' }),
@@ -43,9 +41,6 @@ serve(async (req) => {
   }
 
   try {
-    // =========================================================================
-    // 2. XÁC THỰC ADMIN CHẶT CHẼ TỪ JWT AUTHORIZATION HEADER
-    // =========================================================================
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(
@@ -58,14 +53,13 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
-    if (!supabaseUrl || !supabaseServiceKey) {
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
       return new Response(
         JSON.stringify({ success: false, message: 'Cấu hình Server Env chưa hoàn tất.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Xác minh chữ ký JWT bằng Anon Client
     const supabaseCaller = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -78,13 +72,9 @@ serve(async (req) => {
       );
     }
 
-    // LẤY VÀ XÁC MINH USER ID TRỰC TIẾP TỪ JWT ĐÃ XÁC THỰC
     const verifiedAdminUserId = caller.id;
-
-    // Khởi tạo Supabase Admin Client bằng Service Role Key
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Tra cứu vai trò Admin từ public.profiles bằng verifiedAdminUserId
     const { data: callerProfile, error: profileCheckErr } = await supabaseAdmin
       .from('profiles')
       .select('role')
@@ -98,9 +88,6 @@ serve(async (req) => {
       );
     }
 
-    // =========================================================================
-    // 3. ĐỌC BATCH VÀ XỬ LÝ IDEMPOTENCY CÓ CLAIM TOKEN & LEASE TRONG DATABASE
-    // =========================================================================
     let body: any = {};
     try {
       body = await req.json();
@@ -120,6 +107,14 @@ serve(async (req) => {
       );
     }
 
+    // YÊU CẦU BẮT BUỘC: IdempotencyKey cho thao tác tạo thật Production
+    if (!dryRun && (!idempotencyKey || typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '')) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Thiếu idempotencyKey hợp lệ cho thao tác tạo thật trên Production.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (students.length > 50) {
       return new Response(
         JSON.stringify({ success: false, message: 'Mỗi đợt nhập hàng loạt chỉ được tối đa 50 học sinh.' }),
@@ -127,42 +122,7 @@ serve(async (req) => {
       );
     }
 
-    const payloadFingerprint = `${classId}_${students.map((s: any) => (s.fullName || s.full_name || '').trim()).sort().join('|')}`;
-    let claimToken: string | null = null;
-
-    // Kiểm tra Idempotency Key bằng RPC claim_batch_idempotency trong Database
-    if (idempotencyKey && typeof idempotencyKey === 'string') {
-      const { data: claimRes, error: claimErr } = await supabaseCaller.rpc('claim_batch_idempotency', {
-        p_idempotency_key: idempotencyKey,
-        p_payload_fingerprint: payloadFingerprint,
-      });
-
-      if (!claimErr && claimRes) {
-        if (claimRes.status === 'PAYLOAD_MISMATCH') {
-          return new Response(
-            JSON.stringify({ success: false, message: claimRes.message }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } else if (claimRes.status === 'COMPLETED') {
-          // Trả về kết quả cached từ DB (đã sanitize xóa bỏ PIN)
-          return new Response(
-            JSON.stringify(claimRes.response_data),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } else if (claimRes.status === 'PROCESSING_LEASE_ACTIVE') {
-          return new Response(
-            JSON.stringify({ success: false, message: claimRes.message }),
-            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        } else if (claimRes.claim_token) {
-          claimToken = claimRes.claim_token;
-        }
-      }
-    }
-
-    // =========================================================================
-    // 4. XÁC MINH PHÍA SERVER LỚP ĐÍCH KHỚP ĐỦ 4 ĐIỀU KIỆN LỚP 2.12
-    // =========================================================================
+    // XÁC MINH SERVER LỚP ĐÍCH KHỚP ĐỦ 4 ĐIỀU KIỆN LỚP 2.12
     const { data: targetClass, error: classErr } = await supabaseAdmin
       .from('classes')
       .select('id, name, grade_level, code, teacher_id')
@@ -176,7 +136,6 @@ serve(async (req) => {
       );
     }
 
-    // 1) Tên chuẩn hóa = Lớp 2.12
     const normClassName = targetClass.name.trim().toLowerCase().replace(/\s+/g, ' ');
     if (normClassName !== 'lớp 2.12') {
       return new Response(
@@ -185,7 +144,6 @@ serve(async (req) => {
       );
     }
 
-    // 2) grade_level = 2
     if (targetClass.grade_level !== 2) {
       return new Response(
         JSON.stringify({ success: false, message: `Lớp 2.12 có grade_level = ${targetClass.grade_level} (yêu cầu grade_level = 2). Từ chối batch!` }),
@@ -193,7 +151,6 @@ serve(async (req) => {
       );
     }
 
-    // 3) code = LOP212-3A5818
     if (targetClass.code !== 'LOP212-3A5818') {
       return new Response(
         JSON.stringify({ success: false, message: `Lớp 2.12 có mã code "${targetClass.code}" (yêu cầu mã chính thức "LOP212-3A5818"). Từ chối batch!` }),
@@ -201,7 +158,6 @@ serve(async (req) => {
       );
     }
 
-    // 4) teacher_id đúng cô Lã Nguyễn Diễm Hương
     if (!targetClass.teacher_id) {
       return new Response(
         JSON.stringify({ success: false, message: 'Lớp 2.12 chưa được gán Giáo viên phụ trách. Từ chối batch!' }),
@@ -226,9 +182,7 @@ serve(async (req) => {
       );
     }
 
-    // =========================================================================
-    // 5. CHUẨN HÓA NỘI BỘ BATCH HỌC SINH
-    // =========================================================================
+    // CHUẨN HÓA VÀ HASH FINGERPRINT PAYLOAD BẰNG WEB CRYPTO SHA-256
     const seenNamesInBatch = new Set<string>();
     const cleanedStudentsInput: Array<{ stt: number; fullName: string; isDuplicateInBatch: boolean }> = [];
 
@@ -238,9 +192,7 @@ serve(async (req) => {
       const rawName = item.fullName || item.full_name || '';
       const cleanName = rawName.trim().replace(/\s+/g, ' ');
 
-      if (!cleanName || cleanName.length > 100) {
-        continue;
-      }
+      if (!cleanName || cleanName.length > 100) continue;
 
       const lowerName = cleanName.toLowerCase();
       let isDup = false;
@@ -250,16 +202,56 @@ serve(async (req) => {
         seenNamesInBatch.add(lowerName);
       }
 
-      cleanedStudentsInput.push({
-        stt,
-        fullName: cleanName,
-        isDuplicateInBatch: isDup,
-      });
+      cleanedStudentsInput.push({ stt, fullName: cleanName, isDuplicateInBatch: isDup });
     }
 
-    // =========================================================================
-    // 6. CHẾ ĐỘ DRY-RUN PREVIEW (READ-ONLY CHƯA TẠO DỮ LIỆU)
-    // =========================================================================
+    const sortedNamesString = cleanedStudentsInput.map(s => s.fullName).sort().join('|');
+    const rawFingerprintText = `${classId}_dry:${dryRun}_${sortedNamesString}`;
+    const textEncoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', textEncoder.encode(rawFingerprintText));
+    const payloadFingerprint = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    let claimToken: string | null = null;
+
+    // XỬ LÝ CLAIM RPC FAIL-CLOSED
+    if (idempotencyKey && typeof idempotencyKey === 'string') {
+      const { data: claimRes, error: claimErr } = await supabaseCaller.rpc('claim_batch_idempotency', {
+        p_idempotency_key: idempotencyKey,
+        p_payload_fingerprint: payloadFingerprint,
+      });
+
+      if (claimErr || !claimRes) {
+        return new Response(
+          JSON.stringify({ success: false, message: 'Lỗi xác minh Idempotency Key từ CSDL.' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (claimRes.status === 'PAYLOAD_MISMATCH') {
+        return new Response(
+          JSON.stringify({ success: false, message: claimRes.message }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else if (claimRes.status === 'COMPLETED') {
+        return new Response(
+          JSON.stringify(claimRes.response_data),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else if (claimRes.status === 'PROCESSING_LEASE_ACTIVE') {
+        return new Response(
+          JSON.stringify({ success: false, message: claimRes.message }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else if (claimRes.claim_token) {
+        claimToken = claimRes.claim_token;
+      } else {
+        return new Response(
+          JSON.stringify({ success: false, message: 'Không thể sở hữu claim_token xử lý batch.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     if (dryRun === true) {
       const dryResults: Array<{
         stt: number;
@@ -327,12 +319,12 @@ serve(async (req) => {
             dryResults.push({
               stt: item.stt,
               fullName: item.fullName,
-              status: 'EXISTING_USER_READY_TO_ASSIGN',
+              status: 'DUPLICATE_REQUIRES_REVIEW',
               studentCode: prof.student_code || '-',
               studentId: prof.id,
-              note: 'Đã có tài khoản duy nhất, sẵn sàng gán thêm vào Lớp 2.12.',
+              note: 'Đã có tài khoản trùng tên trên hệ thống. Yêu cầu Admin xác minh UUID trước khi gán lớp.',
             });
-            readyCount++;
+            reviewRequiredCount++;
           }
         } else {
           dryResults.push({
@@ -364,7 +356,7 @@ serve(async (req) => {
       };
 
       if (idempotencyKey && claimToken) {
-        await supabaseCaller.rpc('complete_batch_idempotency', {
+        await supabaseAdmin.rpc('complete_batch_idempotency', {
           p_idempotency_key: idempotencyKey,
           p_claim_token: claimToken,
           p_response_data: dryRunResponse,
@@ -378,9 +370,7 @@ serve(async (req) => {
       );
     }
 
-    // =========================================================================
-    // 7. THỰC THI THẬT PRODUCTION (XỬ LÝ TUẦN TỰ NGUYÊN TỬ VÀ KIỂM TRA ERROR CLEANUP)
-    // =========================================================================
+    // THỰC THI THẬT PRODUCTION
     const finalResults: Array<{
       stt: number;
       fullName: string;
@@ -394,17 +384,24 @@ serve(async (req) => {
     let createdCount = 0;
     let assignedExistingCount = 0;
     let failedCount = 0;
-    let processedIndex = 0;
 
     for (const item of cleanedStudentsInput) {
-      processedIndex++;
-
-      // Heartbeat gia hạn lease idempotency mỗi khi xong 10 học sinh
-      if (processedIndex % 10 === 0 && idempotencyKey && claimToken) {
-        await supabaseCaller.rpc('heartbeat_batch_idempotency', {
+      // HEARTBEAT KIỂM TRA LEASE VÀ CLAIM_TOKEN TRƯỚC MỖI HỌC SINH
+      if (idempotencyKey && claimToken) {
+        const { data: hbOk, error: hbErr } = await supabaseAdmin.rpc('heartbeat_batch_idempotency', {
           p_idempotency_key: idempotencyKey,
           p_claim_token: claimToken,
         });
+
+        if (hbErr || hbOk !== true) {
+          return new Response(
+            JSON.stringify({ 
+              success: false, 
+              message: 'Khóa xử lý Batch đã hết hạn (Lease Expired) hoặc bị chiếm quyền bởi worker khác. Dừng xử lý an toàn!' 
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
       }
 
       if (item.isDuplicateInBatch) {
@@ -424,71 +421,18 @@ serve(async (req) => {
         .eq('role', 'student')
         .ilike('full_name', item.fullName);
 
-      if (matchedProfiles && matchedProfiles.length > 1) {
+      if (matchedProfiles && matchedProfiles.length > 0) {
         finalResults.push({
           stt: item.stt,
           fullName: item.fullName,
           status: 'SKIPPED_DUPLICATE_REQUIRES_REVIEW',
-          note: `Phát hiện ${matchedProfiles.length} tài khoản trùng tên nền tảng. Bắt buộc Admin xác minh thủ công.`,
+          note: `Phát hiện ${matchedProfiles.length} tài khoản trùng tên. Bắt buộc Admin xác minh UUID/Mã HS thủ công.`,
         });
         failedCount++;
         continue;
       }
 
-      if (matchedProfiles && matchedProfiles.length === 1) {
-        const existingProf = matchedProfiles[0];
-        const { data: cmRec } = await supabaseAdmin
-          .from('class_members')
-          .select('id')
-          .eq('class_id', classId)
-          .eq('student_id', existingProf.id)
-          .maybeSingle();
-
-        if (!cmRec) {
-          const { error: insCmErr } = await supabaseAdmin
-            .from('class_members')
-            .insert({
-              class_id: classId,
-              student_id: existingProf.id,
-              joined_at: new Date().toISOString(),
-            });
-
-          if (insCmErr) {
-            finalResults.push({
-              stt: item.stt,
-              fullName: item.fullName,
-              status: 'FAILED_ASSIGN_EXISTING_CLASS',
-              studentCode: existingProf.student_code || '-',
-              studentId: existingProf.id,
-              note: `Lỗi gán lớp tài khoản cũ: ${insCmErr.message}`,
-            });
-            failedCount++;
-          } else {
-            finalResults.push({
-              stt: item.stt,
-              fullName: item.fullName,
-              status: 'ALREADY_EXISTS_ASSIGNED_TO_CLASS',
-              studentCode: existingProf.student_code || '-',
-              studentId: existingProf.id,
-              note: 'Đã có tài khoản duy nhất từ trước, vừa gán vào Lớp 2.12.',
-            });
-            assignedExistingCount++;
-          }
-        } else {
-          finalResults.push({
-            stt: item.stt,
-            fullName: item.fullName,
-            status: 'ALREADY_IN_CLASS',
-            studentCode: existingProf.student_code || '-',
-            studentId: existingProf.id,
-            note: 'Đã có tài khoản và đã thuộc Lớp 2.12 từ trước.',
-          });
-          assignedExistingCount++;
-        }
-        continue;
-      }
-
-      // NẾU CHƯA CÓ TÀI KHOẢN -> KHỞI TẠO TÀI KHOẢN MỚI 100% VỚI UNIQUE RETRY VÀ CLEANUP KIỂM TRA ERROR
+      // CHƯA CÓ TÀI KHOẢN -> TẠO MỚI 100% VỚI KHUÔN MẪU BẢO MẬT & CLEANUP CHẶT CHẼ
       let newlyCreatedUserId: string | null = null;
       let successFullyCreated = false;
 
@@ -499,7 +443,6 @@ serve(async (req) => {
         const internalEmail = `hs_${studentCode.toLowerCase()}@hoclapvui.edu.vn`;
         const internalPassword = `Pin_${pin}_Auth!`;
 
-        // 1. Tạo Auth User
         const { data: authData, error: createAuthErr } = await supabaseAdmin.auth.admin.createUser({
           email: internalEmail,
           password: internalPassword,
@@ -514,23 +457,21 @@ serve(async (req) => {
 
         if (createAuthErr || !authData?.user) {
           if (createAuthErr?.message?.toLowerCase().includes('already') || createAuthErr?.message?.toLowerCase().includes('unique')) {
-            continue; // Retry với student_code/email mới
+            continue;
           }
           finalResults.push({
             stt: item.stt,
             fullName: item.fullName,
             status: 'FAILED_AUTH_CREATION',
-            note: `Lỗi tạo Auth: ${createAuthErr?.message || 'Không thể tạo Auth User'}`,
+            note: 'Không thể khởi tạo tài khoản đăng nhập.',
           });
           failedCount++;
           break;
         }
 
         newlyCreatedUserId = authData.user.id;
+        await new Promise((res) => setTimeout(res, 150));
 
-        await new Promise((res) => setTimeout(res, 200));
-
-        // 2. Upsert public.profiles
         const { error: profileErr } = await supabaseAdmin
           .from('profiles')
           .upsert({
@@ -547,40 +488,43 @@ serve(async (req) => {
         if (profileErr) {
           if (profileErr.code === '23505' && attempt < 5) {
             const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
-            if (delAuthErr) console.error(`Cleanup auth user error (attempt ${attempt}):`, delAuthErr.message, 'User ID:', newlyCreatedUserId);
+            if (delAuthErr) console.error(`[CLEANUP_AUTH_RETRY_ERR] User ${newlyCreatedUserId}:`, delAuthErr.message);
             newlyCreatedUserId = null;
             continue;
           }
 
-          // CLEANUP COMPENSATION DÀNH CHO TÀI KHOẢN TẠO MỚI (CHECK ERROR HIỂN THỊ)
           const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
-          let noteMsg = `Lỗi tạo Profile: ${profileErr.message}. Đã dọn dẹp Auth User.`;
-          if (delAuthErr) {
-            console.error(`CLEANUP_FAILED for Auth User ${newlyCreatedUserId}:`, delAuthErr.message);
-            noteMsg += ` (Cảnh báo: Cleanup Auth thất bại: ${delAuthErr.message})`;
-          }
-
           finalResults.push({
             stt: item.stt,
             fullName: item.fullName,
             status: delAuthErr ? 'CLEANUP_FAILED' : 'FAILED_PROFILE_CREATION',
-            note: noteMsg,
+            note: delAuthErr ? 'Không thể dọn dẹp tài khoản Auth mồ côi.' : 'Lỗi khởi tạo hồ sơ học sinh.',
           });
           failedCount++;
           break;
         }
 
-        // 3. Đặt PIN Hash qua RPC set_student_pin
+        // ĐẶT MÃ PIN HASH QUA RPC SET_STUDENT_PIN (NẾU LỖI -> HỦY THÀNH CÔNG VÀ DỌN DẸP)
         const { error: pinErr } = await supabaseAdmin.rpc('set_student_pin', {
           p_student_id: newlyCreatedUserId,
           p_pin: pin,
         });
 
         if (pinErr) {
-          console.error(`Lỗi gán PIN cho ${studentCode}:`, pinErr.message, 'User ID:', newlyCreatedUserId);
+          const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId);
+          const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
+
+          finalResults.push({
+            stt: item.stt,
+            fullName: item.fullName,
+            status: (delProfErr || delAuthErr) ? 'CLEANUP_FAILED' : 'FAILED_PIN_SETTING',
+            note: (delProfErr || delAuthErr) ? 'Dọn dẹp tài khoản lỗi PIN thất bại.' : 'Lỗi khởi tạo mã PIN bảo mật.',
+          });
+          failedCount++;
+          break;
         }
 
-        // 4. Thêm vào class_members
+        // THÊM VÀO CLASS_MEMBERS
         const { error: cmErr } = await supabaseAdmin
           .from('class_members')
           .insert({
@@ -590,33 +534,25 @@ serve(async (req) => {
           });
 
         if (cmErr) {
-          // CLEANUP COMPENSATION VỚI KIỂM TRA LỖI SUPABASE-JS CHI TIẾT
           const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newlyCreatedUserId);
           const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newlyCreatedUserId);
-
-          let noteMsg = `Lỗi gán lớp: ${cmErr.message}. Đã dọn dẹp tài khoản.`;
-          if (delProfErr || delAuthErr) {
-            console.error(`CLEANUP_FAILED for User ${newlyCreatedUserId}: ProfErr=${delProfErr?.message}, AuthErr=${delAuthErr?.message}`);
-            noteMsg += ` (Cảnh báo: Dọn dẹp tài khoản thất bại: ${delProfErr?.message || delAuthErr?.message})`;
-          }
 
           finalResults.push({
             stt: item.stt,
             fullName: item.fullName,
             status: (delProfErr || delAuthErr) ? 'CLEANUP_FAILED' : 'FAILED_CLASS_ASSIGNMENT',
-            note: noteMsg,
+            note: (delProfErr || delAuthErr) ? 'Dọn dẹp tài khoản lỗi gán lớp thất bại.' : 'Lỗi gán học sinh vào Lớp 2.12.',
           });
           failedCount++;
           break;
         }
 
-        // THÀNH CÔNG 100%!
         finalResults.push({
           stt: item.stt,
           fullName: item.fullName,
           status: 'CREATED_AND_ASSIGNED',
           studentCode,
-          pin, // Trả về PIN duy nhất 1 lần trong HTTP response có no-store
+          pin,
           studentId: newlyCreatedUserId,
           note: 'Tạo tài khoản và gán vào Lớp 2.12 thành công!',
         });
@@ -636,16 +572,6 @@ serve(async (req) => {
       }
     }
 
-    // KẾT QUẢ ĐÃ ĐƯỢC SANITIZE XÓA BỎ MÃ PIN TRƯỚC KHI LƯU VÀO DATABASE IDEMPOTENCY LOGS
-    const sanitizedResultsForCache = finalResults.map(r => ({
-      stt: r.stt,
-      fullName: r.fullName,
-      status: r.status,
-      studentCode: r.studentCode || '-',
-      studentId: r.studentId || '-',
-      note: r.note,
-    }));
-
     const prodResponse = {
       success: true,
       dryRun: false,
@@ -662,15 +588,10 @@ serve(async (req) => {
     };
 
     if (idempotencyKey && claimToken) {
-      const sanitizedResponse = {
-        ...prodResponse,
-        results: sanitizedResultsForCache,
-      };
-
-      await supabaseCaller.rpc('complete_batch_idempotency', {
+      await supabaseAdmin.rpc('complete_batch_idempotency', {
         p_idempotency_key: idempotencyKey,
         p_claim_token: claimToken,
-        p_response_data: sanitizedResponse,
+        p_response_data: prodResponse,
         p_is_success: true,
       });
     }
@@ -681,9 +602,8 @@ serve(async (req) => {
     );
 
   } catch (err: any) {
-    console.error('admin-bulk-create-students exception:', err);
     return new Response(
-      JSON.stringify({ success: false, message: err.message || 'Lỗi server-side.' }),
+      JSON.stringify({ success: false, message: 'Đã xảy ra lỗi hệ thống khi xử lý danh sách học sinh.' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

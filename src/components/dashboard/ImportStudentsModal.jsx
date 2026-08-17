@@ -1,98 +1,90 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileSpreadsheet, CheckCircle2, AlertTriangle, Download, RefreshCw, Users, ShieldAlert, Sparkles, Eye, Lock } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
-import { useSound } from '../../context/SoundContext';
+import { supabase } from '../../config/supabaseClient';
 
-const DEFAULT_34_STUDENTS_TEXT = `Trần Lê Hoàng An
-Đỗ Hoài Anh
-Nguyễn Đình Ân
-Hà Gia Bảo
-Phạm Ngọc Minh Châu
-Nguyễn Công Minh Dương
-Nguyễn Võ Khả Hân
-Huỳnh Minh Hùng
-Phạm Bùi Bảo Khang
-Nguyễn Ngọc An Khánh
-Nguyễn Phúc Đăng Khoa
-Nguyễn Minh Khôi
-Nguyễn Trung Kiên
-Phạm Thị Hoàng Lâm
-Võ Thiên Long
-Trần Thị Quỳnh Mai
-Lê Thị Tú My
-Trần Ngọc Nga
-Trần Thị Kim Ngọc
-Võ Nguyễn Đăng Nguyên
-Nguyễn Ngọc Yến Nhi
-Nguyễn Thanh Nhi
-Nguyễn An Nhiên
-Võ Bảo Như
-Lưu Đình Tấn Phát
-Nguyễn Trần Mạnh Phi
-Nguyễn Ngọc An Phúc
-Nguyễn Thanh Phúc
-Nguyễn Trí Phúc
-Huỳnh Trương Tiến Thành
-Hồ Lê Trường Thịnh
-Phan Ngọc Bảo Trâm
-Phạm Đỗ Anh Tú
-Đặng Yến Vy`;
+const OFFICIAL_CLASS_212_STUDENTS = [
+  "Trần Lê Hoàng An",
+  "Đỗ Hoài Anh",
+  "Nguyễn Đình Ân",
+  "Hà Gia Bảo",
+  "Phạm Ngọc Minh Châu",
+  "Nguyễn Công Minh Dương",
+  "Nguyễn Võ Khả Hân",
+  "Huỳnh Minh Hùng",
+  "Phạm Bùi Bảo Khang",
+  "Nguyễn Ngọc An Khánh",
+  "Nguyễn Phúc Đăng Khoa",
+  "Nguyễn Minh Khôi",
+  "Nguyễn Trung Kiên",
+  "Phạm Thị Hoàng Lâm",
+  "Võ Thiên Long",
+  "Trần Thị Quỳnh Mai",
+  "Lê Thị Tú My",
+  "Trần Ngọc Nga",
+  "Trần Thị Kim Ngọc",
+  "Võ Nguyễn Đăng Nguyên",
+  "Nguyễn Ngọc Yến Nhi",
+  "Nguyễn Thanh Nhi",
+  "Nguyễn An Nhiên",
+  "Võ Bảo Như",
+  "Lưu Đình Tấn Phát",
+  "Nguyễn Trần Mạnh Phi",
+  "Nguyễn Ngọc An Phúc",
+  "Nguyễn Thanh Phúc",
+  "Nguyễn Trí Phúc",
+  "Huỳnh Trương Tiến Thành",
+  "Hồ Lê Trường Thịnh",
+  "Phan Ngọc Bảo Trâm",
+  "Phạm Đỗ Anh Tú",
+  "Đặng Yến Vy"
+];
 
-export const ImportStudentsModal = ({ isOpen, onClose, onImportCompleted }) => {
-  const { triggerSound } = useSound();
+export default function ImportStudentsModal({ isOpen, onClose }) {
+  const [step, setStep] = useState(1);
   const [classesList, setClassesList] = useState([]);
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [rawInputText, setRawInputText] = useState(DEFAULT_34_STUDENTS_TEXT);
+  const [rawNamesText, setRawNamesText] = useState(OFFICIAL_CLASS_212_STUDENTS.join('\n'));
+  const [lastDryRunNamesText, setLastDryRunNamesText] = useState('');
   const [parsedStudents, setParsedStudents] = useState([]);
-  
-  // Trạng thái từng bước: 
-  // Step 1: Input & Run Dry-Run Preview
-  // Step 2: Display Dry-Run Preview Result (Must succeed before Production execution)
-  // Step 3: Executing Production Batch Creation
-  // Step 4: Final Results & Download CSV (PINs cleared upon closing)
-  const [currentStep, setCurrentStep] = useState(1);
 
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [dryRunResult, setDryRunResult] = useState(null);
-  const [productionResult, setProductionResult] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [dryRunData, setDryRunData] = useState(null);
+  const [prodResult, setProdResult] = useState(null);
+  const [isConfirmChecked, setIsConfirmChecked] = useState(false);
+  const [hasExecutedProd, setHasExecutedProd] = useState(false);
+
+  const [idempotencyKey] = useState(() => `batch_212_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
 
   useEffect(() => {
     if (isOpen) {
-      fetchClasses();
-      parseInput(DEFAULT_34_STUDENTS_TEXT);
-      resetAllState();
+      fetchTargetClasses();
+    } else {
+      setStep(1);
+      setDryRunData(null);
+      setProdResult(null);
+      setErrorMessage('');
+      setIsConfirmChecked(false);
+      setHasExecutedProd(false);
     }
   }, [isOpen]);
 
-  const resetAllState = () => {
-    setCurrentStep(1);
-    setErrorMsg('');
-    setDryRunResult(null);
-    setProductionResult(null);
-    setLoading(false);
-  };
-
-  const handleCloseModal = () => {
-    // XÓA NGAY TOÀN BỘ BỘ NHỚ CHỨA PIN TRONG STATE THEO YÊU CẦU BẢO MẬT
-    setDryRunResult(null);
-    setProductionResult(null);
-    setParsedStudents([]);
-    setErrorMsg('');
-    onClose();
-  };
-
-  const fetchClasses = async () => {
+  const fetchTargetClasses = async () => {
     try {
+      setIsLoading(true);
       const { data, error } = await supabase
         .from('classes')
-        .select('id, name, grade_level, code, teacher_id')
-        .order('grade_level', { ascending: true })
-        .order('name', { ascending: true });
+        .select('id, name, code, grade_level, teacher_id')
+        .order('name');
 
-      if (!error && data && data.length > 0) {
+      if (error) throw error;
+
+      if (data && data.length > 0) {
         setClassesList(data);
-        const class212 = data.find(c => c.name.toLowerCase().includes('2.12') && c.grade_level === 2);
+        const class212 = data.find(c =>
+          c.grade_level === 2 &&
+          c.code === 'LOP212-3A5818' &&
+          c.name.toLowerCase().replace(/\s+/g, ' ').includes('2.12')
+        );
         if (class212) {
           setSelectedClassId(class212.id);
         } else {
@@ -100,537 +92,434 @@ export const ImportStudentsModal = ({ isOpen, onClose, onImportCompleted }) => {
         }
       }
     } catch (err) {
-      console.error('Fetch classes error:', err);
+      setErrorMessage('Không thể tải danh sách lớp học: ' + err.message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const parseInput = (text) => {
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+  const handleParseNames = () => {
+    setErrorMessage('');
+    const lines = rawNamesText.split('\n');
+    const list = [];
+    let count = 1;
 
-    const list = lines.map((line, index) => {
-      const cleanName = line.replace(/^\d+[\.\-\s]+/, '').trim();
-      return {
-        stt: index + 1,
-        fullName: cleanName,
-      };
-    });
+    for (const line of lines) {
+      const trimmed = line.trim().replace(/\s+/g, ' ');
+      if (trimmed) {
+        list.push({ stt: count++, fullName: trimmed });
+      }
+    }
+
+    if (list.length === 0) {
+      setErrorMessage('Vui lòng nhập ít nhất 1 họ tên học sinh.');
+      return;
+    }
+
+    if (list.length > 50) {
+      setErrorMessage('Hệ thống chỉ hỗ trợ xử lý tối đa 50 học sinh/lần.');
+      return;
+    }
 
     setParsedStudents(list);
+    setStep(2);
   };
 
-  const handleInputChange = (e) => {
-    const text = e.target.value;
-    setRawInputText(text);
-    parseInput(text);
-    setDryRunResult(null);
-    if (currentStep > 1) setCurrentStep(1);
-  };
-
-  // CHẠY KIỂM TRA DRY-RUN PREVIEW TRƯỚC KHI CHO PHÉP CHẠY PRODUCTION
   const handleRunDryRun = async () => {
     if (!selectedClassId) {
-      setErrorMsg('Vui lòng chọn Lớp học đích (Lớp 2.12).');
+      setErrorMessage('Vui lòng chọn Lớp 2.12 để tiếp tục.');
       return;
     }
-
-    if (parsedStudents.length === 0) {
-      setErrorMsg('Vui lòng nhập ít nhất 1 học sinh.');
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg('');
 
     try {
-      const idempotencyKey = `dryrun_${selectedClassId}_${parsedStudents.length}_${Date.now()}`;
-      const { data, error } = await supabase.functions.invoke('admin-bulk-create-students', {
-        body: {
-          classId: selectedClassId,
-          students: parsedStudents,
-          dryRun: true, // KIỂM TRA DRY-RUN KHÔNG TẠO DỮ LIỆU
-          idempotencyKey,
-        },
-      });
+      setIsLoading(true);
+      setErrorMessage('');
 
-      if (error) {
-        throw new Error(error.message || 'Lỗi khi gọi Edge Function admin-bulk-create-students');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Phiên làm việc hết hạn. Vui lòng đăng nhập lại.');
       }
 
-      if (!data?.success) {
-        throw new Error(data?.message || 'Kiểm tra Dry-Run thất bại.');
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-bulk-create-students`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            classId: selectedClassId,
+            students: parsedStudents,
+            dryRun: true,
+            idempotencyKey: `${idempotencyKey}_dry`,
+          }),
+        }
+      );
+
+      const resData = await response.json();
+      if (!response.ok || !resData.success) {
+        throw new Error(resData.message || 'Lỗi kiểm tra Dry-Run từ server.');
       }
 
-      setDryRunResult(data);
-      setCurrentStep(2);
-      triggerSound('click');
-
+      setDryRunData(resData);
+      setLastDryRunNamesText(rawNamesText);
+      setStep(3);
     } catch (err) {
-      console.error('Dry-Run error:', err);
-      setErrorMsg(err.message || 'Có lỗi khi thực hiện kiểm tra Dry-Run.');
+      setErrorMessage(err.message);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  // THỰC THI TẠO TÀI KHOẢN PRODUCTION THẬT (CHỈ SAU KHI DRY-RUN THÀNH CÔNG)
-  const handleConfirmProductionImport = async () => {
-    if (!dryRunResult || !dryRunResult.success) {
-      setErrorMsg('Vui lòng hoàn tất kiểm tra Dry-Run thành công trước khi chạy Production.');
+  const handleExecuteProduction = async () => {
+    if (!isConfirmChecked || hasExecutedProd) return;
+
+    if (rawNamesText !== lastDryRunNamesText) {
+      setErrorMessage('Danh sách học sinh đã bị thay đổi sau khi chạy Dry-Run. Vui lòng thực hiện Dry-Run lại!');
+      setStep(2);
       return;
     }
 
-    setLoading(true);
-    setCurrentStep(3);
-    setErrorMsg('');
-
     try {
-      const idempotencyKey = `prod_${selectedClassId}_${parsedStudents.length}_${Date.now()}`;
-      const { data, error } = await supabase.functions.invoke('admin-bulk-create-students', {
-        body: {
-          classId: selectedClassId,
-          students: parsedStudents,
-          dryRun: false, // THỰC THI THẬT TRÊN PRODUCTION
-          idempotencyKey,
-        },
-      });
+      setIsLoading(true);
+      setErrorMessage('');
 
-      if (error) {
-        throw new Error(error.message || 'Lỗi khi kết nối Edge Function admin-bulk-create-students');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Phiên làm việc hết hạn. Vui lòng đăng nhập lại.');
       }
 
-      if (!data?.success) {
-        throw new Error(data?.message || 'Quá trình nhập danh sách học sinh Production thất bại.');
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-bulk-create-students`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            classId: selectedClassId,
+            students: parsedStudents,
+            dryRun: false,
+            idempotencyKey,
+          }),
+        }
+      );
+
+      const resData = await response.json();
+      if (!response.ok || !resData.success) {
+        throw new Error(resData.message || 'Lỗi thực thi nhập danh sách từ server.');
       }
 
-      setProductionResult(data);
-      setCurrentStep(4);
-      triggerSound('win');
-      if (onImportCompleted) onImportCompleted();
-
+      setProdResult(resData);
+      setHasExecutedProd(true);
+      setStep(4);
     } catch (err) {
-      console.error('Production import error:', err);
-      setErrorMsg(err.message || 'Có lỗi xảy ra trong quá trình nhập danh sách Production.');
-      setCurrentStep(2);
+      setErrorMessage(err.message);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  // NÚT TẢI CSV AN TOÀN - CHỐNG CSV FORMULA INJECTION
+  const escapeCSVField = (val) => {
+    if (val === null || val === undefined) return '""';
+    let str = String(val);
+    if (/^[=+\-@\t\r]/.test(str)) {
+      str = "'" + str;
+    }
+    return `"${str.replace(/"/g, '""')}"`;
+  };
+
   const handleDownloadCSV = () => {
-    if (!productionResult || !productionResult.results) return;
+    if (!prodResult || !prodResult.results) return;
 
-    const selectedClass = classesList.find(c => c.id === selectedClassId);
-    const className = selectedClass ? selectedClass.name : '2.12';
+    const headers = ['STT', 'Họ Và Tên', 'Mã Học Sinh', 'Mã PIN Đăng Nhập', 'Trạng Thái', 'Ghi Chú'];
+    const rows = prodResult.results.map(r => [
+      r.stt,
+      r.fullName,
+      r.studentCode || '-',
+      r.pin || 'Đã có sẵn',
+      r.status,
+      r.note
+    ]);
 
-    // Đặt BOM UTF-8 để Excel hiển thị đúng tiếng Việt có dấu
-    let csvContent = '\uFEFF';
-    csvContent += 'STT,Họ và Tên,Mã Học Sinh,Mã PIN Đăng Nhập,Lớp Gán,Trạng Thái,Ghi Chú\n';
-
-    // Hàm chống CSV Formula Injection (Nguồn an toàn OWASP)
-    const sanitizeCsvCell = (val) => {
-      if (val === null || val === undefined) return '""';
-      let str = String(val).trim();
-      if (/^[=\+\-@\t\r]/.test(str)) {
-        str = "'" + str; // Thêm dấu nháy đơn bảo vệ cell
-      }
-      return `"${str.replace(/"/g, '""')}"`;
-    };
-
-    productionResult.results.forEach((item) => {
-      // Chỉ tải PIN cho các dòng thành công CREATED_AND_ASSIGNED
-      const isSuccess = item.status === 'CREATED_AND_ASSIGNED';
-      const stt = item.stt;
-      const name = sanitizeCsvCell(item.fullName);
-      const code = sanitizeCsvCell(item.studentCode || '-');
-      const pin = isSuccess ? sanitizeCsvCell(item.pin || '-') : '""';
-      const cName = sanitizeCsvCell(className);
-      const status = sanitizeCsvCell(item.status);
-      const note = sanitizeCsvCell(item.note || '');
-
-      csvContent += `${stt},${name},${code},${pin},${cName},${status},${note}\n`;
-    });
+    const csvContent = "\uFEFF" + [
+      headers.map(escapeCSVField).join(','),
+      ...rows.map(row => row.map(escapeCSVField).join(','))
+    ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `THONG_TIN_DANG_NHAP_${className.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.href = url;
+    link.setAttribute('download', `Danh_Sach_Hoc_Sinh_Lop_212_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    triggerSound('click');
+    
+    // Thu hồi URL Blob giải phóng bộ nhớ RAM
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
   };
 
   if (!isOpen) return null;
 
-  const targetClassObj = classesList.find((c) => c.id === selectedClassId);
+  // Kiểm tra điều kiện khóa nút Tạo Thật Production
+  const isProdDisabled = !dryRunData || 
+    dryRunData.summary.reviewRequired > 0 || 
+    dryRunData.results.length !== parsedStudents.length ||
+    rawNamesText !== lastDryRunNamesText ||
+    !isConfirmChecked ||
+    hasExecutedProd ||
+    isLoading;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-sm animate-fadeIn overflow-y-auto">
-      <div className="bg-white w-full max-w-4xl rounded-3xl border-4 border-amber-300 shadow-2xl overflow-hidden flex flex-col my-6 max-h-[92vh]">
-        
-        {/* MODAL HEADER */}
-        <div className="bg-gradient-to-r from-indigo-800 via-purple-800 to-amber-600 p-5 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center border border-white/30">
-              <FileSpreadsheet className="w-5 h-5 text-amber-300" />
-            </div>
-            <div>
-              <h3 className="font-black text-lg sm:text-xl leading-tight">
-                Nhập Danh Sách Học Sinh Hàng Loạt (Lớp 2.12)
-              </h3>
-              <p className="text-xs text-indigo-100 font-bold flex items-center gap-2">
-                <span>Khối 2 • Lớp 2.12 • LOP212-3A5818</span>
-                <span className="px-2 py-0.5 bg-amber-400 text-amber-950 rounded-full font-black text-[10px]">
-                  {currentStep === 1 ? '1. Chuẩn bị danh sách' : currentStep === 2 ? '2. Bản xem trước Dry-Run' : currentStep === 3 ? '3. Đang thực thi' : '4. Tải CSV thông tin'}
-                </span>
-              </p>
-            </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-3xl w-full p-6 border border-slate-200 dark:border-slate-800 transition-all">
+        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+              <span>📥</span> Nhập Học Sinh Lớp 2.12 Hàng Loạt
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Quy trình 4 bước an toàn: Chuẩn hóa $\rightarrow$ Xem trước Dry-Run $\rightarrow$ Thực thi $\rightarrow$ Tải file CSV
+            </p>
           </div>
           <button
-            onClick={handleCloseModal}
-            className="p-1.5 hover:bg-white/20 rounded-full text-white transition-colors"
+            onClick={onClose}
+            disabled={isLoading}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg"
           >
-            <X className="w-5 h-5" />
+            ✕
           </button>
         </div>
 
-        {/* MODAL BODY */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1">
-          
-          {errorMsg && (
-            <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-start gap-3 text-rose-800 text-xs font-bold animate-shake">
-              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-black">Thông báo lỗi:</p>
-                <p>{errorMsg}</p>
-              </div>
-            </div>
-          )}
+        {errorMessage && (
+          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300 rounded-xl text-sm font-medium flex items-center gap-2">
+            <span>⚠️</span> {errorMessage}
+          </div>
+        )}
 
-          {/* BƯỚC 1: DÁN DANH SÁCH & NÚT CHẠY DRY-RUN */}
-          {currentStep === 1 && (
-            <div className="space-y-6">
-              
-              {/* LỌC XÁC NHẬN LỚP ĐÍCH CHÍNH XÁC */}
-              <div className="bg-amber-50 p-4 rounded-2xl border-2 border-amber-300 space-y-2">
-                <label className="block text-xs font-black text-amber-950 flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-amber-600" /> Chọn Lớp Học Đích (Bắt buộc đúng Lớp 2.12):
-                </label>
-                <select
-                  value={selectedClassId}
-                  onChange={(e) => {
-                    setSelectedClassId(e.target.value);
-                    setDryRunResult(null);
-                  }}
-                  className="w-full p-3 bg-white border-2 border-amber-300 rounded-xl font-black text-xs sm:text-sm text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                >
-                  {classesList.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      🏫 {c.name} (Khối {c.grade_level}) - Mã lớp: {c.code}
-                    </option>
+        {step === 1 && (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Chọn Lớp Đích (Yêu cầu chính thức: Lớp 2.12):
+              </label>
+              <select
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+                className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+              >
+                {classesList.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} (Khối {c.grade_level}) - Mã: {c.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Danh sách 34 Họ tên Học sinh Lớp 2.12 (Mỗi học sinh 1 dòng):
+              </label>
+              <textarea
+                rows={10}
+                value={rawNamesText}
+                onChange={(e) => setRawNamesText(e.target.value)}
+                placeholder="Dán danh sách học sinh vào đây..."
+                className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-mono focus:ring-2 focus:ring-amber-500 outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={onClose}
+                className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm transition-all"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleParseNames}
+                className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2"
+              >
+                Tiếp Tục Đối Chiếu ➔
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-4">
+            <div className="bg-amber-50 dark:bg-amber-950/30 p-4 rounded-xl border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+              <strong>Đã nhận diện {parsedStudents.length} học sinh.</strong> Vui lòng rà soát lại danh sách trước khi khởi chạy bản xem trước Dry-Run.
+            </div>
+
+            <div className="max-h-60 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+              <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+                <thead className="bg-slate-100 dark:bg-slate-800 font-semibold sticky top-0">
+                  <tr>
+                    <th className="p-3">STT</th>
+                    <th className="p-3">Họ và Tên Chuẩn Hóa</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {parsedStudents.map(s => (
+                    <tr key={s.stt}>
+                      <td className="p-3 font-bold text-slate-500">{s.stt}</td>
+                      <td className="p-3 font-medium">{s.fullName}</td>
+                    </tr>
                   ))}
-                </select>
-                {targetClassObj && (
-                  <div className="p-2.5 bg-emerald-100/60 border border-emerald-300 rounded-xl text-xs font-bold text-emerald-900 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      Lớp đã chọn: <strong className="font-black">{targetClassObj.name}</strong> (Khối {targetClassObj.grade_level})
-                    </span>
-                    <span className="font-mono bg-emerald-200 px-2 py-0.5 rounded text-emerald-950 text-[11px] font-black">
-                      Mã: {targetClassObj.code}
-                    </span>
-                  </div>
-                )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-between items-center pt-2">
+              <button
+                onClick={() => setStep(1)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm"
+              >
+                ← Sửa Danh Sách
+              </button>
+              <button
+                onClick={handleRunDryRun}
+                disabled={isLoading}
+                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2"
+              >
+                {isLoading ? '⏳ Đang Quét Dry-Run...' : '🔍 Kiểm Tra Dry-Run Bản Xem Trước ➔'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 3 && dryRunData && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-200">
+                <span className="block text-xl font-extrabold text-emerald-600">{dryRunData.summary.readyToCreate}</span>
+                <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">Sẵn Sàng Tạo Mới</span>
               </div>
+              <div className="p-3 bg-blue-50 dark:bg-blue-950/40 rounded-xl border border-blue-200">
+                <span className="block text-xl font-extrabold text-blue-600">{dryRunData.summary.alreadyInClass}</span>
+                <span className="text-xs font-semibold text-blue-800 dark:text-blue-300">Đã Thuộc Lớp 2.12</span>
+              </div>
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200">
+                <span className="block text-xl font-extrabold text-amber-600">{dryRunData.summary.reviewRequired}</span>
+                <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">Cần Admin Xác Minh</span>
+              </div>
+            </div>
 
-              {/* DÁN DANH SÁCH HỌC SINH */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                    <FileSpreadsheet className="w-4 h-4 text-indigo-600" /> Danh Sách Họ & Tên ({parsedStudents.length} học sinh):
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRawInputText(DEFAULT_34_STUDENTS_TEXT);
-                      parseInput(DEFAULT_34_STUDENTS_TEXT);
-                      setDryRunResult(null);
-                    }}
-                    className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 underline"
-                  >
-                    Dán lại 34 học sinh Lớp 2.12 chuẩn
-                  </button>
-                </div>
+            <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+              <table className="w-full text-left text-xs text-slate-700 dark:text-slate-300">
+                <thead className="bg-slate-100 dark:bg-slate-800 font-semibold sticky top-0">
+                  <tr>
+                    <th className="p-2.5">STT</th>
+                    <th className="p-2.5">Họ và Tên</th>
+                    <th className="p-2.5">Trạng Thái</th>
+                    <th className="p-2.5">Ghi Chú Chi Tiết</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {dryRunData.results.map(r => (
+                    <tr key={r.stt}>
+                      <td className="p-2.5 font-bold text-slate-400">{r.stt}</td>
+                      <td className="p-2.5 font-semibold text-slate-800 dark:text-white">{r.fullName}</td>
+                      <td className="p-2.5">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          r.status === 'READY_TO_CREATE' ? 'bg-emerald-100 text-emerald-800' :
+                          r.status === 'ALREADY_IN_CLASS_212' ? 'bg-blue-100 text-blue-800' :
+                          'bg-amber-100 text-amber-800'
+                        }`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-slate-500 dark:text-slate-400">{r.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-                <textarea
-                  rows={6}
-                  value={rawInputText}
-                  onChange={handleInputChange}
-                  placeholder="Dán danh sách mỗi dòng 1 họ tên..."
-                  className="w-full p-3 bg-slate-50 border-2 border-slate-300 rounded-2xl font-mono text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            {dryRunData.summary.reviewRequired > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+                <span>🚫</span> Nút thực thi bị khóa vì có {dryRunData.summary.reviewRequired} dòng cần Admin xác minh hoặc bị trùng lặp.
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isConfirmChecked}
+                  onChange={(e) => setIsConfirmChecked(e.target.checked)}
+                  disabled={dryRunData.summary.reviewRequired > 0 || hasExecutedProd}
+                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
                 />
-              </div>
-
-              <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-2xl text-xs font-bold text-indigo-900 flex items-center gap-3">
-                <Eye className="w-5 h-5 text-indigo-600 shrink-0" />
-                <p>
-                  Vui lòng bấm <strong>"🔍 Kiểm Tra Dry-Run Bản Xem Trước"</strong>. Hệ thống sẽ đối chiếu dữ liệu hiện tại trên CSDL Production <strong>mà không tạo hay thay đổi bất kỳ bản ghi nào</strong> trước khi mở nút xác nhận thật.
-                </p>
-              </div>
-
+                Tôi đã kiểm tra kỹ bản xem trước Dry-Run và xác nhận chịu trách nhiệm cho thao tác tạo tài khoản thật trên Production.
+              </label>
             </div>
-          )}
 
-          {/* BƯỚC 2: BẢN XEM TRƯỚC DRY-RUN KẾT QUẢ PREVIEW */}
-          {currentStep === 2 && dryRunResult && (
-            <div className="space-y-5 animate-fadeIn">
-              
-              {/* KẾT QUẢ DRY-RUN TỔNG QUAN */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-emerald-600">{dryRunResult.summary?.readyToCreate || 0}</span>
-                  <p className="text-[11px] font-bold text-emerald-800">Sẵn sàng tạo mới</p>
-                </div>
-                <div className="bg-sky-50 border border-sky-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-sky-600">{dryRunResult.summary?.alreadyInClass || 0}</span>
-                  <p className="text-[11px] font-bold text-sky-800">Đã ở trong Lớp 2.12</p>
-                </div>
-                <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-amber-600">{dryRunResult.summary?.reviewRequired || 0}</span>
-                  <p className="text-[11px] font-bold text-amber-800">Trùng tên cần xem xét</p>
-                </div>
-                <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-purple-600">{dryRunResult.summary?.total || 0}</span>
-                  <p className="text-[11px] font-bold text-purple-800">Tổng kiểm tra</p>
-                </div>
-              </div>
-
-              {/* BẢNG BÁO CÁO PREVIEW DRY-RUN 34 DÒNG */}
-              <div>
-                <h4 className="text-xs font-black text-slate-800 mb-2 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-500" /> Kết Quả Đối Chiếu Dry-Run Xem Trước:
-                  </span>
-                  <span className="text-[11px] text-emerald-700 font-bold">Lớp: {dryRunResult.className} (Mã: {dryRunResult.classCode})</span>
-                </h4>
-
-                <div className="max-h-64 overflow-y-auto border-2 border-slate-200 rounded-2xl">
-                  <table className="w-full text-left text-xs font-bold whitespace-nowrap">
-                    <thead className="bg-slate-100 text-slate-700 sticky top-0 border-b border-slate-200">
-                      <tr>
-                        <th className="p-2.5 text-center w-12">STT</th>
-                        <th className="p-2.5">Họ và Tên Đầu Vào</th>
-                        <th className="p-2.5">Trạng Thái Dry-Run</th>
-                        <th className="p-2.5">Ghi Chú Chi Tiết</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {dryRunResult.results?.map((r) => (
-                        <tr key={r.stt} className="hover:bg-amber-50/50">
-                          <td className="p-2 text-center text-slate-500">{r.stt}</td>
-                          <td className="p-2 font-extrabold text-slate-800">{r.fullName}</td>
-                          <td className="p-2">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                              r.status === 'READY_TO_CREATE' ? 'bg-emerald-100 text-emerald-800' :
-                              r.status === 'EXISTING_USER_READY_TO_ASSIGN' ? 'bg-sky-100 text-sky-800' :
-                              r.status === 'ALREADY_IN_CLASS_212' ? 'bg-indigo-100 text-indigo-800' : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="p-2 text-slate-600 text-[11px]">{r.note}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="p-4 bg-emerald-50 border-2 border-emerald-300 rounded-2xl text-xs font-bold text-emerald-950 flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                  Đã hoàn tất kiểm tra Dry-Run. Thầy/Cô có thể bấm nút **"🚀 Xác Nhận Tạo Tài Khoản Production"** bên dưới.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentStep(1)}
-                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-xs"
-                >
-                  Sửa danh sách
-                </button>
-              </div>
-
+            <div className="flex justify-between items-center pt-2">
+              <button
+                onClick={() => setStep(2)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm"
+              >
+                ← Quay Lại
+              </button>
+              <button
+                onClick={handleExecuteProduction}
+                disabled={isProdDisabled}
+                className={`px-6 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 ${
+                  isProdDisabled
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
+              >
+                {isLoading ? '⏳ Đang Tạo Tài Khoản Production...' : '⚡ Xác Nhận Tạo Thật Trên Production ➔'}
+              </button>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* BƯỚC 3: ĐANG THỰC THI THẬT TRÊN PRODUCTION */}
-          {currentStep === 3 && (
-            <div className="py-12 text-center space-y-4">
-              <RefreshCw className="w-12 h-12 text-indigo-600 animate-spin mx-auto" />
-              <h4 className="text-lg font-black text-slate-800">Đang Khởi Tạo Batch Trên Production...</h4>
-              <p className="text-xs font-bold text-slate-600 max-w-md mx-auto">
-                Hệ thống đang khởi tạo Auth Users, Profile, Mã học sinh, PIN Hash và gán Lớp 2.12 an toàn. Vui lòng không đóng cửa sổ này.
+        {step === 4 && prodResult && (
+          <div className="space-y-4">
+            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-300 dark:border-emerald-800 text-center">
+              <span className="text-3xl">🎉</span>
+              <h3 className="text-lg font-bold text-emerald-800 dark:text-emerald-200 mt-1">
+                Hoàn Tất Tạo Tài Khoản Lớp 2.12!
+              </h3>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
+                Đã tạo thành công {prodResult.summary.created} tài khoản mới và gán {prodResult.summary.assignedExisting} học sinh có sẵn.
               </p>
             </div>
-          )}
 
-          {/* BƯỚC 4: KẾT QUẢ PRODUCTION & XUẤT FILE CSV AN TOÀN */}
-          {currentStep === 4 && productionResult && (
-            <div className="space-y-6 animate-fadeIn">
-              
-              {/* KẾT QUẢ TỔNG QUAN */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-emerald-600">{productionResult.summary?.created || 0}</span>
-                  <p className="text-[11px] font-bold text-emerald-800">Tạo mới thành công</p>
-                </div>
-                <div className="bg-sky-50 border border-sky-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-sky-600">{productionResult.summary?.assignedExisting || 0}</span>
-                  <p className="text-[11px] font-bold text-sky-800">Đã gán tài khoản cũ</p>
-                </div>
-                <div className="bg-rose-50 border border-rose-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-rose-600">{productionResult.summary?.failed || 0}</span>
-                  <p className="text-[11px] font-bold text-rose-800">Thất bại / Bỏ qua</p>
-                </div>
-                <div className="bg-purple-50 border border-purple-200 p-3 rounded-2xl text-center">
-                  <span className="text-2xl font-black text-purple-600">{productionResult.summary?.total || 0}</span>
-                  <p className="text-[11px] font-bold text-purple-800">Tổng đã xử lý</p>
-                </div>
-              </div>
-
-              {/* BẢNG CHI TIẾT TỪNG HỌC SINH */}
-              <div>
-                <h4 className="text-xs font-black text-slate-800 mb-2 flex items-center justify-between">
-                  <span>Chi Tiết Xử Lý Production ({productionResult.results?.length || 0} học sinh):</span>
-                  <span className="text-[11px] text-emerald-700 font-bold">Lớp: {productionResult.className}</span>
-                </h4>
-
-                <div className="max-h-60 overflow-y-auto border-2 border-slate-200 rounded-2xl">
-                  <table className="w-full text-left text-xs font-bold whitespace-nowrap">
-                    <thead className="bg-slate-100 text-slate-700 sticky top-0 border-b border-slate-200">
-                      <tr>
-                        <th className="p-2 w-12 text-center">STT</th>
-                        <th className="p-2">Họ tên</th>
-                        <th className="p-2">Mã HS</th>
-                        <th className="p-2">Mã PIN</th>
-                        <th className="p-2">Trạng thái</th>
-                        <th className="p-2">Ghi chú</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {productionResult.results?.map((r) => (
-                        <tr key={r.stt} className="hover:bg-slate-50">
-                          <td className="p-2 text-center text-slate-500">{r.stt}</td>
-                          <td className="p-2 font-extrabold text-slate-800">{r.fullName}</td>
-                          <td className="p-2 font-mono text-indigo-700 font-black">{r.studentCode || '-'}</td>
-                          <td className="p-2 font-mono text-amber-700 font-black">{r.pin || '••••'}</td>
-                          <td className="p-2">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                              r.status === 'CREATED_AND_ASSIGNED' ? 'bg-emerald-100 text-emerald-800' :
-                              r.status.includes('ALREADY') ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="p-2 text-[11px] text-slate-600">{r.note}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* CẢNH BÁO BẢO MẬT & NÚT TẢI CSV */}
-              <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl space-y-3">
-                <div className="flex items-start gap-2.5 text-amber-900 text-xs font-bold">
-                  <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-black text-amber-950">LƯU Ý BẢO MẬT QUAN TRỌNG:</p>
-                    <p>
-                      Vui lòng bấm nút bên dưới để **tải xuống file CSV chứa thông tin đăng nhập (Mã HS & PIN)** về máy Admin. Vì lý do bảo mật, mã PIN đã được mã hóa 1 chiều trên máy chủ và **sẽ bị xóa sạch khỏi bộ nhớ màn hình sau khi đóng cửa sổ này**!
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleDownloadCSV}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl border-b-4 border-emerald-800 shadow-md flex items-center justify-center gap-2 active:translate-y-0.5"
-                >
-                  <Download className="w-4 h-4 text-amber-300" /> TẢI FILE CSV THÔNG TIN ĐĂNG NHẬP (MÃ HS & PIN)
-                </button>
-              </div>
-
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium flex items-center gap-2">
+              <span>⚠️</span> 
+              <span>
+                <strong>Cảnh báo bảo mật:</strong> Hãy tải ngay file CSV mật khẩu PIN bên dưới trước khi đóng modal! Mã PIN sẽ bị xóa khỏi bộ nhớ RAM để bảo mật.
+              </span>
             </div>
-          )}
 
-        </div>
-
-        {/* MODAL FOOTER */}
-        <div className="bg-slate-50 p-4 border-t border-slate-200 flex items-center justify-between shrink-0">
-          {currentStep === 1 && (
-            <>
+            <div className="flex justify-end gap-3 pt-3">
               <button
-                type="button"
-                onClick={handleCloseModal}
-                className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs sm:text-sm rounded-xl"
+                onClick={handleDownloadCSV}
+                className="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2"
               >
-                Hủy bỏ
+                <span>💾</span> Tải File CSV Mật Khẩu PIN Học Sinh
               </button>
-
               <button
-                type="button"
-                onClick={handleRunDryRun}
-                disabled={loading || parsedStudents.length === 0}
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 disabled:opacity-50"
+                onClick={onClose}
+                className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white font-bold text-sm"
               >
-                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4 text-amber-300" />}
-                🔍 Kiểm Tra Dry-Run Bản Xem Trước (Read-Only)
+                Đóng
               </button>
-            </>
-          )}
-
-          {currentStep === 2 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setCurrentStep(1)}
-                className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs sm:text-sm rounded-xl"
-              >
-                Quay lại sửa danh sách
-              </button>
-
-              <button
-                type="button"
-                onClick={handleConfirmProductionImport}
-                disabled={loading}
-                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl border-b-4 border-emerald-800 shadow-md flex items-center gap-2 disabled:opacity-50 active:translate-y-0.5"
-              >
-                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4 text-amber-300" />}
-                🚀 Xác Nhận Tạo Tài Khoản Production (Tạo Thật)
-              </button>
-            </>
-          )}
-
-          {currentStep === 4 && (
-            <button
-              type="button"
-              onClick={handleCloseModal}
-              className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs sm:text-sm rounded-xl"
-            >
-              🔒 Đóng Cửa Sổ & Xóa Mã PIN Khỏi Bộ Nhớ State
-            </button>
-          )}
-        </div>
-
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
-};
+}
+``` protocol

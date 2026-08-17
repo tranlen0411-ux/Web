@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS app_private.batch_idempotency_logs (
 
 REVOKE ALL ON TABLE app_private.batch_idempotency_logs FROM PUBLIC, anon, authenticated;
 
--- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ VỚI ON CONFLICT VÀ FOR UPDATE
+-- 2. HÀM RPC CLAIM IDEMPOTENCY NGUYÊN TỬ (FAIL-CLOSED VỚI CLAIM TOKEN & LEASE)
 CREATE OR REPLACE FUNCTION public.claim_batch_idempotency(
   p_idempotency_key TEXT,
   p_payload_fingerprint TEXT
@@ -61,7 +61,7 @@ BEGIN
 
   v_new_claim_token := gen_random_uuid();
 
-  -- 3. Đảm bảo bản ghi tồn tại bằng INSERT ON CONFLICT DO NOTHING (Tránh lỗi Lock row không tồn tại)
+  -- 3. Atomically Insert claim mới
   INSERT INTO app_private.batch_idempotency_logs (
     admin_id, idempotency_key, claim_token, payload_fingerprint, status, processing_started_at, lease_expires_at
   ) VALUES (
@@ -74,12 +74,10 @@ BEGIN
   WHERE admin_id = v_caller_id AND idempotency_key = p_idempotency_key
   FOR UPDATE;
 
-  -- Nếu vừa INSERT thành công (v_rec.claim_token = v_new_claim_token và status = 'PROCESSING')
   IF v_rec.claim_token = v_new_claim_token AND v_rec.status = 'PROCESSING' THEN
     RETURN jsonb_build_object('status', 'CLAIMED', 'claim_token', v_new_claim_token);
   END IF;
 
-  -- Nếu đã tồn tại từ trước: Kiểm tra fingerprint payload
   IF v_rec.payload_fingerprint <> p_payload_fingerprint THEN
     RETURN jsonb_build_object('status', 'PAYLOAD_MISMATCH', 'message', 'Mã Idempotency Key này đã được sử dụng cho một danh sách học sinh khác.');
   END IF;
@@ -103,7 +101,6 @@ BEGIN
     END IF;
 
   ELSIF v_rec.status = 'FAILED' THEN
-    -- Nếu lần trước thất bại -> Cập nhật status = PROCESSING và cấp claim_token mới
     UPDATE app_private.batch_idempotency_logs
     SET status = 'PROCESSING',
         claim_token = v_new_claim_token,
@@ -123,7 +120,7 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_batch_idempotency(TEXT, TEXT) TO authenticated;
 
--- 3. HÀM RPC HEARTBEAT GIA HẠN LEASE IDEMPOTENCY
+-- 3. HÀM RPC HEARTBEAT GIA HẠN LEASE IDEMPOTENCY (CHỈ CHO SERVICE_ROLE / CALLER THẬT KIỂM TRA LEASE)
 CREATE OR REPLACE FUNCTION public.heartbeat_batch_idempotency(
   p_idempotency_key TEXT,
   p_claim_token UUID
@@ -145,16 +142,17 @@ BEGIN
   WHERE admin_id = v_caller_id 
     AND idempotency_key = p_idempotency_key 
     AND claim_token = p_claim_token 
-    AND status = 'PROCESSING';
+    AND status = 'PROCESSING'
+    AND NOW() < lease_expires_at;
 
   RETURN FOUND;
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) TO authenticated;
+REVOKE ALL ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.heartbeat_batch_idempotency(TEXT, UUID) TO service_role;
 
--- 4. HÀM RPC HOÀN TẤT BATCH IDEMPOTENCY (XÁC MINH CLAIM TOKEN CHÍNH XỦ)
+-- 4. HÀM RPC HOÀN TẤT BATCH IDEMPOTENCY (SANITY CHECK: KHÔNG CHO LƯU PIN/SECRET TRONG RESPONSE_DATA)
 CREATE OR REPLACE FUNCTION public.complete_batch_idempotency(
   p_idempotency_key TEXT,
   p_claim_token UUID,
@@ -168,19 +166,37 @@ SET search_path = ''
 AS $$
 DECLARE
   v_caller_id UUID;
+  v_sanitized_data JSONB;
 BEGIN
   v_caller_id := (SELECT auth.uid());
   IF v_caller_id IS NULL THEN RETURN FALSE; END IF;
+
+  -- LÀM SẠCH TUYỆT ĐỐI MỌI THÔNG TIN BẢO MẬT (PIN, JWT, EMAIL_PASS) TRƯỚC KHI LƯU VÀO CSDL LOGS
+  v_sanitized_data := p_response_data #- '{results}';
+  IF p_response_data ? 'results' THEN
+    SELECT jsonb_set(
+      p_response_data,
+      '{results}',
+      (
+        SELECT COALESCE(jsonb_agg(
+          elem - 'pin' - 'password' - 'jwt' - 'token'
+        ), '[]'::jsonb)
+        FROM jsonb_array_elements(p_response_data->'results') AS elem
+      )
+    ) INTO v_sanitized_data;
+  END IF;
 
   IF p_is_success THEN
     UPDATE app_private.batch_idempotency_logs
     SET status = 'COMPLETED',
         completed_at = NOW(),
-        response_data = p_response_data,
+        response_data = v_sanitized_data,
         updated_at = NOW()
     WHERE admin_id = v_caller_id 
       AND idempotency_key = p_idempotency_key 
-      AND claim_token = p_claim_token;
+      AND claim_token = p_claim_token
+      AND status = 'PROCESSING'
+      AND NOW() < lease_expires_at;
   ELSE
     UPDATE app_private.batch_idempotency_logs
     SET status = 'FAILED',
@@ -195,13 +211,13 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) TO authenticated;
+REVOKE ALL ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_batch_idempotency(TEXT, UUID, JSONB, BOOLEAN) TO service_role;
 
 -- 5. BẢNG BỀN VỮNG LƯU TRỮ RATE LIMIT ĐĂNG NHẬP PIN
 CREATE TABLE IF NOT EXISTS app_private.login_rate_limits (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  identifier TEXT NOT NULL UNIQUE, -- E.g. 'code:HS201' HOẶC 'ip:<sha256_hash>'
+  identifier TEXT NOT NULL UNIQUE,
   failed_attempts INT DEFAULT 0,
   blocked_until TIMESTAMPTZ,
   last_attempt_at TIMESTAMPTZ DEFAULT NOW()
@@ -229,7 +245,6 @@ DECLARE
   v_is_valid BOOLEAN := FALSE;
   v_rate_rec RECORD;
   v_is_blocked BOOLEAN := FALSE;
-  v_lock_minutes INT;
 BEGIN
   v_clean_code := UPPER(TRIM(p_student_code));
   v_code_identifier := 'code:' || v_clean_code;
@@ -282,10 +297,16 @@ BEGIN
 
   -- 5. CẬP NHẬT TRẠNG THÁI RATE LIMIT CHO CẢ CODE VÀ IP IDENTIFIERS
   IF v_is_valid THEN
-    -- Đúng PIN -> Reset số lần thử sai về 0
+    -- Đúng PIN -> Reset số lần thử sai của code_identifier về 0, giảm IP attempts
     UPDATE app_private.login_rate_limits 
     SET failed_attempts = 0, blocked_until = NULL, last_attempt_at = NOW()
-    WHERE identifier IN (v_code_identifier, p_ip_identifier);
+    WHERE identifier = v_code_identifier;
+
+    IF p_ip_identifier IS NOT NULL AND p_ip_identifier <> '' THEN
+      UPDATE app_private.login_rate_limits 
+      SET failed_attempts = GREATEST(0, failed_attempts - 1), last_attempt_at = NOW()
+      WHERE identifier = p_ip_identifier;
+    END IF;
 
     RETURN jsonb_build_object(
       'success', true, 
@@ -293,7 +314,7 @@ BEGIN
       'email', v_email
     );
   ELSE
-    -- Sai PIN -> Tăng số lần thử sai và áp dụng Exponential Backoff
+    -- Sai PIN HOẶC MÃ CHƯA TỒN TẠI -> Tăng số lần thử sai của cả Code và IP và áp dụng Exponential Backoff
     UPDATE app_private.login_rate_limits 
     SET failed_attempts = failed_attempts + 1, last_attempt_at = NOW()
     WHERE identifier IN (v_code_identifier, p_ip_identifier);
