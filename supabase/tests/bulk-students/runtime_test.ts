@@ -94,6 +94,10 @@ async function getRealGoTrueUserToken(
     const client = new Client(DB_URL);
     await client.connect();
     await client.queryObject(
+      `DELETE FROM public.profiles WHERE email = $1 AND id <> $2;`,
+      [email, userId]
+    );
+    await client.queryObject(
       `INSERT INTO public.profiles (id, email, full_name, role, is_disabled)
        VALUES ($1, $2, $3, $4, FALSE)
        ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, email = EXCLUDED.email, full_name = EXCLUDED.full_name;`,
