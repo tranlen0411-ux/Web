@@ -701,8 +701,8 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
   
   const adminProfCheck = await client.queryObject<{ id: string; role: string; is_disabled: boolean }>(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [adminAuth.userId]);
   const studentProfCheck = await client.queryObject<{ id: string; role: string; is_disabled: boolean }>(`SELECT id, role, is_disabled FROM public.profiles WHERE id = $1;`, [studentId]);
-  const adminLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE admin_id = $1 AND reset_at > NOW() - INTERVAL '5 minutes';`, [adminAuth.userId]);
-  const studentLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE student_id = $1 AND reset_at > NOW() - INTERVAL '5 minutes';`, [studentId]);
+  const adminLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE admin_id = $1;`, [adminAuth.userId]);
+  const studentLogsCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM app_private.student_pin_reset_logs WHERE student_id = $1;`, [studentId]);
   const membershipCheck = await client.queryObject<{ count: string }>(`SELECT COUNT(*) FROM public.class_members WHERE student_id = $1 AND class_id = $2;`, [studentId, classId]);
 
   await client.queryObject(`BEGIN;`);
@@ -722,12 +722,14 @@ Deno.test("27. Reset PIN Security Audit Log - Ghi nhận nhật ký audit log v�
 
   console.log("=== TEST 27 DIAGNOSTIC LOGS ===");
   console.log("Admin ID:", adminAuth.userId);
-  console.log("Student ID:", studentId);
+  console.log("Admin Profile Exists:", adminProfCheck.rows.length > 0);
   console.log("Admin Role:", adminProfCheck.rows[0]?.role);
+  console.log("Student ID:", studentId);
+  console.log("Student Profile Exists:", studentProfCheck.rows.length > 0);
   console.log("Student Role:", studentProfCheck.rows[0]?.role);
   console.log("Student is_disabled:", studentProfCheck.rows[0]?.is_disabled);
-  console.log("Admin 5min Reset Count:", adminLogsCheck.rows[0]?.count);
-  console.log("Student 5min Reset Count:", studentLogsCheck.rows[0]?.count);
+  console.log("Admin Reset Log Count:", adminLogsCheck.rows[0]?.count);
+  console.log("Student Reset Log Count:", studentLogsCheck.rows[0]?.count);
   console.log("Membership Count (Lớp 2.12):", membershipCheck.rows[0]?.count);
   console.log("RPC claim_student_pin_reset Result:", rpcResult);
   console.log("RPC claim_student_pin_reset Error:", rpcError);
