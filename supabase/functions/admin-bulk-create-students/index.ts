@@ -10,12 +10,13 @@ const STRICT_EXACT_ORIGINS = [
 ];
 
 const getStrictCorsHeaders = (origin: string | null) => {
-  if (!origin || !STRICT_EXACT_ORIGINS.includes(origin)) {
-    return null;
-  }
+  if (!origin) return null;
+  const cleanOrigin = origin.trim().replace(/\/$/, '');
+  const isValid = STRICT_EXACT_ORIGINS.includes(cleanOrigin) || cleanOrigin.endsWith('.vercel.app');
+  if (!isValid) return null;
 
   return {
-    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Origin': cleanOrigin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-idempotency-key',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Vary': 'Origin',
