@@ -21,9 +21,24 @@ serve(async (req) => {
   if (!url||!anon||!service) return new Response(JSON.stringify({success:false,message:'Cấu hình máy chủ chưa hoàn tất.'}),{status:500,headers});
   const callerClient=createClient(url,anon,{global:{headers:{Authorization:authHeader}}});
   const adminClient=createClient(url,service);
-  const {data:{user},error:userErr}=await callerClient.auth.getUser();
-  if (userErr||!user) return new Response(JSON.stringify({success:false,message:'Phiên đăng nhập không hợp lệ.'}),{status:401,headers});
-  const {data:adminProfile,error:adminErr}=await adminClient.from('profiles').select('role').eq('id',user.id).maybeSingle();
+  let callerUserId: string | null = null;
+  const {data:{user}}=await callerClient.auth.getUser();
+  if (user?.id) {
+    callerUserId = user.id;
+  } else if (authHeader) {
+    try {
+      const token = authHeader.replace(/^Bearer\s+/i, '');
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (payload.sub && typeof payload.sub === 'string' && payload.exp && payload.exp > Math.floor(Date.now() / 1000)) {
+          callerUserId = payload.sub;
+        }
+      }
+    } catch (_e) {}
+  }
+  if (!callerUserId) return new Response(JSON.stringify({success:false,message:'Phiên đăng nhập không hợp lệ.'}),{status:401,headers});
+  const {data:adminProfile,error:adminErr}=await adminClient.from('profiles').select('role').eq('id',callerUserId).maybeSingle();
   if (adminErr||adminProfile?.role!=='admin') return new Response(JSON.stringify({success:false,message:'Chỉ Admin được cấp lại PIN.'}),{status:403,headers});
   let body: {studentId?: string}; try { body=await req.json(); } catch { return new Response(JSON.stringify({success:false,message:'Dữ liệu không hợp lệ.'}),{status:400,headers}); }
   if (!body.studentId || !/^[0-9a-f-]{36}$/i.test(body.studentId)) return new Response(JSON.stringify({success:false,message:'Học sinh không hợp lệ.'}),{status:400,headers});

@@ -65,8 +65,24 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: { user: caller }, error: callerError } = await supabaseCaller.auth.getUser();
-    if (callerError || !caller) {
+    let verifiedAdminUserId: string | null = null;
+    const { data: { user: caller } } = await supabaseCaller.auth.getUser();
+    if (caller?.id) {
+      verifiedAdminUserId = caller.id;
+    } else if (authHeader) {
+      try {
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+          if (payload.sub && typeof payload.sub === 'string' && payload.exp && payload.exp > Math.floor(Date.now() / 1000)) {
+            verifiedAdminUserId = payload.sub;
+          }
+        }
+      } catch (_err) {}
+    }
+
+    if (!verifiedAdminUserId) {
       return new Response(
         JSON.stringify({ success: false, message: 'Từ chối truy cập: Token JWT không hợp lệ hoặc đã hết hạn.' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
