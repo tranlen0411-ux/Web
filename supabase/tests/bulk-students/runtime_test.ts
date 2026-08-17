@@ -30,55 +30,35 @@ async function createAdminDbClient(): Promise<Client> {
   return client;
 }
 
-// Helper tạo JWT local chuẩn HMAC-SHA256 cho Admin, Teacher, Student
+const jwtCache: Record<string, string> = {};
+
+// Helper lấy access_token thật từ GoTrue Auth local (đã nạp sẵn trong 00_fixture.sql)
 async function generateTestJWT(
-  userId: string,
+  _userId: string,
   email: string,
-  roleName: "admin" | "teacher" | "student"
+  _roleName: "admin" | "teacher" | "student"
 ): Promise<string> {
-  const encoder = new TextEncoder();
-  const header = { alg: "HS256", typ: "JWT" };
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    sub: userId,
-    aud: "authenticated",
-    role: "authenticated",
-    email: email,
-    app_metadata: { provider: "email", providers: ["email"] },
-    user_metadata: { role: roleName },
-    iat: now,
-    exp: now + 3600,
-  };
+  if (jwtCache[email]) return jwtCache[email];
 
-  const b64Url = (obj: any) =>
-    btoa(JSON.stringify(obj))
-      .replace(/=/g, "")
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_");
+  const res = await fetch(`${SUPABASE_LOCAL_GATEWAY}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": Deno.env.get("SUPABASE_ANON_KEY") || "anon-key-local",
+    },
+    body: JSON.stringify({
+      email: email,
+      password: "Password123!",
+    }),
+  });
 
-  const encodedHeader = b64Url(header);
-  const encodedPayload = b64Url(payload);
+  const data = await res.json();
+  if (data.access_token) {
+    jwtCache[email] = data.access_token;
+    return data.access_token;
+  }
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(JWT_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(`${encodedHeader}.${encodedPayload}`)
-  );
-
-  const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-
-  return `${encodedHeader}.${encodedPayload}.${encodedSignature}`;
+  throw new Error(`Không thể lấy access_token thật từ GoTrue cho email ${email}: ${JSON.stringify(data)}`);
 }
 
 // Data mock 34 học sinh Lớp 2.12 chuẩn
