@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseUrl } from '../../lib/supabase';
 
 const OFFICIAL_CLASS_212_STUDENTS = [
   "Trần Lê Hoàng An",
@@ -168,7 +168,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-bulk-create-students`,
+        `${supabaseUrl}/functions/v1/admin-bulk-create-students`,
         {
           method: 'POST',
           headers: {
@@ -222,7 +222,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-bulk-create-students`,
+        `${supabaseUrl}/functions/v1/admin-bulk-create-students`,
         {
           method: 'POST',
           headers: {
