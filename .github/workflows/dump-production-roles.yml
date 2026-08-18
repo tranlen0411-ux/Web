@@ -5,17 +5,12 @@ on:
 
 jobs:
   dump-roles:
-    name: Backup Production Roles (Read-Only)
+    name: Backup Production Roles (Read-Only PostgreSQL 17)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
 
       - name: Check Secret Existence
         env:
@@ -27,13 +22,34 @@ jobs:
             exit 1
           fi
 
-      - name: Dump Production Roles
+      - name: Install PostgreSQL 17 Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates lsb-release gnupg
+          sudo install -d /etc/apt/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Verify pg_dumpall Major Version 17
+        run: |
+          pg_dumpall --version
+          PG_VER=$(pg_dumpall --version | awk '{print $3}' | cut -d. -f1)
+          echo "Detected pg_dumpall major version: $PG_VER"
+          if [ "$PG_VER" -ne 17 ]; then
+            echo "::error::pg_dumpall major version is not 17! Current version output: $(pg_dumpall --version)"
+            exit 1
+          fi
+          echo "PASS: pg_dumpall is major version 17."
+
+      - name: Dump Production Roles (Read-Only)
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          echo "Đang thực hiện Read-Only dump cho Supabase Database Roles..."
+          echo "Đang thực hiện Read-Only dump cho Supabase Database Roles bằng PostgreSQL 17 client..."
           # Đảm bảo không ghi dữ liệu (Production writes = NO)
-          supabase db dump --db-url "$SUPABASE_DB_URL" -f roles.sql --role-only
+          pg_dumpall --dbname="$SUPABASE_DB_URL" --roles-only --file=roles.sql
 
       - name: Verify roles.sql existence and non-zero size
         run: |
