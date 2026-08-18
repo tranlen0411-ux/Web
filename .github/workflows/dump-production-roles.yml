@@ -43,13 +43,28 @@ jobs:
           fi
           echo "PASS: pg_dumpall is major version 17."
 
-      - name: Dump Production Roles (Read-Only)
+      - name: Dump Production Roles (Read-Only Supabase CLI Equivalent Filter)
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          RESERVED_ROLES: "anon|authenticated|authenticator|cli_login_.*|dashboard_user|pgbouncer|postgres|service_role|supabase_.*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin"
+          ALLOWED_CONFIGS: "pgaudit.*|pgrst.*|session_replication_role|statement_timeout|track_io_timing"
         run: |
-          echo "Đang thực hiện Read-Only dump cho Supabase Database Roles bằng PostgreSQL 17 client..."
-          # Đảm bảo không ghi dữ liệu (Production writes = NO)
-          pg_dumpall --dbname="$SUPABASE_DB_URL" --roles-only --file=roles.sql
+          echo "Đang dump roles và lọc bỏ Supabase-managed/reserved roles bằng bộ lọc chuẩn từ mã nguồn Supabase CLI..."
+          
+          pg_dumpall --dbname="$SUPABASE_DB_URL" \
+            --roles-only \
+            --quote-all-identifier \
+            --no-role-passwords \
+            --no-comments \
+          | sed -E 's/^\\(un)?restrict .*$/-- &/' \
+          | sed -E "s/^CREATE ROLE \"($RESERVED_ROLES)\"/-- &/" \
+          | sed -E "s/^ALTER ROLE \"($RESERVED_ROLES)\"/-- &/" \
+          | sed -E "s/ (NOSUPERUSER|NOREPLICATION)//g" \
+          | sed -E "s/^-- (.* SET \"($ALLOWED_CONFIGS)\" .*)/\1/" \
+          | sed -E "s/GRANT \".*\" TO \"($RESERVED_ROLES)\"/-- &/" \
+          | sed -E '/^--/d' \
+          | sed -E '/^$/d' \
+          | uniq > roles.sql
 
       - name: Verify roles.sql existence and non-zero size
         run: |
