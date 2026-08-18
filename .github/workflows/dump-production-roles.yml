@@ -1,0 +1,61 @@
+name: Dump Production Supabase Roles
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump-roles:
+    name: Backup Production Roles (Read-Only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Check Secret Existence
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::BLOCKED: SUPABASE_DB_URL secret missing"
+            echo "Vui lòng cấu hình Repository Secret 'SUPABASE_DB_URL' trên GitHub trước khi kích hoạt workflow này."
+            exit 1
+          fi
+
+      - name: Dump Production Roles
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          echo "Đang thực hiện Read-Only dump cho Supabase Database Roles..."
+          # Đảm bảo không ghi dữ liệu (Production writes = NO)
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f roles.sql --role-only
+
+      - name: Verify roles.sql existence and non-zero size
+        run: |
+          if [ ! -f "roles.sql" ]; then
+            echo "::error::File roles.sql không tồn tại sau khi dump!"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "roles.sql" 2>/dev/null || stat -f%z "roles.sql" 2>/dev/null || echo 0)
+          echo "Kích thước file roles.sql: $FILE_SIZE bytes"
+
+          if [ "$FILE_SIZE" -le 0 ]; then
+            echo "::error::File roles.sql bị rỗng (size = $FILE_SIZE bytes)!"
+            exit 1
+          fi
+
+          echo "PASS: roles.sql được khởi tạo thành công với kích thước $FILE_SIZE bytes."
+
+      - name: Upload roles.sql Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-production-roles
+          path: roles.sql
+          retention-days: 7
+          if-no-files-found: error
