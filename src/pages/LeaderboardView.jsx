@@ -18,7 +18,7 @@ export const LeaderboardView = () => {
   const [allSystemClasses, setAllSystemClasses] = useState([]);
   const [userMyClasses, setUserMyClasses] = useState([]);
 
-  // --- STATE KỲ XẾP HẠNG (RANKING PERIODS) ---
+  // --- STATE KỲ XẾP HẠNG (RANKING PERIODS V1) ---
   const [classPeriods, setClassPeriods] = useState([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState('');
   const [isPeriodModalOpen, setIsPeriodModalOpen] = useState(false);
@@ -27,9 +27,12 @@ export const LeaderboardView = () => {
   const [summaryStudentId, setSummaryStudentId] = useState(null);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
 
-  // --- STATE DÀNH CHO TAB TRÒ CHƠI ---
+  // --- STATE BỘ LỌC 4 TẦNG TRÒ CHƠI ---
   const [gameGradeFilter, setGameGradeFilter] = useState('ALL');
   const [gameClassFilter, setGameClassFilter] = useState('ALL_IN_GRADE');
+  const [gameSubjectFilter, setGameSubjectFilter] = useState('ALL');
+  const [gameTimeRange, setGameTimeRange] = useState('ALL');
+  const [availableGameSubjects, setAvailableGameSubjects] = useState([]);
   const [gameStudents, setGameStudents] = useState([]);
   const [loadingGame, setLoadingGame] = useState(false);
   const [gameError, setGameError] = useState('');
@@ -42,9 +45,10 @@ export const LeaderboardView = () => {
   const [loadingAcademic, setLoadingAcademic] = useState(false);
   const [academicError, setAcademicError] = useState('');
 
-  // 1. Load thông tin User đăng nhập & Toàn bộ danh sách Lớp học
+  // 1. Load thông tin User đăng nhập & Toàn bộ danh sách Lớp học & Môn học
   useEffect(() => {
     fetchUserProfileAndClasses();
+    fetchAvailableGameSubjects();
   }, []);
 
   const fetchUserProfileAndClasses = async () => {
@@ -107,7 +111,20 @@ export const LeaderboardView = () => {
     }
   };
 
-  // HÀM LẤY CLASS ID UUID HỢP LỆ (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE)
+  // TẢI DANH SÁCH MÔN HỌC THẬT CỦA CÁC TRÒ CHƠI TỪ CSDL
+  const fetchAvailableGameSubjects = async () => {
+    try {
+      const { data, error } = await supabase.from('games').select('subject');
+      if (!error && data) {
+        const subjects = Array.from(new Set(data.map(g => g.subject).filter(Boolean)));
+        setAvailableGameSubjects(subjects);
+      }
+    } catch (err) {
+      console.error('Fetch game subjects error:', err);
+    }
+  };
+
+  // HÀM LẤY CLASS ID UUID HỢP LỆ (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE CHO RANKING PERIOD MODAL)
   const getValidManagedClassId = () => {
     const targetId = activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter;
     if (!targetId || targetId === 'ALL_IN_GRADE' || targetId === 'ALL') {
@@ -172,18 +189,18 @@ export const LeaderboardView = () => {
     triggerSound('click');
   };
 
-  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI
+  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG)
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
     }
-  }, [activeTab, gameGradeFilter, gameClassFilter, selectedPeriodId]);
+  }, [activeTab, gameGradeFilter, gameClassFilter, gameSubjectFilter, gameTimeRange, selectedPeriodId]);
 
   const fetchGameLeaderboard = async () => {
     setLoadingGame(true);
     setGameError('');
     try {
-      // 1. Nếu người dùng chọn một Kỳ xếp hạng cụ thể -> Gọi RPC get_game_period_leaderboard
+      // TRƯỜNG HỢP 1: ĐANG CHỌN MỘT KỲ XẾP HẠNG CỤ THỂ -> ƯU TIÊN DỮ LIỆU KỲ
       if (selectedPeriodId) {
         const { data: periodLeaderboard, error: periodErr } = await supabase.rpc('get_game_period_leaderboard', {
           p_period_id: selectedPeriodId
@@ -220,19 +237,23 @@ export const LeaderboardView = () => {
         }
       }
 
-      // 2. Nếu không chọn kỳ cụ thể -> Gọi RPC get_game_leaderboard tổng thể
-      const { data: rpcRes, error: rpcErr } = await supabase.rpc('get_game_leaderboard', {
-        p_grade_filter: gameGradeFilter.toString(),
-        p_class_id: gameClassFilter.toString()
-      });
+      // TRƯỜNG HỢP 2: KHÔNG CHỌN KỲ CỤ THỂ -> ÁP DỤNG BỘ LỌC 4 TẦNG (KHỐI -> LỚP -> MÔN -> THỜI GIAN)
+      let timeLimitISO = null;
+      const now = new Date();
 
-      if (!rpcErr && rpcRes && rpcRes.success) {
-        setGameStudents(rpcRes.leaderboard || []);
-        return;
+      if (gameTimeRange === 'WEEK') {
+        const dayOfWeek = now.getDay() || 7;
+        const startOfWeek = new Date(now);
+        startOfWeek.setHours(0, 0, 0, 0);
+        startOfWeek.setDate(now.getDate() - (dayOfWeek - 1));
+        timeLimitISO = startOfWeek.toISOString();
+      } else if (gameTimeRange === 'MONTH') {
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        timeLimitISO = startOfMonth.toISOString();
       }
 
-      // 3. Dự phòng truy vấn dữ liệu client nếu chưa chọn kỳ và RPC cũ rỗng
-      let resultStudents = [];
+      let validStudentProfiles = [];
+
       if (gameClassFilter !== 'ALL_IN_GRADE') {
         if (userProfile?.role === 'teacher') {
           const isManaged = userMyClasses.some(c => c.id === gameClassFilter);
@@ -249,20 +270,17 @@ export const LeaderboardView = () => {
           .eq('class_id', gameClassFilter)
           .eq('profiles.role', 'student');
 
-        resultStudents = (members || []).map(m => ({
+        validStudentProfiles = (members || []).map(m => ({
           ...m.profiles,
           class_name: m.classes?.name,
           grade_level: m.classes?.grade_level || m.profiles?.grade_level
-        })).sort((a, b) => (b.total_stars || 0) - (a.total_stars || 0) || (b.total_coins || 0) - (a.total_coins || 0));
+        }));
 
       } else {
         let query = supabase
           .from('profiles')
           .select('*')
-          .eq('role', 'student')
-          .order('total_stars', { ascending: false })
-          .order('total_coins', { ascending: false })
-          .limit(30);
+          .eq('role', 'student');
 
         if (gameGradeFilter !== 'ALL') {
           query = query.eq('grade_level', parseInt(gameGradeFilter));
@@ -282,14 +300,90 @@ export const LeaderboardView = () => {
             if (m.classes?.name) studentClassMap[m.student_id] = m.classes.name;
           });
 
-          resultStudents = profiles.map(p => ({
+          validStudentProfiles = profiles.map(p => ({
             ...p,
             class_name: studentClassMap[p.id] || null
           }));
         }
       }
 
-      setGameStudents(resultStudents);
+      if (validStudentProfiles.length === 0) {
+        setGameStudents([]);
+        setLoadingGame(false);
+        return;
+      }
+
+      // Xử lý bộ lọc môn học và thời gian
+      if (gameSubjectFilter === 'ALL' && gameTimeRange === 'ALL') {
+        const sorted = validStudentProfiles
+          .sort((a, b) => (b.total_stars || 0) - (a.total_stars || 0) || (b.total_coins || 0) - (a.total_coins || 0));
+
+        let currentRank = 1;
+        const ranked = sorted.map((st, idx, arr) => {
+          const isTied = idx > 0 && st.total_stars === arr[idx - 1].total_stars;
+          if (!isTied) currentRank = idx + 1;
+          return {
+            ...st,
+            rank: currentRank,
+            is_tied: isTied || (idx < arr.length - 1 && st.total_stars === arr[idx + 1].total_stars)
+          };
+        });
+
+        setGameStudents(ranked);
+        setLoadingGame(false);
+        return;
+      }
+
+      const studentIds = validStudentProfiles.map(p => p.id);
+      let progressQuery = supabase
+        .from('student_progress')
+        .select('student_id, stars_earned, completed_at, games!inner(subject)')
+        .in('student_id', studentIds)
+        .eq('status', 'completed');
+
+      if (gameSubjectFilter !== 'ALL') {
+        progressQuery = progressQuery.eq('games.subject', gameSubjectFilter);
+      }
+
+      if (timeLimitISO) {
+        progressQuery = progressQuery.gte('completed_at', timeLimitISO);
+      }
+
+      const { data: progressData, error: progressErr } = await progressQuery;
+
+      if (progressErr) {
+        console.error('Fetch student progress error:', progressErr);
+      }
+
+      const studentStatsMap = {};
+      (progressData || []).forEach(row => {
+        const sid = row.student_id;
+        if (!studentStatsMap[sid]) {
+          studentStatsMap[sid] = { total_stars: 0, completed_count: 0 };
+        }
+        studentStatsMap[sid].total_stars += row.stars_earned || 0;
+        studentStatsMap[sid].completed_count += 1;
+      });
+
+      const filteredStudents = validStudentProfiles.map(st => ({
+        ...st,
+        total_stars: studentStatsMap[st.id]?.total_stars || 0,
+        completed_count: studentStatsMap[st.id]?.completed_count || 0,
+        accumulated_stars: st.total_stars
+      })).sort((a, b) => b.total_stars - a.total_stars || (b.total_coins || 0) - (a.total_coins || 0));
+
+      let currentRank = 1;
+      const rankedFiltered = filteredStudents.map((st, idx, arr) => {
+        const isTied = idx > 0 && st.total_stars === arr[idx - 1].total_stars;
+        if (!isTied) currentRank = idx + 1;
+        return {
+          ...st,
+          rank: currentRank,
+          is_tied: isTied || (idx < arr.length - 1 && st.total_stars === arr[idx + 1].total_stars)
+        };
+      });
+
+      setGameStudents(rankedFiltered);
     } catch (err) {
       console.error('Fetch game leaderboard error:', err);
       setGameError('Lỗi khi tải bảng xếp hạng: ' + err.message);
@@ -419,10 +513,30 @@ export const LeaderboardView = () => {
   };
 
   const getGameLeaderboardTitle = () => {
-    if (gameGradeFilter === 'ALL') return 'Bảng Xếp Hạng Toàn Trường';
-    if (gameClassFilter === 'ALL_IN_GRADE') return `Bảng Xếp Hạng Khối ${gameGradeFilter}`;
-    const targetClass = allSystemClasses.find(c => c.id === gameClassFilter);
-    return targetClass ? `Bảng Xếp Hạng ${formatClassLabel(targetClass.name)}` : `Bảng Xếp Hạng Khối ${gameGradeFilter}`;
+    if (selectedPeriodId) {
+      const pObj = classPeriods.find(p => p.id === selectedPeriodId);
+      return `🏆 Bảng Xếp Hạng Thi Đua: ${pObj?.name || 'Kỳ xếp hạng'}`;
+    }
+    let titleStr = '🎮 Bảng Xếp Hạng Trò Chơi';
+    if (gameGradeFilter === 'ALL') {
+      titleStr += ' – Toàn Trường';
+    } else if (gameClassFilter === 'ALL_IN_GRADE') {
+      titleStr += ` – Khối ${gameGradeFilter} (Tất cả lớp)`;
+    } else {
+      const targetClass = allSystemClasses.find(c => c.id === gameClassFilter);
+      titleStr += ` – ${formatClassLabel(targetClass?.name)}`;
+    }
+
+    if (gameSubjectFilter !== 'ALL') {
+      titleStr += ` [Môn ${gameSubjectFilter}]`;
+    }
+    if (gameTimeRange === 'WEEK') {
+      titleStr += ' [Tuần này]';
+    } else if (gameTimeRange === 'MONTH') {
+      titleStr += ' [Tháng này]';
+    }
+
+    return titleStr;
   };
 
   const getRankBadge = (rank, isTied = false) => {
@@ -524,7 +638,7 @@ export const LeaderboardView = () => {
         </div>
       </div>
 
-      {/* THANH KỲ XẾP HẠNG & NÚT QUẢN LÝ KỲ XẾP HẠNG */}
+      {/* THANH KỲ XẾP HẠNG & NÚT QUẢN LÝ KỲ XẾP HẠNG (RANKING PERIOD V1) */}
       <div className="mb-6 p-4 bg-indigo-50/80 rounded-3xl border-2 border-indigo-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <Calendar className="w-5 h-5 text-indigo-600 shrink-0" />
@@ -567,6 +681,7 @@ export const LeaderboardView = () => {
       {activeTab === 'game' && (
         <div className="space-y-6">
           
+          {/* BỘ LỌC 4 TẦNG TRÒ CHƠI */}
           <div className="bg-amber-50/80 p-5 rounded-3xl border-2 border-amber-200 space-y-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-amber-200/60 pb-3">
               <h3 className="text-sm font-black text-amber-950 flex items-center gap-1.5">
@@ -578,9 +693,11 @@ export const LeaderboardView = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              
+              {/* 1. BỘ LỌC KHỐI */}
               <div>
                 <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
-                  <Filter className="w-3.5 h-3.5 text-amber-600" /> Chọn Khối Lớp:
+                  <Filter className="w-3.5 h-3.5 text-amber-600" /> 1. Chọn Khối Lớp:
                 </label>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {getGameAvailableGrades().map((g) => (
@@ -600,9 +717,10 @@ export const LeaderboardView = () => {
                 </div>
               </div>
 
+              {/* 2. BỘ LỌC LỚP PHỤ THUỘC THEO KHỐI ĐÃ CHỌN */}
               <div>
                 <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
-                  <Users className="w-3.5 h-3.5 text-amber-600" /> Chọn Lớp Thuộc Khối:
+                  <Users className="w-3.5 h-3.5 text-amber-600" /> 2. Chọn Lớp Thuộc Khối:
                 </label>
 
                 {gameGradeFilter === 'ALL' ? (
@@ -632,6 +750,58 @@ export const LeaderboardView = () => {
                 )}
               </div>
 
+              {/* 3. BỘ LỌC MÔN HỌC */}
+              <div>
+                <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
+                  <BookOpen className="w-3.5 h-3.5 text-amber-600" /> 3. Chọn Môn Học:
+                </label>
+                <select
+                  value={gameSubjectFilter}
+                  disabled={Boolean(selectedPeriodId)}
+                  onChange={(e) => {
+                    setGameSubjectFilter(e.target.value);
+                    triggerSound('click');
+                  }}
+                  className={`w-full p-2.5 border-2 rounded-2xl font-extrabold text-xs focus:ring-2 focus:outline-none shadow-sm ${
+                    selectedPeriodId
+                      ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-white border-amber-300 text-amber-950 focus:ring-amber-500'
+                  }`}
+                >
+                  <option value="ALL">🎯 Tất cả môn học</option>
+                  {availableGameSubjects.map((sub) => (
+                    <option key={sub} value={sub}>
+                      📚 Môn {sub}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 4. BỘ LỌC THỜI GIAN (DISABLED KHI ĐANG XEM KỲ XẾP HẠNG) */}
+              <div>
+                <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-amber-600" /> 4. Chọn Thời Gian:
+                </label>
+                {selectedPeriodId ? (
+                  <div className="p-2.5 bg-slate-100 border-2 border-slate-200 rounded-2xl font-bold text-xs text-slate-500 cursor-not-allowed">
+                    ⏱️ Theo thời gian Kỳ xếp hạng (Cố định)
+                  </div>
+                ) : (
+                  <select
+                    value={gameTimeRange}
+                    onChange={(e) => {
+                      setGameTimeRange(e.target.value);
+                      triggerSound('click');
+                    }}
+                    className="w-full p-2.5 bg-white border-2 border-amber-300 rounded-2xl font-extrabold text-xs text-amber-950 focus:ring-2 focus:ring-amber-500 focus:outline-none shadow-sm"
+                  >
+                    <option value="ALL">♾️ Toàn bộ thời gian (Tích lũy tổng)</option>
+                    <option value="WEEK">📅 Tuần này</option>
+                    <option value="MONTH">📆 Tháng này</option>
+                  </select>
+                )}
+              </div>
+
             </div>
           </div>
 
@@ -648,7 +818,7 @@ export const LeaderboardView = () => {
             <div className="text-center py-12 bg-white rounded-3xl border-4 border-amber-200">
               <Trophy className="w-12 h-12 text-amber-400 mx-auto mb-2" />
               <h3 className="text-lg font-black text-amber-900">Chưa có dữ liệu xếp hạng</h3>
-              <p className="text-xs font-bold text-slate-500 mt-1">Chưa có học sinh tham gia hoàn thành bài thi đua trong khoảng thời gian này.</p>
+              <p className="text-xs font-bold text-slate-500 mt-1">Chưa có học sinh nào hoàn thành bài thi đua/trò chơi thỏa mãn bộ lọc hiện tại.</p>
             </div>
           ) : (
             <div className="space-y-3">
