@@ -7,6 +7,8 @@ jobs:
   dump-roles:
     name: Backup Production Roles (Read-Only PostgreSQL 17)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: postgres:17
 
     steps:
       - name: Checkout Code
@@ -21,16 +23,6 @@ jobs:
             echo "Vui lòng cấu hình Repository Secret 'SUPABASE_DB_URL' trên GitHub trước khi kích hoạt workflow này."
             exit 1
           fi
-
-      - name: Install PostgreSQL 17 Client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates lsb-release gnupg
-          sudo install -d /etc/apt/keyrings
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/keyrings/postgresql.gpg
-          echo "deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
 
       - name: Verify pg_dumpall Major Version 17
         run: |
@@ -69,7 +61,9 @@ jobs:
 
           echo "RESET ALL;" >> roles.sql
 
-      - name: Verify roles.sql existence and non-zero size
+      - name: Verify roles.sql Content and Integrity
+        env:
+          RESERVED_ROLES: "anon|authenticated|authenticator|cli_login_.*|dashboard_user|pgbouncer|postgres|service_role|supabase_.*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin"
         run: |
           if [ ! -f "roles.sql" ]; then
             echo "::error::File roles.sql không tồn tại sau khi dump!"
@@ -84,7 +78,30 @@ jobs:
             exit 1
           fi
 
-          echo "PASS: roles.sql được khởi tạo thành công với kích thước $FILE_SIZE bytes."
+          # Kiểm tra dòng cuối cùng của roles.sql phải là RESET ALL;
+          LAST_LINE=$(tail -n 1 roles.sql | tr -d '\r')
+          if [ "$LAST_LINE" != "RESET ALL;" ]; then
+            echo "::error::Dòng cuối của roles.sql không phải là 'RESET ALL;'. Dòng cuối hiện tại: '$LAST_LINE'"
+            exit 1
+          fi
+
+          # Kiểm tra không còn các câu CREATE ROLE / ALTER ROLE cho reserved roles
+          INVALID_CREATE=$(grep -E "^CREATE ROLE \"($RESERVED_ROLES)\"" roles.sql || true)
+          INVALID_ALTER=$(grep -E "^ALTER ROLE \"($RESERVED_ROLES)\"" roles.sql || true)
+
+          if [ -n "$INVALID_CREATE" ]; then
+            echo "::error::Phát hiện câu lệnh CREATE ROLE cho reserved roles vẫn tồn tại trong roles.sql:"
+            echo "$INVALID_CREATE"
+            exit 1
+          fi
+
+          if [ -n "$INVALID_ALTER" ]; then
+            echo "::error::Phát hiện câu lệnh ALTER ROLE cho reserved roles vẫn tồn tại trong roles.sql:"
+            echo "$INVALID_ALTER"
+            exit 1
+          fi
+
+          echo "PASS: roles.sql hợp lệ (tồn tại, size > 0, dòng cuối là RESET ALL;, không chứa CREATE/ALTER ROLE cho reserved roles)."
 
       - name: Upload roles.sql Artifact
         uses: actions/upload-artifact@v4
