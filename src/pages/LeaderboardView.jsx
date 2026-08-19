@@ -107,9 +107,22 @@ export const LeaderboardView = () => {
     }
   };
 
-  // 2. FETCH CÁC KỲ XẾP HẠNG THEO LỚP ĐƯỢC CHỌN (BẢO VỆ LỌC THEO VAI TRÒ)
+  // HÀM LẤY CLASS ID UUID HỢP LỆ (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE)
+  const getValidManagedClassId = () => {
+    const targetId = activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter;
+    if (!targetId || targetId === 'ALL_IN_GRADE' || targetId === 'ALL') {
+      return '';
+    }
+    return targetId;
+  };
+
+  // 2. FETCH CÁC KỲ XẾP HẠNG THEO LỚP ĐƯỢC CHỌN (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE & PHÂN QUYỀN VAI TRÒ)
   const fetchClassPeriods = async (classId, roleParam) => {
-    if (!classId) return;
+    if (!classId || classId === 'ALL_IN_GRADE' || classId === 'ALL') {
+      setClassPeriods([]);
+      setSelectedPeriodId('');
+      return;
+    }
     try {
       const currentRole = roleParam || userProfile?.role;
       let query = supabase
@@ -143,7 +156,7 @@ export const LeaderboardView = () => {
   };
 
   useEffect(() => {
-    const activeClassId = activeTab === 'academic' ? selectedAcademicClassId : (gameClassFilter !== 'ALL_IN_GRADE' ? gameClassFilter : null);
+    const activeClassId = getValidManagedClassId();
     if (activeClassId) {
       fetchClassPeriods(activeClassId, userProfile?.role);
     } else {
@@ -470,6 +483,7 @@ export const LeaderboardView = () => {
   };
 
   const canManagePeriods = userProfile?.role === 'admin' || userProfile?.role === 'teacher';
+  const validManagedClassId = getValidManagedClassId();
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -532,12 +546,18 @@ export const LeaderboardView = () => {
         </div>
 
         {canManagePeriods && (
-          <button
-            onClick={() => setIsPeriodModalOpen(true)}
-            className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md"
-          >
-            <Settings className="w-4 h-4 text-amber-300" /> ⚙️ Quản Lý Kỳ Xếp Hạng
-          </button>
+          validManagedClassId ? (
+            <button
+              onClick={() => setIsPeriodModalOpen(true)}
+              className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md"
+            >
+              <Settings className="w-4 h-4 text-amber-300" /> ⚙️ Quản Lý Kỳ Xếp Hạng
+            </button>
+          ) : (
+            <div className="w-full sm:w-auto px-3 py-1.5 bg-amber-100 border border-amber-300 rounded-2xl text-[11px] font-bold text-amber-900 text-center flex items-center justify-center gap-1">
+              <span>⚠️ Chọn 1 lớp cụ thể để quản lý kỳ</span>
+            </div>
+          )
         )}
       </div>
 
@@ -863,7 +883,7 @@ export const LeaderboardView = () => {
                           {st.academic_score_pct}%
                         </div>
                         <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                          ĐTB: {st.avg_score} điểm
+                          {selectedPeriodId ? `ĐTB: ${st.academic_score_pct}%` : `ĐTB: ${st.avg_score} điểm`}
                         </div>
                       </div>
                     </div>
@@ -887,15 +907,15 @@ export const LeaderboardView = () => {
       <RankingPeriodModal
         isOpen={isPeriodModalOpen}
         onClose={() => setIsPeriodModalOpen(false)}
-        selectedClassId={activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter}
+        selectedClassId={validManagedClassId}
         myClasses={userMyClasses}
         onPeriodChange={() => {
-          const activeClassId = activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter;
+          const activeClassId = getValidManagedClassId();
           fetchClassPeriods(activeClassId, userProfile?.role);
         }}
       />
 
-      {/* MODAL TỔNG KẾT & NHẬN XÉT HỌC SINH THEO KỲ */}
+      {/* MODAL TỔNG KẾT & NHẬN XẾT HỌC SINH THEO KỲ */}
       <StudentPeriodSummaryModal
         isOpen={isSummaryModalOpen}
         onClose={() => setIsSummaryModalOpen(false)}
