@@ -81,7 +81,7 @@ export const LeaderboardView = () => {
         setUserMyClasses(myClasses);
         if (myClasses.length > 0) {
           setSelectedAcademicClassId(myClasses[0].id);
-          fetchClassPeriods(myClasses[0].id);
+          fetchClassPeriods(myClasses[0].id, profile?.role);
         }
         if (profile?.grade_level) {
           setGameGradeFilter(profile.grade_level);
@@ -92,14 +92,14 @@ export const LeaderboardView = () => {
         setUserMyClasses(myClasses);
         if (myClasses.length > 0) {
           setSelectedAcademicClassId(myClasses[0].id);
-          fetchClassPeriods(myClasses[0].id);
+          fetchClassPeriods(myClasses[0].id, profile?.role);
         }
 
       } else if (profile?.role === 'admin') {
         setUserMyClasses(sysClasses || []);
         if (sysClasses && sysClasses.length > 0) {
           setSelectedAcademicClassId(sysClasses[0].id);
-          fetchClassPeriods(sysClasses[0].id);
+          fetchClassPeriods(sysClasses[0].id, profile?.role);
         }
       }
     } catch (err) {
@@ -107,19 +107,30 @@ export const LeaderboardView = () => {
     }
   };
 
-  // 2. FETCH CÁC KỲ XẾP HẠNG THEO LỚP ĐƯỢC CHỌN
-  const fetchClassPeriods = async (classId) => {
+  // 2. FETCH CÁC KỲ XẾP HẠNG THEO LỚP ĐƯỢC CHỌN (BẢO VỆ LỌC THEO VAI TRÒ)
+  const fetchClassPeriods = async (classId, roleParam) => {
     if (!classId) return;
     try {
-      const { data, error } = await supabase
+      const currentRole = roleParam || userProfile?.role;
+      let query = supabase
         .from('ranking_periods')
         .select('*')
         .eq('class_id', classId)
         .order('created_at', { ascending: false });
 
+      // Học sinh chỉ được lấy kỳ ACTIVE và CLOSED, tuyệt đối không thấy DRAFT
+      if (currentRole === 'student') {
+        query = query.in('status', ['ACTIVE', 'CLOSED']);
+      }
+
+      const { data, error } = await query;
+
       if (!error && data) {
-        setClassPeriods(data);
-        const activePeriod = data.find(p => p.status === 'ACTIVE');
+        // Filter bảo vệ thêm cho học sinh trên UI
+        const visiblePeriods = (data || []).filter(p => currentRole !== 'student' || p.status !== 'DRAFT');
+        setClassPeriods(visiblePeriods);
+
+        const activePeriod = visiblePeriods.find(p => p.status === 'ACTIVE');
         if (activePeriod) {
           setSelectedPeriodId(activePeriod.id);
         } else {
@@ -134,12 +145,12 @@ export const LeaderboardView = () => {
   useEffect(() => {
     const activeClassId = activeTab === 'academic' ? selectedAcademicClassId : (gameClassFilter !== 'ALL_IN_GRADE' ? gameClassFilter : null);
     if (activeClassId) {
-      fetchClassPeriods(activeClassId);
+      fetchClassPeriods(activeClassId, userProfile?.role);
     } else {
       setClassPeriods([]);
       setSelectedPeriodId('');
     }
-  }, [selectedAcademicClassId, gameClassFilter, activeTab]);
+  }, [selectedAcademicClassId, gameClassFilter, activeTab, userProfile]);
 
   // 3. TỰ ĐỘNG RESET BỘ LỌC LỚP TRÒ CHƠI KHI ĐỔI KHỐI
   const handleGameGradeChange = (newGrade) => {
@@ -148,7 +159,7 @@ export const LeaderboardView = () => {
     triggerSound('click');
   };
 
-  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (KHÔNG DIRECT-UPDATE FALLBACK KHI RPC KỲ LỖI)
+  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
@@ -274,7 +285,7 @@ export const LeaderboardView = () => {
     }
   };
 
-  // 5. FETCH BẢNG XẾP HẠNG HỌC THUẬT
+  // 5. FETCH BẢNG XẾP HẠNG HỌC THUẬT (MAPPING KHỚP 100% CHUẨN OUTPUT RPC THẬT)
   useEffect(() => {
     if (activeTab === 'academic' && selectedAcademicClassId) {
       fetchAcademicLeaderboard();
@@ -311,7 +322,7 @@ export const LeaderboardView = () => {
         if (Array.isArray(periodAcademic)) {
           setAcademicData({
             success: true,
-            total_valid_exercises: periodAcademic[0]?.assigned_count || 0,
+            total_valid_exercises: periodAcademic[0]?.total_valid_count || 0,
             total_class_max_score: 100,
             leaderboard: periodAcademic.map(st => ({
               student_id: st.student_id,
@@ -321,10 +332,11 @@ export const LeaderboardView = () => {
               avatar_url: st.avatar_url,
               student_code: st.student_code,
               completed_count: st.completed_count,
-              total_valid_count: st.assigned_count,
-              academic_score_pct: st.average_percent,
-              avg_score: (st.average_percent / 10).toFixed(1),
-              total_earned_score: st.average_percent
+              total_valid_count: st.total_valid_count,
+              academic_score_pct: st.academic_score_pct,
+              completion_rate_pct: st.completion_rate_pct,
+              avg_score: st.avg_score !== undefined ? st.avg_score : (st.academic_score_pct / 10).toFixed(1),
+              total_earned_score: st.total_earned_score !== undefined ? st.total_earned_score : st.academic_score_pct
             }))
           });
           setLoadingAcademic(false);
@@ -377,10 +389,20 @@ export const LeaderboardView = () => {
     return [1, 2, 3, 4, 5];
   };
 
+  // 6. KHÔI PHỤC CHÍNH XÁC PHÂN QUYỀN LỌC LỚP TRONG KHỐI
   const getGameClassesForSelectedGrade = () => {
     if (gameGradeFilter === 'ALL') return [];
     const gradeNum = parseInt(gameGradeFilter);
-    return allSystemClasses.filter(c => c.grade_level === gradeNum);
+    const classesInGrade = allSystemClasses.filter(c => c.grade_level === gradeNum);
+
+    if (userProfile?.role === 'admin') {
+      return classesInGrade;
+    } else if (userProfile?.role === 'teacher') {
+      return classesInGrade.filter(c => c.teacher_id === currentUser?.id);
+    } else if (userProfile?.role === 'student') {
+      return classesInGrade.filter(c => userMyClasses.some(mc => mc.id === c.id));
+    }
+    return classesInGrade;
   };
 
   const getGameLeaderboardTitle = () => {
@@ -498,12 +520,14 @@ export const LeaderboardView = () => {
             onChange={(e) => setSelectedPeriodId(e.target.value)}
             className="w-full sm:w-auto p-2 bg-white border-2 border-indigo-200 rounded-xl text-xs font-black text-indigo-950 focus:outline-none"
           >
-            <option value="">-- Toàn bộ thời gian --</option>
-            {classPeriods.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.status === 'ACTIVE' ? '🟢 (Đang diễn ra)' : p.status === 'CLOSED' ? '🔒 (Đã kết thúc)' : '📝 (Bản nháp)'}
-              </option>
-            ))}
+            <option value="">-- Toàn bộ thời gian (Tích lũy tổng) --</option>
+            {classPeriods
+              .filter(p => userProfile?.role !== 'student' || p.status !== 'DRAFT')
+              .map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} {p.status === 'ACTIVE' ? '🟢 (Đang diễn ra)' : p.status === 'CLOSED' ? '🔒 (Đã kết thúc)' : '📝 (Bản nháp)'}
+                </option>
+              ))}
           </select>
         </div>
 
@@ -600,74 +624,72 @@ export const LeaderboardView = () => {
 
           {loadingGame ? (
             <LoadingSkeleton type="page" />
-          ) : gameStudents.length > 0 ? (
+          ) : gameStudents.length === 0 ? (
+            <div className="text-center py-12 bg-white rounded-3xl border-4 border-amber-200">
+              <Trophy className="w-12 h-12 text-amber-400 mx-auto mb-2" />
+              <h3 className="text-lg font-black text-amber-900">Chưa có dữ liệu xếp hạng</h3>
+              <p className="text-xs font-bold text-slate-500 mt-1">Chưa có học sinh tham gia hoàn thành bài thi đua trong khoảng thời gian này.</p>
+            </div>
+          ) : (
             <div className="space-y-3">
-              {gameStudents.map((st, idx) => (
-                <div
-                  key={st.id || idx}
-                  onClick={() => selectedPeriodId && handleOpenStudentSummary(st.id)}
-                  className={`p-4 rounded-3xl border-4 transition-all flex items-center justify-between shadow-sm ${
-                    selectedPeriodId && (userProfile?.role !== 'student' || st.id === currentUser?.id) ? 'cursor-pointer hover:scale-[1.01]' : ''
-                  } ${
-                    idx === 0
-                      ? 'bg-gradient-to-r from-amber-100 to-yellow-100 border-amber-400 shadow-md'
-                      : idx === 1
-                      ? 'bg-gradient-to-r from-slate-100 to-slate-200 border-slate-300'
-                      : idx === 2
-                      ? 'bg-gradient-to-r from-orange-100 to-amber-100 border-orange-300'
-                      : 'bg-white border-amber-100 hover:border-amber-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 text-center font-black">
-                      {getRankBadge(st.rank || idx + 1, st.is_tied)}
-                    </div>
-
-                    <img
-                      src={st.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
-                      alt=""
-                      className="w-12 h-12 rounded-2xl border-2 border-amber-300 bg-white shrink-0"
-                    />
-
-                    <div>
-                      <h4 className="text-base font-black text-slate-800 flex items-center gap-2">
-                        {st.full_name || 'Học Sinh'}
-                      </h4>
-
-                      <div className="flex items-center gap-2 mt-0.5">
-                        {st.class_name ? (
-                          <span className="inline-block px-2.5 py-0.5 bg-amber-200 text-amber-950 font-black text-[11px] rounded-lg border border-amber-300">
-                            🏫 {formatClassLabel(st.class_name)}
-                          </span>
+              {gameStudents.map((st, index) => {
+                const rank = st.rank || index + 1;
+                const isTop3 = rank <= 3;
+                return (
+                  <div
+                    key={st.id || index}
+                    onClick={() => handleOpenStudentSummary(st.id)}
+                    className={`p-4 rounded-3xl border-2 transition-all flex items-center justify-between gap-4 shadow-sm hover:shadow-md cursor-pointer ${
+                      isTop3
+                        ? 'bg-gradient-to-r from-amber-50/90 to-yellow-50/90 border-amber-300'
+                        : 'bg-white border-indigo-100 hover:border-indigo-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="shrink-0">{getRankBadge(rank, st.is_tied)}</div>
+                      
+                      <div className="w-10 h-10 rounded-2xl bg-amber-200 border-2 border-amber-400 overflow-hidden shrink-0">
+                        {st.avatar_url ? (
+                          <img src={st.avatar_url} alt={st.full_name} className="w-full h-full object-cover" />
                         ) : (
-                          <span className="inline-block px-2 py-0.5 bg-amber-100 text-amber-900 font-extrabold text-[10px] rounded-lg">
-                            Khối {st.grade_level || 1}
-                          </span>
+                          <div className="w-full h-full flex items-center justify-center font-black text-amber-900 text-sm">
+                            {st.full_name?.charAt(0) || '🎓'}
+                          </div>
                         )}
                       </div>
-                    </div>
-                  </div>
 
-                  <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <p className="text-base font-black text-amber-600 flex items-center gap-1 justify-end">
-                        <Star className="w-4 h-4 fill-amber-400" /> {st.total_stars || 0} ⭐
-                      </p>
-                      {selectedPeriodId && st.accumulated_stars !== undefined && (
-                        <p className="text-xs font-bold text-slate-500">Tích lũy: {st.accumulated_stars} 🌟</p>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-black text-slate-900">{st.full_name}</h4>
+                          {st.student_code && (
+                            <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                              {st.student_code}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] font-bold text-slate-500 mt-0.5">
+                          {st.class_name ? formatClassLabel(st.class_name) : `Khối ${st.grade_level || ''}`}
+                          {st.completed_count !== undefined && ` • ${st.completed_count} nhiệm vụ`}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className="text-base font-black text-amber-600 flex items-center justify-end gap-1">
+                        {st.total_stars} <Star className="w-4 h-4 text-amber-500 fill-amber-500" />
+                      </div>
+                      {st.accumulated_stars !== undefined && (
+                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                          Tích lũy: {st.accumulated_stars} 🌟
+                        </div>
                       )}
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-12 bg-white rounded-3xl border-4 border-amber-200">
-              <Award className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-              <h3 className="text-lg font-black text-amber-900">Chưa có bảng xếp hạng trò chơi</h3>
-              <p className="text-xs font-bold text-slate-500">Hãy là người đầu tiên chơi game để tích lũy Sao Thưởng nhé!</p>
+                );
+              })}
             </div>
           )}
+
         </div>
       )}
 
@@ -677,26 +699,42 @@ export const LeaderboardView = () => {
       {activeTab === 'academic' && (
         <div className="space-y-6">
           
-          <div className="bg-indigo-50/70 p-5 rounded-3xl border-2 border-indigo-200 space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-indigo-50/80 p-5 rounded-3xl border-2 border-indigo-200 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between border-b border-indigo-200/60 pb-3">
+              <h3 className="text-sm font-black text-indigo-950 flex items-center gap-1.5">
+                <BookOpen className="w-4 h-4 text-indigo-600" /> Xếp Hạng Học Thuật
+              </h3>
+              <span className="text-[11px] font-bold bg-indigo-200 text-indigo-950 px-2.5 py-0.5 rounded-full">
+                {selectedPeriodId ? 'Theo Kỳ Xếp Hạng 🎓' : 'Theo Lớp & Thời Gian 📚'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               
               <div>
                 <label className="block text-xs font-black text-indigo-950 mb-1 flex items-center gap-1">
-                  <Users className="w-3.5 h-3.5 text-indigo-600" /> Lớp Học:
+                  <Users className="w-3.5 h-3.5 text-indigo-600" /> Chọn Lớp Học:
                 </label>
+
                 {userProfile?.role === 'student' ? (
-                  <div className="p-2.5 bg-white border border-indigo-200 rounded-2xl text-xs font-black text-indigo-900 flex items-center justify-between">
-                    <span>🏫 {selectedAcademicClassId ? formatClassLabel(userMyClasses.find(c => c.id === selectedAcademicClassId)?.name) : 'Chưa xếp lớp'}</span>
-                    <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-bold">Lớp của bạn</span>
+                  <div className="p-2.5 bg-indigo-100/60 border border-indigo-200 rounded-2xl text-xs font-bold text-indigo-950">
+                    🏫 {formatClassLabel(userMyClasses[0]?.name)}
                   </div>
                 ) : (
                   <select
                     value={selectedAcademicClassId}
-                    onChange={(e) => setSelectedAcademicClassId(e.target.value)}
-                    className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
+                    onChange={(e) => {
+                      setSelectedAcademicClassId(e.target.value);
+                      triggerSound('click');
+                    }}
+                    className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none shadow-sm"
                   >
-                    {userMyClasses.length === 0 ? (
-                      <option value="">Chưa có lớp nào</option>
+                    {userProfile?.role === 'admin' ? (
+                      allSystemClasses.map(c => (
+                        <option key={c.id} value={c.id}>
+                          🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
+                        </option>
+                      ))
                     ) : (
                       userMyClasses.map(c => (
                         <option key={c.id} value={c.id}>
@@ -727,15 +765,21 @@ export const LeaderboardView = () => {
                 <label className="block text-xs font-black text-indigo-950 mb-1 flex items-center gap-1">
                   <Filter className="w-3.5 h-3.5 text-indigo-600" /> Thời Gian:
                 </label>
-                <select
-                  value={academicTimeRange}
-                  onChange={(e) => setAcademicTimeRange(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
-                >
-                  <option value="ALL">Tất cả bài tập</option>
-                  <option value="MONTH">Tháng này 📅</option>
-                  <option value="SEMESTER">Học kỳ này 🎓</option>
-                </select>
+                {selectedPeriodId ? (
+                  <div className="p-2.5 bg-slate-100 border-2 border-slate-200 rounded-2xl font-bold text-xs text-slate-500 cursor-not-allowed">
+                    ⏱️ Theo thời gian Kỳ xếp hạng
+                  </div>
+                ) : (
+                  <select
+                    value={academicTimeRange}
+                    onChange={(e) => setAcademicTimeRange(e.target.value)}
+                    className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
+                  >
+                    <option value="ALL">Tất cả bài tập</option>
+                    <option value="MONTH">Tháng này 📅</option>
+                    <option value="SEMESTER">Học kỳ này 🎓</option>
+                  </select>
+                )}
               </div>
 
             </div>
@@ -768,83 +812,71 @@ export const LeaderboardView = () => {
               <div className="flex items-center justify-between px-2 text-xs font-black text-indigo-950">
                 <span>🏫 {formatClassLabel(academicData.class_info?.class_name)} ({academicData.leaderboard.length} Học sinh)</span>
                 <span className="bg-indigo-100 text-indigo-900 px-3 py-1 rounded-xl">
-                  Tổng {academicData.total_valid_exercises || 0} bài tập tính xếp hạng
+                  Tổng số bài tập tính điểm: {academicData.total_valid_exercises || 0} bài
                 </span>
               </div>
 
               <div className="space-y-3">
-                {academicData.leaderboard.map((item) => (
-                  <div
-                    key={item.student_id}
-                    onClick={() => selectedPeriodId && handleOpenStudentSummary(item.student_id)}
-                    className={`p-4 rounded-3xl border-4 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm ${
-                      selectedPeriodId && (userProfile?.role !== 'student' || item.student_id === currentUser?.id) ? 'cursor-pointer hover:scale-[1.01]' : ''
-                    } ${
-                      item.rank === 1
-                        ? 'bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100 border-amber-400 shadow-md'
-                        : item.rank === 2
-                        ? 'bg-gradient-to-r from-slate-50 to-slate-100 border-slate-300'
-                        : item.rank === 3
-                        ? 'bg-gradient-to-r from-orange-50 to-amber-50 border-orange-300'
-                        : 'bg-white border-indigo-100 hover:border-indigo-300'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 text-center font-black shrink-0">
-                        {getRankBadge(item.rank, item.is_tied)}
+                {academicData.leaderboard.map((st, index) => {
+                  const rank = st.rank || index + 1;
+                  const isTop3 = rank <= 3;
+                  return (
+                    <div
+                      key={st.student_id || index}
+                      onClick={() => handleOpenStudentSummary(st.student_id)}
+                      className={`p-4 rounded-3xl border-2 transition-all flex items-center justify-between gap-4 shadow-sm hover:shadow-md cursor-pointer ${
+                        isTop3
+                          ? 'bg-gradient-to-r from-indigo-50/90 to-blue-50/90 border-indigo-300'
+                          : 'bg-white border-indigo-100 hover:border-indigo-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="shrink-0">{getRankBadge(rank, st.is_tied)}</div>
+                        
+                        <div className="w-10 h-10 rounded-2xl bg-indigo-200 border-2 border-indigo-400 overflow-hidden shrink-0">
+                          {st.avatar_url ? (
+                            <img src={st.avatar_url} alt={st.full_name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center font-black text-indigo-900 text-sm">
+                              {st.full_name?.charAt(0) || '🎓'}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-black text-slate-900">{st.full_name}</h4>
+                            {st.student_code && (
+                              <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                                {st.student_code}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-500 mt-0.5">
+                            Đã làm: {st.completed_count} / {st.total_valid_count || academicData.total_valid_exercises} bài
+                          </div>
+                        </div>
                       </div>
 
-                      <img
-                        src={item.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'}
-                        alt=""
-                        className="w-12 h-12 rounded-2xl border-2 border-indigo-200 bg-white shrink-0"
-                      />
-
-                      <div>
-                        <h4 className="text-base font-black text-slate-800 flex items-center gap-1.5">
-                          {item.full_name || 'Học sinh'}
-                        </h4>
-                        <div className="flex items-center gap-2 mt-0.5 text-[11px] font-bold text-slate-500">
-                          <span>Đã làm: <strong className="text-indigo-900">{item.completed_count} / {item.total_valid_count} bài</strong></span>
+                      <div className="text-right shrink-0">
+                        <div className="text-base font-black text-indigo-700">
+                          {st.academic_score_pct}%
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                          ĐTB: {st.avg_score} điểm
                         </div>
                       </div>
                     </div>
-
-                    <div className="flex items-center gap-4 self-end sm:self-auto min-w-[200px] w-full sm:w-auto">
-                      <div className="w-full text-right">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="text-[10px] font-black text-slate-500 uppercase">Điểm Học Thuật</span>
-                          <span className="text-lg font-black text-indigo-700">
-                            {item.academic_score_pct}%
-                          </span>
-                        </div>
-
-                        <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-300">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              item.academic_score_pct >= 90
-                                ? 'bg-gradient-to-r from-emerald-400 to-teal-500'
-                                : item.academic_score_pct >= 70
-                                ? 'bg-gradient-to-r from-indigo-400 to-blue-500'
-                                : item.academic_score_pct >= 50
-                                ? 'bg-gradient-to-r from-amber-400 to-yellow-500'
-                                : 'bg-gradient-to-r from-rose-400 to-red-500'
-                            }`}
-                            style={{ width: `${Math.max(item.academic_score_pct, 4)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
             </div>
           ) : (
             <div className="text-center py-12 bg-white rounded-3xl border-4 border-indigo-200">
-              <Award className="w-12 h-12 text-indigo-400 mx-auto mb-2" />
-              <h3 className="text-lg font-black text-indigo-900">Lớp chưa có bài tập tính xếp hạng</h3>
+              <BookOpen className="w-12 h-12 text-indigo-400 mx-auto mb-2" />
+              <h3 className="text-lg font-black text-indigo-900">Chưa có dữ liệu xếp hạng học thuật</h3>
+              <p className="text-xs font-bold text-slate-500 mt-1">Chưa có học sinh hoàn thành bài tập học thuật được giao trong khoảng thời gian này.</p>
             </div>
           )}
 
@@ -855,15 +887,15 @@ export const LeaderboardView = () => {
       <RankingPeriodModal
         isOpen={isPeriodModalOpen}
         onClose={() => setIsPeriodModalOpen(false)}
-        selectedClassId={activeTab === 'academic' ? selectedAcademicClassId : (gameClassFilter !== 'ALL_IN_GRADE' ? gameClassFilter : userMyClasses[0]?.id)}
+        selectedClassId={activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter}
         myClasses={userMyClasses}
         onPeriodChange={() => {
-          const activeClassId = activeTab === 'academic' ? selectedAcademicClassId : (gameClassFilter !== 'ALL_IN_GRADE' ? gameClassFilter : userMyClasses[0]?.id);
-          fetchClassPeriods(activeClassId);
+          const activeClassId = activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter;
+          fetchClassPeriods(activeClassId, userProfile?.role);
         }}
       />
 
-      {/* MODAL TỔNG KẾT HỌC SINH VÀ NHẬN XẾP */}
+      {/* MODAL TỔNG KẾT & NHẬN XÉT HỌC SINH THEO KỲ */}
       <StudentPeriodSummaryModal
         isOpen={isSummaryModalOpen}
         onClose={() => setIsSummaryModalOpen(false)}
