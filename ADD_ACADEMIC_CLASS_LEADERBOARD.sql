@@ -120,7 +120,7 @@ $$;
 REVOKE ALL ON FUNCTION public.assign_exercise_to_classes(UUID, UUID[], BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.assign_exercise_to_classes(UUID, UUID[], BOOLEAN) TO authenticated;
 
--- 4. RPC SECURITY DEFINER: BẢNG XẾP HẠNG HỌC THUẬT THEO LỚP (SIẾT KIỂM THỬ SUBMISSION CHƯA CHẤM & NÂNG CẤP ĐTB %)
+-- 4. RPC SECURITY DEFINER: BẢNG XẾP HẠNG HỌC THUẬT THEO LỚP (BẢO TOÀN 100% OUTPUT CONTRACT CŨ + ĐỒNG BỘ MỐC THỜI GIAN KHUNG TP.HCM 2026-2027)
 DROP FUNCTION IF EXISTS public.get_academic_class_leaderboard(UUID, TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION public.get_academic_class_leaderboard(
@@ -170,7 +170,9 @@ BEGIN
     END IF;
   END IF;
 
-  -- 4. Danh sách bài giao hợp lệ cho lớp
+  -- 4. Danh sách bài giao hợp lệ cho lớp theo ranh giới năm học TP.HCM 2026-2027 (Lọc theo academic_exercise_assignments.assigned_at)
+  -- Mốc ranh giới kỹ thuật tuân thủ nguyên tắc start <= assigned_at < end
+  -- SEMESTER được alias về HK1 để giữ backward compatibility tuyệt đối với mã nguồn cũ
   WITH valid_assignments AS (
     SELECT 
       a.exercise_id,
@@ -193,8 +195,11 @@ BEGIN
       )
       AND (
         p_time_range = 'ALL'
+        OR (p_time_range = 'WEEK' AND a.assigned_at >= date_trunc('week', NOW()))
         OR (p_time_range = 'MONTH' AND a.assigned_at >= date_trunc('month', NOW()))
-        OR (p_time_range = 'SEMESTER' AND a.assigned_at >= (NOW() - INTERVAL '5 months'))
+        OR (p_time_range IN ('SEMESTER', 'HK1') AND a.assigned_at >= TIMESTAMPTZ '2026-09-01 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-01-10 00:00:00+07')
+        OR (p_time_range = 'HK2' AND a.assigned_at >= TIMESTAMPTZ '2027-01-10 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-05-31 00:00:00+07')
+        OR (p_time_range = 'FULL_YEAR' AND a.assigned_at >= TIMESTAMPTZ '2026-09-01 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-05-31 00:00:00+07')
       )
   ),
   class_totals AS (
@@ -305,6 +310,8 @@ BEGIN
         'class_name', v_class_record.name,
         'grade_level', v_class_record.grade_level
       ),
+      'time_range', p_time_range,
+      'subject', p_subject,
       'total_valid_exercises', (SELECT valid_count FROM class_totals),
       'total_class_max_score', (SELECT total_max_score FROM class_totals),
       'leaderboard', COALESCE(
