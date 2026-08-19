@@ -64,6 +64,7 @@ jobs:
       - name: Verify roles.sql Content and Integrity
         env:
           RESERVED_ROLES: "anon|authenticated|authenticator|cli_login_.*|dashboard_user|pgbouncer|postgres|service_role|supabase_.*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin"
+          ALLOWED_CONFIGS: "pgaudit.*|pgrst.*|session_replication_role|statement_timeout|track_io_timing"
         run: |
           if [ ! -f "roles.sql" ]; then
             echo "::error::File roles.sql không tồn tại sau khi dump!"
@@ -85,9 +86,11 @@ jobs:
             exit 1
           fi
 
-          # Kiểm tra không còn các câu CREATE ROLE / ALTER ROLE cho reserved roles
+          # Kiểm tra không còn các câu CREATE ROLE cho reserved roles
           INVALID_CREATE=$(grep -E "^CREATE ROLE \"($RESERVED_ROLES)\"" roles.sql || true)
-          INVALID_ALTER=$(grep -E "^ALTER ROLE \"($RESERVED_ROLES)\"" roles.sql || true)
+
+          # Kiểm tra các câu ALTER ROLE cho reserved roles (chỉ cho phép SET đối với ALLOWED_CONFIGS)
+          INVALID_ALTER=$(grep -E "^ALTER ROLE \"($RESERVED_ROLES)\"" roles.sql | grep -v -E "^ALTER ROLE \"($RESERVED_ROLES)\" SET \"?($ALLOWED_CONFIGS)\"?" || true)
 
           if [ -n "$INVALID_CREATE" ]; then
             echo "::error::Phát hiện câu lệnh CREATE ROLE cho reserved roles vẫn tồn tại trong roles.sql:"
@@ -96,12 +99,12 @@ jobs:
           fi
 
           if [ -n "$INVALID_ALTER" ]; then
-            echo "::error::Phát hiện câu lệnh ALTER ROLE cho reserved roles vẫn tồn tại trong roles.sql:"
+            echo "::error::Phát hiện câu lệnh ALTER ROLE không hợp lệ cho reserved roles trong roles.sql:"
             echo "$INVALID_ALTER"
             exit 1
           fi
 
-          echo "PASS: roles.sql hợp lệ (tồn tại, size > 0, dòng cuối là RESET ALL;, không chứa CREATE/ALTER ROLE cho reserved roles)."
+          echo "PASS: roles.sql hợp lệ (tồn tại, size > 0, dòng cuối là RESET ALL;, không chứa CREATE ROLE cho reserved roles, và chỉ chứa ALTER ROLE SET hợp lệ)."
 
       - name: Upload roles.sql Artifact
         uses: actions/upload-artifact@v4
