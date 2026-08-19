@@ -5,6 +5,7 @@ import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
 import { RankingPeriodModal } from '../components/dashboard/RankingPeriodModal';
 import { StudentPeriodSummaryModal } from '../components/dashboard/StudentPeriodSummaryModal';
+import { getAcademicTimeRangeBounds } from '../config/academicYearConfig';
 
 export const LeaderboardView = () => {
   const { triggerSound } = useSound();
@@ -189,7 +190,7 @@ export const LeaderboardView = () => {
     triggerSound('click');
   };
 
-  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG)
+  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG KHUNG NĂM HỌC TP.HCM)
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
@@ -237,20 +238,8 @@ export const LeaderboardView = () => {
         }
       }
 
-      // TRƯỜNG HỢP 2: KHÔNG CHỌN KỲ CỤ THỂ -> ÁP DỤNG BỘ LỌC 4 TẦNG (KHỐI -> LỚP -> MÔN -> THỜI GIAN)
-      let timeLimitISO = null;
-      const now = new Date();
-
-      if (gameTimeRange === 'WEEK') {
-        const dayOfWeek = now.getDay() || 7;
-        const startOfWeek = new Date(now);
-        startOfWeek.setHours(0, 0, 0, 0);
-        startOfWeek.setDate(now.getDate() - (dayOfWeek - 1));
-        timeLimitISO = startOfWeek.toISOString();
-      } else if (gameTimeRange === 'MONTH') {
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        timeLimitISO = startOfMonth.toISOString();
-      }
+      // TRƯỜNG HỢP 2: KHÔNG CHỌN KỲ CỤ THỂ -> ÁP DỤNG BỘ LỌC 4 TẦNG (KHỐI -> LỚP -> MÔN -> THỜI GIAN NĂM HỌC 2026-2027)
+      const timeBounds = getAcademicTimeRangeBounds(gameTimeRange);
 
       let validStudentProfiles = [];
 
@@ -345,8 +334,11 @@ export const LeaderboardView = () => {
         progressQuery = progressQuery.eq('games.subject', gameSubjectFilter);
       }
 
-      if (timeLimitISO) {
-        progressQuery = progressQuery.gte('completed_at', timeLimitISO);
+      if (timeBounds.start) {
+        progressQuery = progressQuery.gte('completed_at', timeBounds.start);
+      }
+      if (timeBounds.end) {
+        progressQuery = progressQuery.lt('completed_at', timeBounds.end);
       }
 
       const { data: progressData, error: progressErr } = await progressQuery;
@@ -534,6 +526,12 @@ export const LeaderboardView = () => {
       titleStr += ' [Tuần này]';
     } else if (gameTimeRange === 'MONTH') {
       titleStr += ' [Tháng này]';
+    } else if (gameTimeRange === 'HK1') {
+      titleStr += ' [Học kỳ 1 (2026-2027)]';
+    } else if (gameTimeRange === 'HK2') {
+      titleStr += ' [Học kỳ 2 (2026-2027)]';
+    } else if (gameTimeRange === 'FULL_YEAR') {
+      titleStr += ' [Cả năm 2026-2027]';
     }
 
     return titleStr;
@@ -681,7 +679,7 @@ export const LeaderboardView = () => {
       {activeTab === 'game' && (
         <div className="space-y-6">
           
-          {/* BỘ LỌC 4 TẦNG TRÒ CHƠI */}
+          {/* BỘ LỌC 4 TẦNG TRÒ CHƠI KHUNG NĂM HỌC 2026-2027 */}
           <div className="bg-amber-50/80 p-5 rounded-3xl border-2 border-amber-200 space-y-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-amber-200/60 pb-3">
               <h3 className="text-sm font-black text-amber-950 flex items-center gap-1.5">
@@ -777,7 +775,7 @@ export const LeaderboardView = () => {
                 </select>
               </div>
 
-              {/* 4. BỘ LỌC THỜI GIAN (DISABLED KHI ĐANG XEM KỲ XẾP HẠNG) */}
+              {/* 4. BỘ LỌC THỜI GIAN (HỖ TRỢ HỌC KỲ 1, HỌC KỲ 2 & CẢ NĂM HỌC 2026-2027) */}
               <div>
                 <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 text-amber-600" /> 4. Chọn Thời Gian:
@@ -798,6 +796,9 @@ export const LeaderboardView = () => {
                     <option value="ALL">♾️ Toàn bộ thời gian (Tích lũy tổng)</option>
                     <option value="WEEK">📅 Tuần này</option>
                     <option value="MONTH">📆 Tháng này</option>
+                    <option value="HK1">🎓 Học kỳ 1 (Năm học 2026-2027)</option>
+                    <option value="HK2">🎓 Học kỳ 2 (Năm học 2026-2027)</option>
+                    <option value="FULL_YEAR">🏆 Cả năm học (2026-2027)</option>
                   </select>
                 )}
               </div>
