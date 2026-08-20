@@ -29,7 +29,7 @@ BEGIN
   END IF;
 
   -- 2. Kiểm tra phân quyền quản lý lớp (Admin hoặc Giáo viên phụ trách lớp)
-  IF NOT app_private.can_manage_class(v_period.class_id) THEN
+  IF app_private.can_manage_class(v_period.class_id) IS NOT TRUE THEN
     RETURN jsonb_build_object(
       'success', false,
       'status', 'FORBIDDEN',
@@ -38,7 +38,7 @@ BEGIN
   END IF;
 
   -- 3. Khóa trạng thái: Tuyệt đối chỉ cho phép xóa kỳ ở trạng thái 'DRAFT'
-  IF v_period.status <> 'DRAFT' THEN
+  IF v_period.status IS DISTINCT FROM 'DRAFT' THEN
     RETURN jsonb_build_object(
       'success', false,
       'status', 'INVALID_STATUS',

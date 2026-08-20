@@ -7,11 +7,19 @@ import { spawnSync } from 'node:child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Kích hoạt cờ --liftoff-only trước khi nạp WASM để ngăn V8 TurboFan Zone OOM trên máy 4GB RAM
+// Kích hoạt cờ --liftoff-only kết hợp các cờ V8 tối ưu bộ nhớ
 if (!process.execArgv.includes('--liftoff-only')) {
   const result = spawnSync(
     process.execPath,
-    ['--liftoff-only', ...process.execArgv, __filename, ...process.argv.slice(2)],
+    [
+      '--liftoff-only',
+      '--wasm-enforce-bounds-checks',
+      '--v8-pool-size=1',
+      '--no-wasm-async-compilation',
+      ...process.execArgv,
+      __filename,
+      ...process.argv.slice(2)
+    ],
     { stdio: 'inherit' }
   );
   process.exit(result.status ?? 0);
@@ -273,6 +281,6 @@ async function runTests() {
 }
 
 runTests().catch(err => {
-  console.error(`\n❌ TEST THẤT BẠI: ${err.message}`);
+  console.error(`\n❌ TEST THẤT BẠI:`, err);
   process.exit(1);
 });

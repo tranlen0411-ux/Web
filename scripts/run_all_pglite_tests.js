@@ -1,4 +1,3 @@
-import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,11 +7,19 @@ import { spawnSync } from 'node:child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Tự động kích hoạt cờ --liftoff-only nếu chưa có để ngăn V8 Zone OOM khi nạp Postgres WASM trên máy 4GB RAM
+// Kích hoạt cờ --liftoff-only kết hợp các cờ V8 tối ưu bộ nhớ để ngăn V8 TurboFan Zone OOM trên Windows
 if (!process.execArgv.includes('--liftoff-only')) {
   const result = spawnSync(
     process.execPath,
-    ['--liftoff-only', ...process.execArgv, __filename, ...process.argv.slice(2)],
+    [
+      '--liftoff-only',
+      '--wasm-enforce-bounds-checks',
+      '--v8-pool-size=1',
+      '--no-wasm-async-compilation',
+      ...process.execArgv,
+      __filename,
+      ...process.argv.slice(2)
+    ],
     { stdio: 'inherit' }
   );
   process.exit(result.status ?? 0);
@@ -33,7 +40,7 @@ async function truncateAll(db) {
   `);
 }
 
-async function setupDatabaseWithSchema() {
+async function setupDatabaseWithSchema(PGlite) {
   const db = new PGlite();
 
   // 1. Stubs & Helper functions
@@ -185,50 +192,24 @@ async function setupDatabaseWithSchema() {
 }
 
 // 1. Suite: test_pglite_smoke.js
-async function runSuite1() {
+async function runSuite1(db) {
   console.log(`\n------------------------------------------------------------`);
   console.log(`▶ RUNNING: test_pglite_smoke.js`);
   console.log(`------------------------------------------------------------`);
-  const db = new PGlite();
   const result = await db.query('SELECT 1 AS ok;');
   assert.strictEqual(Number(result.rows[0]?.ok), 1, 'Smoke test: ok phải là 1');
-  await db.close();
   console.log('✅ PGLITE SMOKE TEST PASS');
 }
 
 // 2. Suite: test_pglite_auth_stub.js
-async function runSuite2() {
+async function runSuite2(db) {
   console.log(`\n------------------------------------------------------------`);
   console.log(`▶ RUNNING: test_pglite_auth_stub.js`);
   console.log(`------------------------------------------------------------`);
-  const db = new PGlite();
-  await db.exec(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
-        CREATE ROLE anon;
-      END IF;
-      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
-        CREATE ROLE authenticated;
-      END IF;
-    END
-    $$;
-
-    CREATE SCHEMA IF NOT EXISTS auth;
-
-    CREATE OR REPLACE FUNCTION auth.uid()
-    RETURNS uuid
-    LANGUAGE sql
-    STABLE
-    AS $$
-      SELECT current_setting('app.current_user_id', true)::uuid;
-    $$;
-  `);
   const expectedUuid = '11111111-1111-1111-1111-111111111111';
   await db.exec(`SELECT set_config('app.current_user_id', '${expectedUuid}', false);`);
   const res = await db.query('SELECT auth.uid() AS uid;');
   assert.strictEqual(res.rows[0]?.uid, expectedUuid, 'Auth stub: UID không khớp');
-  await db.close();
   console.log('✅ PGLITE AUTH STUB PASS');
 }
 
@@ -744,14 +725,17 @@ async function main() {
   const startTime = Date.now();
   let sharedDb;
   try {
+    const { PGlite } = await import('@electric-sql/pglite');
+    // Khởi tạo shared test database 1 lần duy nhất cho toàn bộ 8 suites
+    sharedDb = await setupDatabaseWithSchema(PGlite);
+
     // 1. Suite 1 (Smoke)
-    await runSuite1();
+    await runSuite1(sharedDb);
 
     // 2. Suite 2 (Auth stub)
-    await runSuite2();
+    await runSuite2(sharedDb);
 
     // 3 - 8. Suites 3..8 trên shared test database
-    sharedDb = await setupDatabaseWithSchema();
     await runSuite3(sharedDb);
     await runSuite4(sharedDb);
     await runSuite5(sharedDb);
@@ -763,7 +747,7 @@ async function main() {
     const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`\n============================================================`);
     console.log(`⏱ Tổng thời gian chạy: ${elapsedSeconds}s`);
-    console.log(`✅ ALL PGLITE ACADEMIC LEADERBOARD & PERIOD TESTS PASS`);
+    console.log(`✅ ALL PGLITE ACADEMIC LEADERBOARD & PERIOD TESTS PASS (8/8 Suites)`);
     console.log(`============================================================\n`);
   } catch (err) {
     if (sharedDb) {
@@ -771,7 +755,7 @@ async function main() {
         await sharedDb.close();
       } catch (_) {}
     }
-    console.error(`\n❌ RUNNER DỪNG KHẨN CẤP: ${err.message}`);
+    console.error(`\n❌ RUNNER DỪNG KHẨN CẤP:`, err);
     process.exitCode = 1;
   }
 }
