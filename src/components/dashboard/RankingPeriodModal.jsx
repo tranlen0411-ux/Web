@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Play, Lock, AlertCircle, CheckCircle2, X, Clock, Settings, Award } from 'lucide-react';
+import { Calendar, Plus, Play, Lock, AlertCircle, CheckCircle2, X, Clock, Settings, Award, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses, onPeriodChange }) {
@@ -105,6 +105,33 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
       if (!data.success) throw new Error(data.message);
 
       setSuccessMessage('Đã kích hoạt kỳ xếp hạng thành công!');
+      await fetchPeriods();
+      if (onPeriodChange) onPeriodChange();
+    } catch (err) {
+      setErrorMessage(err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteDraftPeriod = async (periodId, periodName) => {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa bản nháp kỳ xếp hạng "${periodName || ''}"? Thao tác này không thể hoàn tác.`)) {
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      setErrorMessage('');
+      setSuccessMessage('');
+
+      const { data, error } = await supabase.rpc('delete_draft_ranking_period', {
+        p_period_id: periodId
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.message);
+
+      setSuccessMessage('Đã xóa bản nháp kỳ xếp hạng thành công!');
       await fetchPeriods();
       if (onPeriodChange) onPeriodChange();
     } catch (err) {
@@ -263,20 +290,30 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
 
                     <div className="flex items-center gap-2 self-end sm:self-auto">
                       {p.status === 'DRAFT' && (
-                        <button
-                          disabled={isSubmitting}
-                          onClick={() => handleActivatePeriod(p.id)}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm"
-                        >
-                          <Play className="w-3.5 h-3.5" /> Kích hoạt
-                        </button>
+                        <>
+                          <button
+                            disabled={isSubmitting}
+                            onClick={() => handleActivatePeriod(p.id)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Play className="w-3.5 h-3.5" /> Kích hoạt
+                          </button>
+                          <button
+                            disabled={isSubmitting}
+                            onClick={() => handleDeleteDraftPeriod(p.id, p.name)}
+                            className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 hover:border-rose-300 rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Xóa bản nháp này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Xóa nháp
+                          </button>
+                        </>
                       )}
 
                       {p.status === 'ACTIVE' && (
                         <button
                           disabled={isSubmitting}
                           onClick={() => handleClosePeriod(p.id)}
-                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm"
+                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Lock className="w-3.5 h-3.5" /> Đóng kỳ & Tổng kết
                         </button>
