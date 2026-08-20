@@ -11,6 +11,7 @@ const isValidClassId = (id) => {
     typeof id === 'string' &&
     id !== 'ALL' &&
     id !== 'ALL_IN_GRADE' &&
+    id !== 'NO_CLASS' &&
     UUID_REGEX.test(id.trim())
   );
 };
