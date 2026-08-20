@@ -2,7 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Calendar, Plus, Play, Lock, AlertCircle, CheckCircle2, X, Clock, Settings, Award, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
-export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses, onPeriodChange }) {
+const isValidClassId = (id) => {
+  return Boolean(id && typeof id === 'string' && id !== 'ALL' && id !== 'ALL_IN_GRADE' && id.trim() !== '');
+};
+
+export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses = [], onPeriodChange }) {
   const [activeTab, setActiveTab] = useState('list'); // 'list' | 'create'
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -10,29 +14,53 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
   const [successMessage, setSuccessMessage] = useState('');
 
   // Form state
-  const [formClassId, setFormClassId] = useState(selectedClassId || (myClasses[0]?.id || ''));
+  const [formClassId, setFormClassId] = useState(
+    isValidClassId(selectedClassId) ? selectedClassId : (myClasses?.[0]?.id || '')
+  );
   const [name, setName] = useState('');
   const [periodType, setPeriodType] = useState('MONTH');
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Effect 1: Đồng bộ formClassId từ selectedClassId (nguồn ưu tiên) khi mở modal hoặc selectedClassId thay đổi
   useEffect(() => {
     if (isOpen) {
-      if (selectedClassId) setFormClassId(selectedClassId);
-      fetchPeriods();
+      if (isValidClassId(selectedClassId)) {
+        setFormClassId(selectedClassId);
+      } else if (!isValidClassId(formClassId) && myClasses && myClasses.length > 0) {
+        const firstValid = myClasses.find(c => isValidClassId(c.id));
+        if (firstValid) {
+          setFormClassId(firstValid.id);
+        }
+      }
     }
-  }, [isOpen, selectedClassId, formClassId]);
+  }, [isOpen, selectedClassId, myClasses]);
 
-  const fetchPeriods = async () => {
-    if (!formClassId) return;
+  // Effect 2: Tải danh sách kỳ xếp hạng tương ứng khi modal mở và formClassId hợp lệ
+  useEffect(() => {
+    if (isOpen && isValidClassId(formClassId)) {
+      fetchPeriods(formClassId);
+    } else if (!isOpen) {
+      // Dọn dẹp trạng thái thông báo khi đóng modal
+      setErrorMessage('');
+      setSuccessMessage('');
+    }
+  }, [isOpen, formClassId]);
+
+  const fetchPeriods = async (targetClassId) => {
+    const classIdToFetch = targetClassId || formClassId;
+    if (!isValidClassId(classIdToFetch)) {
+      setPeriods([]);
+      return;
+    }
     try {
       setLoading(true);
       setErrorMessage('');
       const { data, error } = await supabase
         .from('ranking_periods')
         .select('*')
-        .eq('class_id', formClassId)
+        .eq('class_id', classIdToFetch)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -212,9 +240,11 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
               onChange={(e) => setFormClassId(e.target.value)}
               className="p-2 bg-white border-2 border-indigo-200 rounded-xl text-xs font-black text-indigo-950 focus:outline-none"
             >
-              {myClasses.map(c => (
-                <option key={c.id} value={c.id}>🏫 {c.name}</option>
-              ))}
+              {(myClasses || [])
+                .filter(c => isValidClassId(c?.id))
+                .map(c => (
+                  <option key={c.id} value={c.id}>🏫 {c.name}</option>
+                ))}
             </select>
           </div>
 
