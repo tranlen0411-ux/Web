@@ -1,15 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Trophy, Medal, Star, Sparkles, Award, BookOpen, Gamepad2, Filter, Users, CheckCircle2, ChevronRight, AlertCircle, Settings, Calendar, Lock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
+import { useAuth } from '../context/AuthContext';
 import { RankingPeriodModal } from '../components/dashboard/RankingPeriodModal';
 import { StudentPeriodSummaryModal } from '../components/dashboard/StudentPeriodSummaryModal';
 import { getAcademicTimeRangeBounds } from '../config/academicYearConfig';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isValidClassId = (id) => {
+  return Boolean(
+    id &&
+    typeof id === 'string' &&
+    id !== 'ALL' &&
+    id !== 'ALL_IN_GRADE' &&
+    id !== 'NO_CLASS' &&
+    UUID_REGEX.test(id.trim())
+  );
+};
+
 export const LeaderboardView = () => {
+  const { globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   
+  // Refs chống race condition khi chuyển lớp nhanh liên tục
+  const latestGameReqIdRef = useRef(0);
+  const latestAcademicReqIdRef = useRef(0);
+
   // Tab chế độ: 'game' (Xếp hạng Trò chơi) | 'academic' (Xếp hạng Học thuật)
   const [activeTab, setActiveTab] = useState('game');
 
@@ -52,6 +70,44 @@ export const LeaderboardView = () => {
     fetchAvailableGameSubjects();
   }, []);
 
+  // 1b. ĐỒNG BỘ 1 CHIỀU TỪ GLOBAL CLASS FILTER (AUTH CONTEXT) VÀO CÁC STATE PHỤ CỦA LEADERBOARD
+  // LƯU Ý QUAN TRỌNG: TUYỆT ĐỐI KHÔNG GỌI setGlobalClassFilter TRONG EFFECT NÀY ĐỂ TRÁNH VÒNG LẶP STATE VÔ HẠN
+  useEffect(() => {
+    if (!allSystemClasses || allSystemClasses.length === 0) return;
+
+    if (isValidClassId(globalClassFilter)) {
+      const targetClass = allSystemClasses.find(c => c.id === globalClassFilter);
+      if (targetClass) {
+        // Phân quyền Teacher: chỉ đồng bộ nếu thuộc lớp phụ trách
+        if (userProfile?.role === 'teacher') {
+          const isManaged = userMyClasses.some(c => c.id === targetClass.id);
+          if (!isManaged) return;
+        }
+        // Phân quyền Student: chỉ đồng bộ nếu là thành viên lớp
+        if (userProfile?.role === 'student') {
+          const isMember = userMyClasses.some(c => c.id === targetClass.id);
+          if (!isMember) return;
+        }
+
+        setSelectedAcademicClassId(targetClass.id);
+        setGameClassFilter(targetClass.id);
+        if (targetClass.grade_level) {
+          setGameGradeFilter(targetClass.grade_level);
+        }
+      }
+    } else if (globalClassFilter === 'NO_CLASS') {
+      setSelectedAcademicClassId('');
+      setGameClassFilter('ALL_IN_GRADE');
+      setGameGradeFilter('ALL');
+    } else if (globalClassFilter === 'ALL') {
+      setGameClassFilter('ALL_IN_GRADE');
+      setGameGradeFilter('ALL');
+      if (userProfile?.role === 'admin') {
+        setSelectedAcademicClassId('');
+      }
+    }
+  }, [globalClassFilter, allSystemClasses, userMyClasses, userProfile?.role]);
+
   const fetchUserProfileAndClasses = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -84,25 +140,25 @@ export const LeaderboardView = () => {
 
         const myClasses = (cm || []).map(item => item.classes).filter(Boolean);
         setUserMyClasses(myClasses);
-        if (myClasses.length > 0) {
+        if (!isValidClassId(globalClassFilter) && myClasses.length > 0) {
           setSelectedAcademicClassId(myClasses[0].id);
           fetchClassPeriods(myClasses[0].id, profile?.role);
         }
-        if (profile?.grade_level) {
+        if (!isValidClassId(globalClassFilter) && profile?.grade_level) {
           setGameGradeFilter(profile.grade_level);
         }
 
       } else if (profile?.role === 'teacher') {
         const myClasses = (sysClasses || []).filter(c => c.teacher_id === user.id);
         setUserMyClasses(myClasses);
-        if (myClasses.length > 0) {
+        if (!isValidClassId(globalClassFilter) && myClasses.length > 0) {
           setSelectedAcademicClassId(myClasses[0].id);
           fetchClassPeriods(myClasses[0].id, profile?.role);
         }
 
       } else if (profile?.role === 'admin') {
         setUserMyClasses(sysClasses || []);
-        if (sysClasses && sysClasses.length > 0) {
+        if (!isValidClassId(globalClassFilter) && sysClasses && sysClasses.length > 0) {
           setSelectedAcademicClassId(sysClasses[0].id);
           fetchClassPeriods(sysClasses[0].id, profile?.role);
         }
@@ -125,10 +181,13 @@ export const LeaderboardView = () => {
     }
   };
 
-  // HÀM LẤY CLASS ID UUID HỢP LỆ (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE CHO RANKING PERIOD MODAL)
+  // HÀM LẤY CLASS ID UUID HỢP LỆ (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE HOẶC NO_CLASS CHO RANKING PERIOD MODAL)
   const getValidManagedClassId = () => {
+    if (isValidClassId(globalClassFilter)) {
+      return globalClassFilter;
+    }
     const targetId = activeTab === 'academic' ? selectedAcademicClassId : gameClassFilter;
-    if (!targetId || targetId === 'ALL_IN_GRADE' || targetId === 'ALL') {
+    if (!isValidClassId(targetId)) {
       return '';
     }
     return targetId;
@@ -136,7 +195,7 @@ export const LeaderboardView = () => {
 
   // 2. FETCH CÁC KỲ XẾP HẠNG THEO LỚP ĐƯỢC CHỌN (BẢO VỆ CHỐNG TRUYỀN ALL_IN_GRADE & PHÂN QUYỀN VAI TRÒ)
   const fetchClassPeriods = async (classId, roleParam) => {
-    if (!classId || classId === 'ALL_IN_GRADE' || classId === 'ALL') {
+    if (!isValidClassId(classId)) {
       setClassPeriods([]);
       setSelectedPeriodId('');
       return;
@@ -183,14 +242,7 @@ export const LeaderboardView = () => {
     }
   }, [selectedAcademicClassId, gameClassFilter, activeTab, userProfile]);
 
-  // 3. TỰ ĐỘNG RESET BỘ LỌC LỚP TRÒ CHƠI KHI ĐỔI KHỐI
-  const handleGameGradeChange = (newGrade) => {
-    setGameGradeFilter(newGrade);
-    setGameClassFilter('ALL_IN_GRADE');
-    triggerSound('click');
-  };
-
-  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG KHUNG NĂM HỌC TP.HCM)
+  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG & CHỐNG RACE CONDITION)
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
@@ -198,6 +250,7 @@ export const LeaderboardView = () => {
   }, [activeTab, gameGradeFilter, gameClassFilter, gameSubjectFilter, gameTimeRange, selectedPeriodId]);
 
   const fetchGameLeaderboard = async () => {
+    const currentReqId = ++latestGameReqIdRef.current;
     setLoadingGame(true);
     setGameError('');
     try {
@@ -207,17 +260,17 @@ export const LeaderboardView = () => {
           p_period_id: selectedPeriodId
         });
 
+        if (currentReqId !== latestGameReqIdRef.current) return;
+
         if (periodErr) {
           setGameError('Lỗi khi tải dữ liệu Kỳ xếp hạng: ' + periodErr.message);
           setGameStudents([]);
-          setLoadingGame(false);
           return;
         }
 
         if (periodLeaderboard && !Array.isArray(periodLeaderboard) && periodLeaderboard.success === false) {
           setGameError(periodLeaderboard.message || 'Từ chối truy cập Kỳ xếp hạng.');
           setGameStudents([]);
-          setLoadingGame(false);
           return;
         }
 
@@ -233,7 +286,6 @@ export const LeaderboardView = () => {
             rank: st.rank,
             is_tied: st.is_tied
           })));
-          setLoadingGame(false);
           return;
         }
       }
@@ -243,12 +295,13 @@ export const LeaderboardView = () => {
 
       let validStudentProfiles = [];
 
-      if (gameClassFilter !== 'ALL_IN_GRADE') {
+      if (gameClassFilter !== 'ALL_IN_GRADE' && isValidClassId(gameClassFilter)) {
         if (userProfile?.role === 'teacher') {
           const isManaged = userMyClasses.some(c => c.id === gameClassFilter);
           if (!isManaged) {
-            setGameStudents([]);
-            setLoadingGame(false);
+            if (currentReqId === latestGameReqIdRef.current) {
+              setGameStudents([]);
+            }
             return;
           }
         }
@@ -258,6 +311,8 @@ export const LeaderboardView = () => {
           .select('student_id, class_id, profiles!inner(*), classes!inner(name, grade_level)')
           .eq('class_id', gameClassFilter)
           .eq('profiles.role', 'student');
+
+        if (currentReqId !== latestGameReqIdRef.current) return;
 
         validStudentProfiles = (members || []).map(m => ({
           ...m.profiles,
@@ -277,12 +332,16 @@ export const LeaderboardView = () => {
 
         const { data: profiles } = await query;
 
+        if (currentReqId !== latestGameReqIdRef.current) return;
+
         if (profiles && profiles.length > 0) {
           const studentIds = profiles.map(p => p.id);
           const { data: members } = await supabase
             .from('class_members')
             .select('student_id, classes(name)')
             .in('student_id', studentIds);
+
+          if (currentReqId !== latestGameReqIdRef.current) return;
 
           const studentClassMap = {};
           (members || []).forEach(m => {
@@ -297,32 +356,13 @@ export const LeaderboardView = () => {
       }
 
       if (validStudentProfiles.length === 0) {
-        setGameStudents([]);
-        setLoadingGame(false);
+        if (currentReqId === latestGameReqIdRef.current) {
+          setGameStudents([]);
+        }
         return;
       }
 
       // Xử lý bộ lọc môn học và thời gian
-      if (gameSubjectFilter === 'ALL' && gameTimeRange === 'ALL') {
-        const sorted = validStudentProfiles
-          .sort((a, b) => (b.total_stars || 0) - (a.total_stars || 0) || (b.total_coins || 0) - (a.total_coins || 0));
-
-        let currentRank = 1;
-        const ranked = sorted.map((st, idx, arr) => {
-          const isTied = idx > 0 && st.total_stars === arr[idx - 1].total_stars;
-          if (!isTied) currentRank = idx + 1;
-          return {
-            ...st,
-            rank: currentRank,
-            is_tied: isTied || (idx < arr.length - 1 && st.total_stars === arr[idx + 1].total_stars)
-          };
-        });
-
-        setGameStudents(ranked);
-        setLoadingGame(false);
-        return;
-      }
-
       const studentIds = validStudentProfiles.map(p => p.id);
       let progressQuery = supabase
         .from('student_progress')
@@ -342,6 +382,8 @@ export const LeaderboardView = () => {
       }
 
       const { data: progressData, error: progressErr } = await progressQuery;
+
+      if (currentReqId !== latestGameReqIdRef.current) return;
 
       if (progressErr) {
         console.error('Fetch student progress error:', progressErr);
@@ -375,24 +417,39 @@ export const LeaderboardView = () => {
         };
       });
 
-      setGameStudents(rankedFiltered);
+      if (currentReqId === latestGameReqIdRef.current) {
+        setGameStudents(rankedFiltered);
+      }
     } catch (err) {
-      console.error('Fetch game leaderboard error:', err);
-      setGameError('Lỗi khi tải bảng xếp hạng: ' + err.message);
+      if (currentReqId === latestGameReqIdRef.current) {
+        console.error('Fetch game leaderboard error:', err);
+        setGameError('Lỗi khi tải bảng xếp hạng: ' + err.message);
+      }
     } finally {
-      setLoadingGame(false);
+      if (currentReqId === latestGameReqIdRef.current) {
+        setLoadingGame(false);
+      }
     }
   };
 
-  // 5. FETCH BẢNG XẾP HẠNG HỌC THUẬT (MAPPING KHỚP 100% CHUẨN OUTPUT RPC THẬT)
+  // 5. FETCH BẢNG XẾP HẠNG HỌC THUẬT (MAPPING KHỚP 100% CHUẨN OUTPUT RPC THẬT & CHỐNG RACE CONDITION)
   useEffect(() => {
-    if (activeTab === 'academic' && selectedAcademicClassId) {
-      fetchAcademicLeaderboard();
+    if (activeTab === 'academic') {
+      if (isValidClassId(selectedAcademicClassId)) {
+        fetchAcademicLeaderboard();
+      } else {
+        setAcademicData(null);
+      }
     }
   }, [activeTab, selectedAcademicClassId, academicSubject, academicTimeRange, selectedPeriodId]);
 
   const fetchAcademicLeaderboard = async () => {
-    if (!selectedAcademicClassId) return;
+    if (!isValidClassId(selectedAcademicClassId)) {
+      setAcademicData(null);
+      setLoadingAcademic(false);
+      return;
+    }
+    const currentReqId = ++latestAcademicReqIdRef.current;
     setLoadingAcademic(true);
     setAcademicError('');
 
@@ -404,17 +461,17 @@ export const LeaderboardView = () => {
           p_subject: academicSubject
         });
 
+        if (currentReqId !== latestAcademicReqIdRef.current) return;
+
         if (pErr) {
           setAcademicError('Lỗi khi tải dữ liệu Kỳ xếp hạng học thuật: ' + pErr.message);
           setAcademicData(null);
-          setLoadingAcademic(false);
           return;
         }
 
         if (periodAcademic && !Array.isArray(periodAcademic) && periodAcademic.success === false) {
           setAcademicError(periodAcademic.message || 'Từ chối truy cập Kỳ xếp hạng học thuật.');
           setAcademicData(null);
-          setLoadingAcademic(false);
           return;
         }
 
@@ -438,7 +495,6 @@ export const LeaderboardView = () => {
               total_earned_score: st.total_earned_score !== undefined ? st.total_earned_score : st.academic_score_pct
             }))
           });
-          setLoadingAcademic(false);
           return;
         }
       }
@@ -449,6 +505,8 @@ export const LeaderboardView = () => {
         p_time_range: academicTimeRange,
         p_subject: academicSubject
       });
+
+      if (currentReqId !== latestAcademicReqIdRef.current) return;
 
       if (rpcErr) {
         let errMsg = rpcErr.message || 'Lỗi hệ thống khi tải bảng xếp hạng.';
@@ -464,10 +522,14 @@ export const LeaderboardView = () => {
         setAcademicData(null);
       }
     } catch (err) {
-      console.error('Fetch academic leaderboard error:', err);
-      setAcademicError('Lỗi kết nối: ' + err.message);
+      if (currentReqId === latestAcademicReqIdRef.current) {
+        console.error('Fetch academic leaderboard error:', err);
+        setAcademicError('Lỗi kết nối: ' + err.message);
+      }
     } finally {
-      setLoadingAcademic(false);
+      if (currentReqId === latestAcademicReqIdRef.current) {
+        setLoadingAcademic(false);
+      }
     }
   };
 
@@ -475,6 +537,44 @@ export const LeaderboardView = () => {
     if (!name) return 'Lớp Học';
     if (name.toLowerCase().startsWith('lớp') || name.toLowerCase().startsWith('khối')) return name;
     return `Lớp ${name}`;
+  };
+
+  // THAO TÁC 1: Đổi Khối trong Tab Game (Ghi nhận lên Header mở rộng thành ALL)
+  const handleGameGradeChange = (newGrade) => {
+    triggerSound('click');
+    setGameGradeFilter(newGrade);
+    setGameClassFilter('ALL_IN_GRADE');
+    setGlobalClassFilter('ALL');
+  };
+
+  // THAO TÁC 2: Đổi Lớp trong Tab Game (Đồng bộ 2 chiều - Ghi ngược lên Header)
+  const handleGameClassChange = (newClassId) => {
+    triggerSound('click');
+    if (newClassId === 'ALL_IN_GRADE') {
+      setGameClassFilter('ALL_IN_GRADE');
+      setGlobalClassFilter('ALL');
+    } else if (isValidClassId(newClassId)) {
+      if (userProfile?.role === 'teacher') {
+        const isManaged = userMyClasses.some(c => c.id === newClassId);
+        if (!isManaged) return;
+      }
+      setGlobalClassFilter(newClassId);
+    }
+  };
+
+  // THAO TÁC 3: Đổi Lớp trong Tab Academic (Đồng bộ 2 chiều - Ghi ngược lên Header)
+  const handleAcademicClassChange = (newClassId) => {
+    triggerSound('click');
+    if (isValidClassId(newClassId)) {
+      if (userProfile?.role === 'teacher') {
+        const isManaged = userMyClasses.some(c => c.id === newClassId);
+        if (!isManaged) return;
+      }
+      setGlobalClassFilter(newClassId);
+    } else if (newClassId === 'ALL' || newClassId === '') {
+      setSelectedAcademicClassId('');
+      setGlobalClassFilter('ALL');
+    }
   };
 
   const getGameAvailableGrades = () => {
@@ -490,7 +590,11 @@ export const LeaderboardView = () => {
 
   // 6. KHÔI PHỤC CHÍNH XÁC PHÂN QUYỀN LỌC LỚP TRONG KHỐI
   const getGameClassesForSelectedGrade = () => {
-    if (gameGradeFilter === 'ALL') return [];
+    if (gameGradeFilter === 'ALL') {
+      if (userProfile?.role === 'admin') return allSystemClasses;
+      if (userProfile?.role === 'teacher') return userMyClasses;
+      return userMyClasses;
+    }
     const gradeNum = parseInt(gameGradeFilter);
     const classesInGrade = allSystemClasses.filter(c => c.grade_level === gradeNum);
 
@@ -715,28 +819,25 @@ export const LeaderboardView = () => {
                 </div>
               </div>
 
-              {/* 2. BỘ LỌC LỚP PHỤ THUỘC THEO KHỐI ĐÃ CHỌN */}
+              {/* 2. BỘ LỌC LỚP PHỤ THUỘC THEO KHỐI ĐÃ CHỌN (ĐỒNG BỘ 2 CHIỀU VỚI HEADER) */}
               <div>
                 <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
                   <Users className="w-3.5 h-3.5 text-amber-600" /> 2. Chọn Lớp Thuộc Khối:
                 </label>
 
-                {gameGradeFilter === 'ALL' ? (
+                {globalClassFilter === 'NO_CLASS' ? (
                   <div className="p-2.5 bg-amber-100/60 border border-amber-200 rounded-2xl text-xs font-bold text-amber-900 flex items-center justify-between">
-                    <span>Đang xem xếp hạng chung Toàn Trường</span>
-                    <span className="text-[10px] text-amber-700 font-extrabold">Tất cả các lớp</span>
+                    <span>📌 Bài giảng chung</span>
+                    <span className="text-[10px] text-amber-700 font-extrabold">Toàn trường</span>
                   </div>
                 ) : (
                   <select
                     value={gameClassFilter}
-                    onChange={(e) => {
-                      setGameClassFilter(e.target.value);
-                      triggerSound('click');
-                    }}
+                    onChange={(e) => handleGameClassChange(e.target.value)}
                     className="w-full p-2.5 bg-white border-2 border-amber-300 rounded-2xl font-extrabold text-xs text-amber-950 focus:ring-2 focus:ring-amber-500 focus:outline-none shadow-sm"
                   >
                     <option value="ALL_IN_GRADE">
-                      🏫 Tất cả các lớp trong Khối {gameGradeFilter}
+                      {gameGradeFilter === 'ALL' ? '🌐 Tất cả các lớp (Toàn trường)' : `🏫 Tất cả các lớp trong Khối ${gameGradeFilter}`}
                     </option>
 
                     {getGameClassesForSelectedGrade().map((c) => (
@@ -907,19 +1008,21 @@ export const LeaderboardView = () => {
                   <Users className="w-3.5 h-3.5 text-indigo-600" /> Chọn Lớp Học:
                 </label>
 
-                {userProfile?.role === 'student' ? (
+                {globalClassFilter === 'NO_CLASS' ? (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs font-bold text-amber-900">
+                    📌 Bài giảng chung (không có lớp học thuật)
+                  </div>
+                ) : userProfile?.role === 'student' ? (
                   <div className="p-2.5 bg-indigo-100/60 border border-indigo-200 rounded-2xl text-xs font-bold text-indigo-950">
                     🏫 {formatClassLabel(userMyClasses[0]?.name)}
                   </div>
                 ) : (
                   <select
                     value={selectedAcademicClassId}
-                    onChange={(e) => {
-                      setSelectedAcademicClassId(e.target.value);
-                      triggerSound('click');
-                    }}
+                    onChange={(e) => handleAcademicClassChange(e.target.value)}
                     className="w-full p-2.5 bg-white border-2 border-indigo-200 rounded-2xl font-extrabold text-xs text-indigo-950 focus:ring-2 focus:ring-indigo-400 focus:outline-none shadow-sm"
                   >
+                    <option value="">-- Chọn lớp học --</option>
                     {userProfile?.role === 'admin' ? (
                       allSystemClasses.map(c => (
                         <option key={c.id} value={c.id}>
@@ -995,7 +1098,14 @@ export const LeaderboardView = () => {
           ) : !selectedAcademicClassId ? (
             <div className="text-center py-12 bg-white rounded-3xl border-4 border-indigo-200">
               <Users className="w-12 h-12 text-indigo-400 mx-auto mb-2" />
-              <h3 className="text-lg font-black text-indigo-900">Vui lòng chọn Lớp học</h3>
+              <h3 className="text-lg font-black text-indigo-900">
+                {globalClassFilter === 'NO_CLASS' ? 'Chế độ Bài giảng chung' : 'Vui lòng chọn Lớp học'}
+              </h3>
+              <p className="text-xs font-bold text-slate-500 mt-1">
+                {globalClassFilter === 'NO_CLASS'
+                  ? 'Bài giảng chung không có bảng xếp hạng học thuật theo lớp. Vui lòng chọn một lớp cụ thể trên Header hoặc bộ lọc.'
+                  : 'Vui lòng chọn một lớp học để xem xếp hạng kết quả làm bài tập học thuật.'}
+              </p>
             </div>
           ) : academicData && academicData.leaderboard && academicData.leaderboard.length > 0 ? (
             <div className="space-y-4">
