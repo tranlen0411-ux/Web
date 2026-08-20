@@ -1,8 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Calendar, Plus, Play, Lock, AlertCircle, CheckCircle2, X, Clock, Settings, Award, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
-export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses, onPeriodChange }) {
+// Regex kiểm tra UUID v1-v5 chuẩn (36 ký tự hex ngăn cách bằng 4 dấu gạch ngang)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const isValidClassId = (id) => {
+  return Boolean(
+    id &&
+    typeof id === 'string' &&
+    id !== 'ALL' &&
+    id !== 'ALL_IN_GRADE' &&
+    UUID_REGEX.test(id.trim())
+  );
+};
+
+export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses = [], onPeriodChange }) {
   const [activeTab, setActiveTab] = useState('list'); // 'list' | 'create'
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -10,37 +23,86 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
   const [successMessage, setSuccessMessage] = useState('');
 
   // Form state
-  const [formClassId, setFormClassId] = useState(selectedClassId || (myClasses[0]?.id || ''));
+  const [formClassId, setFormClassId] = useState(
+    isValidClassId(selectedClassId) ? selectedClassId : (myClasses?.[0]?.id || '')
+  );
   const [name, setName] = useState('');
   const [periodType, setPeriodType] = useState('MONTH');
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Request counter ref để chống race condition khi đổi lớp nhanh liên tục
+  const latestRequestIdRef = useRef(0);
+
+  // Khi modal mở hoặc selectedClassId thay đổi: đồng bộ lớp ưu tiên và tải kỳ xếp hạng ngay lập tức
   useEffect(() => {
     if (isOpen) {
-      if (selectedClassId) setFormClassId(selectedClassId);
-      fetchPeriods();
-    }
-  }, [isOpen, selectedClassId, formClassId]);
+      let targetClassId = '';
+      if (isValidClassId(selectedClassId)) {
+        targetClassId = selectedClassId;
+      } else if (isValidClassId(formClassId)) {
+        targetClassId = formClassId;
+      } else if (myClasses && myClasses.length > 0) {
+        const firstValid = myClasses.find(c => isValidClassId(c?.id));
+        if (firstValid) targetClassId = firstValid.id;
+      }
 
-  const fetchPeriods = async () => {
-    if (!formClassId) return;
+      if (targetClassId) {
+        setFormClassId(targetClassId);
+        fetchPeriods(targetClassId);
+      } else {
+        setPeriods([]);
+      }
+    } else {
+      // Khi đóng modal: hủy nhận phản hồi từ các request dở dang và dọn dẹp thông báo
+      latestRequestIdRef.current++;
+      setErrorMessage('');
+      setSuccessMessage('');
+    }
+  }, [isOpen, selectedClassId]);
+
+  const handleClassSelectChange = (newClassId) => {
+    setFormClassId(newClassId);
+    if (isValidClassId(newClassId)) {
+      fetchPeriods(newClassId);
+    } else {
+      setPeriods([]);
+    }
+  };
+
+  const fetchPeriods = async (targetClassId) => {
+    const classIdToFetch = targetClassId || formClassId;
+    if (!isValidClassId(classIdToFetch)) {
+      setPeriods([]);
+      return;
+    }
+
+    const currentRequestId = ++latestRequestIdRef.current;
     try {
       setLoading(true);
       setErrorMessage('');
       const { data, error } = await supabase
         .from('ranking_periods')
         .select('*')
-        .eq('class_id', formClassId)
+        .eq('class_id', classIdToFetch)
         .order('created_at', { ascending: false });
+
+      // Nếu đã có request mới hơn được gửi đi trong lúc chờ -> bỏ qua kết quả này (chống race condition)
+      if (currentRequestId !== latestRequestIdRef.current) {
+        return;
+      }
 
       if (error) throw error;
       setPeriods(data || []);
     } catch (err) {
-      setErrorMessage('Lỗi khi tải danh sách kỳ xếp hạng: ' + err.message);
+      if (currentRequestId === latestRequestIdRef.current) {
+        setErrorMessage('Lỗi khi tải danh sách kỳ xếp hạng: ' + err.message);
+      }
     } finally {
-      setLoading(false);
+      if (currentRequestId === latestRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -209,12 +271,14 @@ export function RankingPeriodModal({ isOpen, onClose, selectedClassId, myClasses
             <label className="text-xs font-black text-indigo-950 shrink-0">Lớp học:</label>
             <select
               value={formClassId}
-              onChange={(e) => setFormClassId(e.target.value)}
+              onChange={(e) => handleClassSelectChange(e.target.value)}
               className="p-2 bg-white border-2 border-indigo-200 rounded-xl text-xs font-black text-indigo-950 focus:outline-none"
             >
-              {myClasses.map(c => (
-                <option key={c.id} value={c.id}>🏫 {c.name}</option>
-              ))}
+              {(myClasses || [])
+                .filter(c => isValidClassId(c?.id))
+                .map(c => (
+                  <option key={c.id} value={c.id}>🏫 {c.name}</option>
+                ))}
             </select>
           </div>
 
