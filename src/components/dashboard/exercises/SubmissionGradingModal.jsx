@@ -117,7 +117,6 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         setMsg(error?.message || data?.message || 'Lỗi khi lưu kết quả chấm bài.');
       } else {
         setMsg('✅ Đã lưu điểm và nhận xét thành công!');
-        await fetchSubmissions();
         onClose?.();
       }
     } catch (err) {
