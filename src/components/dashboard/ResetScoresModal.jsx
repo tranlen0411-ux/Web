@@ -157,6 +157,7 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
     const now = new Date();
     let fromIso = null;
     let untilIso = null;
+    let validationError = null;
 
     if (timeMode === 'week') {
       const day = now.getDay();
@@ -182,15 +183,47 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
     } else if (timeMode === 'cutoff') {
       fromIso = customFromDate ? new Date(customFromDate).toISOString() : new Date().toISOString();
       untilIso = null; // Mốc bắt đầu tính điểm mới
+    } else if (timeMode === 'custom') {
+      if (!customFromDate) {
+        validationError = 'Vui lòng chọn ngày bắt đầu (Từ Ngày) cho khoảng thời gian tùy chọn.';
+      } else {
+        const fromDateObj = new Date(customFromDate);
+        if (isNaN(fromDateObj.getTime())) {
+          validationError = 'Ngày bắt đầu không hợp lệ.';
+        } else {
+          fromIso = fromDateObj.toISOString();
+        }
+
+        if (customUntilDate) {
+          const untilDateObj = new Date(customUntilDate);
+          if (isNaN(untilDateObj.getTime())) {
+            validationError = 'Ngày kết thúc không hợp lệ.';
+          } else if (untilDateObj <= fromDateObj) {
+            validationError = 'Ngày kết thúc (Đến Ngày) phải sau ngày bắt đầu (Từ Ngày).';
+          } else {
+            untilIso = untilDateObj.toISOString();
+          }
+        } else {
+          untilIso = null;
+        }
+      }
     }
 
-    return { fromIso, untilIso };
+    return { fromIso, untilIso, validationError };
   };
 
   const triggerPreview = async () => {
     if (!selectedClassId) return;
 
-    const { fromIso, untilIso } = computeTimeRange();
+    const { fromIso, untilIso, validationError } = computeTimeRange();
+    if (validationError) {
+      if (timeMode === 'custom') {
+        setErrorMessage(validationError);
+      }
+      setPreviewData(null);
+      return;
+    }
+
     if (!fromIso) return;
 
     try {
@@ -240,7 +273,12 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
       return;
     }
 
-    const { fromIso, untilIso } = computeTimeRange();
+    const { fromIso, untilIso, validationError } = computeTimeRange();
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
     if (!fromIso) {
       setErrorMessage('Vui lòng chọn mốc thời gian bắt đầu hợp lệ.');
       return;

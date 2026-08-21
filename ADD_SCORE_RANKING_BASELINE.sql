@@ -707,7 +707,7 @@ BEGIN
     SELECT
       vgs.*,
       DENSE_RANK() OVER (
-        ORDER BY vgs.total_stars DESC, vgs.total_coins DESC, vgs.full_name ASC
+        ORDER BY vgs.total_stars DESC, vgs.total_coins DESC
       ) AS rank_pos,
       COUNT(*) OVER (
         PARTITION BY vgs.total_stars, vgs.total_coins
@@ -964,8 +964,8 @@ BEGIN
         OR (p_time_range = 'WEEK' AND a.assigned_at >= date_trunc('week', NOW()))
         OR (p_time_range = 'MONTH' AND a.assigned_at >= date_trunc('month', NOW()))
         OR (p_time_range IN ('SEMESTER', 'HK1') AND a.assigned_at >= TIMESTAMPTZ '2026-09-01 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-01-10 00:00:00+07')
-        OR (p_time_range = 'HK2' AND a.assigned_at >= TIMESTAMPTZ '2027-01-10 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-05-31 00:00:00+07')
-        OR (p_time_range = 'FULL_YEAR' AND a.assigned_at >= TIMESTAMPTZ '2026-09-01 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-05-31 00:00:00+07')
+        OR (p_time_range = 'HK2' AND a.assigned_at >= TIMESTAMPTZ '2027-01-10 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-06-01 00:00:00+07')
+        OR (p_time_range = 'FULL_YEAR' AND a.assigned_at >= TIMESTAMPTZ '2026-09-01 00:00:00+07' AND a.assigned_at < TIMESTAMPTZ '2027-06-01 00:00:00+07')
       )
   ),
   students_in_class AS (
@@ -1088,8 +1088,7 @@ BEGIN
           ss.academic_score_pct DESC,
           ss.completion_rate_pct DESC,
           ss.completed_count DESC,
-          ss.avg_score_pct DESC,
-          ss.full_name ASC
+          ss.avg_score_pct DESC
       ) AS rank_pos,
       COUNT(*) OVER (
         PARTITION BY
@@ -1367,8 +1366,7 @@ BEGIN
           ss.academic_score_pct DESC,
           ss.completion_rate_pct DESC,
           ss.completed_count DESC,
-          ss.avg_score_pct DESC,
-          ss.full_name ASC
+          ss.avg_score_pct DESC
       ) AS rank_pos,
       COUNT(*) OVER (
         PARTITION BY
