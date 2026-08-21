@@ -140,30 +140,30 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   const canGrade = selectedSub && ['submitted', 'pending_manual_grade'].includes(selectedSub.status);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-4xl rounded-3xl border-4 border-amber-300 shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-white w-[95vw] md:w-[92vw] max-w-[1100px] h-[88vh] max-h-[88vh] rounded-3xl border-4 border-amber-300 shadow-2xl p-4 sm:p-6 lg:p-7 animate-fadeIn flex flex-col overflow-hidden">
         
         {/* HEADER - KHÔNG CÒN DÙNG EXERCISE.CLASS_NAME */}
-        <div className="flex items-center justify-between pb-4 border-b-2 border-amber-100 shrink-0">
+        <div className="flex items-center justify-between pb-3 sm:pb-4 border-b-2 border-amber-100 shrink-0">
           <div>
             <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg">
               {exercise.classes?.name ? formatClassLabel(exercise.classes.name) : (exercise.is_global ? 'Toàn trường' : 'Lớp học')} - Môn {exercise.subject}
             </span>
-            <h2 className="text-xl font-black text-slate-800 mt-1">Quản Lý & Chấm Bài: {exercise.title}</h2>
+            <h2 className="text-lg sm:text-xl font-black text-slate-800 mt-1">Quản Lý & Chấm Bài: {exercise.title}</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors"
+            className="p-1.5 sm:p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* BODY */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-4 overflow-y-auto flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 lg:gap-6 pt-4 flex-1 min-h-0 overflow-y-auto md:overflow-hidden">
           
           {/* DANH SÁCH HỌC SINH NỘP BÀI */}
-          <div className="md:col-span-1 border-r border-slate-200 pr-3 space-y-2">
+          <div className="md:col-span-4 lg:col-span-4 md:border-r border-slate-200 md:pr-4 space-y-2 md:overflow-y-auto md:max-h-full">
             <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2">
               Danh sách nộp bài ({submissions.length})
             </h3>
@@ -208,7 +208,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
           </div>
 
           {/* CHẤM BÀI CHI TIẾT */}
-          <div className="md:col-span-2 space-y-4">
+          <div className="md:col-span-8 lg:col-span-8 space-y-4 md:overflow-y-auto md:max-h-full md:pr-2">
             {selectedSub ? (
               <>
                 {msg && (
