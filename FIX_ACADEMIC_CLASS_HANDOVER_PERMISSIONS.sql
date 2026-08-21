@@ -2,65 +2,13 @@
 -- SCRIPT MIGRATION: ĐỒNG BỘ PHÂN QUYỀN BÀI TẬP HỌC THUẬT THEO CLASS OWNERSHIP MODEL
 -- GIÁO VIÊN HIỆN TẠI CỦA LỚP QUẢN LÝ / CHẤM BÀI NỘP, THU HỒI QUYỀN CỦA GV CŨ
 -- GIỮ NGUYÊN TÁC GIẢ BÀI GỐC (TEACHER_ID) VÀ TOÀN VẸN LỊCH SỬ BÀI NỘP 100%
+-- KHÔNG REDEFINE CÁC HÀM HELPER ĐÃ CÓ TRONG REPO (MINIMAL BLAST RADIUS)
 -- ============================================================================
 
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 
--- 1. ĐẢM BẢO SCHEMA VÀ CÁC HÀM QUẢN LÝ LỚP APP_PRIVATE TỒN TẠI VÀ CHUẨN XÁC
-CREATE SCHEMA IF NOT EXISTS app_private;
-REVOKE ALL ON SCHEMA app_private FROM PUBLIC;
-GRANT USAGE ON SCHEMA app_private TO authenticated, service_role, postgres;
-
-CREATE OR REPLACE FUNCTION app_private.is_admin()
-RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = (SELECT auth.uid()) AND role = 'admin');
-$$;
-
-CREATE OR REPLACE FUNCTION app_private.is_teacher()
-RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = (SELECT auth.uid()) AND role = 'teacher');
-$$;
-
-CREATE OR REPLACE FUNCTION app_private.teacher_owns_class(p_class_id UUID)
-RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.classes WHERE id = p_class_id AND teacher_id = (SELECT auth.uid()));
-$$;
-
-CREATE OR REPLACE FUNCTION app_private.student_in_class(p_class_id UUID)
-RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
-  SELECT EXISTS (SELECT 1 FROM public.class_members WHERE class_id = p_class_id AND student_id = (SELECT auth.uid()));
-$$;
-
-CREATE OR REPLACE FUNCTION app_private.teacher_manages_student(p_student_id UUID)
-RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM public.classes c
-    JOIN public.class_members cm ON c.id = cm.class_id
-    WHERE c.teacher_id = (SELECT auth.uid()) AND cm.student_id = p_student_id
-  );
-$$;
-
--- HÀM NỘI BỘ CỘNG SAO VÀ XU CHO HỌC SINH AN TOÀN
-CREATE OR REPLACE FUNCTION app_private.apply_student_rewards(p_student_id UUID, p_stars INT, p_coins INT)
-RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-BEGIN
-  UPDATE public.profiles
-  SET total_stars = COALESCE(total_stars, 0) + GREATEST(0, p_stars),
-      total_coins = COALESCE(total_coins, 0) + GREATEST(0, p_coins),
-      updated_at = NOW()
-  WHERE id = p_student_id;
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION app_private.is_admin() TO authenticated, service_role, postgres;
-GRANT EXECUTE ON FUNCTION app_private.is_teacher() TO authenticated, service_role, postgres;
-GRANT EXECUTE ON FUNCTION app_private.teacher_owns_class(UUID) TO authenticated, service_role, postgres;
-GRANT EXECUTE ON FUNCTION app_private.student_in_class(UUID) TO authenticated, service_role, postgres;
-GRANT EXECUTE ON FUNCTION app_private.teacher_manages_student(UUID) TO authenticated, service_role, postgres;
-GRANT EXECUTE ON FUNCTION app_private.apply_student_rewards(UUID, INT, INT) TO authenticated, service_role, postgres;
-
--- 2. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISES
+-- 1. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISES
 ALTER TABLE public.academic_exercises ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Academic exercises select policy" ON public.academic_exercises;
 DROP POLICY IF EXISTS "Academic exercises insert policy" ON public.academic_exercises;
@@ -112,7 +60,7 @@ FOR DELETE USING (
   OR (app_private.is_teacher() AND teacher_id = (SELECT auth.uid()))
 );
 
--- 3. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
+-- 2. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISE_QUESTIONS
 ALTER TABLE public.academic_exercise_questions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Academic questions select policy" ON public.academic_exercise_questions;
 
@@ -144,7 +92,8 @@ FOR SELECT USING (
   )
 );
 
--- 4. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS
+-- 3. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_EXERCISE_ASSIGNMENTS
+-- QUYỀN XEM VÀ QUẢN LÝ GIAO BÀI ĐI THEO LỚP HỌC (CLASS_ID), KHÔNG CẤP QUYỀN CHỈ VÌ LÀ TÁC GIẢ BÀI GỐC
 ALTER TABLE public.academic_exercise_assignments ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Academic assignments select policy" ON public.academic_exercise_assignments;
 DROP POLICY IF EXISTS "Academic assignments insert policy" ON public.academic_exercise_assignments;
@@ -156,10 +105,6 @@ FOR SELECT USING (
   app_private.is_admin()
   OR app_private.teacher_owns_class(class_id)
   OR app_private.student_in_class(class_id)
-  OR EXISTS (
-    SELECT 1 FROM public.academic_exercises e 
-    WHERE e.id = exercise_id AND e.teacher_id = (SELECT auth.uid())
-  )
 );
 
 CREATE POLICY "Academic assignments insert policy" ON public.academic_exercise_assignments
@@ -180,7 +125,7 @@ FOR DELETE USING (
   app_private.is_admin() OR app_private.teacher_owns_class(class_id)
 );
 
--- 5. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_SUBMISSIONS (THU HỒI QUYỀN CỦA GV CŨ)
+-- 4. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_SUBMISSIONS (THU HỒI QUYỀN CỦA GV CŨ & CHỐNG RÒ RỈ CHÉO)
 ALTER TABLE public.academic_submissions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Academic submissions select policy" ON public.academic_submissions;
 DROP POLICY IF EXISTS "Academic submissions update policy" ON public.academic_submissions;
@@ -189,15 +134,18 @@ CREATE POLICY "Academic submissions select policy" ON public.academic_submission
 FOR SELECT USING (
   app_private.is_admin()
   OR student_id = (SELECT auth.uid())
-  OR app_private.teacher_manages_student(student_id)
   OR EXISTS (
     SELECT 1 FROM public.academic_exercise_assignments a
+    JOIN public.class_members cm ON cm.class_id = a.class_id
     WHERE a.exercise_id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(a.class_id)
   )
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e
+    JOIN public.class_members cm ON cm.class_id = e.class_id
     WHERE e.id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(e.class_id)
   )
 );
@@ -205,34 +153,40 @@ FOR SELECT USING (
 CREATE POLICY "Academic submissions update policy" ON public.academic_submissions
 FOR UPDATE USING (
   app_private.is_admin()
-  OR app_private.teacher_manages_student(student_id)
   OR EXISTS (
     SELECT 1 FROM public.academic_exercise_assignments a
+    JOIN public.class_members cm ON cm.class_id = a.class_id
     WHERE a.exercise_id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(a.class_id)
   )
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e
+    JOIN public.class_members cm ON cm.class_id = e.class_id
     WHERE e.id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(e.class_id)
   )
 )
 WITH CHECK (
   app_private.is_admin()
-  OR app_private.teacher_manages_student(student_id)
   OR EXISTS (
     SELECT 1 FROM public.academic_exercise_assignments a
+    JOIN public.class_members cm ON cm.class_id = a.class_id
     WHERE a.exercise_id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(a.class_id)
   )
   OR EXISTS (
     SELECT 1 FROM public.academic_exercises e
+    JOIN public.class_members cm ON cm.class_id = e.class_id
     WHERE e.id = public.academic_submissions.exercise_id 
+      AND cm.student_id = public.academic_submissions.student_id
       AND app_private.teacher_owns_class(e.class_id)
   )
 );
 
--- 6. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_SUBMISSION_ANSWERS
+-- 5. CẬP NHẬT RLS POLICIES TRÊN PUBLIC.ACADEMIC_SUBMISSION_ANSWERS
 ALTER TABLE public.academic_submission_answers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Academic submission answers select policy" ON public.academic_submission_answers;
 DROP POLICY IF EXISTS "Academic submission answers update policy" ON public.academic_submission_answers;
@@ -244,14 +198,19 @@ FOR SELECT USING (
     WHERE s.id = submission_id AND (
       app_private.is_admin()
       OR s.student_id = (SELECT auth.uid())
-      OR app_private.teacher_manages_student(s.student_id)
       OR EXISTS (
         SELECT 1 FROM public.academic_exercise_assignments a
-        WHERE a.exercise_id = s.exercise_id AND app_private.teacher_owns_class(a.class_id)
+        JOIN public.class_members cm ON cm.class_id = a.class_id
+        WHERE a.exercise_id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(a.class_id)
       )
       OR EXISTS (
         SELECT 1 FROM public.academic_exercises e
-        WHERE e.id = s.exercise_id AND app_private.teacher_owns_class(e.class_id)
+        JOIN public.class_members cm ON cm.class_id = e.class_id
+        WHERE e.id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(e.class_id)
       )
     )
   )
@@ -263,14 +222,19 @@ FOR UPDATE USING (
     SELECT 1 FROM public.academic_submissions s
     WHERE s.id = submission_id AND (
       app_private.is_admin()
-      OR app_private.teacher_manages_student(s.student_id)
       OR EXISTS (
         SELECT 1 FROM public.academic_exercise_assignments a
-        WHERE a.exercise_id = s.exercise_id AND app_private.teacher_owns_class(a.class_id)
+        JOIN public.class_members cm ON cm.class_id = a.class_id
+        WHERE a.exercise_id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(a.class_id)
       )
       OR EXISTS (
         SELECT 1 FROM public.academic_exercises e
-        WHERE e.id = s.exercise_id AND app_private.teacher_owns_class(e.class_id)
+        JOIN public.class_members cm ON cm.class_id = e.class_id
+        WHERE e.id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(e.class_id)
       )
     )
   )
@@ -280,20 +244,26 @@ WITH CHECK (
     SELECT 1 FROM public.academic_submissions s
     WHERE s.id = submission_id AND (
       app_private.is_admin()
-      OR app_private.teacher_manages_student(s.student_id)
       OR EXISTS (
         SELECT 1 FROM public.academic_exercise_assignments a
-        WHERE a.exercise_id = s.exercise_id AND app_private.teacher_owns_class(a.class_id)
+        JOIN public.class_members cm ON cm.class_id = a.class_id
+        WHERE a.exercise_id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(a.class_id)
       )
       OR EXISTS (
         SELECT 1 FROM public.academic_exercises e
-        WHERE e.id = s.exercise_id AND app_private.teacher_owns_class(e.class_id)
+        JOIN public.class_members cm ON cm.class_id = e.class_id
+        WHERE e.id = s.exercise_id
+          AND cm.student_id = s.student_id
+          AND app_private.teacher_owns_class(e.class_id)
       )
     )
   )
 );
 
--- 7. CẬP NHẬT STORAGE POLICIES CHO BUCKET EXERCISE-SUBMISSIONS
+-- 6. CẬP NHẬT STORAGE POLICIES CHO BUCKET EXERCISE-SUBMISSIONS
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
 CREATE POLICY "Exercise submissions select policy" ON storage.objects
 FOR SELECT USING (
@@ -303,21 +273,26 @@ FOR SELECT USING (
     OR EXISTS (
       SELECT 1 FROM public.academic_submissions s
       WHERE s.id::text = (storage.foldername(name))[2] AND (
-        app_private.teacher_manages_student(s.student_id)
-        OR EXISTS (
+        EXISTS (
           SELECT 1 FROM public.academic_exercise_assignments a
-          WHERE a.exercise_id = s.exercise_id AND app_private.teacher_owns_class(a.class_id)
+          JOIN public.class_members cm ON cm.class_id = a.class_id
+          WHERE a.exercise_id = s.exercise_id
+            AND cm.student_id = s.student_id
+            AND app_private.teacher_owns_class(a.class_id)
         )
         OR EXISTS (
           SELECT 1 FROM public.academic_exercises e
-          WHERE e.id = s.exercise_id AND app_private.teacher_owns_class(e.class_id)
+          JOIN public.class_members cm ON cm.class_id = e.class_id
+          WHERE e.id = s.exercise_id
+            AND cm.student_id = s.student_id
+            AND app_private.teacher_owns_class(e.class_id)
         )
       )
     )
   )
 );
 
--- 8. CẬP NHẬT RPC GRADE_ACADEMIC_SUBMISSION CHUẨN CLASS OWNERSHIP MODEL
+-- 7. CẬP NHẬT RPC GRADE_ACADEMIC_SUBMISSION CHUẨN CLASS OWNERSHIP MODEL & PRODUCTION CONTRACT
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -331,6 +306,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_teacher_id UUID;
+  v_role TEXT;
   v_sub RECORD;
   v_ex RECORD;
   v_grade_item JSONB;
@@ -359,6 +335,8 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chưa đăng nhập.');
   END IF;
 
+  SELECT role INTO v_role FROM public.profiles WHERE id = v_teacher_id;
+
   SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id FOR UPDATE;
   IF v_sub.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
@@ -372,19 +350,23 @@ BEGIN
   SELECT * INTO v_ex FROM public.academic_exercises WHERE id = v_sub.exercise_id;
 
   -- KIỂM TRA PHÂN QUYỀN CHẤM BÀI THEO CLASS OWNERSHIP MODEL:
-  -- Admin HOẶC GV đang quản lý học sinh (teacher_manages_student)
-  -- HOẶC GV đang quản lý lớp được giao bài (teacher_owns_class)
-  -- KHÔNG cấp quyền chỉ vì là creator cũ của exercise nếu không còn quản lý lớp/học sinh
-  IF app_private.is_admin() THEN
-    v_has_permission := TRUE;
-  ELSIF app_private.teacher_manages_student(v_sub.student_id) THEN
-    v_has_permission := TRUE;
-  ELSIF v_ex.class_id IS NOT NULL AND app_private.teacher_owns_class(v_ex.class_id) THEN
+  -- Admin HOẶC GV hiện tại quản lý lớp mà bài tập và học sinh thuộc về
+  IF v_role = 'admin' OR app_private.is_admin() THEN
     v_has_permission := TRUE;
   ELSIF EXISTS (
-    SELECT 1 FROM public.academic_exercise_assignments a 
-    WHERE a.exercise_id = v_ex.id AND app_private.teacher_owns_class(a.class_id)
+    SELECT 1 FROM public.academic_exercise_assignments a
+    JOIN public.class_members cm ON cm.class_id = a.class_id
+    WHERE a.exercise_id = v_sub.exercise_id
+      AND cm.student_id = v_sub.student_id
+      AND app_private.teacher_owns_class(a.class_id)
   ) THEN
+    v_has_permission := TRUE;
+  ELSIF v_ex.class_id IS NOT NULL
+    AND app_private.teacher_owns_class(v_ex.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.class_members cm
+      WHERE cm.class_id = v_ex.class_id AND cm.student_id = v_sub.student_id
+    ) THEN
     v_has_permission := TRUE;
   END IF;
 
@@ -445,8 +427,8 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm cho câu ' || v_curr_q_id::text || ' không hợp lệ, phải là số nguyên.');
       END;
 
-      IF v_item_points < 0 OR v_item_points > v_q_points THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm cho câu ' || v_curr_q_id::text || ' phải từ 0 đến ' || v_q_points::text || '.');
+      IF v_item_points < 0 OR v_item_points > COALESCE(v_q_points, 10) THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Điểm chấm cho câu ' || v_curr_q_id::text || ' phải từ 0 đến ' || COALESCE(v_q_points, 10)::text || '.');
       END IF;
 
       v_total_manual := v_total_manual + v_item_points;
@@ -458,20 +440,22 @@ BEGIN
   FROM public.academic_exercise_questions
   WHERE exercise_id = v_sub.exercise_id AND question_type IN ('essay', 'image_upload', 'file_upload');
 
-  IF p_request_revision = TRUE THEN
+  IF NOT p_request_revision THEN
+    IF v_graded_subjective_count < v_total_subjective_count THEN
+      RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn phải chấm đầy đủ điểm cho tất cả câu hỏi tự luận / nộp file trước khi chuyển trạng thái Đã Chấm (graded).');
+    END IF;
+  END IF;
+
+  IF p_request_revision THEN
     v_new_status := 'revision_requested';
   ELSE
-    IF v_graded_subjective_count = v_total_subjective_count THEN
-      v_new_status := 'graded';
-    ELSE
-      v_new_status := 'pending_manual_grade';
-    END IF;
+    v_new_status := 'graded';
   END IF;
 
   -- =========================================================================
   -- PHASE 2: ATOMIC DML EXECUTION PHASE
   -- =========================================================================
-  IF p_manual_grades IS NOT NULL THEN
+  IF p_manual_grades IS NOT NULL AND jsonb_array_length(p_manual_grades) > 0 THEN
     FOR v_grade_item IN SELECT * FROM jsonb_array_elements(p_manual_grades)
     LOOP
       UPDATE public.academic_submission_answers
@@ -479,50 +463,52 @@ BEGIN
           teacher_comment = NULLIF(TRIM(v_grade_item->>'teacher_comment'), '')
       WHERE submission_id = p_submission_id
         AND question_id = (v_grade_item->>'question_id')::UUID;
+
+      GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+      IF v_updated_rows != 1 THEN
+        RAISE EXCEPTION 'Chấm điểm thất bại: Không cập nhật được câu hỏi.';
+      END IF;
     END LOOP;
   END IF;
 
-  IF v_new_status = 'graded' THEN
-    SELECT COALESCE(SUM(points_earned), 0) INTO v_final_total
-    FROM public.academic_submission_answers
-    WHERE submission_id = p_submission_id;
+  SELECT COALESCE(SUM(ans.points_earned), 0) INTO v_total_manual
+  FROM public.academic_submission_answers ans
+  JOIN public.academic_exercise_questions q ON q.id = ans.question_id
+  WHERE ans.submission_id = p_submission_id AND q.question_type IN ('essay', 'image_upload', 'file_upload');
 
-    IF v_sub.max_score > 0 THEN
-      v_ratio := (v_final_total::FLOAT) / (v_sub.max_score::FLOAT);
-      v_stars_to_award := ROUND(v_ratio * v_ex.reward_stars);
-    ELSE
-      v_stars_to_award := 0;
-    END IF;
+  v_final_total := LEAST(COALESCE(v_sub.objective_score, 0) + v_total_manual, COALESCE(v_sub.max_score, 100));
 
-    UPDATE public.academic_submissions
-    SET status = 'graded',
-        total_score = v_final_total,
-        stars_awarded = v_stars_to_award,
-        teacher_feedback = NULLIF(TRIM(p_teacher_feedback), ''),
-        graded_at = NOW(),
-        graded_by = v_teacher_id
-    WHERE id = p_submission_id;
+  IF v_new_status = 'graded' AND v_sub.reward_applied_at IS NULL AND v_final_total > 0 THEN
+    v_ratio := (v_final_total::FLOAT / COALESCE(v_sub.max_score, 100)::FLOAT);
+    v_stars_to_award := FLOOR(COALESCE(v_ex.reward_stars, 10) * v_ratio);
+  END IF;
 
-    IF v_stars_to_award > 0 THEN
-      PERFORM app_private.apply_student_rewards(v_sub.student_id, v_stars_to_award, 0);
-    END IF;
-  ELSE
-    UPDATE public.academic_submissions
-    SET status = v_new_status,
-        teacher_feedback = NULLIF(TRIM(p_teacher_feedback), ''),
-        graded_by = v_teacher_id
-    WHERE id = p_submission_id;
+  UPDATE public.academic_submissions
+  SET status = v_new_status,
+      manual_score = v_total_manual,
+      total_score = v_final_total,
+      teacher_feedback = NULLIF(TRIM(p_teacher_feedback), ''),
+      graded_at = NOW(),
+      graded_by = v_teacher_id,
+      reward_stars_awarded = CASE WHEN v_sub.reward_applied_at IS NULL THEN v_stars_to_award ELSE reward_stars_awarded END,
+      reward_applied_at = CASE WHEN v_stars_to_award > 0 AND v_sub.reward_applied_at IS NULL THEN NOW() ELSE reward_applied_at END
+  WHERE id = p_submission_id;
+
+  IF v_stars_to_award > 0 AND v_sub.reward_applied_at IS NULL THEN
+    UPDATE public.profiles
+    SET total_stars = COALESCE(total_stars, 0) + v_stars_to_award
+    WHERE id = v_sub.student_id;
   END IF;
 
   RETURN jsonb_build_object(
     'success', true,
     'status', v_new_status,
-    'total_score', CASE WHEN v_new_status = 'graded' THEN v_final_total ELSE NULL END,
-    'stars_awarded', CASE WHEN v_new_status = 'graded' THEN v_stars_to_award ELSE 0 END,
+    'total_score', v_final_total,
+    'stars_awarded', CASE WHEN v_sub.reward_applied_at IS NULL THEN v_stars_to_award ELSE 0 END,
     'message', CASE 
       WHEN v_new_status = 'graded' THEN 'Đã chấm bài hoàn tất và trao thưởng thành công!'
       WHEN v_new_status = 'revision_requested' THEN 'Đã yêu cầu học sinh làm lại bài.'
-      ELSE 'Đã lưu điểm thành phần, bài nộp tiếp tục chờ chấm câu tự luận còn lại.'
+      ELSE 'Đã lưu điểm thành phần.'
     END
   );
 END;
@@ -531,7 +517,7 @@ $$;
 REVOKE ALL ON FUNCTION public.grade_academic_submission(UUID, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.grade_academic_submission(UUID, JSONB, TEXT, BOOLEAN) TO authenticated, service_role, postgres;
 
--- 9. CẬP NHẬT RPC ASSIGN_EXERCISE_TO_CLASSES THEO CLASS OWNERSHIP MODEL
+-- 8. CẬP NHẬT RPC ASSIGN_EXERCISE_TO_CLASSES BẢO TOÀN LỊCH SỬ AUDIT (KHÔNG GHI ĐÈ ASSIGNED_AT / ASSIGNED_BY)
 CREATE OR REPLACE FUNCTION public.assign_exercise_to_classes(
   p_exercise_id UUID,
   p_class_ids UUID[],
@@ -594,15 +580,14 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- ON CONFLICT: BẢO TOÀN NGUYÊN VẸN ASSIGNED_BY VÀ ASSIGNED_AT LỊCH SỬ, CHỈ CẬP NHẬT DUE_DATE / RANKING
     INSERT INTO public.academic_exercise_assignments (
       exercise_id, class_id, assigned_by, assigned_at, due_date, counts_toward_ranking
     ) VALUES (
       p_exercise_id, v_class_id, v_caller_id, NOW(), v_ex.due_date, COALESCE(p_counts_toward_ranking, true)
     )
     ON CONFLICT (exercise_id, class_id) DO UPDATE SET
-      assigned_by = EXCLUDED.assigned_by,
-      assigned_at = NOW(),
-      due_date = EXCLUDED.due_date,
+      due_date = COALESCE(EXCLUDED.due_date, public.academic_exercise_assignments.due_date),
       counts_toward_ranking = EXCLUDED.counts_toward_ranking;
 
     IF v_first_assigned_class_id IS NULL THEN
