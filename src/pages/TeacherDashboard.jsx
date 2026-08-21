@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   GraduationCap,
@@ -14,7 +14,8 @@ import {
   Edit2,
   RefreshCw,
   Calendar,
-  Clock
+  Clock,
+  RotateCcw
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +25,7 @@ import { AddGameModal } from '../components/dashboard/AddGameModal';
 import { EditGameModal } from '../components/dashboard/EditGameModal';
 import { EditAssignmentModal } from '../components/dashboard/EditAssignmentModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
+import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { formatClassLabel } from '../utils/helpers';
@@ -77,6 +79,7 @@ export const TeacherDashboard = () => {
   const [pinStatusMap, setPinStatusMap] = useState({});
   const [userForPin, setUserForPin] = useState(null);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [isResetScoresOpen, setIsResetScoresOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
   const [loading, setLoading] = useState(true);
@@ -335,9 +338,21 @@ export const TeacherDashboard = () => {
 
           {/* DANH SÁCH HỌC SINH TRONG LỚP & ĐẶT MÃ PIN */}
           <div className="mb-10">
-            <h3 className="text-xl font-black text-slate-800 mb-3 flex items-center gap-2">
-              <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp & Đặt Mã PIN ({managedStudents.length})
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                <Users className="w-6 h-6 text-purple-600" /> Danh Sách Học Sinh Trong Lớp ({managedStudents.length})
+              </h3>
+
+              <button
+                onClick={() => {
+                  setIsResetScoresOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center gap-1.5 active:translate-y-0.5"
+              >
+                <RotateCcw className="w-4 h-4 text-amber-200" /> 🔄 Reset Điểm / Mốc Mới
+              </button>
+            </div>
 
             <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl mb-4 flex items-center gap-2 text-xs font-bold text-amber-900">
               <Info className="w-4 h-4 text-amber-600 shrink-0" />
@@ -647,6 +662,12 @@ export const TeacherDashboard = () => {
           const isReset = pinStatusMap[studentId] === true;
           showToast(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
         }}
+      />
+
+      <ResetScoresModal
+        isOpen={isResetScoresOpen}
+        onClose={() => setIsResetScoresOpen(false)}
+        onApplied={() => fetchTeacherData()}
       />
 
     </div>

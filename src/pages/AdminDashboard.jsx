@@ -13,7 +13,8 @@ import {
   Info,
   KeyRound,
   FileSpreadsheet,
-  UserCheck
+  UserCheck,
+  RotateCcw
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +25,7 @@ import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
 import { AssignTeacherModal } from '../components/dashboard/AssignTeacherModal';
+import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
@@ -68,6 +70,7 @@ export const AdminDashboard = () => {
   const [userToDelete, setUserToDelete] = useState(null);
   const [isImportStudentsOpen, setIsImportStudentsOpen] = useState(false);
   const [isAssignTeacherOpen, setIsAssignTeacherOpen] = useState(false);
+  const [isResetScoresOpen, setIsResetScoresOpen] = useState(false);
 
   useEffect(() => {
     fetchAdminData();
@@ -253,6 +256,16 @@ export const AdminDashboard = () => {
                 className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
               >
                 <UserCheck className="w-4 h-4 text-sky-200" /> 👩‍🏫 Phân Công Giáo Viên
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsResetScoresOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <RotateCcw className="w-4 h-4 text-amber-200" /> 🔄 Reset Điểm / Mốc Mới
               </button>
 
               <button
@@ -534,6 +547,12 @@ export const AdminDashboard = () => {
         isOpen={isAssignTeacherOpen}
         onClose={() => setIsAssignTeacherOpen(false)}
         onSaved={() => fetchAdminData()}
+      />
+
+      <ResetScoresModal
+        isOpen={isResetScoresOpen}
+        onClose={() => setIsResetScoresOpen(false)}
+        onApplied={() => fetchAdminData()}
       />
 
     </div>
