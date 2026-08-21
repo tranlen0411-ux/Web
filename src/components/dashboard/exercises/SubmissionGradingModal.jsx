@@ -141,7 +141,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-      <div className="bg-white w-[95vw] md:w-[92vw] max-w-[1100px] h-[88vh] max-h-[88vh] rounded-3xl border-4 border-amber-300 shadow-2xl p-4 sm:p-6 lg:p-7 animate-fadeIn flex flex-col overflow-hidden">
+      <div className="bg-white w-[95vw] md:w-[92vw] max-w-[1280px] h-[88vh] max-h-[88vh] rounded-3xl border-4 border-amber-300 shadow-2xl p-4 sm:p-6 lg:p-7 animate-fadeIn flex flex-col overflow-hidden">
         
         {/* HEADER - KHÔNG CÒN DÙNG EXERCISE.CLASS_NAME */}
         <div className="flex items-center justify-between pb-3 sm:pb-4 border-b-2 border-amber-100 shrink-0">
@@ -163,7 +163,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 lg:gap-6 pt-4 flex-1 min-h-0 overflow-y-auto md:overflow-hidden">
           
           {/* DANH SÁCH HỌC SINH NỘP BÀI */}
-          <div className="md:col-span-4 lg:col-span-4 md:border-r border-slate-200 md:pr-4 space-y-2 md:overflow-y-auto md:max-h-full">
+          <div className="md:col-span-3 lg:col-span-3 md:border-r border-slate-200 md:pr-4 space-y-2 md:overflow-y-auto md:max-h-full">
             <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-2">
               Danh sách nộp bài ({submissions.length})
             </h3>
@@ -208,7 +208,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
           </div>
 
           {/* CHẤM BÀI CHI TIẾT */}
-          <div className="md:col-span-8 lg:col-span-8 space-y-4 md:overflow-y-auto md:max-h-full md:pr-2">
+          <div className="md:col-span-9 lg:col-span-9 space-y-4 md:overflow-y-auto md:max-h-full md:pr-2">
             {selectedSub ? (
               <>
                 {msg && (
