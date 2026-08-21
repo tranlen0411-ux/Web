@@ -164,25 +164,24 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
       const startOfWeek = new Date(now.setDate(diff));
       startOfWeek.setHours(0, 0, 0, 0);
       fromIso = startOfWeek.toISOString();
+      untilIso = null; // Mốc tính điểm mới từ đầu tuần này
     } else if (timeMode === 'month') {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       startOfMonth.setHours(0, 0, 0, 0);
       fromIso = startOfMonth.toISOString();
+      untilIso = null; // Mốc tính điểm mới từ đầu tháng này
     } else if (timeMode === 'hk1') {
       fromIso = '2026-09-01T00:00:00+07:00';
-      untilIso = '2027-01-10T00:00:00+07:00';
+      untilIso = null; // Mốc tính điểm mới từ đầu Học kỳ 1
     } else if (timeMode === 'hk2') {
       fromIso = '2027-01-10T00:00:00+07:00';
-      untilIso = '2027-05-31T00:00:00+07:00';
+      untilIso = null; // Mốc tính điểm mới từ đầu Học kỳ 2
     } else if (timeMode === 'full_year') {
       fromIso = '2026-09-01T00:00:00+07:00';
-      untilIso = '2027-05-31T00:00:00+07:00';
+      untilIso = null; // Mốc tính điểm mới từ đầu Năm học
     } else if (timeMode === 'cutoff') {
       fromIso = customFromDate ? new Date(customFromDate).toISOString() : new Date().toISOString();
-      untilIso = null; // Cutoff mode: null means everything from effective_from onwards
-    } else if (timeMode === 'custom') {
-      fromIso = customFromDate ? new Date(customFromDate).toISOString() : null;
-      untilIso = customUntilDate ? new Date(customUntilDate).toISOString() : null;
+      untilIso = null; // Mốc bắt đầu tính điểm mới
     }
 
     return { fromIso, untilIso };
@@ -338,7 +337,7 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
       <div className="bg-white w-full max-w-2xl rounded-3xl border-4 border-amber-300 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        
+
         {/* HEADER */}
         <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-indigo-600 px-6 py-4 text-white flex items-center justify-between border-b-4 border-amber-700">
           <div className="flex items-center gap-3">
