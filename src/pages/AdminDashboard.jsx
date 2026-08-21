@@ -224,7 +224,7 @@ export const AdminDashboard = () => {
       </div>
 
       {activeAdminTab === 'exercises' && (
-        <div className="mb-10 animate-fadeIn">
+        <div className="mb-10">
           <ExerciseListTab role="admin" />
         </div>
       )}
