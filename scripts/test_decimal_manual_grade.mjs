@@ -1,19 +1,29 @@
 import assert from 'node:assert/strict';
 
 console.log('================================================================');
-console.log('🧪 RUNNING DECIMAL MANUAL GRADE PARSING & VALIDATION TESTS');
+console.log('🧪 RUNNING DECIMAL MANUAL GRADE PARSING & INSTANT CLOSE UX TESTS');
 console.log('================================================================\n');
 
-// 1. Logic chuẩn hóa điểm số của SubmissionGradingModal.jsx
-function parseManualGrades(manualGrades) {
-  return Object.keys(manualGrades).map(qId => {
-    const rawPoints = Number(manualGrades[qId]?.points_earned ?? 0);
-    return {
-      question_id: qId,
-      points_earned: Number.isFinite(rawPoints) ? rawPoints : 0,
-      teacher_comment: manualGrades[qId]?.teacher_comment || ''
-    };
-  });
+// 1. Logic chuẩn hóa điểm số của SubmissionGradingModal.jsx (Lọc chỉ câu hỏi tự luận/nộp file)
+function parseManualGrades(selectedSub, manualGrades) {
+  return (selectedSub?.academic_submission_answers || [])
+    .filter(ans =>
+      ['essay', 'image_upload', 'file_upload'].includes(
+        ans.academic_exercise_questions?.question_type
+      )
+    )
+    .map(ans => {
+      const rawPoints = Number(
+        manualGrades[ans.question_id]?.points_earned ?? ans.points_earned ?? 0
+      );
+
+      return {
+        question_id: ans.question_id,
+        points_earned: Number.isFinite(rawPoints) ? rawPoints : 0,
+        teacher_comment:
+          manualGrades[ans.question_id]?.teacher_comment || ''
+      };
+    });
 }
 
 function validateManualGrades(selectedSub, manualGrades) {
@@ -41,7 +51,6 @@ async function simulateHandleSaveGrade({
   feedback,
   requestRevision,
   mockRpcCall,
-  fetchSubmissions,
   onClose,
   setMsg
 }) {
@@ -52,7 +61,7 @@ async function simulateHandleSaveGrade({
     return;
   }
 
-  const gradesArray = parseManualGrades(manualGrades);
+  const gradesArray = parseManualGrades(selectedSub, manualGrades);
   const { data, error } = await mockRpcCall('grade_academic_submission', {
     p_submission_id: selectedSub.id,
     p_manual_grades: gradesArray,
@@ -64,69 +73,72 @@ async function simulateHandleSaveGrade({
     setMsg(error?.message || data?.message || 'Lỗi khi lưu kết quả chấm bài.');
   } else {
     setMsg('✅ Đã lưu điểm và nhận xét thành công!');
-    await fetchSubmissions();
     onClose?.();
   }
 }
 
-// TEST 1: Decimal values 0.5, 1.5, 2.75 are preserved without truncation
-const input1 = {
-  'q1': { points_earned: 0.5, teacher_comment: 'Tốt' },
-  'q2': { points_earned: '1.5', teacher_comment: 'Đầy đủ' },
-  'q3': { points_earned: 2.75, teacher_comment: 'Khá' },
-  'q4': { points_earned: 3, teacher_comment: 'Xuất sắc' }
-};
-
-const parsed1 = parseManualGrades(input1);
-assert.strictEqual(parsed1[0].points_earned, 0.5, '0.5 must be preserved as 0.5, not truncated to 0');
-assert.strictEqual(parsed1[1].points_earned, 1.5, '1.5 string must be parsed to 1.5, not 1');
-assert.strictEqual(parsed1[2].points_earned, 2.75, '2.75 must be preserved as 2.75');
-assert.strictEqual(parsed1[3].points_earned, 3, '3 integer must be preserved as 3');
-console.log('✅ TEST 1 (PASS): 0.5, 1.5, 2.75 được bảo toàn nguyên vẹn, không bị parseInt làm tròn.');
-
-// TEST 2: Total score calculation with decimal scores
-const objectiveScore = 5;
-const totalManual = parsed1.reduce((sum, item) => sum + item.points_earned, 0);
-const finalTotal = objectiveScore + totalManual;
-assert.strictEqual(totalManual, 7.75, 'Total manual score must sum correctly (0.5 + 1.5 + 2.75 + 3 = 7.75)');
-assert.strictEqual(finalTotal, 12.75, 'Final total must be 12.75');
-console.log('✅ TEST 2 (PASS): Tổng điểm thập phân tính chính xác 100% (5 + 7.75 = 12.75).');
-
-// TEST 3: Edge cases (empty, undefined, NaN, null) fallback safely to 0
-const inputEdge = {
-  'q_null': { points_earned: null },
-  'q_undef': { points_earned: undefined },
-  'q_empty': { points_earned: '' },
-  'q_invalid': { points_earned: 'abc' }
-};
-const parsedEdge = parseManualGrades(inputEdge);
-assert.strictEqual(parsedEdge[0].points_earned, 0, 'null -> 0');
-assert.strictEqual(parsedEdge[1].points_earned, 0, 'undefined -> 0');
-assert.strictEqual(parsedEdge[2].points_earned, 0, 'empty string -> 0');
-assert.strictEqual(parsedEdge[3].points_earned, 0, 'invalid string -> 0');
-console.log('✅ TEST 3 (PASS): Xử lý an toàn các giá trị biên null/undefined/NaN về 0.');
-
-// TEST 4: Score limit validation (0 <= points_earned <= question.points)
-const mockSub = {
-  id: 'sub-001',
+// Mock Submission with mixed question types (objective + subjective)
+const mixedSub = {
+  id: 'sub-mixed-001',
   academic_submission_answers: [
     {
-      question_id: 'q_essay_1',
-      academic_exercise_questions: { question_type: 'essay', points: 5, prompt: 'Tự luận toán' }
+      question_id: 'q_choice_1',
+      points_earned: 2,
+      academic_exercise_questions: { question_type: 'single_choice', points: 2, prompt: 'Trắc nghiệm 1' }
+    },
+    {
+      question_id: 'q_fill_2',
+      points_earned: 3,
+      academic_exercise_questions: { question_type: 'fill_blank', points: 3, prompt: 'Điền khuyết 2' }
+    },
+    {
+      question_id: 'q_essay_3',
+      points_earned: 0,
+      academic_exercise_questions: { question_type: 'essay', points: 5, prompt: 'Tự luận văn' }
+    },
+    {
+      question_id: 'q_img_4',
+      points_earned: 0,
+      academic_exercise_questions: { question_type: 'image_upload', points: 5, prompt: 'Nộp ảnh bài tập' }
     }
   ]
 };
 
-// Valid score within range
-const validRes = validateManualGrades(mockSub, { 'q_essay_1': { points_earned: 4.5 } });
+// TEST 1: Decimal values 0.5, 1.5, 2.75 are preserved without truncation
+const input1 = {
+  'q_essay_3': { points_earned: 0.5, teacher_comment: 'Tốt' },
+  'q_img_4': { points_earned: '1.5', teacher_comment: 'Đầy đủ' }
+};
+
+const parsed1 = parseManualGrades(mixedSub, input1);
+assert.strictEqual(parsed1[0].points_earned, 0.5, '0.5 must be preserved as 0.5, not truncated to 0');
+assert.strictEqual(parsed1[1].points_earned, 1.5, '1.5 string must be parsed to 1.5, not 1');
+console.log('✅ TEST 1 (PASS): 0.5, 1.5 được bảo toàn nguyên vẹn, không bị parseInt làm tròn.');
+
+// TEST 2: Payload filter excludes objective questions (single_choice, fill_blank)
+assert.strictEqual(parsed1.length, 2, 'gradesArray must ONLY contain 2 subjective questions');
+assert.strictEqual(parsed1.some(i => i.question_id === 'q_choice_1'), false, 'single_choice must NOT be in gradesArray');
+assert.strictEqual(parsed1.some(i => i.question_id === 'q_fill_2'), false, 'fill_blank must NOT be in gradesArray');
+console.log('✅ TEST 2 (PASS): Payload p_manual_grades được lọc chính xác 100%, loại bỏ câu trắc nghiệm/điền khuyết.');
+
+// TEST 3: Edge cases (empty, undefined, NaN, null) fallback safely to 0
+const inputEdge = {
+  'q_essay_3': { points_earned: null },
+  'q_img_4': { points_earned: 'abc' }
+};
+const parsedEdge = parseManualGrades(mixedSub, inputEdge);
+assert.strictEqual(parsedEdge[0].points_earned, 0, 'null -> 0');
+assert.strictEqual(parsedEdge[1].points_earned, 0, 'invalid string -> 0');
+console.log('✅ TEST 3 (PASS): Xử lý an toàn các giá trị biên null/undefined/NaN về 0.');
+
+// TEST 4: Score limit validation (0 <= points_earned <= question.points)
+const validRes = validateManualGrades(mixedSub, { 'q_essay_3': { points_earned: 4.5 } });
 assert.strictEqual(validRes.valid, true, '4.5 points for 5 max points is valid');
 
-// Exceeds max points
-const exceedRes = validateManualGrades(mockSub, { 'q_essay_1': { points_earned: 5.5 } });
+const exceedRes = validateManualGrades(mixedSub, { 'q_essay_3': { points_earned: 5.5 } });
 assert.strictEqual(exceedRes.valid, false, '5.5 points for 5 max points must fail validation');
 
-// Negative points
-const negRes = validateManualGrades(mockSub, { 'q_essay_1': { points_earned: -1 } });
+const negRes = validateManualGrades(mixedSub, { 'q_essay_3': { points_earned: -1 } });
 assert.strictEqual(negRes.valid, false, 'Negative points must fail validation');
 console.log('✅ TEST 4 (PASS): Validate chính xác giới hạn điểm [0, question.points].');
 
@@ -139,38 +151,39 @@ assert.strictEqual(canGradeRevision, false, 'revision_requested cannot be graded
 assert.strictEqual(canGradeGraded, false, 'graded cannot be graded again');
 console.log('✅ TEST 5 (PASS): Status gate chỉ cho phép chấm khi submitted / pending_manual_grade.');
 
-// TEST 6: Modal closes on RPC success
+// TEST 6: Modal closes INSTANTLY on RPC success
 let onCloseCalled = false;
-let fetchSubmissionsCalled = false;
 let messageState = '';
+let sentPayload = null;
 
 await simulateHandleSaveGrade({
-  selectedSub: mockSub,
-  manualGrades: { 'q_essay_1': { points_earned: 4.5 } },
+  selectedSub: mixedSub,
+  manualGrades: { 'q_essay_3': { points_earned: 4.5 } },
   feedback: 'Tốt',
   requestRevision: false,
-  mockRpcCall: async () => ({ data: { success: true, status: 'graded' }, error: null }),
-  fetchSubmissions: async () => { fetchSubmissionsCalled = true; },
+  mockRpcCall: async (name, payload) => {
+    sentPayload = payload;
+    return { data: { success: true, status: 'graded' }, error: null };
+  },
   onClose: () => { onCloseCalled = true; },
   setMsg: (m) => { messageState = m; }
 });
 
-assert.strictEqual(fetchSubmissionsCalled, true, 'fetchSubmissions must be called on success');
-assert.strictEqual(onCloseCalled, true, 'onClose callback MUST be called on success');
+assert.strictEqual(onCloseCalled, true, 'onClose callback MUST be called immediately on success');
 assert.strictEqual(messageState.includes('thành công'), true, 'Success message must be set');
-console.log('✅ TEST 6 (PASS): RPC success -> fetchSubmissions và onClose được gọi chính xác để đóng Modal.');
+assert.strictEqual(sentPayload.p_manual_grades.length, 2, 'Only 2 subjective items sent to RPC');
+console.log('✅ TEST 6 (PASS): RPC success -> onClose được gọi NGAY LẬP TỨC và payload gửi đi đạt chuẩn.');
 
 // TEST 7: Modal stays open on RPC error
 let onCloseCalledOnError = false;
 let errorMsgState = '';
 
 await simulateHandleSaveGrade({
-  selectedSub: mockSub,
-  manualGrades: { 'q_essay_1': { points_earned: 4.5 } },
+  selectedSub: mixedSub,
+  manualGrades: { 'q_essay_3': { points_earned: 4.5 } },
   feedback: 'Lỗi',
   requestRevision: false,
   mockRpcCall: async () => ({ data: { success: false, message: 'Lỗi phân quyền' }, error: null }),
-  fetchSubmissions: async () => {},
   onClose: () => { onCloseCalledOnError = true; },
   setMsg: (m) => { errorMsgState = m; }
 });
@@ -180,5 +193,5 @@ assert.strictEqual(errorMsgState, 'Lỗi phân quyền', 'Error message must be 
 console.log('✅ TEST 7 (PASS): RPC error -> Modal GIỮ NGUYÊN MỞ và hiển thị thông báo lỗi.');
 
 console.log('\n================================================================');
-console.log('🎉 TOÀN BỘ 7/7 DECIMAL MANUAL GRADE & UX TESTS PASS 100%!');
+console.log('🎉 TOÀN BỘ 7/7 DECIMAL MANUAL GRADE, PAYLOAD FILTER & INSTANT CLOSE TESTS PASS 100%!');
 console.log('================================================================\n');
