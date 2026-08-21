@@ -13,7 +13,6 @@ if (!process.execArgv.includes('--liftoff-only')) {
     process.execPath,
     [
       '--liftoff-only',
-      '--wasm-enforce-bounds-checks',
       '--v8-pool-size=1',
       '--no-wasm-async-compilation',
       ...process.execArgv,
