@@ -22,6 +22,8 @@ export const ExerciseListTab = ({ role = 'student' }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [toastMsg, setToastMsg] = useState('');
 
+  const [managedClassIds, setManagedClassIds] = useState([]);
+
   // Modal Nâng Cao
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedExerciseToEdit, setSelectedExerciseToEdit] = useState(null);
@@ -94,19 +96,54 @@ export const ExerciseListTab = ({ role = 'student' }) => {
         }
 
       } else {
-        // Phía Giáo viên & Admin
+        // Phía Giáo viên & Admin theo Class Ownership Model
+        let myClassIds = [];
+        let assignedExerciseIds = [];
+
+        if (role === 'teacher' && profile?.id) {
+          // Lấy danh sách các lớp GV hiện tại đang trực tiếp quản lý
+          const { data: classData } = await supabase
+            .from('classes')
+            .select('id')
+            .eq('teacher_id', profile.id);
+
+          myClassIds = (classData || []).map(c => c.id).filter(Boolean);
+          setManagedClassIds(myClassIds);
+
+          // Lấy các bài tập đã giao cho các lớp do GV này quản lý
+          if (myClassIds.length > 0) {
+            const { data: assignRecords } = await supabase
+              .from('academic_exercise_assignments')
+              .select('exercise_id')
+              .in('class_id', myClassIds);
+
+            assignedExerciseIds = (assignRecords || []).map(a => a.exercise_id).filter(Boolean);
+          }
+        } else {
+          setManagedClassIds([]);
+        }
+
         let query = supabase
           .from('academic_exercises')
           .select('*, classes:class_id(id, name, grade_level, teacher_id)')
           .order('created_at', { ascending: false });
 
         if (role === 'teacher' && profile?.id) {
-          query = query.eq('teacher_id', profile.id);
+          const filterConditions = [`teacher_id.eq.${profile.id}`];
+          if (myClassIds.length > 0) {
+            filterConditions.push(`class_id.in.(${myClassIds.join(',')})`);
+          }
+          if (assignedExerciseIds.length > 0) {
+            filterConditions.push(`id.in.(${assignedExerciseIds.join(',')})`);
+          }
+          query = query.or(filterConditions.join(','));
         }
 
         const { data: exData, error: exErr } = await query;
         if (!exErr && exData) {
-          setExercises(exData);
+          // Khử trùng lặp bản ghi (Dedup)
+          const uniqueExercises = Array.from(new Map(exData.map(item => [item.id, item])).values());
+          setExercises(uniqueExercises);
         }
 
         // Lấy thông tin phân công các lớp từ bảng academic_exercise_assignments
@@ -344,7 +381,15 @@ export const ExerciseListTab = ({ role = 'student' }) => {
             const isGraded = sub?.status === 'graded';
             const isPending = !sub || sub.status === 'draft';
             const isRevision = sub?.status === 'revision_requested';
-            const canEditExercise = role === 'admin' || (role === 'teacher' && (ex.teacher_id === profile?.id || ex.classes?.teacher_id === profile?.id));
+
+            // Phân biệt rõ ràng theo Class Ownership Model:
+            // 1. Sửa nội dung bài gốc: Chỉ Tác Giả (creator) hoặc Admin
+            const isAuthor = ex.teacher_id === profile?.id;
+            const canEditSourceExercise = role === 'admin' || (role === 'teacher' && isAuthor);
+
+            // 2. Giao bài / Quản lý lượt giao cho lớp: GV phụ trách lớp, Tác giả hoặc Admin
+            const isClassTeacher = (managedClassIds.includes(ex.class_id)) || ((assignmentsMap[ex.id] || []).some(a => managedClassIds.includes(a.class_id)));
+            const canManageAssignment = role === 'admin' || (role === 'teacher' && (isAuthor || isClassTeacher || ex.status === 'published'));
 
             // Xác định thông tin các lớp được giao
             const assignedList = assignmentsMap[ex.id] || [];
@@ -394,6 +439,11 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                     <span className="px-2 py-0.5 bg-amber-50 text-amber-800 font-extrabold text-[10px] rounded-md border border-amber-200 flex items-center gap-0.5">
                       +{ex.reward_stars} <Star className="w-3 h-3 fill-amber-400" />
                     </span>
+                    {isAuthor && role === 'teacher' && (
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-black text-[10px] rounded-md border border-emerald-200">
+                        Bài do tôi tạo
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -444,16 +494,17 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                   ) : (
                     <div className="w-full flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {canEditExercise && (
+                        {canEditSourceExercise && (
                           <button
                             onClick={() => setSelectedExerciseToEdit(ex)}
                             className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 flex items-center gap-1"
+                            title="Sửa nội dung bài gốc"
                           >
-                            <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Sửa Bài
+                            <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Sửa Bài Gốc
                           </button>
                         )}
 
-                        {canEditExercise && !ex.is_global && (
+                        {canManageAssignment && !ex.is_global && (
                           <button
                             onClick={() => handleOpenAssignModal(ex)}
                             className={`px-2.5 py-1 font-bold text-xs rounded-lg border flex items-center gap-1 transition-all ${
@@ -461,6 +512,7 @@ export const ExerciseListTab = ({ role = 'student' }) => {
                                 ? 'bg-amber-500 text-white border-amber-600 shadow-sm hover:bg-amber-600' 
                                 : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
                             }`}
+                            title="Giao bài tập này cho lớp học"
                           >
                             <Share2 className="w-3.5 h-3.5" /> Giao Cho Lớp
                           </button>
