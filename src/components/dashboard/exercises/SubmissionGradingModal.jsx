@@ -31,7 +31,8 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
       if (!error && data) {
         setSubmissions(data);
         if (data.length > 0) {
-          selectSubmissionForGrading(data[0]);
+          const currentUpdated = selectedSub ? data.find(s => s.id === selectedSub.id) : null;
+          selectSubmissionForGrading(currentUpdated || data[0]);
         }
       }
     } catch (err) {
@@ -51,7 +52,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     if (sub.academic_submission_answers) {
       for (const a of sub.academic_submission_answers) {
         grades[a.question_id] = {
-          points_earned: a.points_earned || 0,
+          points_earned: a.points_earned ?? 0,
           teacher_comment: a.teacher_comment || ''
         };
 
@@ -80,11 +81,30 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     setMsg('');
 
     try {
-      const gradesArray = Object.keys(manualGrades).map(qId => ({
-        question_id: qId,
-        points_earned: parseInt(manualGrades[qId].points_earned || 0),
-        teacher_comment: manualGrades[qId].teacher_comment || ''
-      }));
+      // 1. Rà soát giới hạn điểm từng câu hỏi tự luận / nộp file: 0 <= points_earned <= question.points
+      for (const ans of selectedSub.academic_submission_answers || []) {
+        const q = ans.academic_exercise_questions;
+        if (['essay', 'image_upload', 'file_upload'].includes(q?.question_type)) {
+          const rawVal = manualGrades[ans.question_id]?.points_earned;
+          const numVal = Number(rawVal ?? 0);
+          const maxPoints = q?.points ?? 10;
+          if (isNaN(numVal) || numVal < 0 || numVal > maxPoints) {
+            setMsg(`⚠️ Điểm chấm cho câu "${q?.prompt ? (q.prompt.slice(0, 30) + '...') : ''}" không hợp lệ (Phải từ 0 đến ${maxPoints} điểm).`);
+            setIsSubmitting(false);
+            return;
+          }
+        }
+      }
+
+      // 2. Chuyển đổi an toàn sang số thập phân, bảo toàn 0.5, 1.5, không làm tròn xuống bằng parseInt
+      const gradesArray = Object.keys(manualGrades).map(qId => {
+        const rawPoints = Number(manualGrades[qId]?.points_earned ?? 0);
+        return {
+          question_id: qId,
+          points_earned: Number.isFinite(rawPoints) ? rawPoints : 0,
+          teacher_comment: manualGrades[qId]?.teacher_comment || ''
+        };
+      });
 
       const { data, error } = await supabase.rpc('grade_academic_submission', {
         p_submission_id: selectedSub.id,
@@ -106,6 +126,8 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
       setIsSubmitting(false);
     }
   };
+
+  const canGrade = selectedSub && ['submitted', 'pending_manual_grade'].includes(selectedSub.status);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -151,15 +173,25 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-amber-200 flex items-center justify-center font-black text-xs text-amber-900">
+                    <div className="w-8 h-8 rounded-full bg-amber-200 flex items-center justify-center font-black text-xs text-amber-900 shrink-0">
                       {sub.profiles?.full_name?.charAt(0) || 'H'}
                     </div>
-                    <div>
-                      <p className="font-black text-xs">{sub.profiles?.full_name || 'Học sinh'}</p>
-                      <p className="text-[10px] opacity-80">{sub.status}</p>
+                    <div className="min-w-0">
+                      <p className="font-black text-xs truncate">{sub.profiles?.full_name || 'Học sinh'}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className={`px-1.5 py-0.5 text-[9px] font-black rounded ${
+                          sub.status === 'graded'
+                            ? selectedSub?.id === sub.id ? 'bg-emerald-200 text-emerald-950' : 'bg-emerald-100 text-emerald-800'
+                            : sub.status === 'revision_requested'
+                            ? selectedSub?.id === sub.id ? 'bg-rose-200 text-rose-950' : 'bg-rose-100 text-rose-800'
+                            : selectedSub?.id === sub.id ? 'bg-amber-200 text-amber-950' : 'bg-amber-100 text-amber-900'
+                        }`}>
+                          {sub.status === 'graded' ? 'Đã chấm' : sub.status === 'revision_requested' ? 'Cần làm lại' : 'Chờ chấm'}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                  <span className="font-black text-xs">{sub.total_score}đ</span>
+                  <span className="font-black text-xs shrink-0">{sub.total_score ?? 0}đ</span>
                 </button>
               ))
             )}
@@ -184,7 +216,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                   </div>
                   <div className="text-right">
                     <span className="text-2xl font-black text-amber-600">
-                      {selectedSub.total_score} / {selectedSub.max_score} điểm
+                      {selectedSub.total_score ?? 0} / {selectedSub.max_score} điểm
                     </span>
                   </div>
                 </div>
@@ -237,8 +269,10 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                             <label className="text-[11px] font-black text-slate-600">Điểm tự luận:</label>
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max={q?.points || 10}
+                              disabled={!canGrade}
                               value={manualGrades[ans.question_id]?.points_earned ?? ans.points_earned}
                               onChange={(e) => {
                                 const val = e.target.value;
@@ -250,7 +284,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                                   }
                                 }));
                               }}
-                              className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold"
+                              className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold disabled:bg-slate-100 disabled:text-slate-500"
                             />
                           </div>
                         ) : (
@@ -270,8 +304,9 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                     rows="2"
                     placeholder="Nhập nhận xét khen ngợi hoặc động viên bé..."
                     value={feedback}
+                    disabled={!canGrade}
                     onChange={(e) => setFeedback(e.target.value)}
-                    className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800"
+                    className="w-full px-3.5 py-2 bg-white border-2 border-amber-200 rounded-xl text-xs font-bold text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
                   ></textarea>
 
                   <div className="flex items-center gap-2 pt-1">
@@ -279,8 +314,9 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                       type="checkbox"
                       id="revisionReq"
                       checked={requestRevision}
+                      disabled={!canGrade}
                       onChange={(e) => setRequestRevision(e.target.checked)}
-                      className="w-4 h-4 text-amber-500 rounded"
+                      className="w-4 h-4 text-amber-500 rounded disabled:opacity-50"
                     />
                     <label htmlFor="revisionReq" className="text-xs font-bold text-rose-700">
                       Yêu cầu học sinh sửa và làm lại bài tập này
@@ -290,14 +326,24 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
 
                 {/* NÚT HOÀN TẤT */}
                 <div className="pt-2 flex justify-end">
-                  <button
-                    onClick={handleSaveGrade}
-                    disabled={isSubmitting}
-                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    {isSubmitting ? 'Đang Lưu...' : 'Hoàn Tất Chấm Bài'}
-                  </button>
+                  {canGrade ? (
+                    <button
+                      onClick={handleSaveGrade}
+                      disabled={isSubmitting}
+                      className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-all active:translate-y-0.5"
+                    >
+                      {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      {isSubmitting ? 'Đang Lưu...' : 'Hoàn Tất Chấm Bài'}
+                    </button>
+                  ) : (
+                    <button
+                      disabled={true}
+                      className="px-6 py-2.5 bg-slate-200 text-slate-500 font-black text-xs rounded-xl cursor-not-allowed flex items-center gap-1.5 shadow-none"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-slate-400" />
+                      {selectedSub?.status === 'graded' ? 'Đã Chấm Hoàn Tất' : 'Đã Yêu Cầu Làm Lại'}
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
