@@ -96,15 +96,25 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         }
       }
 
-      // 2. Chuyển đổi an toàn sang số thập phân, bảo toàn 0.5, 1.5, không làm tròn xuống bằng parseInt
-      const gradesArray = Object.keys(manualGrades).map(qId => {
-        const rawPoints = Number(manualGrades[qId]?.points_earned ?? 0);
-        return {
-          question_id: qId,
-          points_earned: Number.isFinite(rawPoints) ? rawPoints : 0,
-          teacher_comment: manualGrades[qId]?.teacher_comment || ''
-        };
-      });
+      // 2. Chuyển đổi an toàn sang số thập phân, bảo toàn 0.5, 1.5, chỉ gửi các câu tự luận / nộp file
+      const gradesArray = (selectedSub.academic_submission_answers || [])
+        .filter(ans =>
+          ['essay', 'image_upload', 'file_upload'].includes(
+            ans.academic_exercise_questions?.question_type
+          )
+        )
+        .map(ans => {
+          const rawPoints = Number(
+            manualGrades[ans.question_id]?.points_earned ?? ans.points_earned ?? 0
+          );
+
+          return {
+            question_id: ans.question_id,
+            points_earned: Number.isFinite(rawPoints) ? rawPoints : 0,
+            teacher_comment:
+              manualGrades[ans.question_id]?.teacher_comment || ''
+          };
+        });
 
       const { data, error } = await supabase.rpc('grade_academic_submission', {
         p_submission_id: selectedSub.id,
