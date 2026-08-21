@@ -20,3 +20,8 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 thumbs.db
+
+# Database dump files
+roles.sql
+schema.sql
+data.sql
