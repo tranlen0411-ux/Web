@@ -164,6 +164,8 @@ async function runHardenedHandoverTests() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
     CREATE OR REPLACE FUNCTION storage.foldername(name text)
     RETURNS text[] LANGUAGE plpgsql AS $$
     BEGIN
@@ -204,11 +206,16 @@ async function runHardenedHandoverTests() {
     $$;
   `);
 
-  // 4. Nạp Migration mới FIX_ACADEMIC_CLASS_HANDOVER_PERMISSIONS.sql
+  // 4. Nạp Migration mới FIX_ACADEMIC_CLASS_HANDOVER_PERMISSIONS.sql và UPDATE_STORAGE_HANDOVER_POLICIES.sql
   const migrationPath = path.resolve(__dirname, '../FIX_ACADEMIC_CLASS_HANDOVER_PERMISSIONS.sql');
   const migrationSql = await fs.readFile(migrationPath, 'utf-8');
   await db.exec(migrationSql);
   console.log('✅ Đã nạp thành công migration FIX_ACADEMIC_CLASS_HANDOVER_PERMISSIONS.sql vào PGlite.');
+
+  const storageMigrationPath = path.resolve(__dirname, '../UPDATE_STORAGE_HANDOVER_POLICIES.sql');
+  const storageMigrationSql = await fs.readFile(storageMigrationPath, 'utf-8');
+  await db.exec(storageMigrationSql);
+  console.log('✅ Đã nạp thành công migration UPDATE_STORAGE_HANDOVER_POLICIES.sql vào PGlite.');
 
   // 5. Khởi tạo Fixture dữ liệu:
   const adminId = '11111111-1111-1111-1111-111111111111';

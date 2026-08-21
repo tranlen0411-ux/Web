@@ -262,37 +262,7 @@ WITH CHECK (
   )
 );
 
--- 6. CẬP NHẬT STORAGE POLICIES CHO BUCKET EXERCISE-SUBMISSIONS
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
-CREATE POLICY "Exercise submissions select policy" ON storage.objects
-FOR SELECT USING (
-  bucket_id = 'exercise-submissions' AND (
-    app_private.is_admin()
-    OR (storage.foldername(name))[1] = (SELECT auth.uid())::text
-    OR EXISTS (
-      SELECT 1 FROM public.academic_submissions s
-      WHERE s.id::text = (storage.foldername(name))[2] AND (
-        EXISTS (
-          SELECT 1 FROM public.academic_exercise_assignments a
-          JOIN public.class_members cm ON cm.class_id = a.class_id
-          WHERE a.exercise_id = s.exercise_id
-            AND cm.student_id = s.student_id
-            AND app_private.teacher_owns_class(a.class_id)
-        )
-        OR EXISTS (
-          SELECT 1 FROM public.academic_exercises e
-          JOIN public.class_members cm ON cm.class_id = e.class_id
-          WHERE e.id = s.exercise_id
-            AND cm.student_id = s.student_id
-            AND app_private.teacher_owns_class(e.class_id)
-        )
-      )
-    )
-  )
-);
-
--- 7. CẬP NHẬT RPC GRADE_ACADEMIC_SUBMISSION CHUẨN CLASS OWNERSHIP MODEL & PRODUCTION CONTRACT
+-- 6. CẬP NHẬT RPC GRADE_ACADEMIC_SUBMISSION CHUẨN CLASS OWNERSHIP MODEL & PRODUCTION CONTRACT
 CREATE OR REPLACE FUNCTION public.grade_academic_submission(
   p_submission_id UUID,
   p_manual_grades JSONB,
@@ -517,7 +487,7 @@ $$;
 REVOKE ALL ON FUNCTION public.grade_academic_submission(UUID, JSONB, TEXT, BOOLEAN) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.grade_academic_submission(UUID, JSONB, TEXT, BOOLEAN) TO authenticated, service_role, postgres;
 
--- 8. CẬP NHẬT RPC ASSIGN_EXERCISE_TO_CLASSES BẢO TOÀN LỊCH SỬ AUDIT (KHÔNG GHI ĐÈ ASSIGNED_AT / ASSIGNED_BY)
+-- 7. CẬP NHẬT RPC ASSIGN_EXERCISE_TO_CLASSES BẢO TOÀN LỊCH SỬ AUDIT (KHÔNG GHI ĐÈ ASSIGNED_AT / ASSIGNED_BY)
 CREATE OR REPLACE FUNCTION public.assign_exercise_to_classes(
   p_exercise_id UUID,
   p_class_ids UUID[],
