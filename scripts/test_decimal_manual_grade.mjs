@@ -34,6 +34,41 @@ function validateManualGrades(selectedSub, manualGrades) {
   return { valid: true };
 }
 
+// Mô phỏng hàm handleSaveGrade của SubmissionGradingModal.jsx
+async function simulateHandleSaveGrade({
+  selectedSub,
+  manualGrades,
+  feedback,
+  requestRevision,
+  mockRpcCall,
+  fetchSubmissions,
+  onClose,
+  setMsg
+}) {
+  if (!selectedSub) return;
+  const validation = validateManualGrades(selectedSub, manualGrades);
+  if (!validation.valid) {
+    setMsg(validation.error);
+    return;
+  }
+
+  const gradesArray = parseManualGrades(manualGrades);
+  const { data, error } = await mockRpcCall('grade_academic_submission', {
+    p_submission_id: selectedSub.id,
+    p_manual_grades: gradesArray,
+    p_teacher_feedback: feedback,
+    p_request_revision: requestRevision
+  });
+
+  if (error || !data?.success) {
+    setMsg(error?.message || data?.message || 'Lỗi khi lưu kết quả chấm bài.');
+  } else {
+    setMsg('✅ Đã lưu điểm và nhận xét thành công!');
+    await fetchSubmissions();
+    onClose?.();
+  }
+}
+
 // TEST 1: Decimal values 0.5, 1.5, 2.75 are preserved without truncation
 const input1 = {
   'q1': { points_earned: 0.5, teacher_comment: 'Tốt' },
@@ -73,6 +108,7 @@ console.log('✅ TEST 3 (PASS): Xử lý an toàn các giá trị biên null/und
 
 // TEST 4: Score limit validation (0 <= points_earned <= question.points)
 const mockSub = {
+  id: 'sub-001',
   academic_submission_answers: [
     {
       question_id: 'q_essay_1',
@@ -103,6 +139,46 @@ assert.strictEqual(canGradeRevision, false, 'revision_requested cannot be graded
 assert.strictEqual(canGradeGraded, false, 'graded cannot be graded again');
 console.log('✅ TEST 5 (PASS): Status gate chỉ cho phép chấm khi submitted / pending_manual_grade.');
 
+// TEST 6: Modal closes on RPC success
+let onCloseCalled = false;
+let fetchSubmissionsCalled = false;
+let messageState = '';
+
+await simulateHandleSaveGrade({
+  selectedSub: mockSub,
+  manualGrades: { 'q_essay_1': { points_earned: 4.5 } },
+  feedback: 'Tốt',
+  requestRevision: false,
+  mockRpcCall: async () => ({ data: { success: true, status: 'graded' }, error: null }),
+  fetchSubmissions: async () => { fetchSubmissionsCalled = true; },
+  onClose: () => { onCloseCalled = true; },
+  setMsg: (m) => { messageState = m; }
+});
+
+assert.strictEqual(fetchSubmissionsCalled, true, 'fetchSubmissions must be called on success');
+assert.strictEqual(onCloseCalled, true, 'onClose callback MUST be called on success');
+assert.strictEqual(messageState.includes('thành công'), true, 'Success message must be set');
+console.log('✅ TEST 6 (PASS): RPC success -> fetchSubmissions và onClose được gọi chính xác để đóng Modal.');
+
+// TEST 7: Modal stays open on RPC error
+let onCloseCalledOnError = false;
+let errorMsgState = '';
+
+await simulateHandleSaveGrade({
+  selectedSub: mockSub,
+  manualGrades: { 'q_essay_1': { points_earned: 4.5 } },
+  feedback: 'Lỗi',
+  requestRevision: false,
+  mockRpcCall: async () => ({ data: { success: false, message: 'Lỗi phân quyền' }, error: null }),
+  fetchSubmissions: async () => {},
+  onClose: () => { onCloseCalledOnError = true; },
+  setMsg: (m) => { errorMsgState = m; }
+});
+
+assert.strictEqual(onCloseCalledOnError, false, 'onClose must NOT be called on error');
+assert.strictEqual(errorMsgState, 'Lỗi phân quyền', 'Error message must be shown');
+console.log('✅ TEST 7 (PASS): RPC error -> Modal GIỮ NGUYÊN MỞ và hiển thị thông báo lỗi.');
+
 console.log('\n================================================================');
-console.log('🎉 TOÀN BỘ 5/5 DECIMAL MANUAL GRADE TESTS PASS 100%!');
+console.log('🎉 TOÀN BỘ 7/7 DECIMAL MANUAL GRADE & UX TESTS PASS 100%!');
 console.log('================================================================\n');
