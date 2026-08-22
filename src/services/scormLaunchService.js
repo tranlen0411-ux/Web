@@ -1,105 +1,121 @@
 import { supabase } from '../lib/supabase.js';
 
 /**
- * SCORM Launch & Session Contract Service
- * Quản lý phiên khởi chạy, cấu hình origin tách biệt (Port 4174 / Production Origin)
- * và tương tác an toàn với SCORM Player độc lập
+ * SCORM Launch & Session Contract Service (Phase 2B-1 Final Security Hardened)
+ * Quản lý khởi tạo Secure Launch Sessions (Server-Generated Tokens & Authority),
+ * và chuyển tiếp an toàn tới Isolated SCORM Player (Port 4174)
  */
 
 /**
  * Lấy Base URL của SCORM Player độc lập (Tách biệt Origin với Main App)
  */
 export function getScormPlayerOrigin() {
-  const customOrigin = import.meta.env.VITE_SCORM_PLAYER_ORIGIN;
-  if (customOrigin && typeof customOrigin === 'string' && customOrigin.trim() !== '') {
-    return customOrigin.replace(/\/$/, '');
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    const customOrigin = import.meta.env.VITE_SCORM_PLAYER_ORIGIN;
+    if (customOrigin && typeof customOrigin === 'string' && customOrigin.trim() !== '') {
+      return customOrigin.replace(/\/$/, '');
+    }
   }
-  // Môi trường Local Development: SCORM Player chạy riêng tại cổng 4174
+  // Môi trường Local Development mặc định: SCORM Player chạy riêng tại cổng 4174
   return 'http://localhost:4174';
 }
 
 /**
- * Khởi tạo Session khởi chạy bài học SCORM (Contract chuẩn hóa)
+ * Khởi tạo Secure Launch Session cho bài học SCORM (Server-side Token Generation & Authorization)
+ *
  * @param {Object} params
- * @param {string} params.packageId - ID gói SCORM
- * @param {string} params.launchPath - Đường dẫn tệp entry bên trong gói
- * @param {string} params.contentRoot - Đường dẫn gốc trong storage (<user-id>/<package-id>)
- * @param {string} [params.scormVersion] - Phiên bản SCORM (1.2 / 2004)
+ * @param {string} [params.materialId] - ID tài liệu học tập (dành cho authenticated user)
+ * @param {string} [params.shareToken] - Mã chia sẻ công khai (dành cho public/anon user)
  * @param {string} [params.studentName] - Tên học sinh hiển thị trong bài học
- * @returns {Promise<{ sessionId: string, packageId: string, playerOrigin: string, contentBaseUrl: string, launchPath: string, playerUrl: string, expiresAt: string }>}
+ * @returns {Promise<{ success: boolean, sessionToken: string, playerUrl: string, expiresAt: string, scormVersion: string }>}
  */
 export async function createScormLaunchSession({
-  packageId,
-  launchPath,
-  contentRoot,
-  scormVersion = '1.2',
+  materialId = null,
+  shareToken = null,
   studentName = 'Học sinh',
 }) {
-  if (!packageId || !launchPath) {
-    throw new Error('Thiếu thông tin package_id hoặc launch_path để khởi chạy SCORM.');
+  if (!materialId && !shareToken) {
+    throw new Error('Cần cung cấp material_id (nếu đã đăng nhập) hoặc share_token (nếu học công khai).');
   }
 
-  const rootPrefix = contentRoot || packageId;
-  const fullStoragePath = `${rootPrefix}/${launchPath}`;
+  let rpcName = '';
+  let rpcParams = {};
 
-  // 1. Tạo Signed URL cho launch file từ Storage Private Bucket 'scorm-content'
-  const { data: signData, error: signErr } = await supabase.storage
-    .from('scorm-content')
-    .createSignedUrl(fullStoragePath, 3600); // 1 giờ
-
-  let resolvedLaunchUrl = '';
-  if (!signErr && signData?.signedUrl) {
-    resolvedLaunchUrl = signData.signedUrl;
+  if (materialId) {
+    // 1. Luồng Authenticated: Gọi RPC tạo session người dùng đã đăng nhập
+    rpcName = 'create_scorm_launch_session_authenticated';
+    rpcParams = { p_material_id: materialId };
   } else {
-    // Fallback cho môi trường test local
-    resolvedLaunchUrl = fullStoragePath;
+    // 2. Luồng Public: Gọi RPC tạo session công khai
+    rpcName = 'create_public_scorm_launch_session';
+    rpcParams = { p_share_token: shareToken };
   }
 
-  // 2. Tạo Session ID ngẫu nhiên trong bộ nhớ
-  const sessionId = 'scorm_sess_' + Math.random().toString(36).substring(2, 15);
+  const { data: rpcData, error: rpcErr } = await supabase.rpc(rpcName, rpcParams);
+
+  if (rpcErr) {
+    throw new Error(rpcErr.message || 'Lỗi khi khởi tạo phiên học SCORM.');
+  }
+
+  if (!rpcData || !rpcData.success || !rpcData.session_token) {
+    throw new Error('Không thể khởi tạo phiên học SCORM.');
+  }
+
+  const sessionToken = rpcData.session_token;
   const playerOrigin = getScormPlayerOrigin();
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
-  const contentBaseUrl = resolvedLaunchUrl.substring(0, resolvedLaunchUrl.lastIndexOf('/') + 1);
 
-  // 3. Ghép Player URL chuyển tới SCORM Player Isolated Origin
+  // 3. Xây dựng URL chuyển tiếp sang Isolated SCORM Player (Origin B: Port 4174)
   const queryParams = new URLSearchParams({
-    version: scormVersion,
-    launch: resolvedLaunchUrl,
+    session: sessionToken,
     studentName: studentName,
     parentOrigin: currentOrigin,
-    sessionId: sessionId,
-    packageId: packageId,
   });
 
   const playerUrl = `${playerOrigin}/index.html?${queryParams.toString()}`;
-  const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
 
+  // 4. Trả về sanitized response (Tuyệt đối không để lộ storage path hay credentials)
   return {
-    sessionId,
-    packageId,
-    playerOrigin,
-    contentBaseUrl,
-    launchPath,
-    playerUrl,
-    expiresAt,
+    success: true,
+    sessionToken: sessionToken,
+    playerUrl: playerUrl,
+    expiresAt: rpcData.expires_at,
+    scormVersion: rpcData.scorm_version || '1.2',
   };
 }
 
 /**
+ * Thu hồi phiên học SCORM (Revoke Session)
+ * @param {string} sessionId - ID của session cần thu hồi
+ * @returns {Promise<boolean>}
+ */
+export async function revokeScormLaunchSession(sessionId) {
+  if (!sessionId) return false;
+  try {
+    const { data, error } = await supabase.rpc('revoke_scorm_launch_session', {
+      p_session_id: sessionId,
+    });
+    if (error) throw error;
+    return !!data;
+  } catch (err) {
+    console.warn('Lỗi khi thu hồi phiên SCORM:', err);
+    return false;
+  }
+}
+
+/**
  * Xóa sạch toàn bộ assets của package trong Storage khi xóa hoặc cập nhật bài giảng
- * @param {string} contentRoot - Đường dẫn root dạng <user-id>/<package-id> hoặc <package-id>
+ * @param {string} contentRoot - Đường dẫn root dạng <user-id>/<package-id>
  * @param {string} [originalZipPath] - Đường dẫn file zip gốc
  */
 export async function cleanupScormPackageStorage(contentRoot, originalZipPath) {
   if (!contentRoot) return;
 
   try {
-    // 1. Xóa file ZIP gốc trong bucket learning-materials (nếu có)
     if (originalZipPath) {
       await supabase.storage.from('learning-materials').remove([originalZipPath]);
     }
 
-    // 2. Liệt kê và xóa toàn bộ files trong thư mục package của bucket scorm-content
     const { data: fileList } = await supabase.storage
       .from('scorm-content')
       .list(contentRoot, { limit: 1000 });
