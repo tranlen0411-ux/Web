@@ -3,7 +3,10 @@
 -- Visibility: 'class' | 'school' | 'public'
 -- Hỗ trợ chia sẻ một tài liệu tới nhiều lớp (Cross-Class Sharing)
 -- Bảo mật Token-Only & Server-Side Storage Delivery
+-- Transactional & Idempotent Migration
 -- ============================================================================
+
+BEGIN;
 
 -- 1. BỔ SUNG CỘT VISIBILITY (TẠM THỜI NULLABLE ĐỂ BACKFILL) VÀ SHARE_TOKEN
 ALTER TABLE public.learning_materials
@@ -35,10 +38,12 @@ ALTER TABLE public.learning_materials
 ALTER TABLE public.learning_materials
   ALTER COLUMN visibility SET NOT NULL;
 
--- Constraint 1: Visibility chỉ nhận 'class', 'school', 'public'
+-- Constraint 1: Visibility chỉ nhận 'class', 'school', 'public' (Scoping conrelid chính xác)
 DO $$ BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'learning_materials_visibility_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'learning_materials_visibility_check'
+      AND conrelid = 'public.learning_materials'::regclass
   ) THEN
     ALTER TABLE public.learning_materials
       ADD CONSTRAINT learning_materials_visibility_check
@@ -49,7 +54,9 @@ END $$;
 -- Constraint 2: Ràng buộc Server-side Token Consistency: Chỉ 'public' mới có share_token, 'class'/'school' bắt buộc NULL
 DO $$ BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'check_share_token_consistency'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'check_share_token_consistency'
+      AND conrelid = 'public.learning_materials'::regclass
   ) THEN
     ALTER TABLE public.learning_materials
       ADD CONSTRAINT check_share_token_consistency
@@ -131,11 +138,11 @@ WITH CHECK (
   (
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'teacher'
     AND EXISTS (
-      SELECT 1 FROM public.learning_materials lm 
+      SELECT 1 FROM public.learning_materials lm
       WHERE lm.id = material_id AND lm.created_by = auth.uid()
     )
     AND EXISTS (
-      SELECT 1 FROM public.classes c 
+      SELECT 1 FROM public.classes c
       WHERE c.id = class_id AND c.teacher_id = auth.uid()
     )
   )
@@ -151,7 +158,7 @@ USING (
   (
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'teacher'
     AND EXISTS (
-      SELECT 1 FROM public.learning_materials lm 
+      SELECT 1 FROM public.learning_materials lm
       WHERE lm.id = material_id AND lm.created_by = auth.uid()
     )
   )
@@ -185,13 +192,13 @@ USING (
     visibility = 'class' AND (
       -- Học sinh thuộc lớp chính
       EXISTS (
-        SELECT 1 FROM public.class_members cm 
+        SELECT 1 FROM public.class_members cm
         WHERE cm.class_id = learning_materials.class_id AND cm.student_id = auth.uid()
       )
       OR
       -- Giáo viên phụ trách lớp chính
       EXISTS (
-        SELECT 1 FROM public.classes c 
+        SELECT 1 FROM public.classes c
         WHERE c.id = learning_materials.class_id AND c.teacher_id = auth.uid()
       )
       OR
@@ -346,7 +353,7 @@ REVOKE EXECUTE ON FUNCTION public.get_public_learning_material(TEXT) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.get_public_learning_material(TEXT) TO authenticated, service_role, postgres;
 
 -- 9. CẬP NHẬT STORAGE SELECT POLICY: CHỈ CHO PHÉP AUTHENTICATED THEO QUYỀN
--- TUYỆT ĐỐI KHÔNG CẤP QUYỀN SELECT CHO ANON TRÊN STORAGE OBJECTS (BUCKET 100% PRIVATE)
+-- BẢO VỆ CHẶT CHẼ: KIỂM TRA QUYỀN TRUY CẬP TÀI LIỆU CỦA USER ĐỐI VỚI TỆP TRONG STORAGE
 DROP POLICY IF EXISTS "learning_materials_storage_select" ON storage.objects;
 
 CREATE POLICY "learning_materials_storage_select"
@@ -355,11 +362,48 @@ TO authenticated
 USING (
   bucket_id = 'learning-materials'
   AND (
+    -- S1: Admin toàn quyền mở mọi tệp
     (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
-    OR (storage.foldername(name))[1] = auth.uid()::text
-    OR EXISTS (
+    OR
+    -- S2: Tác giả tải lên theo thư mục ID người dùng
+    (storage.foldername(name))[1] = auth.uid()::text
+    OR
+    -- S2/S3/S4/S6/S7: Tệp thuộc tài liệu mà người dùng được phép truy cập theo phạm vi
+    EXISTS (
       SELECT 1 FROM public.learning_materials lm
-      WHERE lm.file_path = name
+      WHERE lm.file_path = storage.objects.name
+      AND (
+        lm.created_by = auth.uid()
+        OR lm.visibility = 'school'
+        OR lm.visibility = 'public'
+        OR (
+          lm.visibility = 'class' AND (
+            EXISTS (
+              SELECT 1 FROM public.class_members cm
+              WHERE cm.class_id = lm.class_id AND cm.student_id = auth.uid()
+            )
+            OR
+            EXISTS (
+              SELECT 1 FROM public.classes c
+              WHERE c.id = lm.class_id AND c.teacher_id = auth.uid()
+            )
+            OR
+            EXISTS (
+              SELECT 1 FROM public.learning_material_shares lms
+              JOIN public.class_members cm ON cm.class_id = lms.class_id
+              WHERE lms.material_id = lm.id AND cm.student_id = auth.uid()
+            )
+            OR
+            EXISTS (
+              SELECT 1 FROM public.learning_material_shares lms
+              JOIN public.classes c ON c.id = lms.class_id
+              WHERE lms.material_id = lm.id AND c.teacher_id = auth.uid()
+            )
+          )
+        )
+      )
     )
   )
 );
+
+COMMIT;

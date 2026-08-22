@@ -26,7 +26,7 @@ if (!process.execArgv.includes('--liftoff-only')) {
 
 async function runVisibilityTests() {
   console.log('================================================================');
-  console.log('🧪 BẮT ĐẦU KIỂM THỬ PGLITE: MATERIAL VISIBILITY HOTFIX SUITE');
+  console.log('🧪 BẮT ĐẦU KIỂM THỬ PGLITE: MATERIAL VISIBILITY PRODUCTION SAFETY');
   console.log('================================================================\n');
 
   const { PGlite } = await import('@electric-sql/pglite');
@@ -76,7 +76,7 @@ async function runVisibilityTests() {
     $$;
 
     GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role, postgres;
-    GRANT SELECT ON storage.objects TO anon, authenticated, service_role, postgres;
+    GRANT ALL ON storage.objects TO anon, authenticated, service_role, postgres;
   `);
 
   // 2. Tạo cấu trúc cơ bản cũ
@@ -167,7 +167,7 @@ async function runVisibilityTests() {
       ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Bài cũ không class', 'Tiếng Việt', 'pdf', NULL, '${teacherAId}');
   `);
 
-  // 3. Chạy file Migration Phase 1 Hotfix
+  // 3. Chạy file Migration Phase 1 Hotfix LẦN 1
   const migrationPath = path.join(__dirname, '..', 'ADD_LEARNING_MATERIAL_VISIBILITY_PHASE1.sql');
   const migrationSql = await fs.readFile(migrationPath, 'utf-8');
   await db.exec(migrationSql);
@@ -179,12 +179,41 @@ async function runVisibilityTests() {
     ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
   `);
 
-  console.log('✅ Đã nạp Schema và Migration Hotfix thành công vào PGlite.\n');
+  console.log('✅ Đã nạp Schema và Migration Hotfix thành công (Run 1).\n');
 
   let passCount = 0;
 
+  // TEST MIGRATION RE-RUN (LẦN 2) & IDEMPOTENCY
+  console.log('--- TEST MIGRATION IDEMPOTENCY (RUN 2) & TRANSACTION ROLLBACK ---');
+  await db.exec(migrationSql);
+  console.log('✅ M_RERUN: Chạy lại migration lần 2 thành công 100% không lỗi (Idempotent) PASS');
+  passCount++;
+
+  // TEST TRANSACTION ROLLBACK TRÊN LỖI GIỮA CHỪNG
+  let rollbackCaught = false;
+  const preRollbackCount = (await db.query(`SELECT count(*)::int as count FROM public.learning_materials`)).rows[0].count;
+  try {
+    await db.exec(`
+      BEGIN;
+      INSERT INTO public.learning_materials (id, title, subject, file_type, class_id, created_by, visibility)
+      VALUES (gen_random_uuid(), 'Bài rollback test', 'Toán', 'pdf', '${class2AId}', '${teacherAId}', 'class');
+      -- Cố tình ném lỗi cú pháp / foreign key không tồn tại để ép rollback
+      INSERT INTO public.learning_materials (id, title, subject, file_type, class_id, created_by, visibility)
+      VALUES (gen_random_uuid(), 'Bài lỗi', 'Toán', 'pdf', '99999999-9999-9999-9999-999999999999', '${teacherAId}', 'class');
+      COMMIT;
+    `);
+  } catch {
+    rollbackCaught = true;
+    await db.exec(`ROLLBACK;`).catch(() => {});
+  }
+  const postRollbackCount = (await db.query(`SELECT count(*)::int as count FROM public.learning_materials`)).rows[0].count;
+  assert.equal(rollbackCaught, true, 'M_ROLLBACK: Bắt được lỗi transaction');
+  assert.equal(postRollbackCount, preRollbackCount, 'M_ROLLBACK: Dữ liệu rollback hoàn toàn');
+  console.log('✅ M_ROLLBACK: Transaction rollback an toàn bảo vệ cơ sở dữ liệu khi gặp lỗi PASS');
+  passCount++;
+
   // TEST T15 & T16: Backfill test
-  console.log('--- TEST NHÓM 1: BACKFILL DỮ LIỆU CŨ ---');
+  console.log('\n--- TEST NHÓM 1: BACKFILL DỮ LIỆU CŨ ---');
   const backfillClass = (await db.query(`SELECT visibility, share_token FROM public.learning_materials WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'`)).rows[0];
   const backfillSchool = (await db.query(`SELECT visibility, share_token FROM public.learning_materials WHERE id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'`)).rows[0];
   
@@ -198,17 +227,27 @@ async function runVisibilityTests() {
   console.log('✅ T15: Backfill NULL class -> school PASS');
   passCount++;
 
-  // Chuẩn bị dữ liệu bài giảng cho các test tiếp theo
+  // Chuẩn bị dữ liệu bài giảng & file storage cho các test tiếp theo
   const matClass2AId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
   const matSchoolId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
   const matPublicId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
   const publicToken = 'sample_public_secret_token_123456789';
 
+  const filePath2A = `${teacherAId}/math_2a_exercise.pdf`;
+  const filePathSchool = `${teacherAId}/school_regulations.pdf`;
+  const filePathPublic = `${teacherAId}/public_open_course.pdf`;
+
   await db.exec(`
-    INSERT INTO public.learning_materials (id, title, subject, file_type, class_id, created_by, visibility, share_token) VALUES
-      ('${matClass2AId}', 'Bài Toán Lớp 2A (Share 2B)', 'Toán', 'pdf', '${class2AId}', '${teacherAId}', 'class', NULL),
-      ('${matSchoolId}', 'Nội Quy Nhà Trường', 'Đạo đức', 'pdf', NULL, '${teacherAId}', 'school', NULL),
-      ('${matPublicId}', 'Bài Giảng Mẫu Công Khai', 'Khoa học', 'pdf', NULL, '${teacherAId}', 'public', '${publicToken}');
+    INSERT INTO public.learning_materials (id, title, subject, file_type, file_path, class_id, created_by, visibility, share_token) VALUES
+      ('${matClass2AId}', 'Bài Toán Lớp 2A (Share 2B)', 'Toán', 'pdf', '${filePath2A}', '${class2AId}', '${teacherAId}', 'class', NULL),
+      ('${matSchoolId}', 'Nội Quy Nhà Trường', 'Đạo đức', 'pdf', '${filePathSchool}', NULL, '${teacherAId}', 'school', NULL),
+      ('${matPublicId}', 'Bài Giảng Mẫu Công Khai', 'Khoa học', 'pdf', '${filePathPublic}', NULL, '${teacherAId}', 'public', '${publicToken}');
+
+    -- Nạp storage objects vào bucket 'learning-materials'
+    INSERT INTO storage.objects (id, bucket_id, name, owner) VALUES
+      (gen_random_uuid(), 'learning-materials', '${filePath2A}', '${teacherAId}'),
+      (gen_random_uuid(), 'learning-materials', '${filePathSchool}', '${teacherAId}'),
+      (gen_random_uuid(), 'learning-materials', '${filePathPublic}', '${teacherAId}');
 
     -- Chia sẻ bài 2A sang lớp 2B
     INSERT INTO public.learning_material_shares (material_id, class_id) VALUES
@@ -266,7 +305,65 @@ async function runVisibilityTests() {
   console.log('✅ T8: Khách vãng lai (Anon) bị RLS chặn hoàn toàn không query trực tiếp table PASS');
   passCount++;
 
-  console.log('\n--- TEST NHÓM 3: PUBLIC SECURITY & TOKEN CONTRACT ---');
+  console.log('\n--- TEST NHÓM 3: STORAGE POLICY SECURITY TEST (S1 - S8) ---');
+
+  // S1: Admin mở file bất kỳ -> PASS
+  await asUser(adminId);
+  const s1Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE bucket_id = 'learning-materials'`);
+  assert.equal(s1Res.rows[0].count >= 3, true, 'S1: Admin đọc toàn bộ file trong storage');
+  console.log(`✅ S1: Admin mở file bất kỳ trong Storage (${s1Res.rows[0].count} files) PASS`);
+  passCount++;
+
+  // S2: Owner Teacher mở file của mình -> PASS
+  await asUser(teacherAId);
+  const s2Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePath2A}'`);
+  assert.equal(s2Res.rows[0].count, 1, 'S2: Owner Teacher mở được file mình tạo');
+  console.log('✅ S2: Owner Teacher mở file do chính mình tạo PASS');
+  passCount++;
+
+  // S3: Student lớp chính (2A) mở file class -> PASS
+  await asUser(studentClass2AId);
+  const s3Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePath2A}'`);
+  assert.equal(s3Res.rows[0].count, 1, 'S3: Student lớp chính mở được file lớp');
+  console.log('✅ S3: Học sinh lớp chính (2A) mở được file của lớp PASS');
+  passCount++;
+
+  // S4: Student lớp share (2B) mở file class -> PASS
+  await asUser(studentClass2BId);
+  const s4Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePath2A}'`);
+  assert.equal(s4Res.rows[0].count, 1, 'S4: Student lớp share mở được file');
+  console.log('✅ S4: Học sinh lớp được chia sẻ (2B) mở được file liên lớp PASS');
+  passCount++;
+
+  // S5: Student ngoài lớp (3A) KHÔNG mở file lớp 2A -> PASS
+  await asUser(studentClass3AId);
+  const s5Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePath2A}'`);
+  assert.equal(s5Res.rows[0].count, 0, 'S5: Student ngoài lớp bị chặn không mở được file lớp khác');
+  console.log('✅ S5: Học sinh lớp khác (3A) bị RLS Storage CHẶN ĐỨNG không mở được file lớp 2A PASS');
+  passCount++;
+
+  // S6: Authenticated user (HS 3A) mở school material -> PASS
+  await asUser(studentClass3AId);
+  const s6Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePathSchool}'`);
+  assert.equal(s6Res.rows[0].count, 1, 'S6: User mở được file toàn trường');
+  console.log('✅ S6: Học sinh bất kỳ mở được file tài liệu toàn trường (school) PASS');
+  passCount++;
+
+  // S7: Authenticated user mở public material -> PASS
+  await asUser(studentClass3AId);
+  const s7Res = await db.query(`SELECT count(*)::int as count FROM storage.objects WHERE name = '${filePathPublic}'`);
+  assert.equal(s7Res.rows[0].count, 1, 'S7: User mở được file công khai');
+  console.log('✅ S7: Học sinh bất kỳ mở được file tài liệu công khai (public) PASS');
+  passCount++;
+
+  // S8: Anonymous direct Storage SELECT -> BLOCKED
+  await asUser(null);
+  const s8Res = await db.query(`SELECT count(*)::int as count FROM storage.objects`);
+  assert.equal(s8Res.rows[0].count, 0, 'S8: Anon bị chặn 100% direct Storage SELECT');
+  console.log('✅ S8: Khách vãng lai (Anon) bị RLS Storage CHẶN HOÀN TOÀN (BLOCKED) PASS');
+  passCount++;
+
+  console.log('\n--- TEST NHÓM 4: PUBLIC SECURITY & TOKEN CONTRACT ---');
 
   // T18: Valid token public delivery contract (Gọi hàm nội bộ nhận đúng metadata)
   await asUser(adminId); // Backend role
@@ -287,13 +384,6 @@ async function runVisibilityTests() {
   }
   assert.equal(t19Error, true, 'T19: Missing token bị từ chối');
   console.log('✅ T19: Missing token bị chặn đứng PASS');
-  passCount++;
-
-  // T20: File_path direct Storage bypass blocked (Static RLS Assertion: Anon không có SELECT trên storage.objects)
-  await asUser(null);
-  const anonStorageRes = await db.query(`SELECT count(*)::int as count FROM storage.objects`);
-  assert.equal(anonStorageRes.rows[0].count, 0, 'T20: Anon không có direct Storage SELECT');
-  console.log('✅ T20: Khách vãng lai bị chặn đứng không thể direct SELECT storage.objects PASS');
   passCount++;
 
   // T21: Wrong token blocked
@@ -338,7 +428,7 @@ async function runVisibilityTests() {
   console.log('✅ T23: Anon gọi trực tiếp RPC bị chặn quyền EXECUTE thành công PASS');
   passCount++;
 
-  console.log('\n--- TEST NHÓM 4: TRIGGER SERVER-SIDE CLEANUP & TOKEN CONSISTENCY ---');
+  console.log('\n--- TEST NHÓM 5: TRIGGER SERVER-SIDE CLEANUP & TOKEN CONSISTENCY ---');
 
   // Tạo lại 1 bài class có share để test trigger
   const matTriggerTestId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
@@ -418,7 +508,7 @@ async function runVisibilityTests() {
   console.log('✅ T27: Check Constraint check_share_token_consistency hoạt động hoàn hảo cấp Database PASS');
   passCount++;
 
-  console.log('\n--- TEST NHÓM 5: PHÂN QUYỀN GHI & RÀO CHẮN LIÊN LỚP (WRITE GUARDS) ---');
+  console.log('\n--- TEST NHÓM 6: PHÂN QUYỀN GHI & RÀO CHẮN LIÊN LỚP (WRITE GUARDS) ---');
 
   // T3: Teacher không sửa/xóa tài liệu của GV khác
   await asUser(teacherBId);
@@ -472,7 +562,7 @@ async function runVisibilityTests() {
   console.log('✅ T17: Khóa Unique chặn duplicate liên kết chia sẻ lớp PASS');
   passCount++;
 
-  console.log('\n--- TEST NHÓM 6: EDGE FUNCTION STATIC CONTRACT & CONFIG AUDIT (E1-E8) ---');
+  console.log('\n--- TEST NHÓM 7: EDGE FUNCTION STATIC CONTRACT & CONFIG AUDIT (E1-E8) ---');
 
   // E_CONFIG: Kiểm tra supabase/config.toml có verify_jwt = false cho get-public-learning-material
   const configPath = path.join(__dirname, '..', 'supabase', 'config.toml');
@@ -523,7 +613,7 @@ async function runVisibilityTests() {
   passCount++;
 
   console.log('\n================================================================');
-  console.log(`🎉 TẤT CẢ ${passCount} TEST CASES (PGLITE + EDGE CONTRACT) ĐÃ PASS 100%!`);
+  console.log(`🎉 TẤT CẢ ${passCount} TEST CASES (PGLITE + STORAGE S1-S8 + IDEMPOTENCY + EDGE) ĐÃ PASS 100%!`);
   console.log('================================================================\n');
 }
 
