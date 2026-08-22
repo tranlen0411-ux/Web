@@ -205,11 +205,60 @@ async function runScormPhase2HardenedTestSuite() {
     recordPass('DB8', 'ADD_SCORM_PHASE2_MVP.sql không tham chiếu bảng giả public.students');
     recordPass('DB9', 'ADD_SCORM_PHASE2_MVP.sql không tham chiếu cột target_class_id (dùng class_id chuẩn Phase 1)');
 
-    // Chạy migration lần 1
+    // Chạy migration lần 1: BUCKET1 (Bucket chưa tồn tại -> tạo mới private bucket)
     await db.exec(migrationSql);
-    // Chạy migration lần 2 để kiểm thử tính lũy thừa (Idempotency)
+    const b1 = await db.query("SELECT id, public, file_size_limit FROM storage.buckets WHERE id = 'scorm-content';");
+    assert.equal(b1.rows.length, 1);
+    assert.equal(b1.rows[0].public, false);
+    assert.equal(b1.rows[0].file_size_limit, 31457280);
+    recordPass('BUCKET1', 'Bucket chưa tồn tại -> migration tạo private bucket thành công');
+
+    // Chạy migration lần 2: BUCKET2 (Bucket đã tồn tại đúng cấu hình -> không mutate ngoài ý muốn)
     await db.exec(migrationSql);
+    const b2 = await db.query("SELECT id, public, file_size_limit FROM storage.buckets WHERE id = 'scorm-content';");
+    assert.equal(b2.rows.length, 1);
+    assert.equal(b2.rows[0].public, false);
+    assert.equal(b2.rows[0].file_size_limit, 31457280);
+    recordPass('BUCKET2', 'Bucket private đã tồn tại đúng cấu hình -> migration PASS và không mutate ngoài ý muốn');
     recordPass('IDEMPOTENCY', 'ADD_SCORM_PHASE2_MVP.sql chạy lần 1 & lần 2 liên tiếp thành công 100% không lỗi');
+
+    // BUCKET3: Bucket đã tồn tại public=true -> migration FAIL + transaction rollback
+    await db.exec("UPDATE storage.buckets SET public = true WHERE id = 'scorm-content';");
+    let b3Failed = false;
+    try {
+      await db.exec(migrationSql);
+    } catch (err) {
+      await db.exec('ROLLBACK;');
+      if (err.message && (err.message.includes('BẢO MẬT') || err.message.includes('PUBLIC'))) {
+        b3Failed = true;
+      }
+    }
+    assert.equal(b3Failed, true, 'Migration must fail when scorm-content bucket is public');
+    // Khôi phục lại public = false
+    await db.exec("UPDATE storage.buckets SET public = false WHERE id = 'scorm-content';");
+    recordPass('BUCKET3', 'Bucket đã tồn tại public=true -> migration FAIL + transaction rollback thành công');
+
+    // BUCKET4: Bucket đã tồn tại với file_size_limit khác (10MB thay vì 30MB) -> không silent overwrite, báo lỗi và rollback
+    await db.exec("UPDATE storage.buckets SET file_size_limit = 10485760 WHERE id = 'scorm-content';");
+    let b4Failed = false;
+    try {
+      await db.exec(migrationSql);
+    } catch (err) {
+      await db.exec('ROLLBACK;');
+      if (err.message && (err.message.includes('XUNG ĐỘT CẤU HÌNH') || err.message.includes('file_size_limit'))) {
+        b4Failed = true;
+      }
+    }
+    assert.equal(b4Failed, true, 'Migration must block when file_size_limit differs from expected');
+    // Khôi phục lại file_size_limit = 31457280
+    await db.exec("UPDATE storage.buckets SET file_size_limit = 31457280 WHERE id = 'scorm-content';");
+    const b4Bucket = await db.query("SELECT file_size_limit FROM storage.buckets WHERE id = 'scorm-content';");
+    assert.equal(b4Bucket.rows[0].file_size_limit, 31457280);
+    recordPass('BUCKET4', 'Bucket tồn tại với file_size_limit khác -> chặn silent overwrite, báo lỗi và rollback an toàn');
+
+
+
+
 
     // ---------------------------------------------------------
     // SEED DỮ LIỆU THỬ NGHIỆM

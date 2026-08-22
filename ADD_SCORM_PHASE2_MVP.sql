@@ -186,18 +186,45 @@ USING (
   )
 );
 
--- 5. KHỞI TẠO BUCKET STORAGE 'scorm-content' (100% PRIVATE)
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-  'scorm-content', 
-  'scorm-content', 
-  false, 
-  31457280, -- 30MB max single file
-  NULL
-)
-ON CONFLICT (id) DO UPDATE 
-SET public = false,
-    file_size_limit = 31457280;
+-- 5. KHỞI TẠO BUCKET STORAGE 'scorm-content' (100% PRIVATE, NO SILENT MUTATION)
+DO $$
+DECLARE
+  v_bucket RECORD;
+BEGIN
+  SELECT id, public, file_size_limit, allowed_mime_types
+  INTO v_bucket
+  FROM storage.buckets
+  WHERE id = 'scorm-content';
+
+  IF NOT FOUND THEN
+    -- A. Bucket chưa tồn tại: Tạo mới bucket private với cấu hình chuẩn
+    INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    VALUES (
+      'scorm-content',
+      'scorm-content',
+      false,
+      31457280, -- 30MB max single file
+      NULL
+    );
+  ELSE
+    -- B. Bucket đã tồn tại: Tuyệt đối KHÔNG silent mutate cấu hình
+    -- B1. Bắt buộc phải là Private (public = false)
+    IF v_bucket.public IS TRUE THEN
+      RAISE EXCEPTION 'BẢO MẬT: Bucket storage "scorm-content" hiện tại đang ở chế độ PUBLIC. Yêu cầu cấu hình PRIVATE để bảo vệ SCORM assets.';
+    END IF;
+
+    -- B2. file_size_limit phải đúng cấu hình mong đợi (31457280 bytes = 30MB)
+    IF v_bucket.file_size_limit IS DISTINCT FROM 31457280 THEN
+      RAISE EXCEPTION 'XUNG ĐỘT CẤU HÌNH: Bucket "scorm-content" đã tồn tại với file_size_limit = % (kỳ vọng 31457280). Vui lòng kiểm tra và đồng bộ cấu hình trước khi chạy migration.', v_bucket.file_size_limit;
+    END IF;
+
+    -- B3. allowed_mime_types phải là NULL
+    IF v_bucket.allowed_mime_types IS NOT NULL THEN
+      RAISE EXCEPTION 'XUNG ĐỘT CẤU HÌNH: Bucket "scorm-content" đã tồn tại với allowed_mime_types = % (kỳ vọng NULL). Vui lòng kiểm tra cấu hình trước khi chạy migration.', v_bucket.allowed_mime_types;
+    END IF;
+  END IF;
+END $$;
+
 
 -- 6. RLS POLICIES CHO STORAGE.OBJECTS (BUCKET 'scorm-content')
 -- Cấu trúc: scorm-content/<user-id>/<package-id>/...
