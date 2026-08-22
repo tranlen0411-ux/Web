@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  Download, 
-  ExternalLink, 
-  FileText, 
-  Image as ImageIcon, 
-  Video, 
-  FileCode, 
-  Calendar, 
-  User, 
-  BookOpen, 
+import {
+  X,
+  Download,
+  ExternalLink,
+  FileText,
+  Image as ImageIcon,
+  Video,
+  FileCode,
+  Calendar,
+  User,
+  BookOpen,
   HardDrive,
   Lock,
   Maximize2,
@@ -102,9 +102,9 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     if (type === 'image' && signedUrl) {
       return (
         <div className="flex flex-col items-center justify-center p-2 bg-slate-900/90 rounded-2xl overflow-hidden min-h-[350px]">
-          <img 
-            src={signedUrl} 
-            alt={material.title} 
+          <img
+            src={signedUrl}
+            alt={material.title}
             className="max-h-[60vh] max-w-full object-contain rounded-xl shadow-lg"
           />
         </div>
@@ -115,9 +115,9 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     if (type === 'video' && signedUrl) {
       return (
         <div className="flex flex-col items-center justify-center bg-black rounded-2xl overflow-hidden min-h-[350px]">
-          <video 
-            src={signedUrl} 
-            controls 
+          <video
+            src={signedUrl}
+            controls
             controlsList={!isDownloadAllowed ? "nodownload" : undefined}
             autoPlay={false}
             className="w-full max-h-[60vh] rounded-xl"
@@ -153,7 +153,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
         <h4 className="text-lg font-black text-amber-950 mb-1">{material.title}</h4>
         <p className="text-xs font-bold text-slate-500 mb-6 max-w-md">
-          {type === 'link' 
+          {type === 'link'
             ? 'Đường liên kết bài giảng trực tuyến bên ngoài.'
             : `Tài liệu dạng tệp ${type?.toUpperCase()}. Bấm nút bên dưới để xem tệp.`}
         </p>
@@ -166,7 +166,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             rel="noopener noreferrer"
             className="px-6 py-3 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all"
           >
-            <ExternalLink className="w-4 h-4" /> 
+            <ExternalLink className="w-4 h-4" />
             {type === 'link' ? 'Mở Đường Liên Kết Bài Giảng ↗' : 'Mở Xem Tài Liệu Trong Tab Mới ↗'}
           </a>
         )}
@@ -177,7 +177,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
       <div className="relative w-full max-w-4xl bg-white rounded-3xl border-4 border-amber-300 p-5 sm:p-7 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
-        
+
         {/* HEADER MODAL */}
         <div className="flex items-center justify-between border-b-2 border-amber-100 pb-4 mb-4">
           <div className="pr-8">

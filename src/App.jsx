@@ -74,47 +74,47 @@ function AppRoutes() {
   return (
     <div className="min-h-screen flex flex-col justify-between bg-amber-50/60 font-sans">
       <Navbar />
-      
+
       <main className="flex-grow">
         <Routes>
           <Route path="/" element={<HomeDispatcher />} />
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
-          
-          <Route 
-            path="/materials" 
+
+          <Route
+            path="/materials"
             element={
               <ProtectedRoute allowedRoles={['student', 'teacher', 'admin']}>
                 <MaterialsView />
               </ProtectedRoute>
-            } 
+            }
           />
 
-          <Route 
-            path="/student" 
+          <Route
+            path="/student"
             element={
               <ProtectedRoute allowedRoles={['student']}>
                 <StudentDashboard />
               </ProtectedRoute>
-            } 
+            }
           />
 
-          <Route 
-            path="/teacher" 
+          <Route
+            path="/teacher"
             element={
               <ProtectedRoute allowedRoles={['teacher', 'admin']}>
                 <TeacherDashboard />
               </ProtectedRoute>
-            } 
+            }
           />
 
-          <Route 
-            path="/admin" 
+          <Route
+            path="/admin"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminDashboard />
               </ProtectedRoute>
-            } 
+            }
           />
 
           <Route path="/play/:id" element={<GamePlayView />} />
