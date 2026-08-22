@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { sanitizeScormRelativePath, getMimeTypeForAsset } from '../src/utils/scormPathSecurity.js';
+import { sanitizeScormRelativePath, getMimeTypeForAsset } from './src/utils/scormPathSecurity.js';
 
 /**
  * ====================================================================
