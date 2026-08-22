@@ -192,23 +192,17 @@ async function setupSchema(db) {
     $$ LANGUAGE sql STABLE;
   `);
 
-  // RPC get_academic_period_leaderboard và get_game_period_leaderboard từ ADD_SCORE_RANKING_BASELINE.sql
+  // RPC get_game_period_leaderboard từ ADD_SCORE_RANKING_BASELINE.sql
   const baselineSqlPath = path.join(__dirname, '..', 'ADD_SCORE_RANKING_BASELINE.sql');
   const baselineSql = await fs.readFile(baselineSqlPath, 'utf8');
-
-  const acadStartIdx = baselineSql.indexOf('CREATE OR REPLACE FUNCTION public.get_academic_period_leaderboard(');
-  const acadEndIdx = baselineSql.indexOf('REVOKE ALL ON FUNCTION public.get_academic_period_leaderboard');
-  let acadSql = baselineSql.substring(acadStartIdx, acadEndIdx);
-  acadSql = acadSql.replace(/LOWER\(e\.subject\) = LOWER\(p_subject\)/g, 'LOWER(TRIM(e.subject)) = LOWER(TRIM(p_subject))');
 
   const gameStartIdx = baselineSql.indexOf('CREATE OR REPLACE FUNCTION public.get_game_period_leaderboard(');
   const gameEndIdx = baselineSql.indexOf('REVOKE ALL ON FUNCTION public.get_game_period_leaderboard');
   const gameSql = baselineSql.substring(gameStartIdx, gameEndIdx);
-
-  await db.exec(acadSql);
   await db.exec(gameSql);
 
-  // RPC close_ranking_period MỚI
+  // Nạp NGUYÊN VẸN file migration ADD_DYNAMIC_SUBJECTS_TO_CLOSE_RANKING_PERIOD.sql
+  // Chứa close_ranking_period VÀ get_academic_period_leaderboard chuẩn hóa không monkey-patch
   const newMigrationPath = path.join(__dirname, '..', 'ADD_DYNAMIC_SUBJECTS_TO_CLOSE_RANKING_PERIOD.sql');
   const newMigrationSql = await fs.readFile(newMigrationPath, 'utf8');
   await db.exec(newMigrationSql);
@@ -221,7 +215,7 @@ async function run() {
   const db = new PGlite();
 
   await setupSchema(db);
-  console.log('✅ Đã nạp thành công Schema, get_academic_period_leaderboard, get_game_period_leaderboard và close_ranking_period mới.\n');
+  console.log('✅ Đã nạp thành công Schema, get_game_period_leaderboard và migration ADD_DYNAMIC_SUBJECTS_TO_CLOSE_RANKING_PERIOD.sql nguyên vẹn (Không monkey-patch).\n');
 
   // --- SEED DỮ LIỆU CƠ BẢN CHO KỲ CHÍNH (PERIOD 1) ---
   const teacherId = '11111111-1111-1111-1111-111111111111';
@@ -383,11 +377,31 @@ async function run() {
 
   const tests = [];
 
+  const matchLeaderboard = (activeList, closedList) => {
+    if (!activeList || !closedList) return false;
+    if (activeList.length !== closedList.length) return false;
+    return activeList.every((act, idx) => {
+      const cls = closedList[idx];
+      return (
+        act.student_id === cls.student_id &&
+        Number(act.academic_score_pct) === Number(cls.academic_score_pct) &&
+        Number(act.rank) === Number(cls.rank) &&
+        Number(act.completed_count) === Number(cls.completed_count) &&
+        Number(act.total_valid_count) === Number(cls.total_valid_count) &&
+        Number(act.completion_rate_pct) === Number(cls.completion_rate_pct) &&
+        Number(act.total_earned_score) === Number(cls.total_earned_score)
+      );
+    });
+  };
+
   // =========================================================================
-  // BƯỚC 1: LẤY DỮ LIỆU ACTIVE TRƯỚC CLOSE
+  // BƯỚC 1: LẤY DỮ LIỆU ACTIVE TRƯỚC CLOSE (BAO GỒM CÁC BIẾN THỂ CASE/WHITESPACE)
   // =========================================================================
   const activeAll = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'ALL') AS res;`)).rows[0].res;
   const activeMath = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Toán') AS res;`)).rows[0].res;
+  const activeMathSpace = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', ' toán ') AS res;`)).rows[0].res;
+  const activeMathUpper = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'TOÁN') AS res;`)).rows[0].res;
+
   const activeTv = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tiếng Việt') AS res;`)).rows[0].res;
   const activeEng = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tiếng Anh') AS res;`)).rows[0].res;
   const activeInfo = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tin học') AS res;`)).rows[0].res;
@@ -399,10 +413,13 @@ async function run() {
   const closeRes = (await db.query(`SELECT public.close_ranking_period('${periodId}') AS res;`)).rows[0].res;
 
   // =========================================================================
-  // BƯỚC 3: LẤY DỮ LIỆU CLOSED SAU CLOSE
+  // BƯỚC 3: LẤY DỮ LIỆU CLOSED SAU CLOSE (BAO GỒM CÁC BIẾN THỂ CASE/WHITESPACE)
   // =========================================================================
   const closedAll = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'ALL') AS res;`)).rows[0].res;
   const closedMath = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Toán') AS res;`)).rows[0].res;
+  const closedMathSpace = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', ' toán ') AS res;`)).rows[0].res;
+  const closedMathUpper = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'TOÁN') AS res;`)).rows[0].res;
+
   const closedTv = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tiếng Việt') AS res;`)).rows[0].res;
   const closedEng = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tiếng Anh') AS res;`)).rows[0].res;
   const closedInfo = (await db.query(`SELECT public.get_academic_period_leaderboard('${periodId}', 'Tin học') AS res;`)).rows[0].res;
@@ -445,23 +462,6 @@ async function run() {
   });
 
   // E. ACTIVE -> CLOSE -> CLOSED equality
-  const matchLeaderboard = (activeList, closedList) => {
-    if (!activeList || !closedList) return false;
-    if (activeList.length !== closedList.length) return false;
-    return activeList.every((act, idx) => {
-      const cls = closedList[idx];
-      return (
-        act.student_id === cls.student_id &&
-        Number(act.academic_score_pct) === Number(cls.academic_score_pct) &&
-        Number(act.rank) === Number(cls.rank) &&
-        Number(act.completed_count) === Number(cls.completed_count) &&
-        Number(act.total_valid_count) === Number(cls.total_valid_count) &&
-        Number(act.completion_rate_pct) === Number(cls.completion_rate_pct) &&
-        Number(act.total_earned_score) === Number(cls.total_earned_score)
-      );
-    });
-  };
-
   tests.push({
     code: 'E1',
     name: 'ACTIVE vs CLOSED equality: Môn Toán khớp 100% từng học sinh',
@@ -618,7 +618,34 @@ async function run() {
           !snapSubjects.includes(null)
   });
 
-  // U. Subject normalization (Case-insensitive deduplication)
+  // U1. ACTIVE Subject Normalization (Case/Whitespace variants match same result)
+  tests.push({
+    code: 'U1',
+    name: 'ACTIVE Subject Normalization: p_subject = "Toán", " toán ", "TOÁN" trả về kết quả 100% như nhau',
+    pass: matchLeaderboard(activeMath.leaderboard, activeMathSpace.leaderboard) &&
+          matchLeaderboard(activeMath.leaderboard, activeMathUpper.leaderboard) &&
+          activeMath.total_valid_exercises === 4
+  });
+
+  // U2. CLOSED Subject Normalization (Case/Whitespace variants match same snapshot)
+  tests.push({
+    code: 'U2',
+    name: 'CLOSED Subject Normalization: p_subject = "Toán", " toán ", "TOÁN" sau khi đóng kỳ đọc cùng 1 snapshot kết quả',
+    pass: matchLeaderboard(closedMath, closedMathSpace) &&
+          matchLeaderboard(closedMath, closedMathUpper) &&
+          closedMath.length === 4
+  });
+
+  // U3. ACTIVE == CLOSED cho dữ liệu subject hỗn hợp
+  tests.push({
+    code: 'U3',
+    name: 'ACTIVE == CLOSED Equality: Bảng xếp hạng ACTIVE và CLOSED snapshot khớp nhau 100% cho dữ liệu môn có "Toán", " toán ", "TOÁN"',
+    pass: matchLeaderboard(activeMath.leaderboard, closedMath) &&
+          matchLeaderboard(activeMathSpace.leaderboard, closedMathSpace) &&
+          matchLeaderboard(activeMathUpper.leaderboard, closedMathUpper)
+  });
+
+  // U4. Snapshot Deduplication trong Database
   const mathSnapCount = (await db.query(`
     SELECT COUNT(*)::int AS cnt FROM public.ranking_period_results WHERE period_id = '${periodId}' AND LOWER(TRIM(subject)) = 'toán';
   `)).rows[0].cnt;
@@ -628,15 +655,12 @@ async function run() {
   `)).rows[0].cnt;
 
   tests.push({
-    code: 'U1',
-    name: 'Subject Normalization: Toán (gồm "Toán", " toán ", "TOÁN") chỉ tạo duy nhất 1 subject trong snapshot (4 học sinh)',
-    pass: mathSnapCount === 4 && snapSubjects.filter(s => s.toLowerCase() === 'toán').length === 1
-  });
-
-  tests.push({
-    code: 'U2',
-    name: 'Subject Normalization: Tin học (gồm "Tin học", "TIN HỌC") chỉ tạo duy nhất 1 subject trong snapshot (4 học sinh)',
-    pass: infoSnapCount === 4 && snapSubjects.filter(s => s.toLowerCase() === 'tin học').length === 1
+    code: 'U4',
+    name: 'Snapshot Deduplication: DB chỉ lưu duy nhất 1 subject logic cho Toán (4 học sinh) và 1 cho Tin học (4 học sinh)',
+    pass: mathSnapCount === 4 &&
+          infoSnapCount === 4 &&
+          snapSubjects.filter(s => s.toLowerCase() === 'toán').length === 1 &&
+          snapSubjects.filter(s => s.toLowerCase() === 'tin học').length === 1
   });
 
   // V. Game ACTIVE -> CLOSED equality với baseline
