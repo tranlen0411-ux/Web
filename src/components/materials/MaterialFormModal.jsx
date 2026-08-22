@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  UploadCloud, 
-  Link as LinkIcon, 
-  FileText, 
-  CheckCircle2, 
-  AlertCircle, 
-  BookOpen, 
-  GraduationCap, 
+import {
+  X,
+  UploadCloud,
+  Link as LinkIcon,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
+  BookOpen,
+  GraduationCap,
   Lock,
   HardDrive,
   Loader2
@@ -273,7 +273,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-sm animate-fadeIn">
       <div className="relative w-full max-w-2xl bg-white rounded-3xl border-4 border-amber-300 p-6 sm:p-8 shadow-2xl max-h-[92vh] overflow-y-auto custom-scrollbar">
-        
+
         <button
           onClick={onClose}
           disabled={loading}
@@ -298,7 +298,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          
+
           {/* TÊN BÀI GIẢNG / TÀI LIỆU */}
           <div>
             <label className="block text-xs font-black text-slate-700 mb-1">
@@ -363,7 +363,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
           {/* LOẠI TÀI LIỆU & NGUỒN TẢI UP */}
           <div className="p-4 bg-amber-100/50 rounded-2xl border-2 border-amber-200 space-y-3">
             <label className="block text-xs font-black text-amber-950 uppercase">Nguồn tài liệu bài giảng:</label>
-            
+
             <div className="flex gap-4">
               <label className="flex items-center gap-2 text-xs font-black text-slate-700 cursor-pointer">
                 <input

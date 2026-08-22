@@ -1,23 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, 
-  Search, 
-  Filter, 
-  Plus, 
-  FileText, 
-  FileCode, 
-  Image as ImageIcon, 
-  Video, 
-  ExternalLink, 
-  Download, 
-  Eye, 
-  Edit2, 
-  Trash2, 
-  Lock, 
-  Sparkles, 
-  GraduationCap, 
-  Calendar, 
-  User, 
+import {
+  BookOpen,
+  Search,
+  Filter,
+  Plus,
+  FileText,
+  FileCode,
+  Image as ImageIcon,
+  Video,
+  ExternalLink,
+  Download,
+  Eye,
+  Edit2,
+  Trash2,
+  Lock,
+  Sparkles,
+  GraduationCap,
+  Calendar,
+  User,
   HardDrive,
   RefreshCw,
   Loader2,
@@ -240,7 +240,7 @@ export const MaterialsView = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
+
       {/* TOAST NOTIFICATION */}
       {toastMsg && (
         <div className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
@@ -300,7 +300,7 @@ export const MaterialsView = () => {
 
       {/* KHU VỰC TÌM KIẾM & BỘ LỌC NỘI BỘ TRANG */}
       <div className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm mb-8 space-y-4">
-        
+
         {/* Ô TÌM KIẾM THEO TÊN BÀI GIẢNG */}
         <div className="relative">
           <Search className="w-5 h-5 text-amber-600 absolute left-4 top-1/2 -translate-y-1/2" />
@@ -323,7 +323,7 @@ export const MaterialsView = () => {
 
         {/* CÁC BỘ LỌC NỘI BỘ TRANG */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          
+
           {/* 1. LỌC THEO LỚP HỌC NỘI BỘ (TÁC ĐỘNG ĐỒNG THỜI CÙNG HEADER FILTER) */}
           <div>
             <label className="block text-[11px] font-black text-slate-500 uppercase mb-1">
@@ -331,9 +331,9 @@ export const MaterialsView = () => {
             </label>
             <select
               value={selectedLocalClassId}
-              onChange={(e) => { 
-                setSelectedLocalClassId(e.target.value); 
-                triggerSound('click'); 
+              onChange={(e) => {
+                setSelectedLocalClassId(e.target.value);
+                triggerSound('click');
               }}
               className="w-full p-2.5 bg-amber-50/70 border-2 border-amber-200 rounded-xl font-bold text-xs text-slate-800"
             >
@@ -393,8 +393,8 @@ export const MaterialsView = () => {
             const isDownloadAllowed = item.allow_download !== false;
 
             return (
-              <div 
-                key={item.id} 
+              <div
+                key={item.id}
                 className="bg-white p-5 rounded-3xl border-4 border-amber-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between group relative overflow-hidden"
               >
                 <div>
@@ -437,7 +437,7 @@ export const MaterialsView = () => {
 
                   {/* NÚT THAO TÁC (XEM, TẢI VỀ, SỬA, XÓA) */}
                   <div className="flex items-center justify-between gap-2 pt-1">
-                    
+
                     <button
                       onClick={() => {
                         setSelectedMaterialForView(item);
@@ -464,7 +464,7 @@ export const MaterialsView = () => {
                         )}
                       </button>
                     ) : (
-                      <span 
+                      <span
                         className="p-2 bg-slate-100 text-slate-400 rounded-xl cursor-not-allowed"
                         title="Tài liệu này chỉ cho phép xem trực tiếp (Không cho phép tải xuống)"
                       >

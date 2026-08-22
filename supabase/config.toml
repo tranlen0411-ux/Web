@@ -21,3 +21,6 @@ enabled = true
 [edge_runtime]
 enabled = true
 port = 54323
+
+[functions.get-public-learning-material]
+verify_jwt = false
