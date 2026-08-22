@@ -21,7 +21,8 @@ import {
   HardDrive,
   RefreshCw,
   Loader2,
-  HardDriveUpload
+  HardDriveUpload,
+  Layers
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -186,6 +187,8 @@ export const MaterialsView = () => {
         return <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[11px] rounded-xl flex items-center gap-1"><ImageIcon className="w-3.5 h-3.5 text-emerald-600" /> Hình Ảnh</span>;
       case 'video':
         return <span className="px-2.5 py-1 bg-purple-100 text-purple-800 border border-purple-300 font-black text-[11px] rounded-xl flex items-center gap-1"><Video className="w-3.5 h-3.5 text-purple-600" /> Video</span>;
+      case 'scorm':
+        return <span className="px-2.5 py-1 bg-indigo-100 text-indigo-900 border border-indigo-300 font-black text-[11px] rounded-xl flex items-center gap-1"><Layers className="w-3.5 h-3.5 text-indigo-600" /> SCORM</span>;
       case 'link':
         return <span className="px-2.5 py-1 bg-cyan-100 text-cyan-800 border border-cyan-300 font-black text-[11px] rounded-xl flex items-center gap-1"><ExternalLink className="w-3.5 h-3.5 text-cyan-600" /> Link Bài Giảng</span>;
       default:
@@ -376,6 +379,7 @@ export const MaterialsView = () => {
               <option value="powerpoint">📊 File PowerPoint</option>
               <option value="image">🖼️ Hình Ảnh</option>
               <option value="video">🎥 Video Bài Giảng</option>
+              <option value="scorm">📦 Gói SCORM (.zip)</option>
               <option value="link">🔗 Đường Liên Kết (URL)</option>
             </select>
           </div>

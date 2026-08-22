@@ -10,11 +10,16 @@ import {
   GraduationCap,
   Lock,
   HardDrive,
-  Loader2
+  Loader2,
+  Share2,
+  Layers
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { formatClassLabel } from '../../utils/helpers';
+import { validateScormZip } from '../../utils/scormZipValidator';
+import { parseScormManifest } from '../../utils/scormManifest';
+import { cleanupScormPackageStorage } from '../../services/scormLaunchService';
 
 export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList = [], onSaved }) => {
   const { profile } = useAuth();
@@ -27,6 +32,14 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
   const [sourceType, setSourceType] = useState('file'); // 'file' | 'link'
   const [externalUrl, setExternalUrl] = useState('');
   const [allowDownload, setAllowDownload] = useState(true);
+
+  // Material Visibility Phase 1
+  const [visibility, setVisibility] = useState('class'); // 'class' | 'school' | 'public'
+  const [sharedClassIds, setSharedClassIds] = useState([]);
+
+  // SCORM Phase 2A
+  const [scormState, setScormState] = useState(null); // { zip, manifestInfo, fileEntries, totalSize }
+  const [progressText, setProgressText] = useState('');
 
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -46,7 +59,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     'Hoạt động trải nghiệm'
   ];
 
-  // Danh sách các MIME type và Extension hợp lệ (Đã loại bỏ SVG để an toàn)
+  // Danh sách các MIME type và Extension hợp lệ
   const ALLOWED_MIME_TYPES = [
     'application/pdf',
     'application/msword',
@@ -54,10 +67,11 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     'application/vnd.ms-powerpoint',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'image/png', 'image/jpeg', 'image/gif', 'image/webp',
-    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
+    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
+    'application/zip', 'application/x-zip-compressed', 'application/x-zip'
   ];
 
-  const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov'];
+  const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov', 'zip'];
 
   useEffect(() => {
     if (isOpen) {
@@ -70,31 +84,93 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         setSourceType(materialToEdit.external_url ? 'link' : 'file');
         setExternalUrl(materialToEdit.external_url || '');
         setAllowDownload(materialToEdit.allow_download !== false);
+        setVisibility(materialToEdit.visibility || 'class');
         setFile(null);
+        setScormState(null);
+
+        // Load existing shared classes if editing (Phase 1 contract: class_id)
+        if (materialToEdit.id && materialToEdit.visibility === 'class') {
+          supabase
+            .from('learning_material_shares')
+            .select('class_id')
+            .eq('material_id', materialToEdit.id)
+            .then(({ data }) => {
+              if (data) setSharedClassIds(data.map((r) => r.class_id));
+            });
+        } else {
+          setSharedClassIds([]);
+        }
       } else {
         setTitle('');
         setDescription('');
         setSubject('Toán');
-        setClassId('');
+        setClassId(classesList.length > 0 ? classesList[0].id : '');
         setFileType('pdf');
         setSourceType('file');
         setExternalUrl('');
         setAllowDownload(true);
+        setVisibility('class');
+        setSharedClassIds([]);
         setFile(null);
+        setScormState(null);
       }
       setErrorMsg('');
+      setProgressText('');
     }
-  }, [isOpen, materialToEdit]);
+  }, [isOpen, materialToEdit, classesList]);
 
   if (!isOpen) return null;
 
   // Kiểm tra định dạng Extension và MIME Type của file
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const selectedFile = e.target.files[0];
     setErrorMsg('');
+    setScormState(null);
     if (!selectedFile) return;
 
-    // 1. Kiểm tra dung lượng (Tối đa 50MB)
+    // 1. Kiểm tra Extension
+    const ext = selectedFile.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      setErrorMsg(`Định dạng tệp .${ext} không hợp lệ. Hệ thống chấp nhận PDF, Word, PowerPoint, Hình ảnh, Video và SCORM (.zip).`);
+      e.target.value = '';
+      return;
+    }
+
+    // 2. Nếu là gói SCORM (.zip) -> Validate và Parse Manifest
+    if (ext === 'zip') {
+      try {
+        setLoading(true);
+        setProgressText('Đang kiểm tra tính hợp lệ của gói SCORM...');
+
+        const zipValidation = await validateScormZip(selectedFile);
+        const manifestInfo = parseScormManifest(zipValidation.manifestXmlText);
+
+        setFileType('scorm');
+        setScormState({
+          ...zipValidation,
+          manifestInfo,
+        });
+
+        // Tự động điền tên nếu chưa nhập
+        if (!title.trim() && manifestInfo.title) {
+          setTitle(manifestInfo.title);
+        }
+
+        setFile(selectedFile);
+      } catch (err) {
+        console.error('SCORM validation error:', err);
+        setErrorMsg('Lỗi gói SCORM: ' + (err.message || 'Không hợp lệ'));
+        e.target.value = '';
+        setFile(null);
+        setScormState(null);
+      } finally {
+        setLoading(false);
+        setProgressText('');
+      }
+      return;
+    }
+
+    // 3. Với các file thông thường khác
     const MAX_SIZE = 50 * 1024 * 1024;
     if (selectedFile.size > MAX_SIZE) {
       setErrorMsg('Dung lượng tệp tin vượt quá 50MB. Vui lòng chọn tệp nhỏ hơn.');
@@ -102,22 +178,6 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       return;
     }
 
-    // 2. Kiểm tra Extension (Bảo mật: Từ chối SVG)
-    const ext = selectedFile.name.split('.').pop().toLowerCase();
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      setErrorMsg(`Định dạng tệp .${ext} không hợp lệ. Hệ thống chấp nhận PDF, Word, PowerPoint, Hình ảnh (PNG, JPG, GIF, WEBP) và Video (MP4, WEBM).`);
-      e.target.value = '';
-      return;
-    }
-
-    // 3. Kiểm tra MIME Type thực tế từ header của trình duyệt
-    if (selectedFile.type && !ALLOWED_MIME_TYPES.includes(selectedFile.type)) {
-      setErrorMsg(`Loại tệp tin (${selectedFile.type}) không phù hợp danh mục định dạng được phép.`);
-      e.target.value = '';
-      return;
-    }
-
-    // Tự động gán fileType tương ứng
     if (['pdf'].includes(ext)) {
       setFileType('pdf');
     } else if (['doc', 'docx'].includes(ext)) {
@@ -133,7 +193,6 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     setFile(selectedFile);
   };
 
-  // Validation đường liên kết HTTPS bên ngoài
   const validateHttpsUrl = (urlStr) => {
     if (!urlStr) return false;
     try {
@@ -144,12 +203,23 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     }
   };
 
+  const toggleSharedClass = (cId) => {
+    setSharedClassIds((prev) =>
+      prev.includes(cId) ? prev.filter((id) => id !== cId) : [...prev, cId]
+    );
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
 
     if (!title.trim()) {
       setErrorMsg('Vui lòng nhập tên bài giảng / tài liệu.');
+      return;
+    }
+
+    if (visibility === 'class' && !classId) {
+      setErrorMsg('Vui lòng chọn lớp chính cho tài liệu khi chọn phạm vi Theo lớp.');
       return;
     }
 
@@ -172,6 +242,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
     setLoading(true);
 
     let newlyUploadedPath = null;
+    let newlyCreatedPackageId = null;
     const oldFilePath = materialToEdit?.file_path;
 
     try {
@@ -179,44 +250,38 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       let finalFileName = materialToEdit?.file_name || null;
       let finalFileSize = materialToEdit?.file_size || 0;
 
-      // 1. NẾU CÓ CHỌN FILE MỚI -> UPLOAD VÀO THƯ MỤC THUỘC SỞ HỮU {created_by}/{file}
-      if (sourceType === 'file' && file) {
-        const cleanName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const userFolder = profile.id;
-        const storagePath = `${userFolder}/${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${cleanName}`;
+      const isScormUpload = sourceType === 'file' && file && fileType === 'scorm' && scormState;
+      let packageId = null;
+      let contentRoot = null;
+      let zipStoragePath = null;
 
-        const { data: uploadData, error: uploadErr } = await supabase.storage
-          .from('learning-materials')
-          .upload(storagePath, file, {
-            cacheControl: '3600',
-            upsert: false
-          });
-
-        if (uploadErr) {
-          console.error('Storage upload error:', uploadErr);
-          throw new Error('Lỗi khi tải file lên Storage: ' + uploadErr.message);
-        }
-
-        newlyUploadedPath = storagePath;
-        finalFilePath = storagePath;
-        finalFileName = file.name;
-        finalFileSize = file.size;
+      if (isScormUpload) {
+        packageId = crypto.randomUUID();
+        newlyCreatedPackageId = packageId;
+        contentRoot = `${profile.id}/${packageId}`;
+        zipStoragePath = `scorm-zips/${profile.id}/${packageId}.zip`;
       }
 
-      // 2. TẠO HOẶC CẬP NHẬT RECORD TRONG DATABASE
+      // ====================================================================
+      // BƯỚC 1: LƯU BẢN GHI LEARNING_MATERIALS VÀO DATABASE ĐỂ TẠO ANCHOR
+      // ====================================================================
+      setProgressText('Đang khởi tạo bản ghi bài giảng trong hệ thống...');
       const payload = {
         title: title.trim(),
         description: description.trim(),
         subject: subject,
-        class_id: classId ? classId : null,
-        file_name: sourceType === 'file' ? finalFileName : null,
-        file_path: sourceType === 'file' ? finalFilePath : null,
+        class_id: visibility === 'class' ? classId : null,
+        file_name: sourceType === 'file' ? (file ? file.name : finalFileName) : null,
+        file_path: sourceType === 'file' ? (isScormUpload ? zipStoragePath : finalFilePath) : null,
         file_type: fileType,
-        file_size: sourceType === 'file' ? finalFileSize : 0,
+        file_size: sourceType === 'file' ? (file ? file.size : finalFileSize) : 0,
         external_url: sourceType === 'link' ? externalUrl.trim() : null,
         allow_download: allowDownload,
-        updated_at: new Date().toISOString()
+        visibility: visibility,
+        updated_at: new Date().toISOString(),
       };
+
+      let savedMaterialId = materialToEdit?.id;
 
       if (materialToEdit) {
         const { error: updateErr } = await supabase
@@ -224,56 +289,171 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
           .update(payload)
           .eq('id', materialToEdit.id);
 
-        if (updateErr) {
-          throw updateErr;
-        }
+        if (updateErr) throw updateErr;
       } else {
         payload.created_by = profile.id;
-        const { error: insertErr } = await supabase
+        const { data: insertData, error: insertErr } = await supabase
           .from('learning_materials')
-          .insert([payload]);
+          .insert([payload])
+          .select('id')
+          .single();
 
-        if (insertErr) {
-          throw insertErr;
+        if (insertErr) throw insertErr;
+        savedMaterialId = insertData.id;
+      }
+
+      // ====================================================================
+      // BƯỚC 2: NẾU LÀ SCORM -> KHỞI TẠO SCORM_PACKAGES VỚI STATUS='PROCESSING'
+      // ====================================================================
+      if (isScormUpload) {
+        const scormPkgInitPayload = {
+          id: packageId,
+          material_id: savedMaterialId,
+          package_version: '1.0',
+          scorm_version: scormState.manifestInfo?.scormVersion || '1.2',
+          manifest_path: scormState.manifestInfo?.manifestPath || 'imsmanifest.xml',
+          launch_path: scormState.manifestInfo?.launchPath || 'index.html',
+          content_root: contentRoot,
+          status: 'processing',
+          original_zip_path: zipStoragePath,
+          created_by: profile.id,
+        };
+
+        const { error: scormInitErr } = await supabase
+          .from('scorm_packages')
+          .upsert(scormPkgInitPayload, { onConflict: 'material_id' });
+
+        if (scormInitErr) throw scormInitErr;
+
+        // ====================================================================
+        // BƯỚC 3: TẢI TỆP ZIP GỐC LÊN BUCKET LEARNING-MATERIALS
+        // ====================================================================
+        setProgressText('Đang lưu tệp nén gốc SCORM...');
+        const { error: zipUploadErr } = await supabase.storage
+          .from('learning-materials')
+          .upload(zipStoragePath, file, { cacheControl: '3600', upsert: false });
+
+        if (zipUploadErr) {
+          throw new Error('Không thể tải tệp ZIP SCORM lên Storage: ' + zipUploadErr.message);
+        }
+        newlyUploadedPath = zipStoragePath;
+
+        // ====================================================================
+        // BƯỚC 4: GIẢI NÉN & TẢI ASSETS LÊN BUCKET SCORM-CONTENT (<user-id>/<package-id>/...)
+        // ====================================================================
+        setProgressText(`Đang giải nén & tải lên ${scormState.fileEntries.length} tệp nội dung...`);
+        for (let i = 0; i < scormState.fileEntries.length; i++) {
+          const entryName = scormState.fileEntries[i];
+          const fileData = await scormState.zip.file(entryName).async('blob');
+          const assetStoragePath = `${contentRoot}/${entryName}`;
+
+          const { error: assetErr } = await supabase.storage
+            .from('scorm-content')
+            .upload(assetStoragePath, fileData, { cacheControl: '3600', upsert: true });
+
+          if (assetErr) {
+            throw new Error(`Lỗi nạp tệp "${entryName}" vào Storage: ` + assetErr.message);
+          }
+        }
+
+        // ====================================================================
+        // BƯỚC 5: CẬP NHẬT SCORM_PACKAGES SANG STATUS='READY'
+        // ====================================================================
+        setProgressText('Đang hoàn thiện gói bài học SCORM...');
+        const { error: readyErr } = await supabase
+          .from('scorm_packages')
+          .update({ status: 'ready', updated_at: new Date().toISOString() })
+          .eq('id', packageId);
+
+        if (readyErr) throw readyErr;
+
+        finalFilePath = zipStoragePath;
+        finalFileName = file.name;
+        finalFileSize = file.size;
+      }
+      // ====================================================================
+      // XỬ LÝ UPLOAD FILE THƯỜNG KHÁC (PDF, Word, Powerpoint...)
+      // ====================================================================
+      else if (sourceType === 'file' && file) {
+        setProgressText('Đang tải tệp tin lên hệ thống...');
+        const cleanName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const userFolder = profile.id;
+        const storagePath = `${userFolder}/${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${cleanName}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('learning-materials')
+          .upload(storagePath, file, { cacheControl: '3600', upsert: false });
+
+        if (uploadErr) {
+          throw new Error('Lỗi khi tải file lên Storage: ' + uploadErr.message);
+        }
+
+        newlyUploadedPath = storagePath;
+        finalFilePath = storagePath;
+        finalFileName = file.name;
+        finalFileSize = file.size;
+
+        // Cập nhật lại file_path cho material
+        await supabase
+          .from('learning_materials')
+          .update({ file_path: finalFilePath, file_name: finalFileName, file_size: finalFileSize })
+          .eq('id', savedMaterialId);
+      }
+
+      // ====================================================================
+      // BƯỚC 6: CẬP NHẬT BẢNG CHIA SẺ LIÊN LỚP (SHARES - KHỚP PHASE 1: CLASS_ID)
+      // ====================================================================
+      if (visibility === 'class') {
+        // Xóa các liên kết cũ
+        await supabase
+          .from('learning_material_shares')
+          .delete()
+          .eq('material_id', savedMaterialId);
+
+        // Thêm liên kết lớp được chọn (trừ lớp chính)
+        const otherClassIds = sharedClassIds.filter((id) => id !== classId);
+        if (otherClassIds.length > 0) {
+          const shareRows = otherClassIds.map((tId) => ({
+            material_id: savedMaterialId,
+            class_id: tId,
+          }));
+          await supabase.from('learning_material_shares').insert(shareRows);
         }
       }
 
-      // 3. DATABASE UPDATE/INSERT THÀNH CÔNG -> TIẾN HÀNH DỌN DẸP FILE CŨ NẾU CÓ THAY THẾ FILE
+      // Dọn dẹp file cũ nếu có thay thế file
       if (oldFilePath && oldFilePath !== finalFilePath) {
-        const { error: removeErr } = await supabase.storage
-          .from('learning-materials')
-          .remove([oldFilePath]);
-
-        if (removeErr) {
-          console.warn('Cảnh báo: Không thể xóa file cũ trên Storage:', removeErr.message);
-        }
+        await supabase.storage.from('learning-materials').remove([oldFilePath]);
       }
 
       onSaved?.();
       onClose();
-
     } catch (err) {
       console.error('Save material error:', err);
 
-      // ROLLBACK: Nếu Database thất bại và đã lỡ upload file mới -> Xóa file mới upload để tránh tạo rác
+      // Rollback dọn dẹp Storage nếu fail
       if (newlyUploadedPath) {
-        try {
-          await supabase.storage.from('learning-materials').remove([newlyUploadedPath]);
-        } catch (rbException) {
-          console.error('Rollback exception:', rbException);
-        }
+        await supabase.storage.from('learning-materials').remove([newlyUploadedPath]);
+      }
+      if (newlyCreatedPackageId && profile?.id) {
+        await cleanupScormPackageStorage(`${profile.id}/${newlyCreatedPackageId}`);
+        // Đánh dấu status='failed' để không usable
+        await supabase
+          .from('scorm_packages')
+          .update({ status: 'failed' })
+          .eq('id', newlyCreatedPackageId);
       }
 
       setErrorMsg(err.message || 'Lỗi khi lưu thông tin tài liệu.');
     } finally {
       setLoading(false);
+      setProgressText('');
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-sm animate-fadeIn">
       <div className="relative w-full max-w-2xl bg-white rounded-3xl border-4 border-amber-300 p-6 sm:p-8 shadow-2xl max-h-[92vh] overflow-y-auto custom-scrollbar">
-
         <button
           onClick={onClose}
           disabled={loading}
@@ -287,7 +467,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
           {materialToEdit ? 'Sửa Thông Tin Bài Giảng / Tài Liệu' : 'Thêm Bài Giảng / Tài Liệu Mới'}
         </h3>
         <p className="text-xs font-bold text-slate-500 mb-5">
-          Đăng bài giảng, tệp tài liệu hoặc liên kết trực tuyến HTTPS cho học sinh.
+          Đăng bài giảng, tệp tài liệu, gói SCORM hoặc liên kết trực tuyến HTTPS cho học sinh.
         </p>
 
         {errorMsg && (
@@ -298,7 +478,6 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-
           {/* TÊN BÀI GIẢNG / TÀI LIỆU */}
           <div>
             <label className="block text-xs font-black text-slate-700 mb-1">
@@ -314,11 +493,11 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             />
           </div>
 
-          {/* MÔ TẢ NẮN */}
+          {/* MÔ TẢ NGẮN */}
           <div>
             <label className="block text-xs font-black text-slate-700 mb-1">Mô tả ngắn / Hướng dẫn học sinh:</label>
             <textarea
-              rows={3}
+              rows={2}
               placeholder="Nhập ghi chú hoặc dặn dò học sinh khi xem tài liệu..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -326,41 +505,125 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             />
           </div>
 
-          {/* MÔ N HỌC & LỚP HỌC */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-black text-slate-700 mb-1">
-                Môn Học <span className="text-rose-500">*</span>:
-              </label>
-              <select
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                className="w-full p-3 bg-amber-50/80 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800"
+          {/* PHẠM VI CHIA SẺ (VISIBILITY PHASE 1) */}
+          <div className="p-4 bg-amber-50/60 rounded-2xl border-2 border-amber-200 space-y-3">
+            <label className="block text-xs font-black text-amber-950 uppercase flex items-center gap-1.5">
+              <Share2 className="w-4 h-4 text-amber-700" /> Phạm vi chia sẻ bài giảng:
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setVisibility('class')}
+                className={`p-2.5 rounded-xl border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                  visibility === 'class'
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-md'
+                    : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-50'
+                }`}
               >
-                {subjects.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+                <Lock className="w-4 h-4" />
+                <span>🔒 Theo lớp</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setVisibility('school')}
+                className={`p-2.5 rounded-xl border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                  visibility === 'school'
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-md'
+                    : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-50'
+                }`}
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>🏫 Toàn trường</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setVisibility('public')}
+                className={`p-2.5 rounded-xl border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                  visibility === 'public'
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-md'
+                    : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-50'
+                }`}
+              >
+                <Share2 className="w-4 h-4" />
+                <span>🌐 Công khai</span>
+              </button>
             </div>
 
-            <div>
-              <label className="block text-xs font-black text-slate-700 mb-1">Lớp Học Áp Dụng:</label>
-              <select
-                value={classId}
-                onChange={(e) => setClassId(e.target.value)}
-                className="w-full p-3 bg-amber-50/80 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800"
-              >
-                <option value="">🌐 Dành cho Tất cả các lớp</option>
-                {classesList.map(c => (
-                  <option key={c.id} value={c.id}>
-                    🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {visibility === 'class' && (
+              <div className="pt-2 space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Lớp chính áp dụng <span className="text-rose-500">*</span>:
+                  </label>
+                  <select
+                    value={classId}
+                    onChange={(e) => setClassId(e.target.value)}
+                    className="w-full p-2.5 bg-white border-2 border-amber-200 rounded-xl font-bold text-xs text-slate-800"
+                    required
+                  >
+                    <option value="">-- Chọn lớp chính --</option>
+                    {classesList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {classesList.length > 1 && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                      Chia sẻ thêm tới các lớp khác (Liên lớp):
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {classesList
+                        .filter((c) => c.id !== classId)
+                        .map((c) => {
+                          const isSelected = sharedClassIds.includes(c.id);
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => toggleSharedClass(c.id)}
+                              className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                                isSelected
+                                  ? 'bg-amber-500 text-white border-amber-600'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-amber-300'
+                              }`}
+                            >
+                              {isSelected ? '✓ ' : '+ '}
+                              {formatClassLabel(c.name)}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* LOẠI TÀI LIỆU & NGUỒN TẢI UP */}
+          {/* MÔN HỌC */}
+          <div>
+            <label className="block text-xs font-black text-slate-700 mb-1">
+              Môn Học <span className="text-rose-500">*</span>:
+            </label>
+            <select
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="w-full p-3 bg-amber-50/80 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800"
+            >
+              {subjects.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* LOẠI TÀI LIỆU & NGUỒN TẢI LÊN */}
           <div className="p-4 bg-amber-100/50 rounded-2xl border-2 border-amber-200 space-y-3">
             <label className="block text-xs font-black text-amber-950 uppercase">Nguồn tài liệu bài giảng:</label>
 
@@ -383,7 +646,10 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
                   name="sourceType"
                   value="link"
                   checked={sourceType === 'link'}
-                  onChange={() => { setSourceType('link'); setFileType('link'); }}
+                  onChange={() => {
+                    setSourceType('link');
+                    setFileType('link');
+                  }}
                   className="w-4 h-4 text-sky-600"
                 />
                 <LinkIcon className="w-4 h-4 text-sky-600" /> Đường liên kết bài giảng (HTTPS)
@@ -404,17 +670,37 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
                     <option value="powerpoint">📊 PowerPoint (.ppt, .pptx)</option>
                     <option value="image">🖼️ Hình Ảnh (PNG, JPG...)</option>
                     <option value="video">🎥 Video (MP4...)</option>
+                    <option value="scorm">📦 SCORM Package (.zip 1.2 / 2004)</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-black text-slate-700 mb-1">Chọn Tệp Tin Tải Lên (Tối đa 50MB, không hỗ trợ SVG):</label>
+                  <label className="block text-xs font-black text-slate-700 mb-1">
+                    Chọn Tệp Tin Tải Lên {fileType === 'scorm' ? '(Gói .zip chuẩn SCORM)' : '(Tối đa 50MB)'}:
+                  </label>
                   <input
                     type="file"
                     onChange={handleFileChange}
-                    accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov"
+                    accept={
+                      fileType === 'scorm'
+                        ? '.zip,application/zip,application/x-zip-compressed'
+                        : '.pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov'
+                    }
                     className="w-full text-xs font-bold text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-amber-400 file:text-amber-950 hover:file:bg-amber-500 cursor-pointer"
                   />
+
+                  {scormState && (
+                    <div className="mt-2 p-2.5 bg-emerald-50 border border-emerald-300 rounded-xl text-[11px] font-bold text-emerald-800 space-y-0.5">
+                      <p className="flex items-center gap-1.5 font-black text-emerald-900">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Gói SCORM hợp lệ: Phiên bản {scormState.manifestInfo?.scormVersion} ({scormState.filesCount} tệp)
+                      </p>
+                      <p className="text-slate-600">
+                        🚀 Launch File: <code className="bg-white px-1.5 py-0.5 rounded text-emerald-950">{scormState.manifestInfo?.launchPath}</code>
+                      </p>
+                    </div>
+                  )}
+
                   {materialToEdit?.file_name && !file && (
                     <p className="text-[11px] font-extrabold text-emerald-700 mt-1">
                       📄 File hiện tại: {materialToEdit.file_name} (Chọn file mới nếu muốn thay thế)
@@ -424,7 +710,9 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
               </div>
             ) : (
               <div className="pt-2">
-                <label className="block text-xs font-black text-slate-700 mb-1">Đường Liên Kết Bài Giảng (Bắt buộc địa chỉ HTTPS):</label>
+                <label className="block text-xs font-black text-slate-700 mb-1">
+                  Đường Liên Kết Bài Giảng (Bắt buộc địa chỉ HTTPS):
+                </label>
                 <input
                   type="url"
                   placeholder="https://youtube.com/watch?... hoặc https://drive.google.com/..."
@@ -442,7 +730,9 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
               <Lock className="w-4 h-4 text-amber-700" />
               <div>
                 <p className="text-xs font-black text-amber-950">Cho phép học sinh tải tài liệu về máy:</p>
-                <p className="text-[10px] font-bold text-slate-500">Nếu tắt, hệ thống sẽ ẩn nút tải và không phát hành Signed URL tải về.</p>
+                <p className="text-[10px] font-bold text-slate-500">
+                  Nếu tắt, hệ thống sẽ ẩn nút tải và không phát hành Signed URL tải về.
+                </p>
               </div>
             </div>
 
@@ -454,12 +744,12 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             />
           </div>
 
-          {/* TRẠNG THÁI TẢI LÊN */}
+          {/* TRẠNG THÁI TIẾN TRÌNH TẢI LÊN */}
           {loading && (
             <div className="p-3 bg-amber-100 rounded-2xl border border-amber-300 flex items-center gap-3">
               <Loader2 className="w-5 h-5 text-amber-700 animate-spin shrink-0" />
               <p className="text-xs font-bold text-amber-950">
-                Đang xử lý định dạng tệp tin & lưu bài giảng vào hệ thống... Vui lòng chờ trong giây lát.
+                {progressText || 'Đang xử lý tệp tin & lưu bài giảng vào hệ thống... Vui lòng chờ.'}
               </p>
             </div>
           )}
@@ -481,7 +771,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
             >
               {loading ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Đang Tải Lên...
+                  <Loader2 className="w-4 h-4 animate-spin" /> Đang Xử Lý...
                 </>
               ) : materialToEdit ? (
                 '💾 CẬP NHẬT TÀI LIỆU'
@@ -490,9 +780,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
               )}
             </button>
           </div>
-
         </form>
-
       </div>
     </div>
   );
