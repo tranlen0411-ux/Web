@@ -518,6 +518,29 @@ export const LeaderboardView = () => {
           });
           return;
         }
+
+        if (periodAcademic && !Array.isArray(periodAcademic) && Array.isArray(periodAcademic.leaderboard)) {
+          setAcademicData({
+            success: true,
+            total_valid_exercises: periodAcademic.total_valid_exercises ?? (periodAcademic.leaderboard[0]?.total_valid_count || 0),
+            total_class_max_score: periodAcademic.total_class_max_score ?? 100,
+            leaderboard: periodAcademic.leaderboard.map(st => ({
+              student_id: st.student_id,
+              rank: st.rank,
+              is_tied: st.is_tied,
+              full_name: st.full_name,
+              avatar_url: st.avatar_url,
+              student_code: st.student_code,
+              completed_count: st.completed_count,
+              total_valid_count: st.total_valid_count,
+              academic_score_pct: st.academic_score_pct,
+              completion_rate_pct: st.completion_rate_pct,
+              avg_score: st.avg_score !== undefined ? st.avg_score : (st.academic_score_pct / 10).toFixed(1),
+              total_earned_score: st.total_earned_score !== undefined ? st.total_earned_score : st.academic_score_pct
+            }))
+          });
+          return;
+        }
       }
 
       // 2. Nếu không chọn kỳ cụ thể -> Gọi RPC get_academic_class_leaderboard tổng thể
