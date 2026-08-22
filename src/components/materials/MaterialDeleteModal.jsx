@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Trash2, X, Loader2, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { cleanupScormPackageStorage } from '../../services/scormLaunchService';
 
 export const MaterialDeleteModal = ({ isOpen, onClose, material, DELETED_CALLBACK }) => {
   const [loading, setLoading] = useState(false);
@@ -27,7 +28,24 @@ export const MaterialDeleteModal = ({ isOpen, onClose, material, DELETED_CALLBAC
 
       // 2. Nếu Database xóa thành công và có tệp đính kèm -> Xóa file tương ứng khỏi Storage
       let storageFailed = false;
-      if (material.file_path) {
+      if (material.file_type === 'scorm') {
+        try {
+          // Lấy thông tin scorm package để xóa
+          const { data: pkg } = await supabase
+            .from('scorm_packages')
+            .select('content_root, original_zip_path')
+            .eq('material_id', material.id)
+            .maybeSingle();
+
+          if (pkg?.content_root) {
+            await cleanupScormPackageStorage(pkg.content_root, pkg.original_zip_path || material.file_path);
+          } else if (material.file_path) {
+            await supabase.storage.from('learning-materials').remove([material.file_path]);
+          }
+        } catch (scormErr) {
+          console.warn('Lỗi dọn dẹp storage scorm:', scormErr);
+        }
+      } else if (material.file_path) {
         const { error: storageErr } = await supabase.storage
           .from('learning-materials')
           .remove([material.file_path]);

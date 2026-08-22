@@ -15,6 +15,7 @@ if (!process.execArgv.includes('--liftoff-only')) {
       '--liftoff-only',
       '--v8-pool-size=1',
       '--no-wasm-async-compilation',
+      '--max-old-space-size=4096',
       ...process.execArgv,
       __filename,
       ...process.argv.slice(2)
