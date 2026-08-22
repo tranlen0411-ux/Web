@@ -198,6 +198,10 @@ export function sanitizeScormRelativePath(rawRelativePath) {
     return { valid: false, reason: 'EMPTY_PATH' };
   }
 
+  if (rawRelativePath.length > 1024) {
+    return { valid: false, reason: 'EXCESSIVE_PATH_LENGTH' };
+  }
+
   let decoded = rawRelativePath.trim();
 
   // 1. Kiểm tra Null Byte trước và sau khi decode
@@ -205,10 +209,10 @@ export function sanitizeScormRelativePath(rawRelativePath) {
     return { valid: false, reason: 'NULL_BYTE_DETECTED' };
   }
 
-  // 2. Decode percent-encoding nhiều lớp để chặn double encoding (ví dụ %252e%252e)
+  // 2. Decode percent-encoding nhiều lớp để chặn double/triple encoding (ví dụ %252e%252e)
   let prevDecoded = '';
   let decodeAttempts = 0;
-  while (decoded !== prevDecoded && decodeAttempts < 3) {
+  while (decoded !== prevDecoded && decodeAttempts < 5) {
     prevDecoded = decoded;
     try {
       decoded = decodeURIComponent(decoded);
@@ -218,7 +222,7 @@ export function sanitizeScormRelativePath(rawRelativePath) {
     decodeAttempts++;
   }
 
-  if (decoded.includes('\0')) {
+  if (decoded.includes('\0') || decoded.includes('%00')) {
     return { valid: false, reason: 'NULL_BYTE_DETECTED' };
   }
 
@@ -235,16 +239,20 @@ export function sanitizeScormRelativePath(rawRelativePath) {
     normalizedSlashes.includes('../') ||
     normalizedSlashes.includes('/..') ||
     normalizedSlashes === '..' ||
-    normalizedSlashes.includes('..\\')
+    normalizedSlashes.includes('..\\') ||
+    normalizedSlashes.includes('..')
   ) {
     return { valid: false, reason: 'PATH_TRAVERSAL_DETECTED' };
   }
 
   // 6. Chặn absolute paths bắt đầu bằng /
-  const withoutLeadingSlash = normalizedSlashes.replace(/^\/+/, '');
+  if (normalizedSlashes.startsWith('/')) {
+    return { valid: false, reason: 'ABSOLUTE_PATH_DETECTED' };
+  }
 
   // 7. Chuẩn hóa path
-  const normalized = normalizePosixPath(withoutLeadingSlash);
+  const normalized = normalizePosixPath(normalizedSlashes);
+
 
   // 8. Đảm bảo kết quả normalize không vượt ra ngoài root
   if (
