@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -59,6 +59,7 @@ export const StudentDashboard = () => {
 
   const [games, setGames] = useState([]);
   const [assignments, setAssignments] = useState([]);
+  const [academicExercises, setAcademicExercises] = useState([]);
   const [badges, setBadges] = useState([]);
   const [studentBadges, setStudentBadges] = useState([]);
   const [history, setHistory] = useState([]);
@@ -122,6 +123,41 @@ export const StudentDashboard = () => {
           }
         }
         setAssignments(fetchedAssignments);
+
+        // 2.1 Fetch Academic Exercises theo các Lớp Học mà Học Sinh này tham gia
+        let fetchedAcademicExercises = [];
+        let assignedExerciseIds = [];
+        if (myClassIds.length > 0) {
+          const { data: assignRecords } = await supabase
+            .from('academic_exercise_assignments')
+            .select('exercise_id')
+            .in('class_id', myClassIds);
+
+          assignedExerciseIds = (assignRecords || []).map(a => a.exercise_id).filter(Boolean);
+        }
+
+        let exQuery = supabase
+          .from('academic_exercises')
+          .select('id')
+          .eq('status', 'published')
+          .order('created_at', { ascending: false });
+
+        const filterConditions = ['is_global.eq.true'];
+        if (myClassIds.length > 0) {
+          filterConditions.push(`class_id.in.(${myClassIds.join(',')})`);
+        }
+        if (assignedExerciseIds.length > 0) {
+          filterConditions.push(`id.in.(${assignedExerciseIds.join(',')})`);
+        }
+
+        exQuery = exQuery.or(filterConditions.join(','));
+
+        const { data: acExData, error: acExErr } = await exQuery;
+        if (!acExErr && acExData) {
+          const uniqueAcademicExercises = Array.from(new Map(acExData.map(item => [item.id, item])).values());
+          fetchedAcademicExercises = uniqueAcademicExercises;
+        }
+        setAcademicExercises(fetchedAcademicExercises);
 
         // 3. Fetch Badges & Student Badges
         const { data: allBadges } = await supabase.from('badges').select('*');
@@ -335,7 +371,7 @@ export const StudentDashboard = () => {
               : 'text-slate-600 hover:bg-amber-50'
           }`}
         >
-          <BookOpen className="w-4 h-4" /> Bài Tập Học Thuật
+          <BookOpen className="w-4 h-4" /> Bài Tập Học Thuật ({academicExercises.length})
         </button>
 
         <button
@@ -385,7 +421,7 @@ export const StudentDashboard = () => {
       </div>
 
       {activeTab === 'academic_exercises' && (
-        <ExerciseListTab role="student" />
+        <ExerciseListTab role="student" onLoaded={setAcademicExercises} />
       )}
 
       {/* NỘI DUNG THEO TAB */}
