@@ -347,6 +347,7 @@ async function runProductionAssetGatewayAuditSuite() {
             launch_path: info.launch_path,
             scorm_version: info.scorm_version,
             expires_at: info.expires_at,
+            tracking: info.tracking || null,
           });
 
           res.writeHead(200, {
