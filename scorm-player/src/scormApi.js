@@ -1,33 +1,40 @@
 /**
- * SCORM 1.2 and SCORM 2004 In-Memory Runtime API Bridge
- * Tương thích tiêu chuẩn ADL SCORM, lưu trữ trạng thái phiên trong bộ nhớ (RAM/Session)
+ * SCORM 1.2 and SCORM 2004 In-Memory Runtime API Bridge with CMI Persistence Support
+ * Tương thích tiêu chuẩn ADL SCORM, hỗ trợ nạp lại trạng thái (Resume) và lưu trữ tiến độ (Commit).
  */
 
-export function createScorm12Api(initialData = {}) {
+export function createScorm12Api(initialData = {}, onCommitCallback = null) {
   let isInitialized = false;
   let isTerminated = false;
   let lastError = '0';
+
+  const persisted = initialData.tracking || initialData.persistedState || {};
 
   // Khởi tạo CMI Data Model mặc định cho SCORM 1.2
   const cmi = {
     'cmi.core.student_id': initialData.studentId || 'STUDENT_001',
     'cmi.core.student_name': initialData.studentName || 'Học sinh',
-    'cmi.core.lesson_location': '',
+    'cmi.core.lesson_location': persisted.lesson_location || persisted['cmi.core.lesson_location'] || '',
     'cmi.core.credit': 'credit',
-    'cmi.core.lesson_status': 'not attempted',
-    'cmi.core.entry': 'ab-initio',
-    'cmi.core.score.raw': '',
-    'cmi.core.score.min': '0',
-    'cmi.core.score.max': '100',
-    'cmi.core.total_time': '00:00:00',
+    'cmi.core.lesson_status': persisted.lesson_status || persisted['cmi.core.lesson_status'] || 'not attempted',
+    'cmi.core.entry': (persisted.lesson_location || persisted.suspend_data) ? 'resume' : 'ab-initio',
+    'cmi.core.score.raw': persisted.score_raw !== undefined && persisted.score_raw !== null ? String(persisted.score_raw) : (persisted['cmi.core.score.raw'] || ''),
+    'cmi.core.score.min': persisted.score_min !== undefined && persisted.score_min !== null ? String(persisted.score_min) : (persisted['cmi.core.score.min'] || '0'),
+    'cmi.core.score.max': persisted.score_max !== undefined && persisted.score_max !== null ? String(persisted.score_max) : (persisted['cmi.core.score.max'] || '100'),
+    'cmi.core.total_time': persisted.total_time || persisted['cmi.core.total_time'] || '0000:00:00',
     'cmi.core.lesson_mode': 'normal',
     'cmi.core.exit': '',
     'cmi.core.session_time': '00:00:00',
-    'cmi.suspend_data': '',
+    'cmi.suspend_data': persisted.suspend_data || persisted['cmi.suspend_data'] || '',
     'cmi.launch_data': '',
     'cmi.comments': '',
     'cmi.comments_from_lms': '',
   };
+
+  // Nạp thêm các trường bổ sung từ cmi_data nếu có
+  if (persisted.cmi_data && typeof persisted.cmi_data === 'object') {
+    Object.assign(cmi, persisted.cmi_data);
+  }
 
   const errorMessages = {
     '0': 'No error',
@@ -41,6 +48,17 @@ export function createScorm12Api(initialData = {}) {
     '405': 'Incorrect Data Type',
   };
 
+  function triggerCommit(eventType) {
+    if (typeof onCommitCallback === 'function') {
+      try {
+        const snapshot = { ...cmi };
+        onCommitCallback(snapshot, eventType);
+      } catch (err) {
+        console.warn('[SCORM 1.2 API] Background commit notification caught error:', err.message);
+      }
+    }
+  }
+
   return {
     LMSInitialize(param = '') {
       if (isInitialized) {
@@ -50,7 +68,7 @@ export function createScorm12Api(initialData = {}) {
       isInitialized = true;
       isTerminated = false;
       lastError = '0';
-      console.log('[SCORM 1.2 API] LMSInitialize called');
+      console.log('[SCORM 1.2 API] LMSInitialize called. Entry mode:', cmi['cmi.core.entry']);
       return 'true';
     },
 
@@ -62,6 +80,7 @@ export function createScorm12Api(initialData = {}) {
       isTerminated = true;
       lastError = '0';
       console.log('[SCORM 1.2 API] LMSFinish called. Final CMI status:', cmi['cmi.core.lesson_status']);
+      triggerCommit('FINISH');
       return 'true';
     },
 
@@ -72,7 +91,7 @@ export function createScorm12Api(initialData = {}) {
       }
       lastError = '0';
       if (element in cmi) {
-        return cmi[element] || '';
+        return cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
       }
       return '';
     },
@@ -93,7 +112,8 @@ export function createScorm12Api(initialData = {}) {
         return 'false';
       }
       lastError = '0';
-      console.log('[SCORM 1.2 API] LMSCommit state saved to session');
+      console.log('[SCORM 1.2 API] LMSCommit state triggered');
+      triggerCommit('COMMIT');
       return 'true';
     },
 
@@ -115,33 +135,39 @@ export function createScorm12Api(initialData = {}) {
   };
 }
 
-export function createScorm2004Api(initialData = {}) {
+export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
   let isInitialized = false;
   let isTerminated = false;
   let lastError = '0';
+
+  const persisted = initialData.tracking || initialData.persistedState || {};
 
   // Khởi tạo CMI Data Model mặc định cho SCORM 2004 (v3 / v4)
   const cmi = {
     'cmi._version': '1.0',
     'cmi.learner_id': initialData.studentId || 'STUDENT_001',
     'cmi.learner_name': initialData.studentName || 'Học sinh',
-    'cmi.location': '',
-    'cmi.completion_status': 'unknown',
+    'cmi.location': persisted.lesson_location || persisted.location || persisted['cmi.location'] || '',
+    'cmi.completion_status': persisted.completion_status || persisted['cmi.completion_status'] || 'unknown',
     'cmi.completion_threshold': '1.0',
-    'cmi.success_status': 'unknown',
-    'cmi.score.raw': '',
-    'cmi.score.min': '0',
-    'cmi.score.max': '100',
+    'cmi.success_status': persisted.success_status || persisted['cmi.success_status'] || 'unknown',
+    'cmi.score.raw': persisted.score_raw !== undefined && persisted.score_raw !== null ? String(persisted.score_raw) : (persisted['cmi.score.raw'] || ''),
+    'cmi.score.min': persisted.score_min !== undefined && persisted.score_min !== null ? String(persisted.score_min) : (persisted['cmi.score.min'] || '0'),
+    'cmi.score.max': persisted.score_max !== undefined && persisted.score_max !== null ? String(persisted.score_max) : (persisted['cmi.score.max'] || '100'),
     'cmi.score.scaled': '',
-    'cmi.total_time': 'PT0H0M0S',
+    'cmi.total_time': persisted.total_time || persisted['cmi.total_time'] || 'PT0H0M0S',
     'cmi.session_time': 'PT0H0M0S',
     'cmi.mode': 'normal',
     'cmi.credit': 'credit',
-    'cmi.entry': 'ab-initio',
+    'cmi.entry': (persisted.lesson_location || persisted.location || persisted.suspend_data) ? 'resume' : 'ab-initio',
     'cmi.exit': '',
-    'cmi.suspend_data': '',
+    'cmi.suspend_data': persisted.suspend_data || persisted['cmi.suspend_data'] || '',
     'cmi.launch_data': '',
   };
+
+  if (persisted.cmi_data && typeof persisted.cmi_data === 'object') {
+    Object.assign(cmi, persisted.cmi_data);
+  }
 
   const errorMessages = {
     '0': 'No error',
@@ -161,6 +187,17 @@ export function createScorm2004Api(initialData = {}) {
     '402': 'Unimplemented Data Model',
   };
 
+  function triggerCommit(eventType) {
+    if (typeof onCommitCallback === 'function') {
+      try {
+        const snapshot = { ...cmi };
+        onCommitCallback(snapshot, eventType);
+      } catch (err) {
+        console.warn('[SCORM 2004 API] Background commit notification caught error:', err.message);
+      }
+    }
+  }
+
   return {
     Initialize(param = '') {
       if (isInitialized) {
@@ -170,7 +207,7 @@ export function createScorm2004Api(initialData = {}) {
       isInitialized = true;
       isTerminated = false;
       lastError = '0';
-      console.log('[SCORM 2004 API] Initialize called');
+      console.log('[SCORM 2004 API] Initialize called. Entry mode:', cmi['cmi.entry']);
       return 'true';
     },
 
@@ -186,6 +223,7 @@ export function createScorm2004Api(initialData = {}) {
       isTerminated = true;
       lastError = '0';
       console.log('[SCORM 2004 API] Terminate called. Final completion_status:', cmi['cmi.completion_status']);
+      triggerCommit('TERMINATE');
       return 'true';
     },
 
@@ -200,7 +238,7 @@ export function createScorm2004Api(initialData = {}) {
       }
       lastError = '0';
       if (element in cmi) {
-        return cmi[element] || '';
+        return cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
       }
       return '';
     },
@@ -229,7 +267,8 @@ export function createScorm2004Api(initialData = {}) {
         return 'false';
       }
       lastError = '0';
-      console.log('[SCORM 2004 API] Commit state saved to session');
+      console.log('[SCORM 2004 API] Commit state triggered');
+      triggerCommit('COMMIT');
       return 'true';
     },
 
