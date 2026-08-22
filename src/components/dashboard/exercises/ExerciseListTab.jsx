@@ -11,7 +11,7 @@ import { CreateExerciseModal } from './CreateExerciseModal';
 import { ExercisePlayModal } from './ExercisePlayModal';
 import { SubmissionGradingModal } from './SubmissionGradingModal';
 
-export const ExerciseListTab = ({ role = 'student' }) => {
+export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const { profile } = useAuth();
   
   const [exercises, setExercises] = useState([]);
@@ -92,7 +92,11 @@ export const ExerciseListTab = ({ role = 'student' }) => {
 
         const { data: exData, error: exErr } = await query;
         if (!exErr && exData) {
-          setExercises(exData);
+          const uniqueExercises = Array.from(new Map(exData.map(item => [item.id, item])).values());
+          setExercises(uniqueExercises);
+          if (typeof onLoaded === 'function') {
+            onLoaded(uniqueExercises);
+          }
         }
 
       } else {
