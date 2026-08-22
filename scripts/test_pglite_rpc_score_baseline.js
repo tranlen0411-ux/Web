@@ -1,22 +1,33 @@
 /**
  * TEST PGLITE: SCORE RANKING BASELINE V1 (REVISED & COMPREHENSIVE - FINAL 3 POLISHES)
- * Kiểm chứng 100% các yêu cầu:
- * 1. ACADEMIC DENOMINATOR: Mẫu số và tử số tính chuẩn xác theo từng học sinh dựa theo baseline.
- * 2. GAME BASELINE AT ALL / GRADE / CLASS: Điểm mốc xuất phát nhất quán trên cả 3 view.
- * 3. STRICT VALIDATION: [student_in_class, student_other_class] => fail toàn request, 0 baseline inserted.
- * 4. TIE LOGIC: Hai học sinh bằng điểm có cùng rank và is_tied: true. Tên chỉ dùng để sắp xếp hiển thị.
- * 5. FULL_YEAR BOUNDARY: start >= 2026-09-01 00:00:00+07 AND end < 2027-06-01 00:00:00+07.
- * 6. CUSTOM TIME MODE: Kiểm thử ranh giới khoảng ngày tùy chọn hợp lệ và phát hiện lỗi when until <= from.
- * 7. SOFT REVOKE (UNDO) phục hồi điểm số nguyên vẹn.
  */
 
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import assert from 'assert';
+import { spawnSync } from 'child_process';
+import { PGlite } from '@electric-sql/pglite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Kích hoạt cờ --liftoff-only kết hợp các cờ V8 tối ưu bộ nhớ để ngăn V8 TurboFan Zone OOM trên Windows
+if (!process.execArgv.includes('--liftoff-only')) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--liftoff-only',
+      '--v8-pool-size=1',
+      '--no-wasm-async-compilation',
+      ...process.execArgv,
+      __filename,
+      ...process.argv.slice(2)
+    ],
+    { stdio: 'inherit' }
+  );
+  process.exit(result.status ?? 0);
+}
 
 async function setupDatabase(PGlite) {
   const db = new PGlite();

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, Medal, Star, Sparkles, Award, BookOpen, Gamepad2, Filter, Users, CheckCircle2, ChevronRight, AlertCircle, Settings, Calendar, Lock } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Trophy, Medal, Star, Sparkles, Award, BookOpen, Gamepad2, Filter, Users, CheckCircle2, ChevronRight, AlertCircle, Settings, Calendar, Lock, Activity } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
 import { useSound } from '../context/SoundContext';
@@ -19,6 +19,15 @@ const isValidClassId = (id) => {
     UUID_REGEX.test(id.trim())
   );
 };
+
+export const GAME_SOURCE_OPTIONS = [
+  { value: 'ALL', label: 'Tất cả (Kho game + Bài tập)' },
+  { value: 'LIBRARY', label: 'Kho Game Học Tập' },
+  { value: 'ASSIGNED', label: 'Bài tập được giao' }
+];
+
+const VALID_GAME_SOURCES = ['ALL', 'LIBRARY', 'ASSIGNED'];
+const normalizeGameSource = (val) => VALID_GAME_SOURCES.includes(val) ? val : 'ALL';
 
 export const LeaderboardView = () => {
   const { globalClassFilter, setGlobalClassFilter } = useAuth();
@@ -46,11 +55,12 @@ export const LeaderboardView = () => {
   const [summaryStudentId, setSummaryStudentId] = useState(null);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
 
-  // --- STATE BỘ LỌC 4 TẦNG TRÒ CHƠI ---
+  // --- STATE BỘ LỌC 5 TẦNG TRÒ CHƠI ---
   const [gameGradeFilter, setGameGradeFilter] = useState('ALL');
   const [gameClassFilter, setGameClassFilter] = useState('ALL_IN_GRADE');
   const [gameSubjectFilter, setGameSubjectFilter] = useState('ALL');
   const [gameTimeRange, setGameTimeRange] = useState('ALL');
+  const [gameSourceFilter, setGameSourceFilter] = useState('ALL');
   const [availableGameSubjects, setAvailableGameSubjects] = useState([]);
   const [gameStudents, setGameStudents] = useState([]);
   const [loadingGame, setLoadingGame] = useState(false);
@@ -242,12 +252,12 @@ export const LeaderboardView = () => {
     }
   }, [selectedAcademicClassId, gameClassFilter, activeTab, userProfile]);
 
-  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 4 TẦNG & CHỐNG RACE CONDITION)
+  // 4. FETCH BẢNG XẾP HẠNG TRÒ CHƠI (TÍCH HỢP KỲ XẾP HẠNG V1 & BỘ LỌC 5 TẦNG & CHỐNG RACE CONDITION)
   useEffect(() => {
     if (activeTab === 'game') {
       fetchGameLeaderboard();
     }
-  }, [activeTab, gameGradeFilter, gameClassFilter, gameSubjectFilter, gameTimeRange, selectedPeriodId]);
+  }, [activeTab, gameGradeFilter, gameClassFilter, gameSubjectFilter, gameTimeRange, gameSourceFilter, selectedPeriodId]);
 
   const fetchGameLeaderboard = async () => {
     const currentReqId = ++latestGameReqIdRef.current;
@@ -256,8 +266,13 @@ export const LeaderboardView = () => {
     try {
       // TRƯỜNG HỢP 1: ĐANG CHỌN MỘT KỲ XẾP HẠNG CỤ THỂ -> ƯU TIÊN DỮ LIỆU KỲ
       if (selectedPeriodId) {
+        const currentPeriodObj = classPeriods.find(p => p.id === selectedPeriodId);
+        // Với kỳ CLOSED: snapshot bất biến lưu tổng điểm -> truyền 'ALL'
+        const rpcSource = currentPeriodObj?.status === 'CLOSED' ? 'ALL' : normalizeGameSource(gameSourceFilter);
+
         const { data: periodLeaderboard, error: periodErr } = await supabase.rpc('get_game_period_leaderboard', {
-          p_period_id: selectedPeriodId
+          p_period_id: selectedPeriodId,
+          p_source: rpcSource
         });
 
         if (currentReqId !== latestGameReqIdRef.current) return;
@@ -362,16 +377,22 @@ export const LeaderboardView = () => {
         return;
       }
 
-      // Xử lý bộ lọc môn học và thời gian
+      // Xử lý bộ lọc môn học, nguồn hoạt động và thời gian
       const studentIds = validStudentProfiles.map(p => p.id);
       let progressQuery = supabase
         .from('student_progress')
-        .select('student_id, stars_earned, completed_at, games!inner(subject)')
+        .select('student_id, stars_earned, completed_at, assignment_id, games!inner(subject)')
         .in('student_id', studentIds)
         .eq('status', 'completed');
 
       if (gameSubjectFilter !== 'ALL') {
         progressQuery = progressQuery.eq('games.subject', gameSubjectFilter);
+      }
+
+      if (gameSourceFilter === 'LIBRARY') {
+        progressQuery = progressQuery.is('assignment_id', null);
+      } else if (gameSourceFilter === 'ASSIGNED') {
+        progressQuery = progressQuery.not('assignment_id', 'is', null);
       }
 
       if (timeBounds.start) {
@@ -626,6 +647,11 @@ export const LeaderboardView = () => {
     if (gameSubjectFilter !== 'ALL') {
       titleStr += ` [Môn ${gameSubjectFilter}]`;
     }
+    if (gameSourceFilter === 'LIBRARY') {
+      titleStr += ' [Kho Game]';
+    } else if (gameSourceFilter === 'ASSIGNED') {
+      titleStr += ' [Bài tập được giao]';
+    }
     if (gameTimeRange === 'WEEK') {
       titleStr += ' [Tuần này]';
     } else if (gameTimeRange === 'MONTH') {
@@ -783,7 +809,7 @@ export const LeaderboardView = () => {
       {activeTab === 'game' && (
         <div className="space-y-6">
           
-          {/* BỘ LỌC 4 TẦNG TRÒ CHƠI KHUNG NĂM HỌC 2026-2027 */}
+          {/* BỘ LỌC 5 TẦNG TRÒ CHƠI KHUNG NĂM HỌC 2026-2027 */}
           <div className="bg-amber-50/80 p-5 rounded-3xl border-2 border-amber-200 space-y-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-amber-200/60 pb-3">
               <h3 className="text-sm font-black text-amber-950 flex items-center gap-1.5">
@@ -794,7 +820,7 @@ export const LeaderboardView = () => {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               
               {/* 1. BỘ LỌC KHỐI */}
               <div>
@@ -900,6 +926,34 @@ export const LeaderboardView = () => {
                     <option value="HK1">🎓 Học kỳ 1 (Năm học 2026-2027)</option>
                     <option value="HK2">🎓 Học kỳ 2 (Năm học 2026-2027)</option>
                     <option value="FULL_YEAR">🏆 Cả năm học (2026-2027)</option>
+                  </select>
+                )}
+              </div>
+
+              {/* 5. BỘ LỌC NGUỒN HOẠT ĐỘNG (KHO GAME / BÀI TẬP ĐÃ GIAO / TẤT CẢ) */}
+              <div>
+                <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
+                  <Activity className="w-3.5 h-3.5 text-amber-600" /> 5. Nguồn Hoạt Động:
+                </label>
+                {selectedPeriodId && classPeriods.find(p => p.id === selectedPeriodId)?.status === 'CLOSED' ? (
+                  <div className="p-2.5 bg-slate-100 border-2 border-slate-200 rounded-2xl font-bold text-xs text-slate-500 cursor-not-allowed flex items-center justify-between">
+                    <span>🔒 Tất cả nguồn</span>
+                    <span className="text-[10px] text-slate-400">Kỳ đã chốt</span>
+                  </div>
+                ) : (
+                  <select
+                    value={gameSourceFilter}
+                    onChange={(e) => {
+                      setGameSourceFilter(e.target.value);
+                      triggerSound('click');
+                    }}
+                    className="w-full p-2.5 bg-white border-2 border-amber-300 rounded-2xl font-extrabold text-xs text-amber-950 focus:ring-2 focus:ring-amber-500 focus:outline-none shadow-sm"
+                  >
+                    {GAME_SOURCE_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 )}
               </div>
