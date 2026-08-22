@@ -92,6 +92,7 @@ async function runPlayerHostTestSuite() {
             launch_path: 'index.html',
             scorm_version: '1.2',
             expires_at: new Date(Date.now() + 600000).toISOString(),
+            tracking: null,
           }));
         } else {
           res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });

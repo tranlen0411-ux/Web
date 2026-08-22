@@ -22,12 +22,14 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatClassLabel } from '../../utils/helpers';
-import { createScormLaunchSession } from '../../services/scormLaunchService';
+import { createScormLaunchSession, getScormPlayerOrigin } from '../../services/scormLaunchService';
 
 export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [signedUrl, setSignedUrl] = useState(null);
   const [scormPlayerUrl, setScormPlayerUrl] = useState(null);
   const [scormVersion, setScormVersion] = useState('1.2');
+  const [scormSession, setScormSession] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [urlError, setUrlError] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
@@ -50,10 +52,76 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     } else {
       setSignedUrl(null);
       setScormPlayerUrl(null);
+      setScormSession(null);
+      setSaveStatus('idle');
       setUrlError('');
       setCopiedLink(false);
     }
   }, [isOpen, material]);
+
+  // Lắng nghe và xử lý sự kiện đồng bộ trạng thái CMI từ SCORM Player qua postMessage
+  useEffect(() => {
+    if (!isOpen || material?.file_type?.toLowerCase() !== 'scorm') return;
+
+    const handleMessage = async (event) => {
+      const playerOrigin = getScormPlayerOrigin();
+      // 1. Kiểm tra ranh giới Origin nghiêm ngặt (Chặn đứng mọi origin khác)
+      if (event.origin !== playerOrigin) {
+        return;
+      }
+
+      const { type: msgType, payload } = event.data || {};
+      if (
+        msgType === 'SCORM_CMI_COMMIT' ||
+        msgType === 'SCORM_CMI_FINISH' ||
+        msgType === 'SCORM_CMI_TERMINATE'
+      ) {
+        if (!payload || !payload.cmi || !scormSession?.packageId) return;
+
+        try {
+          setSaveStatus('saving');
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_scorm_cmi_state', {
+            p_package_id: scormSession.packageId,
+            p_cmi_payload: payload.cmi,
+            p_session_token: scormSession.sessionToken,
+          });
+
+          if (rpcErr || (rpcRes && !rpcRes.success)) {
+            console.warn('[MaterialViewerModal] Save SCORM CMI state failed:', rpcErr || rpcRes?.message);
+            setSaveStatus('error');
+            if (event.source && typeof event.source.postMessage === 'function') {
+              event.source.postMessage(
+                {
+                  type: 'SCORM_CMI_SAVE_FAILED',
+                  payload: { success: false, reason: rpcErr?.message || rpcRes?.message || 'SAVE_FAILED' },
+                },
+                playerOrigin
+              );
+            }
+          } else {
+            setSaveStatus('saved');
+            if (event.source && typeof event.source.postMessage === 'function') {
+              event.source.postMessage(
+                {
+                  type: 'SCORM_CMI_SAVED',
+                  payload: { success: true, timestamp: new Date().toISOString() },
+                },
+                playerOrigin
+              );
+            }
+          }
+        } catch (err) {
+          console.error('[MaterialViewerModal] Exception saving SCORM CMI:', err);
+          setSaveStatus('error');
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [isOpen, material, scormSession]);
 
   // Tạo Signed URL cho file thường
   const generateSignedUrl = async (filePath) => {
@@ -94,20 +162,22 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         console.warn('Không tìm thấy thông tin scorm_packages:', pkgErr);
         setUrlError('Không tìm thấy dữ liệu gói SCORM trong hệ thống.');
         setScormPlayerUrl(null);
+        setScormSession(null);
         return;
       }
 
       setScormVersion(scormPkg.scorm_version || '1.2');
 
-      // Khởi tạo Player URL từ Service
+      // Khởi tạo Player URL từ Service với đúng materialId
       const session = await createScormLaunchSession({
-        packageId: scormPkg.id,
-        contentRoot: scormPkg.content_root,
-        launchPath: scormPkg.launch_path,
-        scormVersion: scormPkg.scorm_version || '1.2',
+        materialId: materialId,
         studentName: 'Học sinh',
       });
 
+      setScormSession({
+        sessionToken: session.sessionToken,
+        packageId: scormPkg.id,
+      });
       setScormPlayerUrl(session.playerUrl);
     } catch (err) {
       console.error('SCORM player init error:', err);
@@ -167,9 +237,26 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             <span className="flex items-center gap-1.5">
               <Layers className="w-4 h-4" /> Khung bài học SCORM (Chuẩn {scormVersion})
             </span>
-            <span className="text-[10px] bg-amber-100/90 px-2 py-0.5 rounded font-bold">
-              Isolated Origin Sandbox
-            </span>
+            <div className="flex items-center gap-2">
+              {saveStatus === 'saving' && (
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-bold flex items-center gap-1 animate-pulse">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Đang lưu tiến độ...
+                </span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600" /> Đã lưu tiến độ
+                </span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-[10px] bg-rose-100 text-rose-900 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 text-rose-600" /> Lỗi lưu tiến độ
+                </span>
+              )}
+              <span className="text-[10px] bg-amber-100/90 px-2 py-0.5 rounded font-bold">
+                Isolated Origin Sandbox
+              </span>
+            </div>
           </div>
 
           <iframe

@@ -255,6 +255,7 @@ serve(async (req) => {
         launch_path: info.launch_path,
         scorm_version: info.scorm_version,
         expires_at: info.expires_at,
+        tracking: info.tracking || null,
       });
 
       return new Response(req.method === 'HEAD' ? null : sessionInfoBody, {
