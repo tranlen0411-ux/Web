@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import { Trophy, Medal, Star, Sparkles, Award, BookOpen, Gamepad2, Filter, Users, CheckCircle2, ChevronRight, AlertCircle, Settings, Calendar, Lock, Activity } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { LoadingSkeleton } from '../components/common/LoadingSkeleton';
