@@ -63,10 +63,17 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   useEffect(() => {
     if (!isOpen || material?.file_type?.toLowerCase() !== 'scorm') return;
 
+    let playerOrigin = null;
+    try {
+      playerOrigin = getScormPlayerOrigin();
+    } catch {
+      // Player origin chưa được cấu hình -> không đăng ký / xử lý postMessage
+      return;
+    }
+
     const handleMessage = async (event) => {
-      const playerOrigin = getScormPlayerOrigin();
       // 1. Kiểm tra ranh giới Origin nghiêm ngặt (Chặn đứng mọi origin khác)
-      if (event.origin !== playerOrigin) {
+      if (!playerOrigin || event.origin !== playerOrigin) {
         return;
       }
 
@@ -152,6 +159,19 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     setLoadingUrl(true);
     setUrlError('');
     try {
+      // 1. Kiểm tra cấu hình Player Origin trước
+      try {
+        getScormPlayerOrigin();
+      } catch (originErr) {
+        if (originErr?.message === 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED') {
+          setUrlError('Trình phát SCORM chưa được cấu hình trên môi trường này.');
+          setScormPlayerUrl(null);
+          setScormSession(null);
+          return;
+        }
+        throw originErr;
+      }
+
       const { data: scormPkg, error: pkgErr } = await supabase
         .from('scorm_packages')
         .select('*')
@@ -181,7 +201,13 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       setScormPlayerUrl(session.playerUrl);
     } catch (err) {
       console.error('SCORM player init error:', err);
-      setUrlError('Lỗi khi khởi chạy bài học SCORM: ' + (err.message || 'Không xác định'));
+      if (err?.message === 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED') {
+        setUrlError('Trình phát SCORM chưa được cấu hình trên môi trường này.');
+      } else {
+        setUrlError('Lỗi khi khởi chạy bài học SCORM: ' + (err.message || 'Không xác định'));
+      }
+      setScormPlayerUrl(null);
+      setScormSession(null);
     } finally {
       setLoadingUrl(false);
     }

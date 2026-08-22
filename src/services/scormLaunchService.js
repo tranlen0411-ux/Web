@@ -8,16 +8,39 @@ import { supabase } from '../lib/supabase.js';
 
 /**
  * Lấy Base URL của SCORM Player độc lập (Tách biệt Origin với Main App)
+ * - Chỉ cho phép localhost:4174 khi chạy ở môi trường Local Development (import.meta.env.DEV === true)
+ * - Trên môi trường Preview / Production: Bắt buộc cấu hình VITE_SCORM_PLAYER_ORIGIN hợp lệ
+ *
+ * @returns {string} Origin chuẩn hóa (ví dụ: 'https://scorm.example.com' hoặc 'http://localhost:4174')
+ * @throws {Error} với mã/thông báo 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED' nếu thiếu hoặc sai định dạng ngoài DEV
  */
 export function getScormPlayerOrigin() {
+  const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV === true;
+
+  let rawOrigin = '';
   if (typeof import.meta !== 'undefined' && import.meta.env) {
-    const customOrigin = import.meta.env.VITE_SCORM_PLAYER_ORIGIN;
-    if (customOrigin && typeof customOrigin === 'string' && customOrigin.trim() !== '') {
-      return customOrigin.replace(/\/$/, '');
+    rawOrigin = import.meta.env.VITE_SCORM_PLAYER_ORIGIN;
+  }
+
+  if (typeof rawOrigin === 'string' && rawOrigin.trim() !== '') {
+    const trimmed = rawOrigin.trim().replace(/\/+$/, '');
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin;
+      }
+    } catch {
+      throw new Error('SCORM_PLAYER_ORIGIN_NOT_CONFIGURED');
     }
   }
-  // Môi trường Local Development mặc định: SCORM Player chạy riêng tại cổng 4174
-  return 'http://localhost:4174';
+
+  // 1. Chỉ cho phép fallback localhost:4174 khi ở môi trường Local Development
+  if (isDev) {
+    return 'http://localhost:4174';
+  }
+
+  // 2. Trên Preview/Production: Chặn tuyệt đối localhost fallback & chặn tự đoán domain
+  throw new Error('SCORM_PLAYER_ORIGIN_NOT_CONFIGURED');
 }
 
 /**
@@ -38,15 +61,18 @@ export async function createScormLaunchSession({
     throw new Error('Cần cung cấp material_id (nếu đã đăng nhập) hoặc share_token (nếu học công khai).');
   }
 
+  // 1. Kiểm tra cấu hình Player Origin trước khi cấp phát session token
+  const playerOrigin = getScormPlayerOrigin();
+
   let rpcName = '';
   let rpcParams = {};
 
   if (materialId) {
-    // 1. Luồng Authenticated: Gọi RPC tạo session người dùng đã đăng nhập
+    // 2. Luồng Authenticated: Gọi RPC tạo session người dùng đã đăng nhập
     rpcName = 'create_scorm_launch_session_authenticated';
     rpcParams = { p_material_id: materialId };
   } else {
-    // 2. Luồng Public: Gọi RPC tạo session công khai
+    // 3. Luồng Public: Gọi RPC tạo session công khai
     rpcName = 'create_public_scorm_launch_session';
     rpcParams = { p_share_token: shareToken };
   }
@@ -62,7 +88,6 @@ export async function createScormLaunchSession({
   }
 
   const sessionToken = rpcData.session_token;
-  const playerOrigin = getScormPlayerOrigin();
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
 
   // 3. Xây dựng URL chuyển tiếp sang Isolated SCORM Player (Origin B: Port 4174)
