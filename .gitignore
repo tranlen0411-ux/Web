@@ -25,3 +25,11 @@ thumbs.db
 roles.sql
 schema.sql
 data.sql
+
+# Supabase temp & local tool artifacts
+supabase/.temp/
+.temp/
+
+# Nested build & dependency directories
+**/dist/
+**/node_modules/

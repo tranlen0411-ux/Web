@@ -14,19 +14,31 @@ import {
   Lock,
   Maximize2,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Play,
+  Layers,
+  Copy,
+  Check
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatClassLabel } from '../../utils/helpers';
+import { createScormLaunchSession } from '../../services/scormLaunchService';
 
 export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [signedUrl, setSignedUrl] = useState(null);
+  const [scormPlayerUrl, setScormPlayerUrl] = useState(null);
+  const [scormVersion, setScormVersion] = useState('1.2');
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [urlError, setUrlError] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
     if (isOpen && material) {
-      if (material.file_path) {
+      const type = material.file_type?.toLowerCase();
+
+      if (type === 'scorm') {
+        loadScormPackage(material.id);
+      } else if (material.file_path) {
         generateSignedUrl(material.file_path);
       } else if (material.external_url) {
         setSignedUrl(material.external_url);
@@ -37,11 +49,13 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       }
     } else {
       setSignedUrl(null);
+      setScormPlayerUrl(null);
       setUrlError('');
+      setCopiedLink(false);
     }
   }, [isOpen, material]);
 
-  // Tạo Signed URL có thời hạn ngắn (300 giây) từ Supabase Storage Private Bucket để xem trực tiếp
+  // Tạo Signed URL cho file thường
   const generateSignedUrl = async (filePath) => {
     setLoadingUrl(true);
     setUrlError('');
@@ -65,6 +79,52 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     }
   };
 
+  // Nạp thông tin SCORM Package và tạo Player Launch Session
+  const loadScormPackage = async (materialId) => {
+    setLoadingUrl(true);
+    setUrlError('');
+    try {
+      const { data: scormPkg, error: pkgErr } = await supabase
+        .from('scorm_packages')
+        .select('*')
+        .eq('material_id', materialId)
+        .maybeSingle();
+
+      if (pkgErr || !scormPkg) {
+        console.warn('Không tìm thấy thông tin scorm_packages:', pkgErr);
+        setUrlError('Không tìm thấy dữ liệu gói SCORM trong hệ thống.');
+        setScormPlayerUrl(null);
+        return;
+      }
+
+      setScormVersion(scormPkg.scorm_version || '1.2');
+
+      // Khởi tạo Player URL từ Service
+      const session = await createScormLaunchSession({
+        packageId: scormPkg.id,
+        contentRoot: scormPkg.content_root,
+        launchPath: scormPkg.launch_path,
+        scormVersion: scormPkg.scorm_version || '1.2',
+        studentName: 'Học sinh',
+      });
+
+      setScormPlayerUrl(session.playerUrl);
+    } catch (err) {
+      console.error('SCORM player init error:', err);
+      setUrlError('Lỗi khi khởi chạy bài học SCORM: ' + (err.message || 'Không xác định'));
+    } finally {
+      setLoadingUrl(false);
+    }
+  };
+
+  const handleCopyShareLink = () => {
+    if (!material?.share_token) return;
+    const shareUrl = `${window.location.origin}/materials/public/${material.share_token}`;
+    navigator.clipboard.writeText(shareUrl);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
   if (!isOpen || !material) return null;
 
   const formatFileSize = (bytes) => {
@@ -76,13 +136,16 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   };
 
   const isDownloadAllowed = material.allow_download !== false;
+  const type = material.file_type?.toLowerCase();
 
   const renderViewerContent = () => {
     if (loadingUrl) {
       return (
         <div className="flex flex-col items-center justify-center p-12 bg-amber-50/50 rounded-2xl border-2 border-amber-200 min-h-[300px]">
           <Loader2 className="w-8 h-8 text-amber-600 animate-spin mb-2" />
-          <p className="text-xs font-bold text-amber-900">Đang khởi tạo đường dẫn xem tài liệu tạm thời (Signed URL)...</p>
+          <p className="text-xs font-bold text-amber-900">
+            {type === 'scorm' ? 'Đang khởi tạo môi trường bài học SCORM...' : 'Đang khởi tạo đường dẫn xem an toàn (Signed URL)...'}
+          </p>
         </div>
       );
     }
@@ -96,9 +159,31 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       );
     }
 
-    const type = material.file_type?.toLowerCase();
+    // 1. XEM GÓI SCORM 1.2 / 2004
+    if (type === 'scorm' && scormPlayerUrl) {
+      return (
+        <div className="w-full h-[68vh] bg-slate-900 rounded-2xl overflow-hidden border-4 border-amber-400 relative shadow-inner flex flex-col">
+          <div className="bg-amber-500 px-4 py-2 flex items-center justify-between text-amber-950 font-black text-xs">
+            <span className="flex items-center gap-1.5">
+              <Layers className="w-4 h-4" /> Khung bài học SCORM (Chuẩn {scormVersion})
+            </span>
+            <span className="text-[10px] bg-amber-100/90 px-2 py-0.5 rounded font-bold">
+              Isolated Origin Sandbox
+            </span>
+          </div>
 
-    // 1. XEM FILE HÌNH ẢNH
+          <iframe
+            src={scormPlayerUrl}
+            title={material.title}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
+            allow="fullscreen; autoplay"
+            className="w-full flex-1 border-none bg-white"
+          />
+        </div>
+      );
+    }
+
+    // 2. XEM FILE HÌNH ẢNH
     if (type === 'image' && signedUrl) {
       return (
         <div className="flex flex-col items-center justify-center p-2 bg-slate-900/90 rounded-2xl overflow-hidden min-h-[350px]">
@@ -111,14 +196,14 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       );
     }
 
-    // 2. XEM FILE VIDEO
+    // 3. XEM FILE VIDEO
     if (type === 'video' && signedUrl) {
       return (
         <div className="flex flex-col items-center justify-center bg-black rounded-2xl overflow-hidden min-h-[350px]">
           <video
             src={signedUrl}
             controls
-            controlsList={!isDownloadAllowed ? "nodownload" : undefined}
+            controlsList={!isDownloadAllowed ? 'nodownload' : undefined}
             autoPlay={false}
             className="w-full max-h-[60vh] rounded-xl"
           >
@@ -128,7 +213,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       );
     }
 
-    // 3. XEM FILE PDF TRỰC TIẾP
+    // 4. XEM FILE PDF TRỰC TIẾP
     if (type === 'pdf' && signedUrl) {
       return (
         <div className="w-full h-[60vh] bg-slate-100 rounded-2xl overflow-hidden border-2 border-slate-200 relative">
@@ -141,7 +226,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       );
     }
 
-    // 4. WORD, POWERPOINT, LINK HOẶC FILE KHÁC
+    // 5. WORD, POWERPOINT, LINK HOẶC FILE KHÁC
     return (
       <div className="p-8 bg-amber-50/80 border-2 border-amber-200 rounded-3xl text-center flex flex-col items-center justify-center min-h-[260px]">
         <div className="w-20 h-20 bg-amber-100 rounded-3xl border-4 border-amber-300 flex items-center justify-center mb-4 text-amber-800 shadow-md">
@@ -158,7 +243,6 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             : `Tài liệu dạng tệp ${type?.toUpperCase()}. Bấm nút bên dưới để xem tệp.`}
         </p>
 
-        {/* Nút xem đường dẫn bên ngoài hoặc mở tab mới chỉ khi được phép */}
         {signedUrl && (isDownloadAllowed || type === 'link') && (
           <a
             href={signedUrl}
@@ -177,16 +261,32 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
       <div className="relative w-full max-w-4xl bg-white rounded-3xl border-4 border-amber-300 p-5 sm:p-7 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
-
         {/* HEADER MODAL */}
         <div className="flex items-center justify-between border-b-2 border-amber-100 pb-4 mb-4">
           <div className="pr-8">
-            <span className="px-3 py-1 bg-amber-100 text-amber-900 text-[11px] font-black rounded-xl border border-amber-300 uppercase inline-block mb-1">
-              📖 {material.subject} {material.className ? `• ${formatClassLabel(material.className)}` : ''}
-            </span>
-            <h3 className="text-lg sm:text-xl font-black text-amber-950 line-clamp-1">
-              {material.title}
-            </h3>
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <span className="px-3 py-0.5 bg-amber-100 text-amber-900 text-[11px] font-black rounded-xl border border-amber-300 uppercase inline-block">
+                📖 {material.subject} {material.className ? `• ${formatClassLabel(material.className)}` : ''}
+              </span>
+
+              {material.visibility === 'public' && (
+                <span className="px-2.5 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-black rounded-lg border border-sky-300">
+                  🌐 Công khai
+                </span>
+              )}
+              {material.visibility === 'school' && (
+                <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] font-black rounded-lg border border-indigo-300">
+                  🏫 Toàn trường
+                </span>
+              )}
+              {type === 'scorm' && (
+                <span className="px-2.5 py-0.5 bg-purple-100 text-purple-800 text-[10px] font-black rounded-lg border border-purple-300 flex items-center gap-1">
+                  <Layers className="w-3 h-3" /> SCORM {scormVersion}
+                </span>
+              )}
+            </div>
+
+            <h3 className="text-lg sm:text-xl font-black text-amber-950 line-clamp-1">{material.title}</h3>
           </div>
 
           <button
@@ -216,7 +316,8 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
                   <User className="w-3.5 h-3.5 text-amber-600" /> {material.authorName || 'Giáo viên'}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-sky-600" /> {new Date(material.created_at).toLocaleDateString('vi-VN')}
+                  <Calendar className="w-3.5 h-3.5 text-sky-600" />{' '}
+                  {new Date(material.created_at).toLocaleDateString('vi-VN')}
                 </span>
                 {material.file_size > 0 && (
                   <span className="flex items-center gap-1.5">
@@ -232,7 +333,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
                   </span>
                 ) : (
                   <span className="px-2.5 py-0.5 bg-rose-100 text-rose-800 rounded-lg text-[11px] font-black flex items-center gap-1">
-                    <Lock className="w-3 h-3" /> Chỉ xem trực tiếp (Không cho phép tải xuống)
+                    <Lock className="w-3 h-3" /> Chỉ xem trực tiếp
                   </span>
                 )}
               </div>
@@ -240,7 +341,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
           </div>
         </div>
 
-        {/* FOOTER MODAL & NÚT DOWNLOAD */}
+        {/* FOOTER MODAL & NÚT DOWNLOAD / SHARE */}
         <div className="pt-3 border-t-2 border-amber-100 flex items-center justify-between gap-3">
           <button
             onClick={onClose}
@@ -249,9 +350,21 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             Đóng
           </button>
 
-          <div className="flex items-center gap-2">
-            {/* KHI ALLOW_DOWNLOAD = FALSE: KHÔNG HIỂN THỊ NÚT MỞ TAB MỚI VÀ KHÔNG HIỂN THỊ NÚT TẢI XUỐNG */}
-            {isDownloadAllowed && signedUrl && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Nút Copy Link nếu là Public Material */}
+            {material.visibility === 'public' && material.share_token && (
+              <button
+                type="button"
+                onClick={handleCopyShareLink}
+                className="px-4 py-2.5 bg-sky-100 hover:bg-sky-200 text-sky-800 font-black text-xs rounded-xl flex items-center gap-1.5 transition-all"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedLink ? 'Đã Sao Chép Link!' : 'Sao Chép Link'}
+              </button>
+            )}
+
+            {/* Nút Download cho các tệp thông thường */}
+            {isDownloadAllowed && signedUrl && type !== 'scorm' && (
               <>
                 <a
                   href={signedUrl}
@@ -275,7 +388,6 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             )}
           </div>
         </div>
-
       </div>
     </div>
   );
