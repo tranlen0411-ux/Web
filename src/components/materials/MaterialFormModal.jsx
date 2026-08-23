@@ -266,6 +266,24 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
       // BƯỚC 1: LƯU BẢN GHI LEARNING_MATERIALS VÀO DATABASE ĐỂ TẠO ANCHOR
       // ====================================================================
       setProgressText('Đang khởi tạo bản ghi bài giảng trong hệ thống...');
+
+      // Xử lý share_token khớp ràng buộc check_share_token_consistency:
+      // 1. Khi visibility === 'public':
+      //    - Edit bài đang public: giữ nguyên share_token cũ
+      //    - Tạo mới hoặc chuyển từ class/school sang public: tạo token ngẫu nhiên mới
+      // 2. Khi visibility === 'class' hoặc 'school':
+      //    - Bắt buộc share_token = null
+      let computedShareToken = null;
+      if (visibility === 'public') {
+        if (materialToEdit && materialToEdit.visibility === 'public' && materialToEdit.share_token) {
+          computedShareToken = materialToEdit.share_token;
+        } else {
+          computedShareToken = crypto.randomUUID().replace(/-/g, '');
+        }
+      } else {
+        computedShareToken = null;
+      }
+
       const payload = {
         title: title.trim(),
         description: description.trim(),
@@ -278,6 +296,7 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         external_url: sourceType === 'link' ? externalUrl.trim() : null,
         allow_download: allowDownload,
         visibility: visibility,
+        share_token: computedShareToken,
         updated_at: new Date().toISOString(),
       };
 
