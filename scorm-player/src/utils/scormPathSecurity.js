@@ -4,6 +4,7 @@
 export const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
+  '.xhtml': 'application/xhtml+xml; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -16,11 +17,14 @@ export const MIME_TYPES = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
+  '.bmp': 'image/bmp',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
@@ -28,6 +32,8 @@ export const MIME_TYPES = {
   '.eot': 'application/vnd.ms-fontobject',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8',
+  '.vtt': 'text/vtt; charset=utf-8',
+  '.wasm': 'application/wasm',
 };
 
 /**
@@ -37,22 +43,39 @@ export const MIME_TYPES = {
  */
 function getFileExtension(filePath) {
   if (!filePath) return '';
-  const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-  const fileName = lastSlash !== -1 ? filePath.substring(lastSlash + 1) : filePath;
+  const clean = filePath.split('?')[0].split('#')[0];
+  const lastSlash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  const fileName = lastSlash !== -1 ? clean.substring(lastSlash + 1) : clean;
   const lastDot = fileName.lastIndexOf('.');
   if (lastDot === -1 || lastDot === 0) return '';
   return fileName.substring(lastDot).toLowerCase();
 }
 
 /**
- * Lấy MIME Type phù hợp từ tên tệp
+ * Lấy MIME Type phù hợp từ tên tệp và tùy chọn upstream MIME
  * @param {string} filePath
+ * @param {string} [upstreamContentType]
  * @returns {string}
  */
-export function getMimeTypeForAsset(filePath) {
-  if (!filePath) return 'application/octet-stream';
-  const ext = getFileExtension(filePath);
-  return MIME_TYPES[ext] || 'application/octet-stream';
+export function getMimeTypeForAsset(filePath, upstreamContentType) {
+  const cleanPath = filePath ? filePath.split('?')[0].split('#')[0] : '';
+  const effectivePath = (!cleanPath || cleanPath.endsWith('/')) ? 'index.html' : cleanPath;
+  const ext = getFileExtension(effectivePath);
+
+  if (ext && MIME_TYPES[ext]) {
+    return MIME_TYPES[ext];
+  }
+
+  if (
+    upstreamContentType &&
+    upstreamContentType !== 'application/octet-stream' &&
+    upstreamContentType !== 'text/plain' &&
+    upstreamContentType !== 'text/plain; charset=utf-8'
+  ) {
+    return upstreamContentType;
+  }
+
+  return 'application/octet-stream';
 }
 
 /**
