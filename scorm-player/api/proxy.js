@@ -114,18 +114,22 @@ export default async function handler(request) {
       responseHeaders.delete('Location');
     }
 
+    // Filter CSP on SCORM asset endpoints (/session/<token>/...) so upstream CSP sandbox does not block SCO scripts
+    const sessionMatch = url.pathname.match(/^\/session\/[^/]+(?:\/(.*))?$/);
+    if (sessionMatch) {
+      responseHeaders.delete('content-security-policy');
+      responseHeaders.delete('content-security-policy-report-only');
+    }
+
     // Deterministic MIME preservation for SCORM assets and session-info
     if (upstreamRes.status === 200 || upstreamRes.status === 206) {
       if (url.pathname === '/session-info') {
         responseHeaders.set('Content-Type', 'application/json; charset=utf-8');
-      } else {
-        const sessionMatch = url.pathname.match(/^\/session\/[^/]+(?:\/(.*))?$/);
-        if (sessionMatch) {
-          const relativeAssetPath = sessionMatch[1] || '';
-          const upstreamContentType = upstreamRes.headers.get('content-type');
-          const resolvedMime = getMimeTypeForAsset(relativeAssetPath, upstreamContentType);
-          responseHeaders.set('Content-Type', resolvedMime);
-        }
+      } else if (sessionMatch) {
+        const relativeAssetPath = sessionMatch[1] || '';
+        const upstreamContentType = upstreamRes.headers.get('content-type');
+        const resolvedMime = getMimeTypeForAsset(relativeAssetPath, upstreamContentType);
+        responseHeaders.set('Content-Type', resolvedMime);
       }
     }
 

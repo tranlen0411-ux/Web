@@ -249,6 +249,20 @@ async function runPlayerHostTestSuite() {
           return;
         }
 
+        if (rawPath === 'csp-test.html') {
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Security-Policy': 'sandbox allow-downloads; default-src \'none\'',
+            'Content-Security-Policy-Report-Only': 'default-src \'self\'',
+            'X-Custom-Upstream': 'custom-gw-value',
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'private, no-transform, max-age=300',
+          });
+          if (req.method === 'HEAD') res.end();
+          else res.end('<!DOCTYPE html><html><head><title>CSP Test</title></head><body><h1>CSP Cleaned</h1></body></html>');
+          return;
+        }
+
         if (rawPath === 'media/intro.mp4') {
           const totalLength = videoBuffer.length;
           const range = req.headers['range'];
@@ -600,6 +614,41 @@ async function runPlayerHostTestSuite() {
       assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
     }
     recordPass('HOST22', 'Headers bảo mật X-Content-Type-Options: nosniff và Referrer-Policy: no-referrer được bảo toàn 100% trên mọi phản hồi');
+
+    // -------------------------------------------------------------
+    // CÁC KIỂM THỬ CSP FILTERING CHO SCORM ASSET ENDPOINTS (SCORM G6)
+    // -------------------------------------------------------------
+
+    // HOST23: Upstream Content-Security-Policy on /session/<token>/... is ABSENT downstream
+    const rHost23 = await reqPlayer(`/session/${validToken}/csp-test.html`);
+    assert.equal(rHost23.status, 200);
+    assert.equal(rHost23.headers.get('content-security-policy'), '');
+    recordPass('HOST23', 'Upstream Content-Security-Policy: sandbox trên /session/:token/... bị loại bỏ hoàn toàn (Downstream CSP ABSENT)');
+
+    // HOST24: Upstream Content-Security-Policy-Report-Only is ABSENT downstream
+    assert.equal(rHost23.headers.get('content-security-policy-report-only'), '');
+    recordPass('HOST24', 'Upstream Content-Security-Policy-Report-Only trên /session/:token/... bị loại bỏ hoàn toàn');
+
+    // HOST25: Non-CSP custom upstream header is preserved downstream
+    assert.equal(rHost23.headers.get('x-custom-upstream'), 'custom-gw-value');
+    recordPass('HOST25', 'Các custom headers không liên quan tới CSP từ upstream được bảo toàn nguyên vẹn');
+
+    // HOST26: Security headers nosniff and no-referrer are preserved on CSP filtered response
+    assert.equal(rHost23.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(rHost23.headers.get('referrer-policy'), 'no-referrer');
+    recordPass('HOST26', 'Các security headers cơ bản (X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) giữ nguyên vẹn');
+
+    // HOST27: Content-Type normalization and Cache-Control preserved
+    assert.equal(rHost23.headers.get('content-type'), 'text/html; charset=utf-8');
+    assert.equal(rHost23.headers.get('cache-control'), 'private, no-transform, max-age=300');
+    assert.ok(rHost23.bodyText.includes('CSP Cleaned'));
+    recordPass('HOST27', 'Content-Type text/html; charset=utf-8 và Cache-Control được bảo toàn');
+
+    // HOST28: /session-info behavior unchanged
+    const rHost28 = await reqPlayer(`/session-info?session=${validToken}`);
+    assert.equal(rHost28.status, 200);
+    assert.equal(rHost28.headers.get('content-type'), 'application/json; charset=utf-8');
+    recordPass('HOST28', 'Endpoint /session-info hoạt động ổn định và giữ nguyên hợp đồng trả về');
 
     console.log('\n================================================================');
     console.log(`🎉 TẤT CẢ ${passedTests}/${totalTests} KIỂM THỬ PLAYER HOST ĐÃ HOÀN TẤT VÀ PASS 100%!`);
