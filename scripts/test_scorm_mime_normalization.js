@@ -1,58 +1,97 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 
-console.log('=== RUNNING TARGETED TESTS FOR SCORM G6 ZIP UPLOAD MIME NORMALIZATION ===\n');
+console.log('=== RUNNING TARGETED TESTS FOR SCORM G6 ZIP MIME BODY NORMALIZATION ===\n');
 
-// Đọc source code MaterialFormModal.jsx
+// 1. Kiểm tra File/Blob normalization logic với bytes thực tế
+console.log('[TEST 1, 2, 3, 6] Simulating browser File/Blob slice normalization:');
+
+const sampleZipBytes = Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00]); // PK header
+const originalFileMeta = { name: 'lesson_math_grade1.zip', size: sampleZipBytes.length };
+
+const testCases = [
+  { desc: 'Windows Chrome MIME', mime: 'application/x-zip-compressed' },
+  { desc: 'Standard MIME', mime: 'application/zip' },
+  { desc: 'Empty MIME (undetected by OS)', mime: '' }
+];
+
+for (const tc of testCases) {
+  const originalBlob = new Blob([sampleZipBytes], { type: tc.mime });
+  assert.strictEqual(originalBlob.type, tc.mime, `Original mime should be ${tc.mime}`);
+
+  // Áp dụng kỹ thuật: file.slice(0, file.size, 'application/zip')
+  const normalizedBlob = originalBlob.slice(0, originalBlob.size, 'application/zip');
+
+  // Verify:
+  assert.strictEqual(normalizedBlob.type, 'application/zip', `${tc.desc}: normalized type must be application/zip`);
+  assert.strictEqual(normalizedBlob.size, originalBlob.size, `${tc.desc}: size must match exactly`);
+  
+  // Verify byte content preservation
+  const normBuffer = Buffer.from(await normalizedBlob.arrayBuffer());
+  assert.strictEqual(normBuffer.length, sampleZipBytes.length, `${tc.desc}: byte length must match`);
+  assert.deepStrictEqual(normBuffer, sampleZipBytes, `${tc.desc}: binary contents must be 100% identical`);
+  
+  console.log(`  -> PASS [${tc.desc}]: '${tc.mime || "(empty)"}' -> '${normalizedBlob.type}' (Bytes: ${normBuffer.length} bytes preserved)`);
+}
+
+// 2. Kiểm tra Source Code Modal
+console.log('\n[TEST 4, 5, 7, 8, 9] Verifying MaterialFormModal.jsx implementation:');
 const fileContent = fs.readFileSync('src/components/materials/MaterialFormModal.jsx', 'utf8');
 
-// Test 1, 2, 3: SCORM Upload Option Check
-// Khi isScormUpload là true, dù browser gửi file.type là gì:
-// - 'application/x-zip-compressed' (Windows Chrome)
-// - 'application/zip' (chuẩn RFC / macOS / Linux)
-// - '' (trống khi browser không nhận diện được extension .zip)
-// Hàm upload của Supabase Storage luôn nhận object options cố định có contentType: 'application/zip'.
-const scormUploadSnippet = fileContent.substring(
+// Test SCORM upload body & options
+const scormUploadSection = fileContent.substring(
   fileContent.indexOf('BƯỚC 3: TẢI TỆP ZIP GỐC LÊN BUCKET LEARNING-MATERIALS'),
   fileContent.indexOf('newlyUploadedPath = zipStoragePath;')
 );
 
-console.log('[TEST 1, 2, 3] Verifying SCORM ZIP Storage upload options:');
-assert.ok(scormUploadSnippet.includes(".from('learning-materials')"), 'Must target learning-materials bucket');
-assert.ok(scormUploadSnippet.includes("contentType: 'application/zip'"), 'Must explicitly specify contentType: application/zip');
-assert.ok(scormUploadSnippet.includes("cacheControl: '3600'"), 'Must keep cacheControl: 3600');
-assert.ok(scormUploadSnippet.includes("upsert: false"), 'Must keep upsert: false');
-console.log('  -> PASS: SCORM ZIP upload options always normalize contentType to application/zip regardless of browser MIME.\n');
+assert.ok(
+  scormUploadSection.includes("const normalizedZipBlob = file.slice(0, file.size, 'application/zip');"),
+  'Must create normalizedZipBlob via file.slice(0, file.size, "application/zip")'
+);
+assert.ok(
+  scormUploadSection.includes(".upload(zipStoragePath, normalizedZipBlob, { contentType: 'application/zip', cacheControl: '3600', upsert: false })"),
+  'Must upload normalizedZipBlob and keep contentType option defense-in-depth'
+);
+console.log('  -> PASS: SCORM upload body is normalizedZipBlob with contentType option preserved.');
 
-// Test 4: Normal non-SCORM upload path unchanged
-console.log('[TEST 4] Verifying normal non-SCORM upload path:');
-const normalUploadSnippet = fileContent.substring(
+// Test payload preserves original file.name and file.size
+const payloadSection = fileContent.substring(
+  fileContent.indexOf('const payload = {'),
+  fileContent.indexOf('let savedMaterialId = materialToEdit?.id;')
+);
+assert.ok(payloadSection.includes("file_name: sourceType === 'file' ? (file ? file.name : finalFileName) : null"), 'DB payload must preserve original file.name');
+assert.ok(payloadSection.includes("file_size: sourceType === 'file' ? (file ? file.size : finalFileSize) : 0"), 'DB payload must preserve original file.size');
+console.log('  -> PASS: DB metadata preserves original file.name and file.size.');
+
+// Test Normal non-SCORM upload path unchanged
+const normalUploadSection = fileContent.substring(
   fileContent.indexOf('XỬ LÝ UPLOAD FILE THƯỜNG KHÁC'),
   fileContent.indexOf('newlyUploadedPath = storagePath;')
 );
-assert.ok(normalUploadSnippet.includes(".upload(storagePath, file, { cacheControl: '3600', upsert: false })"), 'Normal upload options must NOT have contentType override');
-console.log('  -> PASS: Normal non-SCORM upload remains unchanged.\n');
+assert.ok(
+  normalUploadSection.includes(".upload(storagePath, file, { cacheControl: '3600', upsert: false })"),
+  'Normal non-SCORM upload must remain unchanged with raw file and standard options'
+);
+console.log('  -> PASS: Normal non-SCORM upload path is completely untouched.');
 
-// Test 5: share_token behavior unchanged
-console.log('[TEST 5] Verifying share_token behavior:');
-const shareTokenSnippet = fileContent.substring(
+// Test share_token logic intact
+const shareTokenSection = fileContent.substring(
   fileContent.indexOf('// Xử lý share_token khớp ràng buộc check_share_token_consistency:'),
   fileContent.indexOf('const payload = {')
 );
-assert.ok(shareTokenSnippet.includes("if (visibility === 'public')"), 'Must handle public visibility');
-assert.ok(shareTokenSnippet.includes("computedShareToken = crypto.randomUUID().replace(/-/g, '')"), 'Must generate random token for new public');
-assert.ok(shareTokenSnippet.includes("computedShareToken = null;"), 'Must set null for class/school');
-console.log('  -> PASS: share_token contract and consistency logic intact.\n');
+assert.ok(shareTokenSection.includes("if (visibility === 'public')"), 'Public visibility logic intact');
+assert.ok(shareTokenSection.includes("computedShareToken = crypto.randomUUID().replace(/-/g, '')"), 'Token generation intact');
+assert.ok(shareTokenSection.includes("computedShareToken = null;"), 'Class/school null token intact');
+console.log('  -> PASS: share_token contract logic is intact.');
 
-// Test 6: SCORM rollback behavior unchanged
-console.log('[TEST 6] Verifying SCORM rollback behavior:');
-const rollbackSnippet = fileContent.substring(
+// Test rollback logic intact
+const rollbackSection = fileContent.substring(
   fileContent.indexOf('// Rollback dọn dẹp Storage nếu fail'),
   fileContent.indexOf('setErrorMsg(err.message')
 );
-assert.ok(rollbackSnippet.includes("await supabase.storage.from('learning-materials').remove([newlyUploadedPath])"), 'Must clean learning-materials storage');
-assert.ok(rollbackSnippet.includes("await cleanupScormPackageStorage(`${profile.id}/${newlyCreatedPackageId}`)"), 'Must clean scorm-content bucket');
-assert.ok(rollbackSnippet.includes(".update({ status: 'failed' })"), 'Must mark package status failed');
-console.log('  -> PASS: SCORM rollback and error cleanup logic intact.\n');
+assert.ok(rollbackSection.includes("await supabase.storage.from('learning-materials').remove([newlyUploadedPath])"), 'Storage rollback intact');
+assert.ok(rollbackSection.includes("await cleanupScormPackageStorage(`${profile.id}/${newlyCreatedPackageId}`)"), 'SCORM package cleanup intact');
+assert.ok(rollbackSection.includes(".update({ status: 'failed' })"), 'Status failed update intact');
+console.log('  -> PASS: Rollback and error recovery logic is intact.\n');
 
-console.log('ALL 6 TARGETED TESTS PASSED SUCCESSFULLY! ✅');
+console.log('ALL TARGETED TESTS PASSED SUCCESSFULLY! ✅');
