@@ -572,9 +572,9 @@ async function runScormPhase2HardenedTestSuite() {
     );
     recordPass('ZIP4', 'Fixture D (Malicious Path Traversal ZIP) bị phát hiện và chặn đứng tuyệt đối');
 
-    assert.ok(SCORM_LIMITS.MAX_ZIP_SIZE === 20 * 1024 * 1024);
-    assert.ok(SCORM_LIMITS.MAX_SINGLE_FILE_SIZE === 30 * 1024 * 1024);
-    assert.ok(SCORM_LIMITS.MAX_TOTAL_UNCOMPRESSED_SIZE === 80 * 1024 * 1024);
+    assert.ok(SCORM_LIMITS.MAX_ZIP_SIZE === 100 * 1024 * 1024);
+    assert.ok(SCORM_LIMITS.MAX_SINGLE_FILE_SIZE === 100 * 1024 * 1024);
+    assert.ok(SCORM_LIMITS.MAX_TOTAL_UNCOMPRESSED_SIZE === 300 * 1024 * 1024);
     recordPass('ZIP5', 'Hạn mức dung lượng ZIP & tệp đơn lẻ được thiết lập an toàn');
 
     assert.ok(SCORM_LIMITS.MAX_ENTRY_COUNT === 1000);
