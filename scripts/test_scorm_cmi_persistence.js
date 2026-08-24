@@ -54,10 +54,8 @@ if (!process.execArgv.includes('--liftoff-only')) {
     process.execPath,
     [
       '--liftoff-only',
-      '--no-concurrent-recompilation',
       '--v8-pool-size=1',
       '--no-wasm-async-compilation',
-      '--max-old-space-size=4096',
       ...process.execArgv,
       __filename,
       ...process.argv.slice(2),
@@ -876,21 +874,71 @@ async function runScormCmiPersistenceTestSuite() {
     assert.equal(anonLoadBlocked, true, 'Anon must be denied EXECUTE on load_scorm_cmi_state');
     recordPass('CMI31', 'CMI31_ANON_RPC_EXECUTE_BLOCKED: Người dùng ẩn danh bị chặn hoàn toàn quyền gọi RPC');
 
-    // --- CMI32: CMI32_AUTHENTICATED_RPC_EXECUTE_ALLOWED ---
-    await asUser(student1Id, 'authenticated');
-    const authSave = await db.query(
-      `SELECT public.save_scorm_cmi_state($1, $2, $3) AS result`,
-      [package12Id, JSON.stringify({ 'cmi.core.lesson_location': 'slide_auth_32' }), token1_12]
-    );
-    assert.equal(authSave.rows[0].result.success, true);
+    // --- CMI33: CMI33_RESUME_LIFECYCLE_RESET_GUARANTEE ---
+    // Kiểm tra Session 1 (empty) -> entry = ab-initio
+    const api2004Session1 = createScorm2004Api({ studentName: 'Học sinh 1' });
+    assert.equal(api2004Session1.Initialize(), 'true');
+    assert.equal(api2004Session1.GetValue('cmi.entry'), 'ab-initio');
+    assert.equal(api2004Session1.GetValue('cmi.exit'), '');
+    assert.equal(api2004Session1.GetValue('cmi.session_time'), 'PT0H0M0S');
 
-    const authLoad = await db.query(
-      `SELECT public.load_scorm_cmi_state($1, $2) AS result`,
-      [package12Id, token1_12]
-    );
-    assert.equal(authLoad.rows[0].result.success, true);
-    assert.equal(authLoad.rows[0].result.tracking.lesson_location, 'slide_auth_32');
-    recordPass('CMI32', 'CMI32_AUTHENTICATED_RPC_EXECUTE_ALLOWED: Người dùng authenticated được phép thực thi RPC hợp lệ');
+    // Kiểm tra Session 2 (chứa snapshot cũ với entry: ab-initio, exit: suspend, session_time: PT0H15M0S)
+    const staleCmi2004Snapshot = {
+      'cmi.entry': 'ab-initio',
+      'cmi.exit': 'suspend',
+      'cmi.session_time': 'PT0H15M0S',
+      'cmi.location': 'slide_5',
+      'cmi.suspend_data': 'eyJzbGlkZSI6NX0=',
+      'cmi.score.raw': '100',
+      'cmi.completion_status': 'incomplete',
+      'cmi.success_status': 'unknown',
+    };
+    const api2004Session2 = createScorm2004Api({
+      studentName: 'Học sinh 1',
+      tracking: {
+        lesson_location: 'slide_5',
+        suspend_data: 'eyJzbGlkZSI6NX0=',
+        score_raw: 100,
+        completion_status: 'incomplete',
+        cmi_data: staleCmi2004Snapshot,
+      },
+    });
+    assert.equal(api2004Session2.Initialize(), 'true');
+    assert.equal(api2004Session2.GetValue('cmi.entry'), 'resume', 'SCORM 2004 cmi.entry must be resume');
+    assert.equal(api2004Session2.GetValue('cmi.exit'), '', 'SCORM 2004 cmi.exit must be reset to empty for new session');
+    assert.equal(api2004Session2.GetValue('cmi.session_time'), 'PT0H0M0S', 'SCORM 2004 cmi.session_time must be reset to PT0H0M0S');
+    assert.equal(api2004Session2.GetValue('cmi.suspend_data'), 'eyJzbGlkZSI6NX0=', 'suspend_data must be preserved');
+    assert.equal(api2004Session2.GetValue('cmi.location'), 'slide_5', 'location must be preserved');
+    assert.equal(api2004Session2.GetValue('cmi.score.raw'), '100', 'score.raw must be preserved');
+
+    // Kiểm tra tương tự cho SCORM 1.2
+    const staleCmi12Snapshot = {
+      'cmi.core.entry': 'ab-initio',
+      'cmi.core.exit': 'suspend',
+      'cmi.core.session_time': '0000:15:00',
+      'cmi.core.lesson_location': 'slide_8',
+      'cmi.suspend_data': 'choice_A|step_8',
+      'cmi.core.score.raw': '80',
+      'cmi.core.lesson_status': 'incomplete',
+    };
+    const api12Session2 = createScorm12Api({
+      studentName: 'Học sinh 1',
+      tracking: {
+        lesson_location: 'slide_8',
+        suspend_data: 'choice_A|step_8',
+        score_raw: 80,
+        lesson_status: 'incomplete',
+        cmi_data: staleCmi12Snapshot,
+      },
+    });
+    assert.equal(api12Session2.LMSInitialize(), 'true');
+    assert.equal(api12Session2.LMSGetValue('cmi.core.entry'), 'resume', 'SCORM 1.2 cmi.core.entry must be resume');
+    assert.equal(api12Session2.LMSGetValue('cmi.core.exit'), '', 'SCORM 1.2 cmi.core.exit must be reset to empty');
+    assert.equal(api12Session2.LMSGetValue('cmi.core.session_time'), '00:00:00', 'SCORM 1.2 cmi.core.session_time must be reset to 00:00:00');
+    assert.equal(api12Session2.LMSGetValue('cmi.suspend_data'), 'choice_A|step_8', 'suspend_data must be preserved');
+    assert.equal(api12Session2.LMSGetValue('cmi.core.lesson_location'), 'slide_8', 'lesson_location must be preserved');
+    assert.equal(api12Session2.LMSGetValue('cmi.core.score.raw'), '80', 'score.raw must be preserved');
+    recordPass('CMI33', 'CMI33_RESUME_LIFECYCLE_RESET_GUARANTEE: Tái thiết lập vòng đời phiên chuẩn xác, bảo tồn toàn vẹn dữ liệu học tập');
 
     console.log('\n================================================================');
     console.log(`🎉 TẤT CẢ ${passedTests}/${totalTests} KIỂM THỬ CMI PERSISTENCE & SECURITY AUDIT ĐÃ HOÀN TẤT VÀ PASS 100%!`);

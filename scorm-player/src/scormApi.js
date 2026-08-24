@@ -31,10 +31,21 @@ export function createScorm12Api(initialData = {}, onCommitCallback = null) {
     'cmi.comments_from_lms': '',
   };
 
-  // Nạp thêm các trường bổ sung từ cmi_data nếu có
+  // Nạp thêm các trường bổ sung từ cmi_data nếu có (giữ lại suspend_data, location, score, interactions...)
   if (persisted.cmi_data && typeof persisted.cmi_data === 'object') {
     Object.assign(cmi, persisted.cmi_data);
   }
+
+  // Tái thiết lập các trường vòng đời cho phiên học mới (Session Lifecycle Reset)
+  const hasProgress12 = Boolean(
+    cmi['cmi.core.lesson_location'] ||
+    cmi['cmi.suspend_data'] ||
+    persisted.lesson_location ||
+    persisted.suspend_data
+  );
+  cmi['cmi.core.entry'] = hasProgress12 ? 'resume' : 'ab-initio';
+  cmi['cmi.core.exit'] = '';
+  cmi['cmi.core.session_time'] = '00:00:00';
 
   const errorMessages = {
     '0': 'No error',
@@ -165,9 +176,22 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
     'cmi.launch_data': '',
   };
 
+  // Nạp thêm các trường bổ sung từ cmi_data nếu có (giữ lại suspend_data, location, score, interactions...)
   if (persisted.cmi_data && typeof persisted.cmi_data === 'object') {
     Object.assign(cmi, persisted.cmi_data);
   }
+
+  // Tái thiết lập các trường vòng đời cho phiên học mới (Session Lifecycle Reset)
+  const hasProgress2004 = Boolean(
+    cmi['cmi.location'] ||
+    cmi['cmi.suspend_data'] ||
+    persisted.lesson_location ||
+    persisted.location ||
+    persisted.suspend_data
+  );
+  cmi['cmi.entry'] = hasProgress2004 ? 'resume' : 'ab-initio';
+  cmi['cmi.exit'] = '';
+  cmi['cmi.session_time'] = 'PT0H0M0S';
 
   const errorMessages = {
     '0': 'No error',
