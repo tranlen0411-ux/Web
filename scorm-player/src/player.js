@@ -119,6 +119,37 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       if (payload && payload.tracking) {
         console.log('🔄 [SCORM Player] Dynamic CMI state restored via postMessage payload');
       }
+    } else if (type === 'SCORM_REQUEST_SAVE_BEFORE_CLOSE') {
+      try {
+        const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+        const activeApi = is2004 ? window.API_1484_11 : window.API;
+
+        if (activeApi && typeof activeApi._getCmi === 'function') {
+          const snapshot = activeApi._getCmi();
+          handleCmiCommit(snapshot, 'PARENT_CLOSE_SNAPSHOT');
+        } else {
+          if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
+            window.parent.postMessage(
+              {
+                type: 'SCORM_CLOSE_SNAPSHOT_FAILED',
+                payload: { error: 'API_GET_CMI_NOT_AVAILABLE', scormVersion },
+              },
+              parentOrigin
+            );
+          }
+        }
+      } catch (snapErr) {
+        console.warn('[SCORM Player] Failed to capture snapshot before close:', snapErr.message);
+        if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
+          window.parent.postMessage(
+            {
+              type: 'SCORM_CLOSE_SNAPSHOT_FAILED',
+              payload: { error: snapErr.message, scormVersion },
+            },
+            parentOrigin
+          );
+        }
+      }
     }
   });
 

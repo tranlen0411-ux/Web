@@ -874,6 +874,22 @@ async function runScormCmiPersistenceTestSuite() {
     assert.equal(anonLoadBlocked, true, 'Anon must be denied EXECUTE on load_scorm_cmi_state');
     recordPass('CMI31', 'CMI31_ANON_RPC_EXECUTE_BLOCKED: Người dùng ẩn danh bị chặn hoàn toàn quyền gọi RPC');
 
+    // --- CMI32: CMI32_AUTHENTICATED_RPC_EXECUTE_ALLOWED ---
+    await asUser(student1Id);
+    const authSaveRes = await db.query(
+      `SELECT public.save_scorm_cmi_state($1, $2, $3) AS result`,
+      [package12Id, JSON.stringify({ 'cmi.core.lesson_location': 'slide_auth_allowed_32' }), token1_12]
+    );
+    assert.equal(authSaveRes.rows[0].result.success, true);
+
+    const authLoadRes = await db.query(
+      `SELECT public.load_scorm_cmi_state($1, $2) AS result`,
+      [package12Id, token1_12]
+    );
+    assert.equal(authLoadRes.rows[0].result.success, true);
+    assert.equal(authLoadRes.rows[0].result.tracking.lesson_location, 'slide_auth_allowed_32');
+    recordPass('CMI32', 'CMI32_AUTHENTICATED_RPC_EXECUTE_ALLOWED: Học sinh đã đăng nhập có toàn quyền gọi RPC đọc/lưu tiến độ');
+
     // --- CMI33: CMI33_RESUME_LIFECYCLE_RESET_GUARANTEE ---
     // Kiểm tra Session 1 (empty) -> entry = ab-initio
     const api2004Session1 = createScorm2004Api({ studentName: 'Học sinh 1' });
