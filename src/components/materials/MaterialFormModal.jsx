@@ -331,8 +331,11 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         setProgressText('Đang lưu tệp nén gốc SCORM...');
         const { error: zipUploadErr } = await supabase.storage
           .from('learning-materials')
-          .upload(zipStoragePath, file, { cacheControl: '3600', upsert: false });
-
+.upload(zipStoragePath, file, {
+  cacheControl: '3600',
+  upsert: false,
+  contentType: 'application/zip',
+});
         if (zipUploadErr) {
           throw new Error('Không thể tải tệp ZIP SCORM lên Storage: ' + zipUploadErr.message);
         }
