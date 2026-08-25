@@ -329,13 +329,17 @@ export const MaterialFormModal = ({ isOpen, onClose, materialToEdit, classesList
         // BƯỚC 3: TẢI TỆP ZIP GỐC LÊN BUCKET LEARNING-MATERIALS
         // ====================================================================
         setProgressText('Đang lưu tệp nén gốc SCORM...');
-        const { error: zipUploadErr } = await supabase.storage
-          .from('learning-materials')
-.upload(zipStoragePath, file, {
-  cacheControl: '3600',
-  upsert: false,
-  contentType: 'application/zip',
+        const normalizedZipFile = new Blob([file], {
+  type: 'application/zip',
 });
+
+const { error: zipUploadErr } = await supabase.storage
+  .from('learning-materials')
+  .upload(zipStoragePath, normalizedZipFile, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: 'application/zip',
+  });
         if (zipUploadErr) {
           throw new Error('Không thể tải tệp ZIP SCORM lên Storage: ' + zipUploadErr.message);
         }
