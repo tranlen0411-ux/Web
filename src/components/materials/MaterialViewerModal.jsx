@@ -101,12 +101,9 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
       // Khởi tạo Player URL từ Service
       const session = await createScormLaunchSession({
-        packageId: scormPkg.id,
-        contentRoot: scormPkg.content_root,
-        launchPath: scormPkg.launch_path,
-        scormVersion: scormPkg.scorm_version || '1.2',
-        studentName: 'Học sinh',
-      });
+  materialId,
+  studentName: 'Học sinh',
+});
 
       setScormPlayerUrl(session.playerUrl);
     } catch (err) {
