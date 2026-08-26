@@ -94,6 +94,23 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       if (loadingOverlay) loadingOverlay.style.display = 'none';
+      // Một số SCORM runtime tính layout trước khi iframe ổn định kích thước.
+      // Kích hoạt lại resize/reflow để tránh màn hình trắng hoặc nội dung che nút điều hướng.
+      const triggerScoReflow = () => {
+        try {
+          contentFrame.contentWindow?.dispatchEvent(new Event('resize'));
+        } catch (err) {
+          console.warn('[SCORM Player] Unable to dispatch SCO resize event:', err);
+        }
+
+        window.dispatchEvent(new Event('resize'));
+      };
+
+      requestAnimationFrame(() => {
+        triggerScoReflow();
+        setTimeout(triggerScoReflow, 150);
+        setTimeout(triggerScoReflow, 500);
+      });
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
