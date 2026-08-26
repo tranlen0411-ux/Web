@@ -101,9 +101,12 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
       // Khởi tạo Player URL từ Service
       const session = await createScormLaunchSession({
-  materialId,
-  studentName: 'Học sinh',
-});
+        packageId: scormPkg.id,
+        contentRoot: scormPkg.content_root,
+        launchPath: scormPkg.launch_path,
+        scormVersion: scormPkg.scorm_version || '1.2',
+        studentName: 'Học sinh',
+      });
 
       setScormPlayerUrl(session.playerUrl);
     } catch (err) {
@@ -172,7 +175,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
           <iframe
             src={scormPlayerUrl}
             title={material.title}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
             allow="fullscreen; autoplay"
             className="w-full flex-1 border-none bg-white"
           />
