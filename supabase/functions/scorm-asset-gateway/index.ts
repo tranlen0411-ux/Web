@@ -30,11 +30,16 @@ const corsHeaders = {
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
+  '.xhtml': 'application/xhtml+xml; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
+  '.cjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
   '.xml': 'application/xml; charset=utf-8',
+  '.xsd': 'application/xml; charset=utf-8',
+  '.dtd': 'application/xml-dtd',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -42,11 +47,20 @@ const MIME_TYPES: Record<string, string> = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
+  '.cur': 'image/x-icon',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.weba': 'audio/webm',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
+  '.mov': 'video/quicktime',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
@@ -54,12 +68,16 @@ const MIME_TYPES: Record<string, string> = {
   '.eot': 'application/vnd.ms-fontobject',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8',
+  '.vtt': 'text/vtt; charset=utf-8',
+  '.srt': 'text/plain; charset=utf-8',
+  '.wasm': 'application/wasm',
 };
 
 function getFileExtension(filePath: string): string {
   if (!filePath) return '';
-  const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-  const fileName = lastSlash !== -1 ? filePath.substring(lastSlash + 1) : filePath;
+  const cleanPath = filePath.split('?')[0].split('#')[0];
+  const lastSlash = Math.max(cleanPath.lastIndexOf('/'), cleanPath.lastIndexOf('\\'));
+  const fileName = lastSlash !== -1 ? cleanPath.substring(lastSlash + 1) : cleanPath;
   const lastDot = fileName.lastIndexOf('.');
   if (lastDot === -1 || lastDot === 0) return '';
   return fileName.substring(lastDot).toLowerCase();
@@ -68,6 +86,9 @@ function getFileExtension(filePath: string): string {
 function getMimeTypeForAsset(filePath: string): string {
   if (!filePath) return 'application/octet-stream';
   const ext = getFileExtension(filePath);
+  if (ext === '.html' || ext === '.htm') {
+    return 'text/html; charset=utf-8';
+  }
   return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
