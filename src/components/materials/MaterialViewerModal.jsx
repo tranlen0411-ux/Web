@@ -172,7 +172,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
           <iframe
             src={scormPlayerUrl}
             title={material.title}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
             allow="fullscreen; autoplay"
             className="w-full flex-1 border-none bg-white"
           />
