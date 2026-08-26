@@ -216,7 +216,7 @@ BEGIN
   -- 5. Server tự sinh 32 CSPRNG random bytes (256-bit entropy) và encode thành 64 hex chars qua pgcrypto
   v_raw_token := pg_catalog.encode(extensions.gen_random_bytes(32), 'hex');
   v_token_hash := pg_catalog.encode(extensions.digest(pg_catalog.convert_to(v_raw_token, 'UTF8'), 'sha256'), 'hex');
-  v_expires_at := pg_catalog.now() + interval '10 minutes';
+  v_expires_at := pg_catalog.now() + interval '2 hours';
 
   -- 6. Lưu session (chỉ lưu token hash, không lưu raw token)
   INSERT INTO public.scorm_launch_sessions (
@@ -306,7 +306,7 @@ BEGIN
   -- 3. Server sinh 32 CSPRNG random bytes (256-bit entropy) và encode thành 64 hex chars qua pgcrypto
   v_raw_token := pg_catalog.encode(extensions.gen_random_bytes(32), 'hex');
   v_token_hash := pg_catalog.encode(extensions.digest(pg_catalog.convert_to(v_raw_token, 'UTF8'), 'sha256'), 'hex');
-  v_expires_at := pg_catalog.now() + interval '10 minutes';
+  v_expires_at := pg_catalog.now() + interval '2 hours';
 
   -- 4. Lưu session (user_id = NULL, access_mode = 'public')
   INSERT INTO public.scorm_launch_sessions (
