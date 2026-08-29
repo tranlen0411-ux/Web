@@ -270,6 +270,7 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       isTerminated = false;
       lastError = '0';
       console.log('[SCORM 2004 API] Initialize called. Entry mode:', cmi['cmi.entry']);
+      console.log(`[SCORM DIAG] Initialize entry=${cmi['cmi.entry']}`);
       return 'true';
     },
 
@@ -299,10 +300,20 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
         return '';
       }
       lastError = '0';
+      let val = '';
       if (element in cmi) {
-        return cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
+        val = cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
       }
-      return '';
+
+      if (element === 'cmi.entry') {
+        console.log(`[SCORM DIAG] GetValue cmi.entry=${val}`);
+      } else if (element === 'cmi.suspend_data') {
+        console.log(`[SCORM DIAG] GetValue cmi.suspend_data length=${val.length}`);
+      } else if (element === 'cmi.location') {
+        console.log(`[SCORM DIAG] GetValue cmi.location=${val}`);
+      }
+
+      return val;
     },
 
     SetValue(element, value) {
