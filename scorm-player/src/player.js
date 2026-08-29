@@ -110,6 +110,11 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       return;
     }
 
+    if (window.parent && window.parent !== window && event.source !== window.parent) {
+      console.warn('[SCORM Player] Blocked unauthorized postMessage source (not window.parent)');
+      return;
+    }
+
     const { type, payload } = event.data || {};
     if (type === 'PING') {
       if (event.source && event.origin) {
@@ -118,6 +123,11 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     } else if (type === 'RESTORE_CMI') {
       if (payload && payload.tracking) {
         console.log('🔄 [SCORM Player] Dynamic CMI state restored via postMessage payload');
+        const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+        const activeApi = is2004 ? window.API_1484_11 : window.API;
+        if (activeApi && typeof activeApi._restoreCmi === 'function') {
+          activeApi._restoreCmi(payload.tracking);
+        }
       }
     } else if (type === 'SCORM_REQUEST_SAVE_BEFORE_CLOSE') {
       try {

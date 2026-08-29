@@ -37,6 +37,8 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
   const scormIframeRef = useRef(null);
   const closeTimeoutRef = useRef(null);
+  const scormTrackingRef = useRef(null);
+  const commitDebounceRef = useRef(null);
 
   // Cleanup timeout khi component unmount
   useEffect(() => {
@@ -44,6 +46,10 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       if (closeTimeoutRef.current) {
         clearTimeout(closeTimeoutRef.current);
         closeTimeoutRef.current = null;
+      }
+      if (commitDebounceRef.current) {
+        clearTimeout(commitDebounceRef.current);
+        commitDebounceRef.current = null;
       }
     };
   }, []);
@@ -68,6 +74,11 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         clearTimeout(closeTimeoutRef.current);
         closeTimeoutRef.current = null;
       }
+      if (commitDebounceRef.current) {
+        clearTimeout(commitDebounceRef.current);
+        commitDebounceRef.current = null;
+      }
+      scormTrackingRef.current = null;
       setSignedUrl(null);
       setScormPlayerUrl(null);
       setScormSession(null);
@@ -90,13 +101,102 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       return;
     }
 
+    const executeSaveCmi = async (cmiData, isCloseSnapshot = false, sourceEvent = null) => {
+      if (!cmiData || !scormSession?.packageId || !scormSession?.sessionToken) return;
+
+      try {
+        setSaveStatus('saving');
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_scorm_cmi_state', {
+          p_package_id: scormSession.packageId,
+          p_cmi_payload: cmiData,
+          p_session_token: scormSession.sessionToken,
+        });
+
+        if (rpcErr || !rpcRes || rpcRes.success !== true) {
+          console.warn('[MaterialViewerModal] Save SCORM CMI state failed:', rpcErr || rpcRes?.message);
+          setSaveStatus('error');
+          if (isCloseSnapshot) {
+            if (closeTimeoutRef.current) {
+              clearTimeout(closeTimeoutRef.current);
+              closeTimeoutRef.current = null;
+            }
+            setIsClosing(false);
+          }
+          if (sourceEvent && typeof sourceEvent.postMessage === 'function') {
+            sourceEvent.postMessage(
+              {
+                type: 'SCORM_CMI_SAVE_FAILED',
+                payload: { success: false, reason: rpcErr?.message || rpcRes?.message || 'SAVE_FAILED' },
+              },
+              playerOrigin
+            );
+          }
+        } else {
+          setSaveStatus('saved');
+          if (scormTrackingRef.current) {
+            scormTrackingRef.current = {
+              ...scormTrackingRef.current,
+              cmi_data: cmiData,
+            };
+          }
+          if (isCloseSnapshot) {
+            if (closeTimeoutRef.current) {
+              clearTimeout(closeTimeoutRef.current);
+              closeTimeoutRef.current = null;
+            }
+            setIsClosing(false);
+            onClose();
+          }
+          if (sourceEvent && typeof sourceEvent.postMessage === 'function') {
+            sourceEvent.postMessage(
+              {
+                type: 'SCORM_CMI_SAVED',
+                payload: { success: true, timestamp: new Date().toISOString() },
+              },
+              playerOrigin
+            );
+          }
+        }
+      } catch (err) {
+        console.error('[MaterialViewerModal] Exception saving SCORM CMI:', err);
+        setSaveStatus('error');
+        if (isCloseSnapshot) {
+          if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+          }
+          setIsClosing(false);
+        }
+      }
+    };
+
     const handleMessage = async (event) => {
-      // 1. Kiểm tra ranh giới Origin nghiêm ngặt (Chặn đứng mọi origin khác)
+      // 1. Kiểm tra ranh giới Origin & Source Window nghiêm ngặt (Chặn đứng mọi origin/iframe khác)
       if (!playerOrigin || event.origin !== playerOrigin) {
         return;
       }
 
+      if (scormIframeRef.current?.contentWindow && event.source !== scormIframeRef.current.contentWindow) {
+        return;
+      }
+
       const { type: msgType, payload } = event.data || {};
+
+      // Phản hồi PING hoặc SCORM_LOADED để hydrate lại dữ liệu nếu Player yêu cầu
+      if (msgType === 'PING' || msgType === 'SCORM_LOADED') {
+        if (scormTrackingRef.current && scormIframeRef.current?.contentWindow) {
+          scormIframeRef.current.contentWindow.postMessage(
+            {
+              type: 'RESTORE_CMI',
+              payload: {
+                tracking: scormTrackingRef.current,
+              },
+            },
+            playerOrigin
+          );
+        }
+        return;
+      }
 
       if (msgType === 'SCORM_CLOSE_SNAPSHOT_FAILED') {
         console.warn('[MaterialViewerModal] SCORM Player snapshot before close failed:', payload?.error);
@@ -117,64 +217,23 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         if (!payload || !payload.cmi || !scormSession?.packageId) return;
 
         const isCloseSnapshot = payload.event === 'PARENT_CLOSE_SNAPSHOT';
+        const isUrgent = isCloseSnapshot || msgType === 'SCORM_CMI_FINISH' || msgType === 'SCORM_CMI_TERMINATE';
 
-        try {
-          setSaveStatus('saving');
-          const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_scorm_cmi_state', {
-            p_package_id: scormSession.packageId,
-            p_cmi_payload: payload.cmi,
-            p_session_token: scormSession.sessionToken,
-          });
-
-          if (rpcErr || (rpcRes && !rpcRes.success)) {
-            console.warn('[MaterialViewerModal] Save SCORM CMI state failed:', rpcErr || rpcRes?.message);
-            setSaveStatus('error');
-            if (isCloseSnapshot) {
-              if (closeTimeoutRef.current) {
-                clearTimeout(closeTimeoutRef.current);
-                closeTimeoutRef.current = null;
-              }
-              setIsClosing(false);
-            }
-            if (event.source && typeof event.source.postMessage === 'function') {
-              event.source.postMessage(
-                {
-                  type: 'SCORM_CMI_SAVE_FAILED',
-                  payload: { success: false, reason: rpcErr?.message || rpcRes?.message || 'SAVE_FAILED' },
-                },
-                playerOrigin
-              );
-            }
-          } else {
-            setSaveStatus('saved');
-            if (isCloseSnapshot) {
-              if (closeTimeoutRef.current) {
-                clearTimeout(closeTimeoutRef.current);
-                closeTimeoutRef.current = null;
-              }
-              setIsClosing(false);
-              onClose();
-            }
-            if (event.source && typeof event.source.postMessage === 'function') {
-              event.source.postMessage(
-                {
-                  type: 'SCORM_CMI_SAVED',
-                  payload: { success: true, timestamp: new Date().toISOString() },
-                },
-                playerOrigin
-              );
-            }
+        if (isUrgent) {
+          if (commitDebounceRef.current) {
+            clearTimeout(commitDebounceRef.current);
+            commitDebounceRef.current = null;
           }
-        } catch (err) {
-          console.error('[MaterialViewerModal] Exception saving SCORM CMI:', err);
-          setSaveStatus('error');
-          if (isCloseSnapshot) {
-            if (closeTimeoutRef.current) {
-              clearTimeout(closeTimeoutRef.current);
-              closeTimeoutRef.current = null;
-            }
-            setIsClosing(false);
+          await executeSaveCmi(payload.cmi, isCloseSnapshot, event.source);
+        } else {
+          // Debounce 1.5s cho auto-commit trong lúc học sinh làm bài
+          if (commitDebounceRef.current) {
+            clearTimeout(commitDebounceRef.current);
           }
+          commitDebounceRef.current = setTimeout(() => {
+            commitDebounceRef.current = null;
+            executeSaveCmi(payload.cmi, false, event.source);
+          }, 1500);
         }
       }
     };
@@ -249,6 +308,24 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         studentName: 'Học sinh',
       });
 
+      // Gọi RPC load_scorm_cmi_state để lấy tiến độ học tập đã lưu (nếu có)
+      try {
+        const { data: loadRes, error: loadErr } = await supabase.rpc('load_scorm_cmi_state', {
+          p_package_id: scormPkg.id,
+          p_session_token: session.sessionToken,
+        });
+
+        if (!loadErr && loadRes && loadRes.success && loadRes.tracking) {
+          scormTrackingRef.current = loadRes.tracking;
+          console.log('[MaterialViewerModal] Loaded persisted SCORM CMI tracking:', loadRes.tracking);
+        } else {
+          scormTrackingRef.current = null;
+        }
+      } catch (loadExc) {
+        console.warn('[MaterialViewerModal] load_scorm_cmi_state caught exception:', loadExc);
+        scormTrackingRef.current = null;
+      }
+
       setScormSession({
         sessionToken: session.sessionToken,
         packageId: scormPkg.id,
@@ -263,6 +340,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       }
       setScormPlayerUrl(null);
       setScormSession(null);
+      scormTrackingRef.current = null;
     } finally {
       setLoadingUrl(false);
     }

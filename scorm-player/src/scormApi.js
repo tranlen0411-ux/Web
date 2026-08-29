@@ -143,6 +143,44 @@ export function createScorm12Api(initialData = {}, onCommitCallback = null) {
     _getCmi() {
       return { ...cmi };
     },
+
+    _restoreCmi(newTracking) {
+      if (!newTracking || typeof newTracking !== 'object') return;
+      const t = newTracking;
+      if (t.lesson_location || t['cmi.core.lesson_location']) {
+        cmi['cmi.core.lesson_location'] = t.lesson_location || t['cmi.core.lesson_location'];
+      }
+      if (t.suspend_data || t['cmi.suspend_data']) {
+        cmi['cmi.suspend_data'] = t.suspend_data || t['cmi.suspend_data'];
+      }
+      if (t.lesson_status || t['cmi.core.lesson_status']) {
+        cmi['cmi.core.lesson_status'] = t.lesson_status || t['cmi.core.lesson_status'];
+      }
+      if (t.score_raw !== undefined && t.score_raw !== null) {
+        cmi['cmi.core.score.raw'] = String(t.score_raw);
+      }
+      if (t.score_min !== undefined && t.score_min !== null) {
+        cmi['cmi.core.score.min'] = String(t.score_min);
+      }
+      if (t.score_max !== undefined && t.score_max !== null) {
+        cmi['cmi.core.score.max'] = String(t.score_max);
+      }
+      if (t.total_time || t['cmi.core.total_time']) {
+        cmi['cmi.core.total_time'] = t.total_time || t['cmi.core.total_time'];
+      }
+      if (t.cmi_data && typeof t.cmi_data === 'object') {
+        Object.assign(cmi, t.cmi_data);
+      }
+      const hasProgress = Boolean(
+        cmi['cmi.core.lesson_location'] ||
+        cmi['cmi.suspend_data'] ||
+        t.lesson_location ||
+        t.suspend_data
+      );
+      cmi['cmi.core.entry'] = hasProgress ? 'resume' : 'ab-initio';
+      cmi['cmi.core.exit'] = '';
+      cmi['cmi.core.session_time'] = '00:00:00';
+    },
   };
 }
 
@@ -310,6 +348,48 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
 
     _getCmi() {
       return { ...cmi };
+    },
+
+    _restoreCmi(newTracking) {
+      if (!newTracking || typeof newTracking !== 'object') return;
+      const t = newTracking;
+      if (t.lesson_location || t.location || t['cmi.location']) {
+        cmi['cmi.location'] = t.lesson_location || t.location || t['cmi.location'];
+      }
+      if (t.suspend_data || t['cmi.suspend_data']) {
+        cmi['cmi.suspend_data'] = t.suspend_data || t['cmi.suspend_data'];
+      }
+      if (t.completion_status || t['cmi.completion_status']) {
+        cmi['cmi.completion_status'] = t.completion_status || t['cmi.completion_status'];
+      }
+      if (t.success_status || t['cmi.success_status']) {
+        cmi['cmi.success_status'] = t.success_status || t['cmi.success_status'];
+      }
+      if (t.score_raw !== undefined && t.score_raw !== null) {
+        cmi['cmi.score.raw'] = String(t.score_raw);
+      }
+      if (t.score_min !== undefined && t.score_min !== null) {
+        cmi['cmi.score.min'] = String(t.score_min);
+      }
+      if (t.score_max !== undefined && t.score_max !== null) {
+        cmi['cmi.score.max'] = String(t.score_max);
+      }
+      if (t.total_time || t['cmi.total_time']) {
+        cmi['cmi.total_time'] = t.total_time || t['cmi.total_time'];
+      }
+      if (t.cmi_data && typeof t.cmi_data === 'object') {
+        Object.assign(cmi, t.cmi_data);
+      }
+      const hasProgress = Boolean(
+        cmi['cmi.location'] ||
+        cmi['cmi.suspend_data'] ||
+        t.lesson_location ||
+        t.location ||
+        t.suspend_data
+      );
+      cmi['cmi.entry'] = hasProgress ? 'resume' : 'ab-initio';
+      cmi['cmi.exit'] = '';
+      cmi['cmi.session_time'] = 'PT0H0M0S';
     },
   };
 }
