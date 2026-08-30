@@ -1021,12 +1021,62 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     });
 
+    // Hook Element setAttribute & className setter để bắt chính xác Call Stack của iSpring khi kích hoạt slide
+    function hookSlideActivationCallStack(frameWin) {
+      if (!frameWin || frameWin.__activation_stack_hooked) return;
+      frameWin.__activation_stack_hooked = true;
+
+      try {
+        const origSetAttribute = frameWin.Element.prototype.setAttribute;
+        frameWin.Element.prototype.setAttribute = function (name, value) {
+          const sVal = String(value);
+          const cls = this.className || '';
+          if (
+            (name === 'class' && (sVal.includes('active') || sVal.includes('current')) && (cls.includes('slide') || cls.includes('frame') || cls.includes('quiz') || sVal.includes('slide'))) ||
+            (name === 'style' && (sVal.includes('display: block') || sVal.includes('visibility: visible') || sVal.includes('opacity: 1')) && (cls.includes('slide') || cls.includes('frame') || cls.includes('quiz'))) ||
+            (name === 'aria-hidden' && sVal === 'false')
+          ) {
+            const stack = new Error().stack || '';
+            const tag = this.tagName ? this.tagName.toLowerCase() : 'node';
+            const id = this.id ? `#${this.id}` : '';
+            console.log(`[SCORM RUN ${runId}] 🎯 [SLIDE ACTIVATION STACK] target=<${tag}${id} class="${cls}"> attr=${name} value="${sVal}"`);
+            console.log(`[SCORM RUN ${runId}] [SLIDE ACTIVATION CALL CHAIN]:\n${stack.split('\n').slice(1, 10).join('\n')}`);
+          }
+          return origSetAttribute.apply(this, arguments);
+        };
+
+        const classDesc = Object.getOwnPropertyDescriptor(frameWin.Element.prototype, 'className');
+        if (classDesc && classDesc.set) {
+          const origClassSet = classDesc.set;
+          Object.defineProperty(frameWin.Element.prototype, 'className', {
+            get: classDesc.get,
+            set: function (val) {
+              const sVal = String(val);
+              if ((sVal.includes('active') || sVal.includes('current')) && ((this.className || '').includes('slide') || sVal.includes('slide'))) {
+                const stack = new Error().stack || '';
+                console.log(`[SCORM RUN ${runId}] 🎯 [SLIDE ACTIVATION STACK] className setter target=<${this.tagName.toLowerCase()} class="${this.className}"> new="${sVal}"`);
+                console.log(`[SCORM RUN ${runId}] [SLIDE ACTIVATION CALL CHAIN]:\n${stack.split('\n').slice(1, 10).join('\n')}`);
+              }
+              return origClassSet.call(this, val);
+            },
+            configurable: true,
+          });
+        }
+      } catch (hookErr) {
+        console.warn('[SLIDE ACTIVATION STACK] hook error:', hookErr.message);
+      }
+    }
+
     contentFrame.onload = () => {
       console.log(`[SCORM RUN ${runId}] 🎯 SCO Content loaded successfully into frame from Same-Origin Gateway.`);
       inspectFrameState('onload');
 
       const frameWin = contentFrame.contentWindow;
       const frameDoc = contentFrame.contentDocument || frameWin?.document;
+
+      if (frameWin) {
+        hookSlideActivationCallStack(frameWin);
+      }
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
