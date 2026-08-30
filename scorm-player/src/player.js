@@ -120,15 +120,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       if (event.source && event.origin) {
         event.source.postMessage({ type: 'PONG', payload: { status: 'READY', version: scormVersion } }, event.origin);
       }
-    } else if (type === 'RESTORE_CMI') {
-      if (payload && payload.tracking) {
-        console.log('🔄 [SCORM Player] Dynamic CMI state restored via postMessage payload');
-        const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
-        const activeApi = is2004 ? window.API_1484_11 : window.API;
-        if (activeApi && typeof activeApi._restoreCmi === 'function') {
-          activeApi._restoreCmi(payload.tracking);
-        }
-      }
     } else if (type === 'SCORM_REQUEST_SAVE_BEFORE_CLOSE') {
       try {
         const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
@@ -163,7 +154,88 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     }
   });
 
-  // 6. Nạp bài giảng vào Content Frame
+  // 6. Chờ nhận persisted CMI state từ Parent (nếu có nhúng trong iframe) TRƯỚC KHI nạp SCO content
+  async function waitForInitialCmiState() {
+    // Nếu chạy độc lập không có parent hoặc parentOrigin không thiết lập
+    if (!window.parent || window.parent === window || !parentOrigin || parentOrigin === '*') {
+      if (persistedTracking) {
+        console.log('[SCORM DIAG] persisted state received');
+        const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+        const activeApi = is2004 ? window.API_1484_11 : window.API;
+        if (activeApi && typeof activeApi._restoreCmi === 'function') {
+          activeApi._restoreCmi(persistedTracking);
+        }
+        console.log('[SCORM DIAG] persisted state applied before SCO load');
+      }
+      return;
+    }
+
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const messageListener = (event) => {
+        if (event.origin !== parentOrigin && parentOrigin !== '*') return;
+        if (event.source !== window.parent) return;
+
+        const { type, payload } = event.data || {};
+        if (type === 'INITIAL_CMI_STATE' || type === 'RESTORE_CMI') {
+          if (!resolved) {
+            resolved = true;
+            window.removeEventListener('message', messageListener);
+            console.log('[SCORM DIAG] persisted state received');
+
+            if (payload && payload.tracking) {
+              const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+              const activeApi = is2004 ? window.API_1484_11 : window.API;
+              if (activeApi && typeof activeApi._restoreCmi === 'function') {
+                activeApi._restoreCmi(payload.tracking);
+              }
+              console.log('[SCORM DIAG] persisted state applied before SCO load');
+            } else {
+              console.log('[SCORM DIAG] persisted state applied before SCO load (ab-initio)');
+            }
+            resolve();
+          }
+        }
+      };
+
+      window.addEventListener('message', messageListener);
+
+      // Gửi tín hiệu sẵn sàng nhận initial state lên parent
+      window.parent.postMessage(
+        {
+          type: 'PLAYER_READY_FOR_INITIAL_STATE',
+          payload: { version: scormVersion },
+        },
+        parentOrigin
+      );
+
+      // Phòng vệ timeout tối đa 800ms nếu parent không phản hồi (ví dụ standalone hoặc parent cũ)
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          window.removeEventListener('message', messageListener);
+          if (persistedTracking) {
+            console.log('[SCORM DIAG] persisted state received');
+            const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+            const activeApi = is2004 ? window.API_1484_11 : window.API;
+            if (activeApi && typeof activeApi._restoreCmi === 'function') {
+              activeApi._restoreCmi(persistedTracking);
+            }
+            console.log('[SCORM DIAG] persisted state applied before SCO load');
+          } else {
+            console.log('[SCORM DIAG] persisted state applied before SCO load (ab-initio)');
+          }
+          resolve();
+        }
+      }, 800);
+    });
+  }
+
+  await waitForInitialCmiState();
+  console.log('[SCORM DIAG] SCO load allowed');
+
+  // 7. Nạp bài giảng vào Content Frame (Chỉ nạp SAU KHI CMI State đã được chuẩn bị hoàn tất)
   if (contentFrame) {
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');

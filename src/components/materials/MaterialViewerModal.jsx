@@ -182,12 +182,16 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
       const { type: msgType, payload } = event.data || {};
 
-      // Phản hồi PING hoặc SCORM_LOADED để hydrate lại dữ liệu nếu Player yêu cầu
-      if (msgType === 'PING' || msgType === 'SCORM_LOADED') {
-        if (scormTrackingRef.current && scormIframeRef.current?.contentWindow) {
+      // Phản hồi handshake khởi tạo hoặc yêu cầu hydrate dữ liệu từ Player
+      if (
+        msgType === 'PLAYER_READY_FOR_INITIAL_STATE' ||
+        msgType === 'PING' ||
+        msgType === 'SCORM_LOADED'
+      ) {
+        if (scormIframeRef.current?.contentWindow) {
           scormIframeRef.current.contentWindow.postMessage(
             {
-              type: 'RESTORE_CMI',
+              type: 'INITIAL_CMI_STATE',
               payload: {
                 tracking: scormTrackingRef.current,
               },
