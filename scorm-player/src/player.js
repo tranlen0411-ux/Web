@@ -468,6 +468,134 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
+    let hasGeometryNudgeRun = false;
+
+    // 6. Thử nghiệm Controlled 1px Geometry Nudge an toàn tuyệt đối (Không synthetic resize, không loop, có try/finally)
+    function executeControlledGeometryNudge() {
+      if (hasGeometryNudgeRun) return;
+      hasGeometryNudgeRun = true;
+
+      const frameWin = contentFrame ? contentFrame.contentWindow : null;
+      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+
+      if (!frameWin || !frameDoc) {
+        console.warn('[SCORM NUDGE] frame not ready, skip nudge');
+        return;
+      }
+
+      // Capture original geometry
+      const origClientW = contentFrame.clientWidth;
+      const origClientH = contentFrame.clientHeight;
+      const origScoW = frameWin.innerWidth;
+      const origScoH = frameWin.innerHeight;
+      const origStyleWidth = contentFrame.style.width;
+      const origStyleHeight = contentFrame.style.height;
+
+      console.log(`[SCORM NUDGE] original iframe=${origClientW}x${origClientH} sco=${origScoW}x${origScoH}`);
+
+      try {
+        // Thực hiện thay đổi 1px chiều rộng (Width - 1px)
+        const targetPx = (origClientW > 10 ? origClientW - 1 : origClientW + 1) + 'px';
+        contentFrame.style.width = targetPx;
+
+        // Đợi 1 frame layout
+        requestAnimationFrame(() => {
+          try {
+            const changedClientW = contentFrame.clientWidth;
+            const changedClientH = contentFrame.clientHeight;
+            const changedScoW = frameWin.innerWidth;
+            const changedScoH = frameWin.innerHeight;
+
+            console.log(`[SCORM NUDGE] changed iframe=${changedClientW}x${changedClientH} sco=${changedScoW}x${changedScoH}`);
+
+            const hasDelta = (changedScoW !== origScoW) || (changedClientW !== origClientW);
+
+            if (!hasDelta) {
+              console.warn('[SCORM NUDGE] geometry delta FAILED (SCO inner size unchanged)');
+              contentFrame.style.width = origStyleWidth;
+              contentFrame.style.height = origStyleHeight;
+              return;
+            }
+
+            console.log('[SCORM NUDGE] geometry delta confirmed');
+
+            // Invalidate tại kích thước tạm thời (Lần 1)
+            console.log('[SCORM NUDGE] invalidate at temporary geometry');
+            if (typeof frameWin.invalidatePlayerSize === 'function') {
+              frameWin.invalidatePlayerSize();
+            }
+            if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
+              frameWin.player.invalidateSize();
+            }
+
+            // Phục hồi kích thước ban đầu sau 1 rAF
+            requestAnimationFrame(() => {
+              try {
+                contentFrame.style.width = origStyleWidth;
+                contentFrame.style.height = origStyleHeight;
+                console.log('[SCORM NUDGE] geometry restored');
+
+                // Đợi 1 rAF tiếp theo để browser áp dụng lại size gốc rồi final invalidate (Lần 2)
+                requestAnimationFrame(() => {
+                  try {
+                    const finalClientW = contentFrame.clientWidth;
+                    const finalClientH = contentFrame.clientHeight;
+                    const finalScoW = frameWin.innerWidth;
+                    const finalScoH = frameWin.innerHeight;
+
+                    console.log(`[SCORM NUDGE] final verified iframe=${finalClientW}x${finalClientH} sco=${finalScoW}x${finalScoH}`);
+
+                    console.log('[SCORM NUDGE] final invalidate');
+                    if (typeof frameWin.invalidatePlayerSize === 'function') {
+                      frameWin.invalidatePlayerSize();
+                    }
+                    if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
+                      frameWin.player.invalidateSize();
+                    }
+                    console.log('[SCORM NUDGE] completed');
+
+                    // Ghi nhận snapshot và rect sau Nudge
+                    setTimeout(() => {
+                      logGeometrySnapshot('POST_NUDGE');
+                      inspectRenderSurfaces('POST_NUDGE', frameDoc, frameWin);
+
+                      const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+                      const playerView = frameDoc.querySelector('.playerView, [class*="playerView"]');
+                      const allButtons = Array.from(frameDoc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+                      const nextBtn = allButtons.find((b) => (b.innerText || b.textContent || b.id || '').toLowerCase().includes('next') && !b.id.includes('slidesBackground'));
+                      const submitBtn = allButtons.find((b) => (b.innerText || b.textContent || b.id || '').toLowerCase().includes('submit'));
+
+                      function rStr(el) {
+                        if (!el) return 'missing';
+                        const r = el.getBoundingClientRect();
+                        return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+                      }
+
+                      console.log(`[SCORM NUDGE RESULT] slidesBg=${rStr(slidesBg)} playerView=${rStr(playerView)} next=${rStr(nextBtn)} submit=${submitBtn ? rStr(submitBtn) : 'missing'}`);
+                    }, 50);
+                  } catch (finalErr) {
+                    console.warn('[SCORM NUDGE] Final invalidate error:', finalErr.message);
+                  }
+                });
+              } catch (restoreErr) {
+                console.warn('[SCORM NUDGE] Restore step error:', restoreErr.message);
+                contentFrame.style.width = origStyleWidth;
+                contentFrame.style.height = origStyleHeight;
+              }
+            });
+          } catch (midErr) {
+            console.warn('[SCORM NUDGE] Temp geometry step error:', midErr.message);
+            contentFrame.style.width = origStyleWidth;
+            contentFrame.style.height = origStyleHeight;
+          }
+        });
+      } catch (nudgeErr) {
+        console.warn('[SCORM NUDGE] Fatal error:', nudgeErr.message);
+        contentFrame.style.width = origStyleWidth;
+        contentFrame.style.height = origStyleHeight;
+      }
+    }
+
     function inspectFrameState(eventLabel = 'Frame event') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -555,6 +683,11 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           if (frameDoc) inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
         }
       }, 1200);
+
+      // Kích hoạt Controlled 1px Geometry Nudge sau khi SCO onload hoàn tất
+      setTimeout(() => {
+        executeControlledGeometryNudge();
+      }, 600);
     };
 
     contentFrame.onerror = (err) => {
