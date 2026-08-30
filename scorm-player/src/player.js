@@ -691,380 +691,150 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 9. DEEP VISIBILITY, COMPUTED STYLE, PAINT & OVERLAY INSPECTOR
-    let isLayoutSuccess = false;
-    let attemptCount = 0;
-    let activeContentObserver = null;
+    // 9. MINIMAL R3 MICRO-GEOMETRY ACTIVATION ENGINE (Controlled Scope & Strict Guard)
+    let hasGeometryActivationTickled = false;
     let pendingRafId = null;
+    let savedOriginalWidth = '';
 
-    function cleanupContentObserver() {
-      if (activeContentObserver) {
-        activeContentObserver.disconnect();
-        activeContentObserver = null;
-      }
+    function cleanupActivationEngine() {
       if (pendingRafId) {
         cancelAnimationFrame(pendingRafId);
         pendingRafId = null;
       }
-    }
-
-    // 1. Log chi tiết Computed Style, Rect, Z-index, Transform của toàn bộ các tầng
-    function logDeepVisibilityAndStyle(stageLabel) {
-      const frameWin = contentFrame ? contentFrame.contentWindow : null;
-      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (!frameDoc || !frameWin) return;
-
-      console.log(`========================================================`);
-      console.log(`[SCORM RUN ${runId}] 🔬 [DEEP STYLE & VISIBILITY] === ${stageLabel} ===`);
-
-      const targets = [
-        { name: 'playerView', sel: '.playerView, [class*="playerView"]' },
-        { name: 'framesLayer', sel: '.framesLayerContent, [class*="framesLayer"]' },
-        { name: 'slidesBg', sel: '#slidesBackground, [id*="slidesBackground"]' },
-        { name: 'slideView', sel: '.slideView, [class*="slideView"], [class*="slide"]' },
-        { name: 'quizRoot', sel: '.quizView, [class*="quizView"], [id*="quiz"]' },
-        { name: 'firstSvg', sel: 'svg' },
-        { name: 'firstCanvas', sel: 'canvas' },
-        { name: 'firstImg', sel: 'img' },
-      ];
-
-      targets.forEach(({ name, sel }) => {
-        const el = frameDoc.querySelector(sel);
-        if (!el) {
-          console.log(`  ${name.padEnd(12)}: NOT_FOUND in DOM`);
-          return;
-        }
-
-        const s = frameWin.getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        const rStr = `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
-        const clientStr = `${el.clientWidth}x${el.clientHeight}`;
-        const offsetStr = `${el.offsetWidth}x${el.offsetHeight}`;
-        const tf = s.transform !== 'none' ? ` tf="${s.transform}"` : ' tf=none';
-        const z = s.zIndex !== 'auto' ? ` zIndex=${s.zIndex}` : ' zIndex=auto';
-        const pos = s.position;
-        const bg = s.backgroundColor !== 'rgba(0, 0, 0, 0)' && s.backgroundColor !== 'transparent' ? ` bg="${s.backgroundColor}"` : '';
-
-        console.log(`  ${name.padEnd(12)}: rect=${rStr} client=${clientStr} offset=${offsetStr} disp=${s.display} vis=${s.visibility} op=${s.opacity} pos=${pos}${z} ov=${s.overflow}${tf}${bg}`);
-      });
-    }
-
-    // 2. Kiểm tra Element From Point (3-5 điểm giữa slide) và Quét Layer Phủ (Overlays)
-    function inspectElementFromPointAndOverlays(stageLabel) {
-      const frameWin = contentFrame ? contentFrame.contentWindow : null;
-      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (!frameDoc || !frameWin) return;
-
-      console.log(`--------------------------------------------------------`);
-      console.log(`[SCORM RUN ${runId}] 🎯 [PAINT & OVERLAY PROOF] === ${stageLabel} ===`);
-
-      const w = frameWin.innerWidth;
-      const h = frameWin.innerHeight;
-      const points = [
-        { name: 'Center', x: Math.round(w / 2), y: Math.round(h / 2) },
-        { name: 'Top-Center', x: Math.round(w / 2), y: Math.round(h * 0.25) },
-        { name: 'Bottom-Center', x: Math.round(w / 2), y: Math.round(h * 0.75) },
-        { name: 'Left-Center', x: Math.round(w * 0.25), y: Math.round(h / 2) },
-        { name: 'Right-Center', x: Math.round(w * 0.75), y: Math.round(h / 2) },
-      ];
-
-      points.forEach(({ name, x, y }) => {
-        try {
-          const topEl = frameDoc.elementFromPoint(x, y);
-          if (!topEl) {
-            console.log(`  [VISIBLE PROOF] point=(${x},${y}) [${name}] topElement=NULL`);
-            return;
-          }
-          const tag = topEl.tagName ? topEl.tagName.toLowerCase() : 'node';
-          const id = topEl.id ? `#${topEl.id}` : '';
-          const cls = typeof topEl.className === 'string' && topEl.className ? `.${topEl.className.substring(0, 20)}` : '';
-          const r = topEl.getBoundingClientRect();
-          const s = frameWin.getComputedStyle(topEl);
-          console.log(`  [VISIBLE PROOF] point=(${x},${y}) [${name}] topElement=<${tag}${id}${cls}> rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] bg="${s.backgroundColor}" z=${s.zIndex}`);
-        } catch (efpErr) {
-          console.warn(`  [VISIBLE PROOF] point=(${x},${y}) error:`, efpErr.message);
-        }
-      });
-
-      // Quét tất cả các element có khả năng là Overlay trắng che khuất
-      try {
-        const allEls = Array.from(frameDoc.querySelectorAll('*'));
-        let foundOverlays = 0;
-        allEls.forEach((el) => {
-          const s = frameWin.getComputedStyle(el);
-          const r = el.getBoundingClientRect();
-          const isLarge = r.width >= (w * 0.5) && r.height >= (h * 0.4);
-          const isPositioned = s.position === 'absolute' || s.position === 'fixed';
-          const isVisible = s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
-
-          if (isLarge && isPositioned && isVisible) {
-            foundOverlays++;
-            const tag = el.tagName ? el.tagName.toLowerCase() : 'el';
-            const id = el.id ? `#${el.id}` : '';
-            const cls = typeof el.className === 'string' && el.className ? `.${el.className.substring(0, 25)}` : '';
-            console.log(`  [OVERLAY SCAN #${foundOverlays}] target=<${tag}${id}${cls}> rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] z=${s.zIndex} bg="${s.backgroundColor}" op=${s.opacity} pe=${s.pointerEvents}`);
-          }
-        });
-        if (foundOverlays === 0) {
-          console.log(`  [OVERLAY SCAN] No blocking large overlays detected.`);
-        }
-      } catch (scanErr) {
-        console.warn('  [OVERLAY SCAN] scan error:', scanErr.message);
+      if (contentFrame && savedOriginalWidth !== undefined && hasGeometryActivationTickled) {
+        contentFrame.style.width = savedOriginalWidth;
       }
-
-      // Quét các class/attribute kích hoạt slide (active, current, visible, hidden, aria-hidden)
-      try {
-        const activeEls = frameDoc.querySelectorAll('[class*="active"], [class*="current"], [class*="visible"], [class*="hidden"], [aria-hidden], [data-state]');
-        console.log(`  [SLIDE STATE ATTRS] Total matching state nodes: ${activeEls.length}`);
-        Array.from(activeEls).slice(0, 5).forEach((el, idx) => {
-          const tag = el.tagName ? el.tagName.toLowerCase() : 'el';
-          const cls = el.className || '-';
-          const ariaH = el.getAttribute('aria-hidden');
-          const dataSt = el.getAttribute('data-state');
-          console.log(`    stateNode#${idx + 1}: <${tag}> cls="${cls}" aria-hidden=${ariaH} data-state=${dataSt}`);
-        });
-      } catch (stErr) {
-        console.warn('  [SLIDE STATE ATTRS] error:', stErr.message);
-      }
-      console.log(`========================================================`);
     }
 
-    function checkMeaningfulContentAndGeometry(frameDoc, frameWin) {
-      if (!frameDoc) return { hasMeaningfulContent: false, isValidGeometry: false, geomStr: 'no-doc', countsStr: 'no-doc', flW: 0, flH: 0, sbW: 0, sbH: 0 };
+    function checkSlideActiveState(frameDoc, frameWin) {
+      if (!frameDoc || !frameWin) return { isReadyForTickle: false, isAlreadyActive: false, reason: 'no-doc' };
 
       const fl = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
       const sb = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+      const slideView = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
       const svgs = frameDoc.querySelectorAll('svg');
       const canvases = frameDoc.querySelectorAll('canvas');
-      const imgs = frameDoc.querySelectorAll('img');
-      const videos = frameDoc.querySelectorAll('video');
-      const iframes = frameDoc.querySelectorAll('iframe, frame');
 
-      const flW = fl ? Math.round(fl.getBoundingClientRect().width) : 0;
-      const flH = fl ? Math.round(fl.getBoundingClientRect().height) : 0;
       const sbW = sb ? Math.round(sb.getBoundingClientRect().width) : 0;
-      const sbH = sb ? Math.round(sb.getBoundingClientRect().height) : 0;
+      const flW = fl ? Math.round(fl.getBoundingClientRect().width) : 0;
 
-      const flCount = fl ? fl.childElementCount : 0;
-      const sbCount = sb ? sb.childElementCount : 0;
+      // 1. Kiểm tra DOM và Shell geometry đã sẵn sàng chưa
+      const hasMountedContent = (svgs.length > 0 || canvases.length > 0 || (fl && fl.childElementCount > 0) || (sb && sb.childElementCount > 0));
+      const hasShellGeometry = (sbW > 10 || flW > 10);
 
-      const hasMeaningfulContent = (
-        svgs.length > 0 ||
-        canvases.length > 0 ||
-        imgs.length > 0 ||
-        videos.length > 0 ||
-        iframes.length > 0 ||
-        flCount > 0 ||
-        sbCount > 0
-      );
+      if (!hasMountedContent || !hasShellGeometry) {
+        return { isReadyForTickle: false, isAlreadyActive: false, reason: 'content-or-shell-not-ready' };
+      }
 
-      const isValidGeometry = (flW > 10 && flH > 10) || (sbW > 10 && sbH > 10);
-      const geomStr = `frames=${flW}x${flH} slides=${sbW}x${sbH}`;
-      const countsStr = `framesChildren=${flCount} slidesChildren=${sbCount} svg=${svgs.length} canvas=${canvases.length} img=${imgs.length}`;
+      // 2. Kiểm tra slideView thực tế đã active và visible chưa
+      if (slideView) {
+        const s = frameWin.getComputedStyle(slideView);
+        const r = slideView.getBoundingClientRect();
+        const cls = slideView.className || '';
+        const isClassActive = cls.includes('active') || cls.includes('current');
+        const isNotHidden = s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
+        const hasSize = r.width > 10 && r.height > 10;
 
-      return {
-        hasMeaningfulContent,
-        isValidGeometry,
-        flW, flH, sbW, sbH,
-        geomStr,
-        countsStr,
-      };
+        if (isClassActive && isNotHidden && hasSize) {
+          return { isReadyForTickle: false, isAlreadyActive: true, reason: 'slide-already-active-and-visible' };
+        }
+      }
+
+      // Đủ điều kiện: Shell đã có kích thước, DOM đã mount, nhưng slideView vẫn đang inactive/hidden
+      return { isReadyForTickle: true, isAlreadyActive: false, reason: 'slide-inactive-stuck' };
     }
 
-    function tryContentAwareLayout(source = 'MUTATION') {
-      if (isLayoutSuccess) return;
+    function executeMicroGeometryActivation(source = 'CONTENT_READY') {
+      if (hasGeometryActivationTickled) return;
 
       const frameWin = contentFrame ? contentFrame.contentWindow : null;
       const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (!frameWin || !frameDoc) return;
+      if (!frameWin || !frameDoc || !contentFrame) return;
 
-      const state = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
-      if (state.isValidGeometry) {
-        isLayoutSuccess = true;
-        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${state.geomStr})`);
-        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
-        cleanupContentObserver();
-        logDeepVisibilityAndStyle('ALREADY_VALID');
-        inspectElementFromPointAndOverlays('ALREADY_VALID');
+      const state = checkSlideActiveState(frameDoc, frameWin);
+      if (state.isAlreadyActive) {
+        console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] ALREADY_VALID (${state.reason})`);
         return;
       }
 
-      if (!state.hasMeaningfulContent) return;
-
-      let targetObj = null;
-      let targetMethodName = null;
-
-      if (frameWin.player && typeof frameWin.player.updateLayout === 'function') {
-        targetObj = frameWin.player;
-        targetMethodName = 'player.updateLayout';
-      } else if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
-        targetObj = frameWin.player;
-        targetMethodName = 'player.invalidateSize';
-      } else if (typeof frameWin.invalidatePlayerSize === 'function') {
-        targetObj = frameWin;
-        targetMethodName = 'window.invalidatePlayerSize';
-      } else if (frameWin.PresentationPlayer && typeof frameWin.PresentationPlayer.invalidateSize === 'function') {
-        targetObj = frameWin.PresentationPlayer;
-        targetMethodName = 'PresentationPlayer.invalidateSize';
+      if (!state.isReadyForTickle) {
+        return;
       }
 
-      if (!targetObj || !targetMethodName) return;
+      // Đặt cờ guard bảo vệ ngay lập tức (Chỉ chạy tối đa 1 chu kỳ cho mỗi SCO mount)
+      hasGeometryActivationTickled = true;
 
-      if (pendingRafId) cancelAnimationFrame(pendingRafId);
+      // Lưu lại chính xác inline style width ban đầu của contentFrame
+      savedOriginalWidth = contentFrame.style.width || '';
+      const originalWidthStyle = savedOriginalWidth;
+      const currentClientWidth = contentFrame.clientWidth;
+      const tickleWidth = Math.max(10, currentClientWidth - 1);
+
+      console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] R3_TRIGGER (source=${source})`);
+      console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] WIDTH_DELTA before=${currentClientWidth}px tickle=${tickleWidth}px`);
+
+      // Áp dụng vi điều chỉnh 1px ở outer iframe boundary
+      contentFrame.style.width = `${tickleWidth}px`;
 
       pendingRafId = requestAnimationFrame(() => {
-        pendingRafId = requestAnimationFrame(() => {
-          pendingRafId = null;
-          if (isLayoutSuccess) return;
+        // Khôi phục chính xác inline style width ban đầu
+        contentFrame.style.width = originalWidthStyle;
+        pendingRafId = null;
+        console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] WIDTH_RESTORED value="${originalWidthStyle || 'default'}"`);
 
-          attemptCount++;
-          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] CONTENT_READY_ATTEMPT number=${attemptCount} (source=${source})`);
-
-          try {
-            const fnName = targetMethodName.split('.').pop();
-            targetObj[fnName]();
-          } catch (triggerErr) {
-            console.warn(`[SCORM RUN ${runId}] [ISPRING LAYOUT] Error in attempt #${attemptCount}:`, triggerErr.message);
-          }
-
+        // Đo đạc và xác thực kết quả sau 2 frame render
+        requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const afterState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
-              const success = afterState.isValidGeometry;
-              console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] RESULT number=${attemptCount} frames=${afterState.flW}x${afterState.flH} slides=${afterState.sbW}x${afterState.sbH} success=${success}`);
+            const afterState = checkSlideActiveState(frameDoc, frameWin);
+            const slideView = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
+            const r = slideView ? slideView.getBoundingClientRect() : { width: 0, height: 0 };
+            const rStr = `${Math.round(r.width)}x${Math.round(r.height)}`;
+            const isSuccess = afterState.isAlreadyActive;
 
-              // Chụp toàn bộ Computed Style & ElementFromPoint ngay sau attempt
-              logDeepVisibilityAndStyle(`AFTER_ATTEMPT_${attemptCount}`);
-              inspectElementFromPointAndOverlays(`AFTER_ATTEMPT_${attemptCount}`);
+            console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] RESULT active=${isSuccess} visible=${isSuccess} rect=${rStr}`);
 
-              if (success) {
-                isLayoutSuccess = true;
-                console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] INITIAL_LAYOUT_COMPLETE`);
-                console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
-                cleanupContentObserver();
-              }
-            });
+            if (!isSuccess) {
+              console.warn(`[SCORM RUN ${runId}] [SCORM ACTIVATION] R3_FAILED`);
+            }
           });
         });
       });
     }
 
-    // Gắn MutationObserver vào content root của iSpring
-    function setupContentAwareObserver(frameDoc, frameWin) {
-      if (!frameDoc || !frameDoc.body || isLayoutSuccess) return;
-      cleanupContentObserver();
+    function setupActivationWatcher(frameDoc, frameWin) {
+      if (!frameDoc || !frameDoc.body || hasGeometryActivationTickled) return;
 
-      const initialState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
-      if (initialState.isValidGeometry) {
-        isLayoutSuccess = true;
-        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${initialState.geomStr})`);
-        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
-        logDeepVisibilityAndStyle('INITIAL_ALREADY_VALID');
-        inspectElementFromPointAndOverlays('INITIAL_ALREADY_VALID');
+      // 1. Kiểm tra ngay nếu đã active (ví dụ Fresh Launch)
+      const initialState = checkSlideActiveState(frameDoc, frameWin);
+      if (initialState.isAlreadyActive) {
+        console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] ALREADY_VALID (Initial check)`);
         return;
       }
 
-      const targetEl = frameDoc.querySelector('.playerView') || frameDoc.body;
-      const targetTag = targetEl.tagName ? targetEl.tagName.toLowerCase() : 'div';
-      const targetCls = typeof targetEl.className === 'string' && targetEl.className ? `.${targetEl.className.substring(0, 15)}` : '';
-      console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT] OBSERVER_ATTACHED target=<${targetTag}${targetCls}>`);
+      if (initialState.isReadyForTickle) {
+        executeMicroGeometryActivation('INITIAL_CHECK');
+        return;
+      }
 
-      activeContentObserver = new MutationObserver((mutations) => {
-        if (isLayoutSuccess) {
-          cleanupContentObserver();
+      // 2. Lắng nghe qua MutationObserver khi content DOM được mount
+      const targetEl = frameDoc.querySelector('.playerView') || frameDoc.body;
+      const obs = new MutationObserver(() => {
+        if (hasGeometryActivationTickled) {
+          obs.disconnect();
           return;
         }
 
-        let hasNewNodes = false;
-        mutations.forEach((m) => {
-          if (m.addedNodes && m.addedNodes.length > 0) hasNewNodes = true;
-          if (m.type === 'attributes') {
-            const attr = m.attributeName;
-            const target = m.target;
-            const tTag = target.tagName ? target.tagName.toLowerCase() : 'el';
-            const tCls = target.className || '-';
-            const oldV = m.oldValue;
-            const newV = target.getAttribute(attr);
-            console.log(`[SCORM RUN ${runId}] [ISPRING VISIBILITY MUTATION] target=<${tTag} cls="${tCls}"> attr=${attr} old="${oldV}" new="${newV}"`);
-          }
-        });
-
-        if (hasNewNodes) {
-          const s = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
-          console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT] MUTATION ${s.countsStr} geometry=${s.geomStr}`);
-          tryContentAwareLayout('MUTATION_BATCH');
+        const s = checkSlideActiveState(frameDoc, frameWin);
+        if (s.isReadyForTickle) {
+          obs.disconnect();
+          executeMicroGeometryActivation('MUTATION_READY');
+        } else if (s.isAlreadyActive) {
+          obs.disconnect();
+          console.log(`[SCORM RUN ${runId}] [SCORM ACTIVATION] ALREADY_VALID (Mounted active)`);
         }
       });
 
-      activeContentObserver.observe(targetEl, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
-
-      if (initialState.hasMeaningfulContent) {
-        tryContentAwareLayout('INITIAL_CONTENT_CHECK');
-      }
-    }
-
-    // Lắng nghe Native User Resize để đo lường so sánh trước và sau
-    window.addEventListener('resize', () => {
-      const frameWin = contentFrame ? contentFrame.contentWindow : null;
-      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (frameDoc && frameWin) {
-        console.log(`[SCORM RUN ${runId}] 🖱️ [NATIVE RESIZE TRIGGERED]`);
-        logDeepVisibilityAndStyle('NATIVE_RESIZE_BEFORE');
-        inspectElementFromPointAndOverlays('NATIVE_RESIZE_BEFORE');
-
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            logDeepVisibilityAndStyle('NATIVE_RESIZE_AFTER');
-            inspectElementFromPointAndOverlays('NATIVE_RESIZE_AFTER');
-          });
-        });
-      }
-    });
-
-    // Hook Element setAttribute & className setter để bắt chính xác Call Stack của iSpring khi kích hoạt slide
-    function hookSlideActivationCallStack(frameWin) {
-      if (!frameWin || frameWin.__activation_stack_hooked) return;
-      frameWin.__activation_stack_hooked = true;
-
-      try {
-        const origSetAttribute = frameWin.Element.prototype.setAttribute;
-        frameWin.Element.prototype.setAttribute = function (name, value) {
-          const sVal = String(value);
-          const cls = this.className || '';
-          if (
-            (name === 'class' && (sVal.includes('active') || sVal.includes('current')) && (cls.includes('slide') || cls.includes('frame') || cls.includes('quiz') || sVal.includes('slide'))) ||
-            (name === 'style' && (sVal.includes('display: block') || sVal.includes('visibility: visible') || sVal.includes('opacity: 1')) && (cls.includes('slide') || cls.includes('frame') || cls.includes('quiz'))) ||
-            (name === 'aria-hidden' && sVal === 'false')
-          ) {
-            const stack = new Error().stack || '';
-            const tag = this.tagName ? this.tagName.toLowerCase() : 'node';
-            const id = this.id ? `#${this.id}` : '';
-            console.log(`[SCORM RUN ${runId}] 🎯 [SLIDE ACTIVATION STACK] target=<${tag}${id} class="${cls}"> attr=${name} value="${sVal}"`);
-            console.log(`[SCORM RUN ${runId}] [SLIDE ACTIVATION CALL CHAIN]:\n${stack.split('\n').slice(1, 10).join('\n')}`);
-          }
-          return origSetAttribute.apply(this, arguments);
-        };
-
-        const classDesc = Object.getOwnPropertyDescriptor(frameWin.Element.prototype, 'className');
-        if (classDesc && classDesc.set) {
-          const origClassSet = classDesc.set;
-          Object.defineProperty(frameWin.Element.prototype, 'className', {
-            get: classDesc.get,
-            set: function (val) {
-              const sVal = String(val);
-              if ((sVal.includes('active') || sVal.includes('current')) && ((this.className || '').includes('slide') || sVal.includes('slide'))) {
-                const stack = new Error().stack || '';
-                console.log(`[SCORM RUN ${runId}] 🎯 [SLIDE ACTIVATION STACK] className setter target=<${this.tagName.toLowerCase()} class="${this.className}"> new="${sVal}"`);
-                console.log(`[SCORM RUN ${runId}] [SLIDE ACTIVATION CALL CHAIN]:\n${stack.split('\n').slice(1, 10).join('\n')}`);
-              }
-              return origClassSet.call(this, val);
-            },
-            configurable: true,
-          });
-        }
-      } catch (hookErr) {
-        console.warn('[SLIDE ACTIVATION STACK] hook error:', hookErr.message);
-      }
+      obs.observe(targetEl, { childList: true, subtree: true });
     }
 
     contentFrame.onload = () => {
@@ -1074,21 +844,17 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       const frameWin = contentFrame.contentWindow;
       const frameDoc = contentFrame.contentDocument || frameWin?.document;
 
-      if (frameWin) {
-        hookSlideActivationCallStack(frameWin);
-      }
-
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      setupContentAwareObserver(frameDoc, frameWin);
+      setupActivationWatcher(frameDoc, frameWin);
     };
 
-    window.addEventListener('pagehide', cleanupContentObserver);
-    window.addEventListener('beforeunload', cleanupContentObserver);
+    window.addEventListener('pagehide', cleanupActivationEngine);
+    window.addEventListener('beforeunload', cleanupActivationEngine);
 
     contentFrame.onerror = (err) => {
       console.error(`[SCORM RUN ${runId}] ❌ Failed to load SCO content frame:`, err);
