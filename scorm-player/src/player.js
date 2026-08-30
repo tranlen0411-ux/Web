@@ -592,11 +592,47 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       });
     }
 
+    let hasHistoricalInitialReflowRun = false;
+
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       inspectFrameState('onload');
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
+
+      // Khôi phục cơ chế reflow lịch sử (Commit 1c6f282) có guard 1-lần
+      if (!hasHistoricalInitialReflowRun) {
+        hasHistoricalInitialReflowRun = true;
+
+        const triggerScoReflow = (source) => {
+          try {
+            contentFrame.contentWindow?.dispatchEvent(new Event('resize'));
+          } catch (err) {
+            console.warn('[SCORM HISTORICAL REFLOW] SCO resize failed:', source, err);
+          }
+
+          try {
+            window.dispatchEvent(new Event('resize'));
+          } catch (err) {
+            console.warn('[SCORM HISTORICAL REFLOW] Player resize failed:', source, err);
+          }
+        };
+
+        requestAnimationFrame(() => {
+          console.log('[SCORM HISTORICAL REFLOW] rAF');
+          triggerScoReflow('rAF');
+
+          setTimeout(() => {
+            console.log('[SCORM HISTORICAL REFLOW] T+150');
+            triggerScoReflow('150ms');
+          }, 150);
+
+          setTimeout(() => {
+            console.log('[SCORM HISTORICAL REFLOW] T+500');
+            triggerScoReflow('500ms');
+          }, 500);
+        });
+      }
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
