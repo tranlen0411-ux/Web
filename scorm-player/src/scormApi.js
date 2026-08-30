@@ -285,7 +285,9 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       }
       isTerminated = true;
       lastError = '0';
-      console.log('[SCORM 2004 API] Terminate called. Final completion_status:', cmi['cmi.completion_status']);
+      const loc = cmi['cmi.location'] || '';
+      const susLen = (cmi['cmi.suspend_data'] || '').length;
+      console.log(`[SCORM DIAG] Terminate location=${loc} suspendLength=${susLen}`);
       triggerCommit('TERMINATE');
       return 'true';
     },
@@ -326,6 +328,16 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
         return 'false';
       }
       lastError = '0';
+
+      if (element === 'cmi.location') {
+        const oldVal = cmi['cmi.location'] || '';
+        console.log(`[SCORM DIAG] SetValue cmi.location old=${oldVal} new=${value}`);
+      } else if (element === 'cmi.suspend_data') {
+        const oldLen = (cmi['cmi.suspend_data'] || '').length;
+        const newLen = String(value).length;
+        console.log(`[SCORM DIAG] SetValue cmi.suspend_data oldLen=${oldLen} newLen=${newLen}`);
+      }
+
       cmi[element] = String(value);
       return 'true';
     },
@@ -340,7 +352,9 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
         return 'false';
       }
       lastError = '0';
-      console.log('[SCORM 2004 API] Commit state triggered');
+      const loc = cmi['cmi.location'] || '';
+      const susLen = (cmi['cmi.suspend_data'] || '').length;
+      console.log(`[SCORM DIAG] Commit location=${loc} suspendLength=${susLen}`);
       triggerCommit('COMMIT');
       return 'true';
     },

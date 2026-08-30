@@ -233,12 +233,77 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   }
 
   await waitForInitialCmiState();
+
+  const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+  const activeApi = is2004 ? window.API_1484_11 : window.API;
+  const initialCmi = activeApi && typeof activeApi._getCmi === 'function' ? activeApi._getCmi() : {};
+  const initialLoc = is2004 ? (initialCmi['cmi.location'] || '') : (initialCmi['cmi.core.lesson_location'] || '');
+  const initialSusData = initialCmi['cmi.suspend_data'] || '';
+
+  console.log(`[SCORM DIAG] initial cmi.location=${initialLoc}`);
+  console.log(`[SCORM DIAG] initial suspend_data length=${initialSusData.length}`);
   console.log('[SCORM DIAG] SCO load allowed');
 
-  // 7. Nạp bài giảng vào Content Frame (Chỉ nạp SAU KHI CMI State đã được chuẩn bị hoàn tất)
+  // Bắt lỗi tài nguyên mạng và ngoại lệ JavaScript toàn cục trên Player Window
+  window.addEventListener('error', (event) => {
+    if (event.target && event.target !== window && (event.target.src || event.target.href)) {
+      console.warn(`[SCORM DIAG] Resource load failed: <${event.target.tagName.toLowerCase()}> ${event.target.src || event.target.href}`);
+    } else if (event.message) {
+      console.error(`[SCORM DIAG] JS Exception: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`);
+    }
+  }, true);
+
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('[SCORM DIAG] Unhandled Rejection:', event.reason);
+  });
+
+  // 7. Nạp bài giảng vào Content Frame và kích hoạt Frame Monitor
   if (contentFrame) {
+    function inspectFrameState(eventLabel = 'Frame event') {
+      try {
+        const frameWin = contentFrame.contentWindow;
+        const frameDoc = contentFrame.contentDocument || frameWin?.document;
+        const currentSrc = contentFrame.src || '';
+        const currentHref = frameWin?.location?.href || 'unknown';
+        const readyState = frameDoc?.readyState || 'unknown';
+
+        console.log(`[SCORM DIAG] [${eventLabel}] frame.src=${currentSrc} frame.href=${currentHref} readyState=${readyState}`);
+
+        if (currentHref === 'about:blank') {
+          console.warn('[SCORM DIAG] WARNING: Frame has navigated or reset to about:blank!');
+        }
+
+        if (frameWin && !frameWin.__scorm_diag_attached) {
+          frameWin.__scorm_diag_attached = true;
+
+          frameWin.addEventListener('error', (e) => {
+            if (e.target && e.target !== frameWin && (e.target.src || e.target.href)) {
+              console.warn(`[SCORM DIAG] [Frame Resource Fail] <${e.target.tagName.toLowerCase()}> ${e.target.src || e.target.href}`);
+            } else if (e.message) {
+              console.error(`[SCORM DIAG] [Frame JS Exception] ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`);
+            }
+          }, true);
+
+          frameWin.addEventListener('unhandledrejection', (e) => {
+            console.error('[SCORM DIAG] [Frame Unhandled Rejection]', e.reason);
+          });
+
+          frameWin.addEventListener('beforeunload', () => {
+            console.log(`[SCORM DIAG] Frame beforeunload: transitioning from ${frameWin.location.href}`);
+          });
+
+          frameWin.addEventListener('unload', () => {
+            console.log('[SCORM DIAG] Frame unload triggered');
+          });
+        }
+      } catch (inspectErr) {
+        console.warn('[SCORM DIAG] Frame inspection note:', inspectErr.message);
+      }
+    }
+
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
+      inspectFrameState('onload');
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
@@ -248,6 +313,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
     contentFrame.onerror = (err) => {
       console.error('❌ [SCORM Player] Failed to load SCO content frame:', err);
+      inspectFrameState('onerror');
       showError('Không thể tải nội dung bài giảng qua Gateway.');
     };
 
