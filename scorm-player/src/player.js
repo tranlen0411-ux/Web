@@ -347,118 +347,165 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 3. Quét Quiz Controls trên Toàn Bộ Documents (Top Document + Tất cả Nested Frame Documents)
-    function diagnoseQuizDom(triggerLabel = 'Snapshot') {
+    // 3. Khám phá và phân tích các nút điều khiển thật (Real Interactive Controls)
+    function inspectRealInteractiveControls(doc, win, docLabel = 'SCO Document') {
+      if (!doc || !doc.body) return;
+
+      const nonControlPattern = /slides?background|background|stage|container|wrapper|scorm-content|overlay/i;
+      const allElements = Array.from(doc.querySelectorAll('*'));
+      const interactiveCandidates = [];
+
+      allElements.forEach((el) => {
+        try {
+          const id = (el.id || '').toLowerCase();
+          const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+          const tag = el.tagName.toUpperCase();
+          const role = (el.getAttribute('role') || '').toLowerCase();
+          const type = (el.getAttribute('type') || '').toLowerCase();
+
+          // Bỏ qua false positives rõ ràng
+          if (nonControlPattern.test(id) || (cls && nonControlPattern.test(cls) && !/button|btn|control|nav/i.test(cls))) {
+            return;
+          }
+          if (tag === 'HTML' || tag === 'BODY' || tag === 'SCRIPT' || tag === 'STYLE' || tag === 'HEAD' || tag === 'META' || tag === 'IFRAME') {
+            return;
+          }
+
+          const style = win ? win.getComputedStyle(el) : {};
+          const rect = el.getBoundingClientRect();
+          const text = (el.innerText || el.textContent || el.value || '').trim();
+          const aria = (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+          const isButtonTag = tag === 'BUTTON' || (tag === 'INPUT' && (type === 'button' || type === 'submit'));
+          const isRoleButton = role === 'button';
+          const isPointerCursor = style.cursor === 'pointer';
+          const hasOnClick = typeof el.onclick === 'function' || el.hasAttribute('onclick');
+          const isInteractive = isButtonTag || isRoleButton || isPointerCursor || hasOnClick || el.tabIndex >= 0;
+
+          if (isInteractive || /submit|next|prev|back|nộp|tiếp|quay/i.test(text) || /submit|next|prev|back/i.test(aria) || /submit|next|prev|btn|button|control/i.test(cls) || /submit|next|prev|btn|button|control/i.test(id)) {
+            const display = style.display || 'unknown';
+            const visibility = style.visibility || 'unknown';
+            const opacity = style.opacity || '1';
+            const pe = style.pointerEvents || 'auto';
+            const disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true' || cls.includes('disabled');
+            const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
+
+            interactiveCandidates.push({
+              tag: tag.toLowerCase(),
+              id: el.id || '-',
+              cls: cls ? cls.substring(0, 30) : '-',
+              text: text ? text.substring(0, 20).replace(/\s+/g, ' ') : '-',
+              aria: aria ? aria.substring(0, 20) : '-',
+              rectStr,
+              rect,
+              display,
+              visibility,
+              opacity,
+              pe,
+              disabled,
+              isZeroSize: rect.width === 0 || rect.height === 0,
+            });
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      console.log(`[SCORM DIAG] [${docLabel}] Found ${interactiveCandidates.length} potential interactive controls:`);
+      interactiveCandidates.slice(0, 12).forEach((c, idx) => {
+        console.log(`[SCORM DIAG] [${docLabel}] #${idx + 1} <${c.tag}> id=${c.id} cls=${c.cls} text="${c.text}" aria="${c.aria}" display=${c.display} vis=${c.visibility} op=${c.opacity} pe=${c.pe} disabled=${c.disabled} rect=${c.rectStr}`);
+      });
+
+      // Phân loại nút Submit, Next, Prev thực thụ
+      function findBestControl(patterns) {
+        return interactiveCandidates.find((c) => {
+          const matchText = patterns.some((p) => p.test(c.text) || p.test(c.aria));
+          const matchIdCls = patterns.some((p) => p.test(c.id) || p.test(c.cls));
+          return (matchText || matchIdCls) && !c.cls.includes('slidesbackground') && !c.id.includes('slidesbackground');
+        });
+      }
+
+      const realSubmit = findBestControl([/submit/i, /nộp/i, /check/i, /xác nhận/i, /answer/i]);
+      const realNext = findBestControl([/next/i, /tiếp/i, /forward/i, /continue/i, /chevron-right/i]);
+      const realPrev = findBestControl([/prev/i, /previous/i, /back/i, /trước/i, /lùi/i, /quay lại/i, /chevron-left/i]);
+
+      console.log(`[SCORM DIAG] [${docLabel}] CLASSIFIED REAL CONTROLS:`);
+      console.log(`  - REAL_SUBMIT_CONTROL: ${realSubmit ? `<${realSubmit.tag} id=${realSubmit.id}> text="${realSubmit.text}" rect=${realSubmit.rectStr} dis=${realSubmit.disabled} vis=${realSubmit.visibility} op=${realSubmit.opacity}` : 'missing'}`);
+      console.log(`  - REAL_NEXT_CONTROL: ${realNext ? `<${realNext.tag} id=${realNext.id}> text="${realNext.text}" rect=${realNext.rectStr} dis=${realNext.disabled} vis=${realNext.visibility} op=${realNext.opacity}` : 'missing'}`);
+      console.log(`  - REAL_PREVIOUS_CONTROL: ${realPrev ? `<${realPrev.tag} id=${realPrev.id}> text="${realPrev.text}" rect=${realPrev.rectStr} dis=${realPrev.disabled} vis=${realPrev.visibility} op=${realPrev.opacity}` : 'missing'}`);
+
+      // Cây DOM rút gọn quanh Quiz Root nếu tìm thấy
+      const quizRoot = doc.querySelector('[class*="quiz"], [id*="quiz"], [class*="player"], [class*="navigation"], [class*="toolbar"]') || doc.body;
+      if (quizRoot) {
+        const rootTag = quizRoot.tagName.toLowerCase();
+        const rootId = quizRoot.id || '-';
+        const rootCls = typeof quizRoot.className === 'string' ? quizRoot.className.substring(0, 40) : '-';
+        const rootRect = quizRoot.getBoundingClientRect();
+        console.log(`[SCORM DIAG] REAL_QUIZ_ROOT: <${rootTag} id="${rootId}" class="${rootCls}"> rect=[${Math.round(rootRect.left)},${Math.round(rootRect.top)},${Math.round(rootRect.width)}x${Math.round(rootRect.height)}] childNodes=${quizRoot.children.length}`);
+      }
+    }
+
+    // 4. Quét Read-Only iSpring Quiz Runtime State
+    function inspectIspringRuntimeState(win, contextLabel = 'SCO Window') {
+      if (!win) return;
+      try {
+        const knownGlobals = ['ispring', 'iSpring', 'PresentationPlayer', 'player', 'quizPlayer', 'ispringCourse', 'quiz', 'courseData'];
+        const stateSummary = {};
+
+        knownGlobals.forEach((k) => {
+          if (win[k] && typeof win[k] === 'object') {
+            const obj = win[k];
+            const safeProps = {};
+            const keysToScan = ['currentSlideIndex', 'slideIndex', 'currentSlide', 'questionIndex', 'currentQuestion', 'attempts', 'maxAttempts', 'isAnswered', 'answered', 'isSubmitted', 'submitted', 'isCompleted', 'completed', 'navigationLocked', 'isNavigationLocked', 'navigationEnabled', 'isSubmitEnabled', 'submitEnabled', 'feedbackState', 'state', 'mode', 'status'];
+
+            keysToScan.forEach((prop) => {
+              if (prop in obj && typeof obj[prop] !== 'function') {
+                safeProps[prop] = obj[prop];
+              }
+            });
+
+            stateSummary[k] = safeProps;
+          }
+        });
+
+        console.log(`[SCORM DIAG] [${contextLabel}] QUIZ_RUNTIME_STATE:`, JSON.stringify(stateSummary));
+      } catch (stErr) {
+        console.warn(`[SCORM DIAG] Read runtime state error:`, stErr.message);
+      }
+    }
+
+    // 5. Tổng hợp snapshot chẩn đoán toàn diện
+    function runComprehensiveQuizDiagnostics(triggerLabel = 'Snapshot') {
       try {
         const frameWin = contentFrame.contentWindow;
         const frameDoc = contentFrame.contentDocument || frameWin?.document;
         const vpSize = `${window.innerWidth}x${window.innerHeight}`;
         const frameClient = `${contentFrame.clientWidth}x${contentFrame.clientHeight}`;
-        const frameOffset = `${contentFrame.offsetWidth}x${contentFrame.offsetHeight}`;
 
-        console.log(`[SCORM DIAG] [${triggerLabel}] viewport/frame size=viewport:${vpSize} frameClient:${frameClient} frameOffset:${frameOffset}`);
+        console.log(`========================================================`);
+        console.log(`[SCORM DIAG] === QUIZ DIAGNOSTIC SNAPSHOT: ${triggerLabel} ===`);
+        console.log(`[SCORM DIAG] viewport=${vpSize} frame=${frameClient}`);
 
         if (!frameDoc || !frameDoc.body) {
-          console.log(`[SCORM DIAG] [${triggerLabel}] frameDoc body not yet available`);
+          console.log(`[SCORM DIAG] frameDoc not ready`);
           return;
         }
 
-        // Hook iSpring APIs trên top frame window
-        if (frameWin) hookIspringLayoutApi(frameWin, 'SCO Top Window');
+        // A. Quét SCO Top Document
+        inspectRealInteractiveControls(frameDoc, frameWin, 'SCO Top Document');
+        inspectIspringRuntimeState(frameWin, 'SCO Top Window');
 
-        // Tập hợp tất cả documents
-        const allDocs = [{ label: 'SCO Top Document', doc: frameDoc, win: frameWin }];
+        // B. Quét Nested Frame Documents
         const nestedFrames = enumerateNestedFrames(frameDoc);
-
         nestedFrames.forEach((nf) => {
           if (nf.ifrDoc) {
-            allDocs.push({
-              label: `Nested Frame #${nf.depth}.${nf.index + 1} (${nf.src || nf.ifr.id || nf.ifr.name || 'frame'})`,
-              doc: nf.ifrDoc,
-              win: nf.ifrWin,
-              rect: nf.rect,
-            });
+            inspectRealInteractiveControls(nf.ifrDoc, nf.ifrWin, `Nested Frame #${nf.depth}.${nf.index + 1} (${nf.src || nf.ifr.id || 'frame'})`);
+            inspectIspringRuntimeState(nf.ifrWin, `Nested Frame #${nf.depth}.${nf.index + 1}`);
           }
         });
 
-        allDocs.forEach((docEntry) => {
-          const d = docEntry.doc;
-          const w = docEntry.win;
-          const allElements = Array.from(d.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a, div, span, canvas, svg'));
-
-          function inspectElementRole(keywords) {
-            const candidates = allElements.filter((el) => {
-              const text = (el.innerText || el.textContent || el.value || '').toLowerCase().trim();
-              const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
-              const id = (el.id || '').toLowerCase();
-              const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-              const title = (el.getAttribute('title') || '').toLowerCase();
-              return keywords.some((k) => text.includes(k) || aria.includes(k) || id.includes(k) || cls.includes(k) || title.includes(k));
-            });
-
-            if (candidates.length === 0) {
-              return { status: 'missing', summary: 'none found' };
-            }
-
-            const target = candidates[0];
-            const style = w ? w.getComputedStyle(target) : (d.defaultView?.getComputedStyle(target) || {});
-            const rect = target.getBoundingClientRect();
-            const disabled = target.disabled === true || target.getAttribute('aria-disabled') === 'true' || (typeof target.className === 'string' && target.className.includes('disabled'));
-            const display = style.display || 'unknown';
-            const visibility = style.visibility || 'unknown';
-            const opacity = style.opacity || '1';
-            const pointerEvents = style.pointerEvents || 'auto';
-            const zIndex = style.zIndex || 'auto';
-
-            let status = 'normal';
-            if (display === 'none' || visibility === 'hidden' || opacity === '0') {
-              status = 'hidden';
-            } else if (disabled) {
-              status = 'disabled';
-            } else if (rect.width === 0 || rect.height === 0) {
-              status = 'zero-size';
-            } else if (rect.bottom <= 0 || rect.top >= (contentFrame.clientHeight || window.innerHeight) || rect.right <= 0 || rect.left >= (contentFrame.clientWidth || window.innerWidth)) {
-              status = 'offscreen';
-            }
-
-            const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
-            const summary = `tag=<${target.tagName.toLowerCase()}> id=${target.id || '-'} text="${(target.innerText || target.textContent || '').trim().substring(0, 15)}" display=${display} vis=${visibility} op=${opacity} pe=${pointerEvents} zIndex=${zIndex} disabled=${disabled} rect=${rectStr}`;
-
-            return { status, summary, target, disabled, rectStr, rect, display, visibility, opacity };
-          }
-
-          const submitDiag = inspectElementRole(['submit', 'nộp bài', 'gửi', 'trả lời', 'check', 'xác nhận', 'send']);
-          const nextDiag = inspectElementRole(['next', 'tiếp', 'sau', 'forward', 'continue', 'chevron-right', 'arrow-right']);
-          const prevDiag = inspectElementRole(['prev', 'trước', 'lùi', 'back', 'chevron-left', 'arrow-left']);
-
-          console.log(`[SCORM DIAG] [${triggerLabel}] [${docEntry.label}] controls: submit=<${submitDiag.status}> next=<${nextDiag.status}> prev=<${prevDiag.status}>`);
-          if (submitDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] submit detail: ${submitDiag.summary}`);
-          if (nextDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] next detail: ${nextDiag.summary}`);
-          if (prevDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] prev detail: ${prevDiag.summary}`);
-
-          // Quét canvas / svg size
-          const canvases = Array.from(d.querySelectorAll('canvas, svg'));
-          canvases.slice(0, 3).forEach((cv, ci) => {
-            const cvRect = cv.getBoundingClientRect();
-            console.log(`[SCORM DIAG] [${docEntry.label}] <${cv.tagName.toLowerCase()} #${ci + 1}> size=${Math.round(cvRect.width)}x${Math.round(cvRect.height)} rect=[${Math.round(cvRect.left)},${Math.round(cvRect.top)}]`);
-          });
-
-          // Quét iSpring Runtime State objects
-          if (w) {
-            ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz', 'courseData'].forEach((key) => {
-              if (w[key] && typeof w[key] === 'object') {
-                try {
-                  const stateKeys = Object.keys(w[key]).slice(0, 15);
-                  console.log(`[SCORM DIAG] [${docEntry.label}] iSpring object [${key}]: methods/props=[${stateKeys.join(', ')}]`);
-                } catch {
-                  // ignore
-                }
-              }
-            });
-          }
-        });
-      } catch (domErr) {
-        console.warn(`[SCORM DIAG] [${triggerLabel}] DOM inspection note:`, domErr.message);
+        console.log(`========================================================`);
+      } catch (diagErr) {
+        console.warn(`[SCORM DIAG] Snapshot error:`, diagErr.message);
       }
     }
 
@@ -502,17 +549,17 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
           frameWin.addEventListener('resize', () => {
             console.log(`[SCORM DIAG] [Frame resize event] innerSize=${frameWin.innerWidth}x${frameWin.innerHeight}`);
-            diagnoseQuizDom('Frame resize');
+            runComprehensiveQuizDiagnostics('Frame resize');
           });
 
           frameWin.addEventListener('focus', () => {
             console.log('[SCORM DIAG] [Frame focus event]');
-            diagnoseQuizDom('Frame focus');
+            runComprehensiveQuizDiagnostics('Frame focus');
           });
 
           frameWin.addEventListener('click', () => {
-            setTimeout(() => diagnoseQuizDom('Frame click + 300ms'), 300);
-            setTimeout(() => diagnoseQuizDom('Frame click + 1000ms'), 1000);
+            setTimeout(() => runComprehensiveQuizDiagnostics('Frame click + 300ms'), 300);
+            setTimeout(() => runComprehensiveQuizDiagnostics('Frame click + 1000ms'), 1000);
           });
         }
       } catch (inspectErr) {
@@ -523,28 +570,28 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     // Lắng nghe các sự kiện repaint/resize/visibility trên player window
     window.addEventListener('resize', () => {
       console.log(`[SCORM DIAG] [Window resize event] size=${window.innerWidth}x${window.innerHeight}`);
-      diagnoseQuizDom('Window resize');
+      runComprehensiveQuizDiagnostics('Window resize');
     });
 
     document.addEventListener('visibilitychange', () => {
       console.log(`[SCORM DIAG] [VisibilityChange event] state=${document.visibilityState}`);
-      diagnoseQuizDom(`Visibility ${document.visibilityState}`);
+      runComprehensiveQuizDiagnostics(`Visibility ${document.visibilityState}`);
     });
 
     window.addEventListener('focus', () => {
       console.log('[SCORM DIAG] [Window focus event]');
-      diagnoseQuizDom('Window focus');
+      runComprehensiveQuizDiagnostics('Window focus');
     });
 
     window.addEventListener('click', () => {
-      setTimeout(() => diagnoseQuizDom('Window click + 300ms'), 300);
-      setTimeout(() => diagnoseQuizDom('Window click + 1000ms'), 1000);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Window click + 300ms'), 300);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Window click + 1000ms'), 1000);
     });
 
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       inspectFrameState('onload');
-      diagnoseQuizDom('onload T+0');
+      runComprehensiveQuizDiagnostics('onload T+0');
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
@@ -553,10 +600,10 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
 
       // Schedule interval diagnostics để bắt trạng thái sau khi user bấm YES Resume
-      setTimeout(() => diagnoseQuizDom('Post-load T+1s'), 1000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+2s'), 2000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+4s'), 4000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+7s'), 7000);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Post-load T+1s'), 1000);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Post-load T+2s'), 2000);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Post-load T+4s'), 4000);
+      setTimeout(() => runComprehensiveQuizDiagnostics('Post-load T+7s'), 7000);
     };
 
     contentFrame.onerror = (err) => {
