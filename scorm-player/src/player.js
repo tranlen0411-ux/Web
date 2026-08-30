@@ -687,6 +687,200 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
+    // Hook EventTarget addEventListener và window.onresize để xác định chính xác handler iSpring đăng ký
+    function hookResizeListeners(win) {
+      if (!win || win.__resize_hooked) return;
+      win.__resize_hooked = true;
+
+      try {
+        const origAddEventListener = win.addEventListener;
+        win.addEventListener = function (type, listener, options) {
+          if (type === 'resize') {
+            const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()).toFixed(1);
+            const listenerName = listener?.name || (typeof listener === 'function' ? 'anonymous' : String(listener));
+            const fnStr = typeof listener === 'function' ? listener.toString().substring(0, 120).replace(/\s+/g, ' ') : '';
+            console.log(`[ISPRING RESIZE TRACE] listener_registered type=resize name="${listenerName}" fn="${fnStr}" time=${now}ms`);
+            
+            if (!win.__registeredResizeHandlers) win.__registeredResizeHandlers = [];
+            win.__registeredResizeHandlers.push(listener);
+          }
+          return origAddEventListener.apply(this, arguments);
+        };
+
+        let _onresize = win.onresize;
+        Object.defineProperty(win, 'onresize', {
+          get() { return _onresize; },
+          set(fn) {
+            const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()).toFixed(1);
+            console.log(`[ISPRING RESIZE TRACE] onresize_assigned time=${now}ms fn="${fn?.toString().substring(0, 120).replace(/\s+/g, ' ')}"`);
+            _onresize = fn;
+            if (!win.__registeredResizeHandlers) win.__registeredResizeHandlers = [];
+            win.__registeredResizeHandlers.push(fn);
+          },
+          configurable: true,
+        });
+      } catch (hookErr) {
+        console.warn('[ISPRING RESIZE TRACE] hook error:', hookErr.message);
+      }
+    }
+
+    // Bộ thực thi kiểm chứng khoa học Root-Cause (R1: Synthetic, R2: Direct API, R3: Real 1px Delta)
+    async function runRootCauseProof(frameWin, frameDoc) {
+      if (!frameDoc || window.__r_proof_has_run) return;
+      window.__r_proof_has_run = true;
+
+      function takeSnapshot(label) {
+        const sb = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+        const fl = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+        const pv = frameDoc.querySelector('.playerView, [class*="playerView"]');
+        const qr = frameDoc.querySelector('.quizView, [class*="quizView"], [id*="quiz"]');
+        const svgs = frameDoc.querySelectorAll('svg').length;
+        const canvases = frameDoc.querySelectorAll('canvas').length;
+
+        function r(el) {
+          if (!el) return 'missing';
+          const b = el.getBoundingClientRect();
+          if (b.width === 0 && b.height === 0) return '0x0';
+          return `[${Math.round(b.left)},${Math.round(b.top)},${Math.round(b.width)}x${Math.round(b.height)}]`;
+        }
+
+        return {
+          label,
+          inner: frameWin ? `${frameWin.innerWidth}x${frameWin.innerHeight}` : 'NA',
+          playerView: r(pv),
+          framesLayer: r(fl),
+          slidesBg: r(sb),
+          quizRoot: r(qr),
+          svgs,
+          canvases,
+          isVisible: (sb && sb.getBoundingClientRect().width > 10) || svgs > 0,
+        };
+      }
+
+      console.log('========================================================');
+      console.log('🔬 [ROOT-CAUSE PROOF] BẮT ĐẦU THỬ NGHIỆM CHẨN ĐOÁN R1, R2, R3');
+      console.log('========================================================');
+
+      const beforeAll = takeSnapshot('INITIAL_BLANK_T5');
+      console.log(`[PROOF T5 BEFORE] inner=${beforeAll.inner} playerView=${beforeAll.playerView} framesLayer=${beforeAll.framesLayer} slidesBg=${beforeAll.slidesBg} svgs=${beforeAll.svgs} isVisible=${beforeAll.isVisible}`);
+
+      // ----------------------------------------------------
+      // TEST R1: Synthetic Resize Event trên SCO Window (Same Geometry)
+      // ----------------------------------------------------
+      console.log('🧪 [TEST R1] Dispatching synthetic Event("resize") on scoWindow...');
+      try {
+        frameWin.dispatchEvent(new Event('resize'));
+      } catch (r1Err) {
+        console.warn('[TEST R1] dispatchEvent error:', r1Err.message);
+      }
+
+      await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+      const afterR1 = takeSnapshot('AFTER_R1_SYNTHETIC');
+      const r1Fixed = afterR1.isVisible;
+      console.log(`[TEST R1 RESULT] synthetic resize same geometry = ${r1Fixed ? 'FIXED (PASS)' : 'NOT_FIXED (FAIL)'}`);
+      console.log(`  BEFORE R1: framesLayer=${beforeAll.framesLayer} slidesBg=${beforeAll.slidesBg} svgs=${beforeAll.svgs}`);
+      console.log(`  AFTER  R1: framesLayer=${afterR1.framesLayer} slidesBg=${afterR1.slidesBg} svgs=${afterR1.svgs}`);
+
+      if (r1Fixed) {
+        console.log('🎉 [ROOT-CAUSE PROOF] R1 SUCCEEDED: Synthetic resize event kích hoạt được layout pipeline!');
+        return;
+      }
+
+      // ----------------------------------------------------
+      // TEST R2: Direct Layout / Invalidate API Call
+      // ----------------------------------------------------
+      console.log('🧪 [TEST R2] Searching for real iSpring internal layout / invalidate methods...');
+      let foundApiName = null;
+      let r2Fixed = false;
+
+      const candidates = [
+        { obj: frameWin, name: 'window.invalidatePlayerSize' },
+        { obj: frameWin, name: 'window.setPlayerSize' },
+        { obj: frameWin, name: 'window.updatePlayerSize' },
+        { obj: frameWin?.player, name: 'player.invalidateSize' },
+        { obj: frameWin?.player, name: 'player.updateLayout' },
+        { obj: frameWin?.player, name: 'player.setPlayerSize' },
+        { obj: frameWin?.player, name: 'player.resize' },
+        { obj: frameWin?.PresentationPlayer, name: 'PresentationPlayer.invalidateSize' },
+        { obj: frameWin?.ispringCourse, name: 'ispringCourse.updateLayout' },
+        { obj: frameWin?.quizPlayer, name: 'quizPlayer.updateLayout' },
+      ];
+
+      for (const c of candidates) {
+        if (c.obj) {
+          const parts = c.name.split('.');
+          const mName = parts[1];
+          if (typeof c.obj[mName] === 'function') {
+            foundApiName = c.name;
+            console.log(`[TEST R2] Found active layout API: ${foundApiName}. Calling directly...`);
+            try {
+              if (mName === 'setPlayerSize') {
+                c.obj[mName](frameWin.innerWidth, frameWin.innerHeight);
+              } else {
+                c.obj[mName]();
+              }
+            } catch (callErr) {
+              console.warn(`[TEST R2] Error calling ${foundApiName}:`, callErr.message);
+            }
+            break;
+          }
+        }
+      }
+
+      // Nếu có registered resize handlers từ iSpring, thử gọi trực tiếp handler đó
+      if (!foundApiName && frameWin.__registeredResizeHandlers && frameWin.__registeredResizeHandlers.length > 0) {
+        console.log(`[TEST R2] Calling ${frameWin.__registeredResizeHandlers.length} registered resize handler(s) directly...`);
+        frameWin.__registeredResizeHandlers.forEach((h, i) => {
+          try {
+            h.call(frameWin, new UIEvent('resize'));
+            foundApiName = `registeredHandler#${i}`;
+          } catch (hErr) {
+            console.warn(`[TEST R2] registeredHandler#${i} call error:`, hErr.message);
+          }
+        });
+      }
+
+      if (foundApiName) {
+        await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+        const afterR2 = takeSnapshot('AFTER_R2_DIRECT_CALL');
+        r2Fixed = afterR2.isVisible;
+        console.log(`[TEST R2 RESULT] direct layout call (${foundApiName}) = ${r2Fixed ? 'FIXED (PASS)' : 'NOT_FIXED (FAIL)'}`);
+        console.log(`  BEFORE R2: framesLayer=${beforeAll.framesLayer} slidesBg=${beforeAll.slidesBg} svgs=${beforeAll.svgs}`);
+        console.log(`  AFTER  R2: framesLayer=${afterR2.framesLayer} slidesBg=${afterR2.slidesBg} svgs=${afterR2.svgs}`);
+
+        if (r2Fixed) {
+          console.log(`🎉 [ROOT-CAUSE PROOF] R2 SUCCEEDED: Direct API call (${foundApiName}) đã kích hoạt render thành công!`);
+          return;
+        }
+      } else {
+        console.log('[TEST R2 RESULT] direct layout API = NOT AVAILABLE');
+      }
+
+      // ----------------------------------------------------
+      // TEST R3: Real Geometry Delta (733 -> 732 -> 733)
+      // ----------------------------------------------------
+      console.log('🧪 [TEST R3] Testing Real 1px Geometry Delta on Content Frame (733 -> 732 -> restore)...');
+      const originalWidthStyle = contentFrame.style.width || '100%';
+      contentFrame.style.width = 'calc(100% - 1px)';
+
+      await new Promise((res) => requestAnimationFrame(res));
+      contentFrame.style.width = originalWidthStyle;
+
+      await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+      const afterR3 = takeSnapshot('AFTER_R3_GEOMETRY_DELTA');
+      const r3Fixed = afterR3.isVisible;
+      console.log(`[TEST R3 RESULT] real 1px geometry delta = ${r3Fixed ? 'FIXED (PASS)' : 'NOT_FIXED (FAIL)'}`);
+      console.log(`  BEFORE R3: framesLayer=${beforeAll.framesLayer} slidesBg=${beforeAll.slidesBg} svgs=${beforeAll.svgs}`);
+      console.log(`  AFTER  R3: framesLayer=${afterR3.framesLayer} slidesBg=${afterR3.slidesBg} svgs=${afterR3.svgs}`);
+
+      console.log('========================================================');
+      console.log('📊 [ROOT-CAUSE PROOF SUMMARY]');
+      console.log(`  R1 (Synthetic Resize):   ${r1Fixed ? 'PASS' : 'FAIL'}`);
+      console.log(`  R2 (Direct Layout API):  ${foundApiName ? (r2Fixed ? 'PASS' : 'FAIL') : 'NOT AVAILABLE'}`);
+      console.log(`  R3 (Real 1px Delta):     ${r3Fixed ? 'PASS' : 'FAIL'}`);
+      console.log('========================================================');
+    }
+
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       logComprehensiveGeometry('T1_CONTENT_FRAME_ONLOAD');
@@ -695,6 +889,10 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
       const frameWin = contentFrame.contentWindow;
       const frameDoc = contentFrame.contentDocument || frameWin?.document;
+
+      if (frameWin) {
+        hookResizeListeners(frameWin);
+      }
 
       if (frameWin && !frameWin.__scorm_t3_attached) {
         frameWin.__scorm_t3_attached = true;
@@ -717,14 +915,17 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Mốc T4 (250ms sau render) và T5 (trước khi người dùng resize)
-      setTimeout(() => {
+      // Mốc T4 (250ms sau render), T5 (trước khi người dùng resize) và thực thi ROOT-CAUSE PROOF R1, R2, R3
+      setTimeout(async () => {
         logComprehensiveGeometry('T4_POST_RENDER_250MS');
         logComprehensiveGeometry('T5_BEFORE_USER_RESIZE');
         logBreakpointState('BEFORE_NATIVE');
         if (frameDoc) {
           inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
           inspectFreshQuizState('INITIAL_LOAD');
+
+          // Thực hiện thử nghiệm khoa học R1, R2, R3 tự động tại mốc T5
+          await runRootCauseProof(frameWin, frameDoc);
 
           // Gắn listener lắng nghe người dùng tương tác với Quiz (chọn đáp án / bấm nút)
           try {
@@ -735,7 +936,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             }, true);
           } catch {}
         }
-      }, 250);
+      }, 350);
     };
 
     contentFrame.onerror = (err) => {
