@@ -265,60 +265,60 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     let lastWinSize = `${window.innerWidth}x${window.innerHeight}`;
     let callSeq = 0;
 
-    // 1. Hàm chụp chi tiết toàn bộ Geometry & Media Parameters
+    // 1. Hàm chụp chi tiết toàn bộ Geometry & Media Parameters (In trực tiếp từng dòng Plain Text)
     function logGeometrySnapshot(stageLabel) {
       try {
         const frameWin = contentFrame ? contentFrame.contentWindow : null;
         const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
 
-        // Window & Viewport
-        const winInner = `${window.innerWidth}x${window.innerHeight}`;
-        const winOuter = `${window.outerWidth}x${window.outerHeight}`;
-        const docClient = `${document.documentElement.clientWidth}x${document.documentElement.clientHeight}`;
-        const dpr = window.devicePixelRatio || 1;
+        // MAIN
+        const winInner = `${window.innerWidth != null ? window.innerWidth : 'NA'}x${window.innerHeight != null ? window.innerHeight : 'NA'}`;
+        const winOuter = `${window.outerWidth != null ? window.outerWidth : 'NA'}x${window.outerHeight != null ? window.outerHeight : 'NA'}`;
+        const dpr = window.devicePixelRatio != null ? window.devicePixelRatio : 'NA';
+        console.log(`[SCORM GEOMETRY] ${stageLabel} MAIN inner=${winInner} outer=${winOuter} dpr=${dpr}`);
+
+        // VISUAL VIEWPORT
         const vv = window.visualViewport
-          ? `[w=${Math.round(window.visualViewport.width)},h=${Math.round(window.visualViewport.height)},scale=${window.visualViewport.scale.toFixed(2)}]`
-          : 'none';
+          ? `viewport=${Math.round(window.visualViewport.width)}x${Math.round(window.visualViewport.height)} scale=${window.visualViewport.scale.toFixed(2)}`
+          : 'viewport=NA scale=NA';
+        console.log(`[SCORM GEOMETRY] ${stageLabel} VISUAL ${vv}`);
 
-        // Content Iframe
-        const ifrRect = contentFrame ? contentFrame.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
-        const ifrRectStr = `[${Math.round(ifrRect.left)},${Math.round(ifrRect.top)},${Math.round(ifrRect.width)}x${Math.round(ifrRect.height)}]`;
-        const ifrClient = contentFrame ? `${contentFrame.clientWidth}x${contentFrame.clientHeight}` : '0x0';
-        const ifrOffset = contentFrame ? `${contentFrame.offsetWidth}x${contentFrame.offsetHeight}` : '0x0';
+        // IFRAME
+        let ifrRectStr = 'rect=NA';
+        let ifrClient = 'client=NA';
+        let ifrOffset = 'offset=NA';
+        if (contentFrame) {
+          const r = contentFrame.getBoundingClientRect();
+          ifrRectStr = `rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+          ifrClient = `client=${contentFrame.clientWidth != null ? contentFrame.clientWidth : 'NA'}x${contentFrame.clientHeight != null ? contentFrame.clientHeight : 'NA'}`;
+          ifrOffset = `offset=${contentFrame.offsetWidth != null ? contentFrame.offsetWidth : 'NA'}x${contentFrame.offsetHeight != null ? contentFrame.offsetHeight : 'NA'}`;
+        }
+        console.log(`[SCORM GEOMETRY] ${stageLabel} IFRAME ${ifrRectStr} ${ifrClient} ${ifrOffset}`);
 
-        // SCO Window / Document
-        const scoInner = frameWin ? `${frameWin.innerWidth}x${frameWin.innerHeight}` : 'unknown';
-        const scoDocClient = frameDoc ? `${frameDoc.documentElement.clientWidth}x${frameDoc.documentElement.clientHeight}` : 'unknown';
-        const bodyRect = frameDoc && frameDoc.body ? frameDoc.body.getBoundingClientRect() : { width: 0, height: 0 };
-        const bodyRectStr = `[${Math.round(bodyRect.width)}x${Math.round(bodyRect.height)}]`;
+        // SCO
+        const scoInner = frameWin ? `inner=${frameWin.innerWidth != null ? frameWin.innerWidth : 'NA'}x${frameWin.innerHeight != null ? frameWin.innerHeight : 'NA'}` : 'inner=NA';
+        const scoDocClient = frameDoc && frameDoc.documentElement ? `docClient=${frameDoc.documentElement.clientWidth != null ? frameDoc.documentElement.clientWidth : 'NA'}x${frameDoc.documentElement.clientHeight != null ? frameDoc.documentElement.clientHeight : 'NA'}` : 'docClient=NA';
+        console.log(`[SCORM GEOMETRY] ${stageLabel} SCO ${scoInner} ${scoDocClient}`);
 
-        // Specific SCO Elements
+        // ELEMENTS
         function getElRectStr(selector) {
-          if (!frameDoc) return 'missing';
+          if (!frameDoc) return 'NA';
           const el = frameDoc.querySelector(selector);
-          if (!el) return 'missing';
+          if (!el) return 'NA';
           const r = el.getBoundingClientRect();
           return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
         }
-
         const playerViewRect = getElRectStr('.playerView, [class*="playerView"], [class*="player"]');
         const framesLayerRect = getElRectStr('.framesLayerContent, [class*="framesLayer"]');
         const slidesBgRect = getElRectStr('#slidesBackground, [id*="slidesBackground"]');
+        console.log(`[SCORM GEOMETRY] ${stageLabel} ELEMENTS playerView=${playerViewRect} framesLayer=${framesLayerRect} slidesBg=${slidesBgRect}`);
 
-        // Media queries
-        const isLandscape = window.matchMedia ? window.matchMedia('(orientation: landscape)').matches : 'unknown';
-        const isMin768 = window.matchMedia ? window.matchMedia('(min-width: 768px)').matches : 'unknown';
-
-        console.log(`========================================================`);
-        console.log(`[SCORM GEOMETRY] ${stageLabel}:`);
-        console.log(`  - MAIN_WINDOW: inner=${winInner} outer=${winOuter} docClient=${docClient} dpr=${dpr} visualViewport=${vv}`);
-        console.log(`  - IFRAME: rect=${ifrRectStr} client=${ifrClient} offset=${ifrOffset}`);
-        console.log(`  - SCO_DOC: inner=${scoInner} docClient=${scoDocClient} bodyRect=${bodyRectStr}`);
-        console.log(`  - ELEMENTS: playerView=${playerViewRect} framesLayer=${framesLayerRect} slidesBg=${slidesBgRect}`);
-        console.log(`  - MEDIA: landscape=${isLandscape} min768=${isMin768}`);
-        console.log(`========================================================`);
+        // MEDIA
+        const isLandscape = window.matchMedia ? window.matchMedia('(orientation: landscape)').matches : 'NA';
+        const isMin768 = window.matchMedia ? window.matchMedia('(min-width: 768px)').matches : 'NA';
+        console.log(`[SCORM GEOMETRY] ${stageLabel} MEDIA landscape=${isLandscape} min768=${isMin768}`);
       } catch (geomErr) {
-        console.warn(`[SCORM GEOMETRY] Snapshot error:`, geomErr.message);
+        console.warn(`[SCORM GEOMETRY] ${stageLabel} error:`, geomErr.message);
       }
     }
 
