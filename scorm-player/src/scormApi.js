@@ -101,10 +101,22 @@ export function createScorm12Api(initialData = {}, onCommitCallback = null) {
         return '';
       }
       lastError = '0';
+      let val = '';
       if (element in cmi) {
-        return cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
+        val = cmi[element] !== undefined && cmi[element] !== null ? String(cmi[element]) : '';
       }
-      return '';
+
+      if (element === 'cmi.core.entry') {
+        console.log(`[SCORM DIAG] GetValue cmi.entry=${val}`);
+      } else if (element === 'cmi.suspend_data') {
+        const head = val ? val.substring(0, 24) : '';
+        const tail = val && val.length > 24 ? val.substring(val.length - 24) : '';
+        console.log(`[SCORM DIAG] GetValue cmi.suspend_data length=${val.length} signature=[${head}...${tail}]`);
+      } else if (element === 'cmi.core.lesson_location') {
+        console.log(`[SCORM DIAG] GetValue cmi.location=${val}`);
+      }
+
+      return val;
     },
 
     LMSSetValue(element, value) {

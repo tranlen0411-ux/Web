@@ -208,12 +208,8 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
       const { type: msgType, payload } = event.data || {};
 
-      // Phản hồi handshake khởi tạo hoặc yêu cầu hydrate dữ liệu từ Player
-      if (
-        msgType === 'PLAYER_READY_FOR_INITIAL_STATE' ||
-        msgType === 'PING' ||
-        msgType === 'SCORM_LOADED'
-      ) {
+      // Phản hồi handshake khởi tạo từ Player (duy nhất khi Player yêu cầu trước khi mount SCO)
+      if (msgType === 'PLAYER_READY_FOR_INITIAL_STATE') {
         if (scormIframeRef.current?.contentWindow) {
           scormIframeRef.current.contentWindow.postMessage(
             {
@@ -221,6 +217,19 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
               payload: {
                 tracking: isDiagFresh ? null : scormTrackingRef.current,
               },
+            },
+            playerOrigin
+          );
+        }
+        return;
+      }
+
+      if (msgType === 'PING') {
+        if (scormIframeRef.current?.contentWindow) {
+          scormIframeRef.current.contentWindow.postMessage(
+            {
+              type: 'PONG',
+              payload: { status: 'READY' },
             },
             playerOrigin
           );
