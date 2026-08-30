@@ -468,6 +468,59 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
+    let lastMin768 = window.innerWidth >= 768;
+
+    // 6. Hàm đo và chẩn đoán Breakpoint 768px Causality
+    function logBreakpointState(triggerLabel = '') {
+      try {
+        const frameWin = contentFrame ? contentFrame.contentWindow : null;
+        const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+        const currentWidth = window.innerWidth;
+        const currentMin768 = currentWidth >= 768;
+        const transition = `${lastMin768 ? 'true' : 'false'}->${currentMin768 ? 'true' : 'false'}`;
+        lastMin768 = currentMin768;
+
+        let slidesBgRect = 'missing';
+        let framesLayerRect = 'missing';
+        let playerViewRect = 'missing';
+        let svgCount = 0;
+        let contentVisible = 'false';
+
+        if (frameDoc) {
+          const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+          const framesLayer = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+          const playerView = frameDoc.querySelector('.playerView, [class*="playerView"]');
+          const svgs = frameDoc.querySelectorAll('svg');
+          svgCount = svgs.length;
+
+          function rStr(el) {
+            if (!el) return 'missing';
+            const r = el.getBoundingClientRect();
+            return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+          }
+
+          slidesBgRect = rStr(slidesBg);
+          framesLayerRect = rStr(framesLayer);
+          playerViewRect = rStr(playerView);
+          contentVisible = (slidesBg && slidesBg.getBoundingClientRect().width > 10) ? 'true' : 'false';
+
+          console.log(`[SCORM BREAKPOINT] transition ${transition} (${triggerLabel})`);
+          console.log(`[SCORM BREAKPOINT] width=${currentWidth} min768=${currentMin768} contentVisible=${contentVisible} svgCount=${svgCount} slidesBg=${slidesBgRect} framesLayer=${framesLayerRect} playerView=${playerViewRect}`);
+
+          // Trace CSS / layout state
+          const pvStyle = playerView && frameWin ? frameWin.getComputedStyle(playerView) : {};
+          const bodyCls = frameDoc.body?.className || '-';
+          const pvCls = playerView?.className || '-';
+          const flCls = framesLayer?.className || '-';
+          console.log(`[SCORM BREAKPOINT CSS] bodyCls="${bodyCls}" playerViewCls="${pvCls}" framesLayerCls="${flCls}" transform="${pvStyle.transform || 'none'}" disp=${pvStyle.display || 'unknown'} vis=${pvStyle.visibility || 'unknown'}`);
+        } else {
+          console.log(`[SCORM BREAKPOINT] transition ${transition} width=${currentWidth} min768=${currentMin768} (${triggerLabel}, frameDoc not ready)`);
+        }
+      } catch (bpErr) {
+        console.warn('[SCORM BREAKPOINT] Error:', bpErr.message);
+      }
+    }
+
     function inspectFrameState(eventLabel = 'Frame event') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -511,8 +564,9 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       console.log(`[SCORM RESIZE TRACE] native browser resize BEGIN: window size ${lastWinSize} -> ${currentWinSize}`);
       lastWinSize = currentWinSize;
 
-      // Log ngay đầu resize event BEFORE iSpring handler
+      // Log ngay đầu resize event
       logGeometrySnapshot('RESIZE_EVENT_ENTRY');
+      logBreakpointState('RESIZE_EVENT_ENTRY');
 
       const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
       const frameWin = contentFrame.contentWindow;
@@ -523,8 +577,11 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
       // Schedule log sau khi render hoàn tất
       requestAnimationFrame(() => {
-        logGeometrySnapshot('CONTENT_VISIBLE');
-        if (frameDoc) inspectRenderSurfaces('CONTENT_VISIBLE', frameDoc, frameWin);
+        requestAnimationFrame(() => {
+          logGeometrySnapshot('CONTENT_VISIBLE');
+          logBreakpointState('CONTENT_VISIBLE_rAF2');
+          if (frameDoc) inspectRenderSurfaces('CONTENT_VISIBLE', frameDoc, frameWin);
+        });
       });
     });
 
@@ -550,6 +607,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         if (!hasLoggedBeforeNative) {
           hasLoggedBeforeNative = true;
           logGeometrySnapshot('BEFORE_NATIVE');
+          logBreakpointState('BEFORE_NATIVE');
           const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
           const frameWin = contentFrame.contentWindow;
           if (frameDoc) inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
