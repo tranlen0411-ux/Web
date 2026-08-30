@@ -310,7 +310,9 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       if (element === 'cmi.entry') {
         console.log(`[SCORM DIAG] GetValue cmi.entry=${val}`);
       } else if (element === 'cmi.suspend_data') {
-        console.log(`[SCORM DIAG] GetValue cmi.suspend_data length=${val.length}`);
+        const head = val ? val.substring(0, 24) : '';
+        const tail = val && val.length > 24 ? val.substring(val.length - 24) : '';
+        console.log(`[SCORM DIAG] GetValue cmi.suspend_data length=${val.length} signature=[${head}...${tail}]`);
       } else if (element === 'cmi.location') {
         console.log(`[SCORM DIAG] GetValue cmi.location=${val}`);
       }
@@ -333,9 +335,12 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
         const oldVal = cmi['cmi.location'] || '';
         console.log(`[SCORM DIAG] SetValue cmi.location old=${oldVal} new=${value}`);
       } else if (element === 'cmi.suspend_data') {
+        const sVal = String(value);
         const oldLen = (cmi['cmi.suspend_data'] || '').length;
-        const newLen = String(value).length;
-        console.log(`[SCORM DIAG] SetValue cmi.suspend_data oldLen=${oldLen} newLen=${newLen}`);
+        const newLen = sVal.length;
+        const head = sVal.substring(0, 24);
+        const tail = sVal.length > 24 ? sVal.substring(sVal.length - 24) : '';
+        console.log(`[SCORM DIAG] SetValue cmi.suspend_data oldLen=${oldLen} newLen=${newLen} signature=[${head}...${tail}]`);
       }
 
       cmi[element] = String(value);

@@ -257,8 +257,89 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     console.error('[SCORM DIAG] Unhandled Rejection:', event.reason);
   });
 
-  // 7. Nạp bài giảng vào Content Frame và kích hoạt Frame Monitor
+  // 7. Nạp bài giảng vào Content Frame và kích hoạt bộ chẩn đoán Quiz Controls & Repaint Monitor
   if (contentFrame) {
+    function diagnoseQuizDom(triggerLabel = 'Snapshot') {
+      try {
+        const frameWin = contentFrame.contentWindow;
+        const frameDoc = contentFrame.contentDocument || frameWin?.document;
+        const vpSize = `${window.innerWidth}x${window.innerHeight}`;
+        const frameClient = `${contentFrame.clientWidth}x${contentFrame.clientHeight}`;
+        const frameOffset = `${contentFrame.offsetWidth}x${contentFrame.offsetHeight}`;
+
+        console.log(`[SCORM DIAG] [${triggerLabel}] viewport/frame size=viewport:${vpSize} frameClient:${frameClient} frameOffset:${frameOffset}`);
+
+        if (!frameDoc || !frameDoc.body) {
+          console.log(`[SCORM DIAG] [${triggerLabel}] frameDoc body not yet available`);
+          return;
+        }
+
+        // Tìm tất cả các candidate elements trong frame
+        const allElements = Array.from(frameDoc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a, div, span, canvas, svg'));
+
+        function inspectElementRole(keywords, roleName) {
+          const candidates = allElements.filter((el) => {
+            const text = (el.innerText || el.textContent || el.value || '').toLowerCase().trim();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
+            const id = (el.id || '').toLowerCase();
+            const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+            const title = (el.getAttribute('title') || '').toLowerCase();
+            return keywords.some((k) => text.includes(k) || aria.includes(k) || id.includes(k) || cls.includes(k) || title.includes(k));
+          });
+
+          if (candidates.length === 0) {
+            return { status: 'missing', summary: 'none found' };
+          }
+
+          // Lấy candidate nổi bật nhất
+          const target = candidates[0];
+          const style = frameWin ? frameWin.getComputedStyle(target) : {};
+          const rect = target.getBoundingClientRect();
+          const disabled = target.disabled === true || target.getAttribute('aria-disabled') === 'true' || (typeof target.className === 'string' && target.className.includes('disabled'));
+          const display = style.display || 'unknown';
+          const visibility = style.visibility || 'unknown';
+          const opacity = style.opacity || '1';
+          const pointerEvents = style.pointerEvents || 'auto';
+          const zIndex = style.zIndex || 'auto';
+
+          let status = 'normal';
+          if (display === 'none' || visibility === 'hidden' || opacity === '0') {
+            status = 'hidden';
+          } else if (disabled) {
+            status = 'disabled';
+          } else if (rect.width === 0 || rect.height === 0) {
+            status = 'zero-size';
+          } else if (rect.bottom <= 0 || rect.top >= (contentFrame.clientHeight || window.innerHeight) || rect.right <= 0 || rect.left >= (contentFrame.clientWidth || window.innerWidth)) {
+            status = 'offscreen';
+          }
+
+          const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
+          const summary = `tag=<${target.tagName.toLowerCase()}> id=${target.id || '-'} text="${(target.innerText || target.textContent || '').trim().substring(0, 15)}" display=${display} vis=${visibility} op=${opacity} pe=${pointerEvents} zIndex=${zIndex} disabled=${disabled} rect=${rectStr}`;
+
+          return { status, summary, target, disabled };
+        }
+
+        const submitDiag = inspectElementRole(['submit', 'nộp bài', 'gửi', 'trả lời', 'check', 'xác nhận', 'send'], 'submit');
+        const nextDiag = inspectElementRole(['next', 'tiếp', 'sau', 'forward', 'continue', 'chevron-right', 'arrow-right'], 'next');
+        const prevDiag = inspectElementRole(['prev', 'trước', 'lùi', 'back', 'chevron-left', 'arrow-left'], 'prev');
+
+        console.log(`[SCORM DIAG] [${triggerLabel}] quiz controls DOM submit=<${submitDiag.status}> next=<${nextDiag.status}> prev=<${prevDiag.status}>`);
+        console.log(`[SCORM DIAG] control computedStyle submit: ${submitDiag.summary}`);
+        console.log(`[SCORM DIAG] control computedStyle next: ${nextDiag.summary}`);
+        console.log(`[SCORM DIAG] control computedStyle prev: ${prevDiag.summary}`);
+
+        // iSpring Object Inspector
+        if (frameWin) {
+          const ispringKeys = Object.keys(frameWin).filter((k) => /ispring|player|quiz|presentation|course/i.test(k));
+          if (ispringKeys.length > 0) {
+            console.log(`[SCORM DIAG] iSpring globals detected: ${ispringKeys.join(', ')}`);
+          }
+        }
+      } catch (domErr) {
+        console.warn(`[SCORM DIAG] [${triggerLabel}] DOM inspection note:`, domErr.message);
+      }
+    }
+
     function inspectFrameState(eventLabel = 'Frame event') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -295,20 +376,64 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           frameWin.addEventListener('unload', () => {
             console.log('[SCORM DIAG] Frame unload triggered');
           });
+
+          frameWin.addEventListener('resize', () => {
+            console.log(`[SCORM DIAG] [Frame resize event] innerSize=${frameWin.innerWidth}x${frameWin.innerHeight}`);
+            diagnoseQuizDom('Frame resize');
+          });
+
+          frameWin.addEventListener('focus', () => {
+            console.log('[SCORM DIAG] [Frame focus event]');
+            diagnoseQuizDom('Frame focus');
+          });
+
+          frameWin.addEventListener('click', () => {
+            setTimeout(() => diagnoseQuizDom('Frame click + 300ms'), 300);
+            setTimeout(() => diagnoseQuizDom('Frame click + 1000ms'), 1000);
+          });
         }
       } catch (inspectErr) {
         console.warn('[SCORM DIAG] Frame inspection note:', inspectErr.message);
       }
     }
 
+    // Lắng nghe các sự kiện repaint/resize/visibility trên player window
+    window.addEventListener('resize', () => {
+      console.log(`[SCORM DIAG] [Window resize event] size=${window.innerWidth}x${window.innerHeight}`);
+      diagnoseQuizDom('Window resize');
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      console.log(`[SCORM DIAG] [VisibilityChange event] state=${document.visibilityState}`);
+      diagnoseQuizDom(`Visibility ${document.visibilityState}`);
+    });
+
+    window.addEventListener('focus', () => {
+      console.log('[SCORM DIAG] [Window focus event]');
+      diagnoseQuizDom('Window focus');
+    });
+
+    window.addEventListener('click', () => {
+      setTimeout(() => diagnoseQuizDom('Window click + 300ms'), 300);
+      setTimeout(() => diagnoseQuizDom('Window click + 1000ms'), 1000);
+    });
+
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       inspectFrameState('onload');
+      diagnoseQuizDom('onload T+0');
+
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
+
+      // Schedule interval diagnostics để bắt trạng thái sau khi user bấm YES Resume
+      setTimeout(() => diagnoseQuizDom('Post-load T+1s'), 1000);
+      setTimeout(() => diagnoseQuizDom('Post-load T+2s'), 2000);
+      setTimeout(() => diagnoseQuizDom('Post-load T+4s'), 4000);
+      setTimeout(() => diagnoseQuizDom('Post-load T+7s'), 7000);
     };
 
     contentFrame.onerror = (err) => {
