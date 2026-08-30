@@ -158,12 +158,13 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
   function getSlideViewState(frameDoc, frameWin) {
     if (!frameDoc || !frameWin) return 'NO_DOC';
-    const sv = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
-    if (!sv) return 'NOT_FOUND';
-    const s = frameWin.getComputedStyle(sv);
-    const r = sv.getBoundingClientRect();
-    const ariaHidden = sv.getAttribute('aria-hidden');
-    return `class="${sv.className}" display="${s.display}" vis="${s.visibility}" aria-hidden="${ariaHidden}" rect=${Math.round(r.width)}x${Math.round(r.height)}`;
+    const svList = frameDoc.querySelectorAll('.slideView');
+    if (!svList || svList.length === 0) return 'NOT_FOUND';
+    const firstSv = svList[0];
+    const s = frameWin.getComputedStyle(firstSv);
+    const r = firstSv.getBoundingClientRect();
+    const ariaHidden = firstSv.getAttribute('aria-hidden');
+    return `count=${svList.length} class="${firstSv.className}" display="${s.display}" vis="${s.visibility}" aria-hidden="${ariaHidden}" rect=${Math.round(r.width)}x${Math.round(r.height)}`;
   }
 
   function checkIsQuizVisible(frameDoc) {
@@ -201,39 +202,83 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Kiểm tra trạng thái Resume Stuck sau 1 giây
+      // Bounded polling kiểm tra trạng thái Resume Stuck (250ms mỗi lần, tối đa 4 giây)
       const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
       const activeApi = is2004 ? window.API_1484_11 : window.API;
       const initialEntry = activeApi?._getCmi ? (activeApi._getCmi()['cmi.entry'] || activeApi._getCmi()['cmi.core.entry']) : '';
       const isResume = (initialEntry === 'resume' || (persistedTracking && Object.keys(persistedTracking).length > 0));
 
       if (isResume) {
-        setTimeout(() => {
+        let pollCount = 0;
+        const maxPolls = 16; // 16 * 250ms = 4000ms (4 seconds max)
+        const pollInterval = 250;
+
+        const checkResumeStuck = () => {
           if (hasSentStuckMessage) return;
 
           const frameWin = contentFrame.contentWindow;
           const frameDoc = contentFrame.contentDocument || frameWin?.document;
-          if (!frameDoc || !frameWin) return;
+          if (!frameDoc || !frameWin) {
+            pollCount++;
+            if (pollCount < maxPolls) {
+              setTimeout(checkResumeStuck, pollInterval);
+            }
+            return;
+          }
 
-          const sv = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
-          if (sv) {
+          // Query tất cả .slideView (chính xác selector .slideView, không dùng [class*="slide"])
+          const slideViews = frameDoc.querySelectorAll('.slideView');
+          if (!slideViews || slideViews.length === 0) {
+            // Chưa có .slideView trong DOM, tiếp tục kiểm tra trong khoảng thời gian hữu hạn
+            pollCount++;
+            if (pollCount < maxPolls) {
+              setTimeout(checkResumeStuck, pollInterval);
+            }
+            return;
+          }
+
+          // Kiểm tra xem có ít nhất một .slideView visible và kích thước > 0 hay không
+          let hasVisibleSlideView = false;
+          for (let i = 0; i < slideViews.length; i++) {
+            const sv = slideViews[i];
             const s = frameWin.getComputedStyle(sv);
             const r = sv.getBoundingClientRect();
             const ariaHidden = sv.getAttribute('aria-hidden');
-            const isStuck = (s.display === 'none' || ariaHidden === 'true' || r.width === 0 || r.height === 0);
 
-            if (isStuck) {
-              hasSentStuckMessage = true;
-              console.log(`[SCORM Player] PLAYER_WINDOW_INNER_WIDTH_BEFORE=${window.innerWidth}`);
-              console.log(`[SCORM Player] SLIDEVIEW_STATE_BEFORE=${getSlideViewState(frameDoc, frameWin)}`);
-              console.log('[SCORM Player] Sending SCORM_RESUME_LAYOUT_STUCK to parent...');
+            const isHidden = (
+              s.display === 'none' ||
+              s.visibility === 'hidden' ||
+              ariaHidden === 'true' ||
+              (r.width === 0 && r.height === 0) ||
+              sv.offsetWidth === 0 ||
+              sv.offsetHeight === 0
+            );
 
-              if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
-                window.parent.postMessage({ type: 'SCORM_RESUME_LAYOUT_STUCK' }, parentOrigin);
-              }
+            if (!isHidden) {
+              hasVisibleSlideView = true;
+              break;
             }
           }
-        }, 1000);
+
+          if (hasVisibleSlideView) {
+            // Đã có ít nhất một .slideView visible và kích thước > 0 -> Layout hoạt động tốt, KHÔNG pulse
+            console.log('[SCORM Player] Visible .slideView detected, layout active. No pulse needed.');
+            return;
+          }
+
+          // Đã có .slideView nhưng TẤT CẢ đều bị ẩn (display:none, visibility:hidden, aria-hidden=true hoặc 0x0)
+          // -> Gửi SCORM_RESUME_LAYOUT_STUCK một lần duy nhất (one-shot guard)
+          hasSentStuckMessage = true;
+          console.log(`[SCORM Player] PLAYER_WINDOW_INNER_WIDTH_BEFORE=${window.innerWidth}`);
+          console.log(`[SCORM Player] SLIDEVIEW_STATE_BEFORE=${getSlideViewState(frameDoc, frameWin)}`);
+          console.log('[SCORM Player] Resume stuck detected (all .slideView hidden/0x0). Sending SCORM_RESUME_LAYOUT_STUCK to parent...');
+
+          if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
+            window.parent.postMessage({ type: 'SCORM_RESUME_LAYOUT_STUCK' }, parentOrigin);
+          }
+        };
+
+        setTimeout(checkResumeStuck, pollInterval);
       }
     };
 
