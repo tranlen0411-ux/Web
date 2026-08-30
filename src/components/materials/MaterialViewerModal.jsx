@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Download,
@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatClassLabel } from '../../utils/helpers';
-import { createScormLaunchSession } from '../../services/scormLaunchService';
+import { createScormLaunchSession, getScormPlayerOrigin } from '../../services/scormLaunchService';
 
 export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [signedUrl, setSignedUrl] = useState(null);
@@ -32,8 +32,12 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [urlError, setUrlError] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
 
+  const scormIframeRef = useRef(null);
+  const hasPulsedOuterIframeRef = useRef(false);
+
   useEffect(() => {
     if (isOpen && material) {
+      hasPulsedOuterIframeRef.current = false;
       const type = material.file_type?.toLowerCase();
 
       if (type === 'scorm') {
@@ -48,11 +52,76 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         setLoadingUrl(false);
       }
     } else {
+      hasPulsedOuterIframeRef.current = false;
       setSignedUrl(null);
       setScormPlayerUrl(null);
       setUrlError('');
       setCopiedLink(false);
     }
+  }, [isOpen, material]);
+
+  // Lắng nghe và xử lý sự kiện kích hoạt lại layout từ SCORM Player qua postMessage
+  useEffect(() => {
+    if (!isOpen || material?.file_type?.toLowerCase() !== 'scorm') return;
+
+    let playerOrigin = null;
+    try {
+      playerOrigin = getScormPlayerOrigin();
+    } catch {
+      return;
+    }
+
+    const handleMessage = (event) => {
+      // 1. Kiểm tra ranh giới Origin nghiêm ngặt
+      if (!playerOrigin || event.origin !== playerOrigin) {
+        return;
+      }
+
+      // Kiểm tra source window nếu scormIframeRef đã mount
+      if (scormIframeRef.current?.contentWindow && event.source !== scormIframeRef.current.contentWindow) {
+        return;
+      }
+
+      const { type: msgType } = event.data || {};
+
+      // Xử lý One-shot Outer Iframe Geometry Pulse khi Player thông báo Resume Stuck
+      if (msgType === 'SCORM_RESUME_LAYOUT_STUCK') {
+        if (hasPulsedOuterIframeRef.current) return;
+        hasPulsedOuterIframeRef.current = true;
+
+        const iframeEl = scormIframeRef.current;
+        if (!iframeEl) return;
+
+        const rectBefore = iframeEl.getBoundingClientRect();
+        const originalWidth = iframeEl.style.width || '';
+        const originalMaxWidth = iframeEl.style.maxWidth || '';
+
+        console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_BEFORE=${Math.round(rectBefore.width)}`);
+
+        // Giảm actual rendered width đúng 1px bằng maxWidth
+        const targetWidth = Math.max(10, Math.floor(rectBefore.width) - 1);
+        iframeEl.style.maxWidth = `${targetWidth}px`;
+
+        const rectDuring = iframeEl.getBoundingClientRect();
+        console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_DURING=${Math.round(rectDuring.width)}`);
+
+        // Chờ 2 requestAnimationFrame rồi khôi phục chính xác style ban đầu
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            iframeEl.style.width = originalWidth;
+            iframeEl.style.maxWidth = originalMaxWidth;
+
+            const rectAfter = iframeEl.getBoundingClientRect();
+            console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_AFTER=${Math.round(rectAfter.width)}`);
+          });
+        });
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
   }, [isOpen, material]);
 
   // Tạo Signed URL cho file thường
@@ -170,6 +239,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
           </div>
 
           <iframe
+            ref={scormIframeRef}
             src={scormPlayerUrl}
             title={material.title}
             sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
