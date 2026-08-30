@@ -274,6 +274,7 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
 
   return {
     Initialize(param = '') {
+      const runPrefix = typeof window !== 'undefined' && window.__SCORM_CURRENT_RUN_ID ? `[SCORM RUN ${window.__SCORM_CURRENT_RUN_ID}] ` : '';
       if (isInitialized) {
         lastError = '103';
         return 'false';
@@ -281,8 +282,8 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       isInitialized = true;
       isTerminated = false;
       lastError = '0';
-      console.log('[SCORM 2004 API] Initialize called. Entry mode:', cmi['cmi.entry']);
-      console.log(`[SCORM DIAG] Initialize entry=${cmi['cmi.entry']}`);
+      console.log(`${runPrefix}[SCORM 2004 API] Initialize called. Entry mode: ${cmi['cmi.entry']}`);
+      console.log(`${runPrefix}[SCORM DIAG] Initialize entry=${cmi['cmi.entry']}`);
       if (typeof window !== 'undefined' && typeof window.__logComprehensiveGeometry === 'function') {
         window.__logComprehensiveGeometry('T2_ISPRING_INITIALIZE');
       }
@@ -290,6 +291,7 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
     },
 
     Terminate(param = '') {
+      const runPrefix = typeof window !== 'undefined' && window.__SCORM_CURRENT_RUN_ID ? `[SCORM RUN ${window.__SCORM_CURRENT_RUN_ID}] ` : '';
       if (!isInitialized) {
         lastError = '112';
         return 'false';
@@ -302,12 +304,13 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       lastError = '0';
       const loc = cmi['cmi.location'] || '';
       const susLen = (cmi['cmi.suspend_data'] || '').length;
-      console.log(`[SCORM DIAG] Terminate location=${loc} suspendLength=${susLen}`);
+      console.log(`${runPrefix}[SCORM DIAG] Terminate location=${loc} suspendLength=${susLen}`);
       triggerCommit('TERMINATE');
       return 'true';
     },
 
     GetValue(element) {
+      const runPrefix = typeof window !== 'undefined' && window.__SCORM_CURRENT_RUN_ID ? `[SCORM RUN ${window.__SCORM_CURRENT_RUN_ID}] ` : '';
       if (!isInitialized) {
         lastError = '122';
         return '';
@@ -323,13 +326,13 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       }
 
       if (element === 'cmi.entry') {
-        console.log(`[SCORM DIAG] GetValue cmi.entry=${val}`);
+        console.log(`${runPrefix}[SCORM DIAG] GetValue cmi.entry=${val}`);
       } else if (element === 'cmi.suspend_data') {
         const head = val ? val.substring(0, 24) : '';
         const tail = val && val.length > 24 ? val.substring(val.length - 24) : '';
-        console.log(`[SCORM DIAG] GetValue cmi.suspend_data length=${val.length} signature=[${head}...${tail}]`);
+        console.log(`${runPrefix}[SCORM DIAG] GetValue cmi.suspend_data length=${val.length} signature=[${head}...${tail}]`);
       } else if (element === 'cmi.location') {
-        console.log(`[SCORM DIAG] GetValue cmi.location=${val}`);
+        console.log(`${runPrefix}[SCORM DIAG] GetValue cmi.location=${val}`);
       }
 
       return val;

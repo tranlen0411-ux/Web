@@ -8,6 +8,10 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 (async function initScormPlayer() {
   console.log('🎮 [SCORM Player] Initializing Isolated Player Module with CMI Persistence (Port 4174)...');
 
+  // 1. Tạo RUN_ID duy nhất cho mỗi phiên khởi chạy SCO
+  const runId = Math.random().toString(36).substring(2, 8);
+  window.__SCORM_CURRENT_RUN_ID = runId;
+
   // 1. Phân tích tham số khởi chạy từ Query Params
   const urlParams = new URLSearchParams(window.location.search);
   const sessionToken = urlParams.get('session') || '';
@@ -18,9 +22,9 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   const isDiagFresh = urlParams.get('scormDiagFresh') === '1';
 
   if (isDiagFresh) {
-    console.log('[SCORM DIAG FRESH MODE] ENABLED');
-    console.log('[SCORM DIAG FRESH MODE] persisted tracking intentionally ignored in-memory only');
-    console.log('[SCORM DIAG FRESH MODE] database writes disabled');
+    console.log(`[SCORM RUN ${runId}] [SCORM DIAG FRESH MODE] ENABLED`);
+    console.log(`[SCORM RUN ${runId}] [SCORM DIAG FRESH MODE] persisted tracking intentionally ignored in-memory only`);
+    console.log(`[SCORM RUN ${runId}] [SCORM DIAG FRESH MODE] database writes disabled`);
   }
 
   const contentFrame = document.getElementById('scorm-content-frame');
@@ -91,19 +95,19 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           parentOrigin
         );
       } catch (postErr) {
-        console.warn('[SCORM Player] postMessage to parent failed:', postErr.message);
+        console.warn(`[SCORM RUN ${runId}] [SCORM Player] postMessage to parent failed:`, postErr.message);
       }
     }
   }
 
   // 4. ZERO-RACE DETERMINISTIC LIFECYCLE: Chờ nhận persisted CMI state TRƯỚC KHI tạo API & mount SCO
-  console.log('[SCORM RESTORE] SCORM_RESTORE_START');
+  console.log(`[SCORM RUN ${runId}] SCORM_RESTORE_START`);
 
   async function resolveInitialTracking() {
     // Nếu chạy độc lập không có parent hoặc parentOrigin không thiết lập
     if (!window.parent || window.parent === window || !parentOrigin || parentOrigin === '*') {
       const standaloneTracking = (persistedTracking && !isDiagFresh) ? persistedTracking : null;
-      console.log(`[SCORM RESTORE] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(standaloneTracking)}`);
+      console.log(`[SCORM RUN ${runId}] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(standaloneTracking)}`);
       return standaloneTracking;
     }
 
@@ -120,7 +124,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             resolved = true;
             window.removeEventListener('message', messageListener);
             const receivedTracking = (payload && payload.tracking && !isDiagFresh) ? payload.tracking : null;
-            console.log(`[SCORM RESTORE] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(receivedTracking)}`);
+            console.log(`[SCORM RUN ${runId}] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(receivedTracking)}`);
             resolve(receivedTracking);
           }
         }
@@ -143,8 +147,8 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           resolved = true;
           window.removeEventListener('message', messageListener);
           const fallbackTracking = (persistedTracking && !isDiagFresh) ? persistedTracking : null;
-          console.warn('[SCORM RESTORE] Handshake timeout (2s), fallback to session-info tracking');
-          console.log(`[SCORM RESTORE] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(fallbackTracking)}`);
+          console.warn(`[SCORM RUN ${runId}] [SCORM RESTORE] Handshake timeout (2s), fallback to session-info tracking`);
+          console.log(`[SCORM RUN ${runId}] INITIAL_CMI_STATE_RECEIVED hasTracking=${Boolean(fallbackTracking)}`);
           resolve(fallbackTracking);
         }
       }, 2000);
@@ -165,7 +169,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   window.API = api12;
   window.API_1484_11 = api2004;
 
-  console.log(`✅ [SCORM Player] Attached window.API (1.2) and window.API_1484_11 (2004). Target: ${scormVersion}`);
+  console.log(`[SCORM RUN ${runId}] ✅ Attached window.API (1.2) and window.API_1484_11 (2004). Target: ${scormVersion}`);
 
   const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
   const activeApi = is2004 ? window.API_1484_11 : window.API;
@@ -175,7 +179,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   const initialSusData = initialCmi['cmi.suspend_data'] || '';
 
   // 6. SCORM RESTORE READY: Xác nhận CMI state đã sẵn sàng 100%
-  console.log(`[SCORM RESTORE] SCORM_RESTORE_READY entry=${initialEntry} suspendLength=${initialSusData.length} location=${initialLoc}`);
+  console.log(`[SCORM RUN ${runId}] SCORM_RESTORE_READY entry=${initialEntry} suspendLength=${initialSusData.length} location=${initialLoc}`);
 
   // 7. Lắng nghe các lệnh điều khiển từ parent (Save before close, Ping)
   window.addEventListener('message', (event) => {
@@ -687,8 +691,76 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 9. MINIMAL R2 DIRECT-LAYOUT PATCH (Deterministic Lifecycle Trigger)
+    // 9. DEEP DIAGNOSTIC TRACER FOR RUNTIME PROOF (RUN_ID, Call Counter, DOM Counts, Content Mutations)
     let hasInitialLayoutTriggered = false;
+    let layoutCallCount = 0;
+    let initialTriggerTime = 0;
+
+    function getDetailedDomSnapshot(frameDoc, frameWin) {
+      if (!frameDoc) return null;
+      const fl = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+      const sb = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+      const pv = frameDoc.querySelector('.playerView, [class*="playerView"]');
+      const qr = frameDoc.querySelector('.quizView, [class*="quizView"], [id*="quiz"]');
+      const svgs = frameDoc.querySelectorAll('svg');
+      const canvases = frameDoc.querySelectorAll('canvas');
+      const iframes = frameDoc.querySelectorAll('iframe, frame');
+
+      function rStr(el) {
+        if (!el) return 'missing';
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return '0x0';
+        return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+      }
+
+      return {
+        playerViewRect: rStr(pv),
+        framesLayerRect: rStr(fl),
+        slidesBgRect: rStr(sb),
+        quizRootRect: rStr(qr),
+        flChildrenCount: fl ? fl.children.length : 0,
+        sbChildrenCount: sb ? sb.children.length : 0,
+        qrChildrenCount: qr ? qr.children.length : 0,
+        svgCount: svgs.length,
+        canvasCount: canvases.length,
+        iframeCount: iframes.length,
+        isVisible: (sb && sb.getBoundingClientRect().width > 10) || svgs.length > 0,
+      };
+    }
+
+    // Gắn MutationObserver theo dõi sự xuất hiện của slide/quiz DOM sau initial trigger
+    function attachContentMutationObserver(frameDoc, frameWin) {
+      if (!frameDoc || !frameDoc.body || frameDoc.__scorm_content_obs_attached) return;
+      frameDoc.__scorm_content_obs_attached = true;
+
+      try {
+        const obs = new MutationObserver((mutations) => {
+          let addedCount = 0;
+          let targetSummary = [];
+
+          mutations.forEach((m) => {
+            if (m.addedNodes && m.addedNodes.length > 0) {
+              addedCount += m.addedNodes.length;
+              const tag = m.target.tagName ? m.target.tagName.toLowerCase() : 'node';
+              const id = m.target.id ? `#${m.target.id}` : '';
+              const cls = typeof m.target.className === 'string' && m.target.className ? `.${m.target.className.substring(0, 15)}` : '';
+              targetSummary.push(`${tag}${id}${cls}`);
+            }
+          });
+
+          if (addedCount > 0) {
+            const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+            const deltaMs = initialTriggerTime > 0 ? `+${(now - initialTriggerTime).toFixed(1)}ms` : '0ms';
+            const snap = getDetailedDomSnapshot(frameDoc, frameWin);
+            console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT MUTATION] time=${deltaMs} addedNodes=${addedCount} targets=[${targetSummary.slice(0, 3).join(', ')}] svgs=${snap?.svgCount} canvases=${snap?.canvasCount} framesChildren=${snap?.flChildrenCount} slidesChildren=${snap?.sbChildrenCount} isVisible=${snap?.isVisible}`);
+          }
+        });
+
+        obs.observe(frameDoc.body, { childList: true, subtree: true });
+      } catch (obsErr) {
+        console.warn(`[SCORM RUN ${runId}] [ISPRING CONTENT MUTATION] observer error:`, obsErr.message);
+      }
+    }
 
     function triggerInitialDirectLayout(sourceLabel = 'DET_READY') {
       if (hasInitialLayoutTriggered) return true;
@@ -720,36 +792,45 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
 
       hasInitialLayoutTriggered = true;
+      initialTriggerTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-      function getDimensions(el) {
-        if (!el) return 'missing';
-        const r = el.getBoundingClientRect();
-        return `${Math.round(r.width)}x${Math.round(r.height)}`;
+      // Hook wrap phương thức updateLayout để theo dõi mọi lần gọi sau này (kể cả từ native resize)
+      const origMethod = targetObj[targetMethodName.split('.').pop()];
+      const methodName = targetMethodName.split('.').pop();
+      if (!targetObj.__scorm_wrapped) {
+        targetObj.__scorm_wrapped = true;
+        targetObj[methodName] = function () {
+          layoutCallCount++;
+          const callSource = layoutCallCount === 1 ? sourceLabel : 'native-resize/internal';
+          const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()).toFixed(1);
+          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] CALL number=${layoutCallCount} source=${callSource} time=${now}ms`);
+          return origMethod.apply(this, arguments);
+        };
       }
 
-      const flBefore = getDimensions(frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]'));
-      const sbBefore = getDimensions(frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]'));
-
-      console.log(`[ISPRING LAYOUT] READY method=${targetMethodName} source=${sourceLabel}`);
-      console.log(`[ISPRING LAYOUT] BEFORE frames=${flBefore} slides=${sbBefore}`);
-      console.log(`[ISPRING LAYOUT] DIRECT_TRIGGER`);
+      const snapBefore = getDetailedDomSnapshot(frameDoc, frameWin);
+      console.log(`[SCORM RUN ${runId}] [ISPRING PLAYER_OBJECT_FOUND] target=${targetMethodName}`);
+      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] READY method=${targetMethodName} source=${sourceLabel}`);
+      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] BEFORE frames=${snapBefore?.framesLayerRect} slides=${snapBefore?.slidesBgRect} quizRoot=${snapBefore?.quizRootRect}`);
+      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] DOM_SNAPSHOT_AT_TRIGGER: framesChildren=${snapBefore?.flChildrenCount} slidesChildren=${snapBefore?.sbChildrenCount} quizChildren=${snapBefore?.qrChildrenCount} svgs=${snapBefore?.svgCount} canvases=${snapBefore?.canvasCount} iframes=${snapBefore?.iframeCount}`);
+      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] DIRECT_TRIGGER`);
 
       try {
-        const fnName = targetMethodName.split('.').pop();
-        targetObj[fnName]();
+        targetObj[methodName]();
       } catch (triggerErr) {
-        console.warn('[ISPRING LAYOUT] Error executing direct layout:', triggerErr.message);
+        console.warn(`[SCORM RUN ${runId}] [ISPRING LAYOUT] Error executing direct layout:`, triggerErr.message);
       }
 
+      // Kích hoạt theo dõi biến đổi DOM liên tục sau trigger
+      attachContentMutationObserver(frameDoc, frameWin);
+
       requestAnimationFrame(() => {
-        const flRaf1 = getDimensions(frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]'));
-        const sbRaf1 = getDimensions(frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]'));
-        console.log(`[ISPRING LAYOUT] AFTER_RAF1 frames=${flRaf1} slides=${sbRaf1}`);
+        const snapRaf1 = getDetailedDomSnapshot(frameDoc, frameWin);
+        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] AFTER_RAF1 frames=${snapRaf1?.framesLayerRect} slides=${snapRaf1?.slidesBgRect} svgs=${snapRaf1?.svgCount}`);
 
         requestAnimationFrame(() => {
-          const flRaf2 = getDimensions(frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]'));
-          const sbRaf2 = getDimensions(frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]'));
-          console.log(`[ISPRING LAYOUT] AFTER_RAF2 frames=${flRaf2} slides=${sbRaf2}`);
+          const snapRaf2 = getDetailedDomSnapshot(frameDoc, frameWin);
+          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] AFTER_RAF2 frames=${snapRaf2?.framesLayerRect} slides=${snapRaf2?.slidesBgRect} svgs=${snapRaf2?.svgCount} isVisible=${snapRaf2?.isVisible}`);
         });
       });
 
@@ -780,17 +861,34 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         frameCount++;
         if (triggerInitialDirectLayout(`rAF_CYCLE_${frameCount}`)) return;
 
-        if (frameCount < 25) {
+        if (frameCount < 30) {
           requestAnimationFrame(checkFrameReadiness);
         } else {
-          console.log('[ISPRING LAYOUT] NOT_READY (Waiting complete)');
+          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] NOT_READY (Waiting complete)`);
         }
       }
       requestAnimationFrame(checkFrameReadiness);
     }
 
+    // Lắng nghe Native User Resize để đo lường so sánh trước và sau
+    window.addEventListener('resize', () => {
+      const frameWin = contentFrame ? contentFrame.contentWindow : null;
+      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+      if (frameDoc) {
+        const snapBeforeResize = getDetailedDomSnapshot(frameDoc, frameWin);
+        console.log(`[SCORM RUN ${runId}] [NATIVE RESIZE BEFORE] frames=${snapBeforeResize?.framesLayerRect} slides=${snapBeforeResize?.slidesBgRect} svgs=${snapBeforeResize?.svgCount} framesChildren=${snapBeforeResize?.flChildrenCount}`);
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const snapAfterResize = getDetailedDomSnapshot(frameDoc, frameWin);
+            console.log(`[SCORM RUN ${runId}] [NATIVE RESIZE AFTER] frames=${snapAfterResize?.framesLayerRect} slides=${snapAfterResize?.slidesBgRect} svgs=${snapAfterResize?.svgCount} framesChildren=${snapAfterResize?.flChildrenCount} isVisible=${snapAfterResize?.isVisible}`);
+          });
+        });
+      }
+    });
+
     contentFrame.onload = () => {
-      console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
+      console.log(`[SCORM RUN ${runId}] 🎯 SCO Content loaded successfully into frame from Same-Origin Gateway.`);
       inspectFrameState('onload');
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
@@ -804,7 +902,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     };
 
     contentFrame.onerror = (err) => {
-      console.error('❌ [SCORM Player] Failed to load SCO content frame:', err);
+      console.error(`[SCORM RUN ${runId}] ❌ Failed to load SCO content frame:`, err);
       inspectFrameState('onerror');
       showError('Không thể tải nội dung bài giảng qua Gateway.');
     };
@@ -812,7 +910,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     // Nạp đường dẫn cùng Origin B (Chỉ mount đúng 1 lần sau khi SCORM_RESTORE_READY)
     if (!hasScoMounted) {
       hasScoMounted = true;
-      console.log(`[SCORM RESTORE] SCO_MOUNT_START url=${finalScoUrl}`);
+      console.log(`[SCORM RUN ${runId}] [SCORM RESTORE] SCO_MOUNT_START url=${finalScoUrl}`);
       contentFrame.src = finalScoUrl;
     }
   }
