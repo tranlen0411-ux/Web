@@ -283,6 +283,9 @@ export function createScorm2004Api(initialData = {}, onCommitCallback = null) {
       lastError = '0';
       console.log('[SCORM 2004 API] Initialize called. Entry mode:', cmi['cmi.entry']);
       console.log(`[SCORM DIAG] Initialize entry=${cmi['cmi.entry']}`);
+      if (typeof window !== 'undefined' && typeof window.__logComprehensiveGeometry === 'function') {
+        window.__logComprehensiveGeometry('T2_ISPRING_INITIALIZE');
+      }
       return 'true';
     },
 
