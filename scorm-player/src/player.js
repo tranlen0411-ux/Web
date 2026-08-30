@@ -153,7 +153,45 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     }
   });
 
-  // 6. Nạp bài giảng vào Content Frame
+  // 6. Nạp bài giảng vào Content Frame & Cơ chế phát hiện Resume Stuck
+  let hasSentStuckMessage = false;
+
+  function getSlideViewState(frameDoc, frameWin) {
+    if (!frameDoc || !frameWin) return 'NO_DOC';
+    const sv = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
+    if (!sv) return 'NOT_FOUND';
+    const s = frameWin.getComputedStyle(sv);
+    const r = sv.getBoundingClientRect();
+    const ariaHidden = sv.getAttribute('aria-hidden');
+    return `class="${sv.className}" display="${s.display}" vis="${s.visibility}" aria-hidden="${ariaHidden}" rect=${Math.round(r.width)}x${Math.round(r.height)}`;
+  }
+
+  function checkIsQuizVisible(frameDoc) {
+    if (!frameDoc) return false;
+    const canvas = frameDoc.querySelector('canvas.quizCanvas, canvas, [class*="quiz"]');
+    if (!canvas) return false;
+    const r = canvas.getBoundingClientRect();
+    return r.width > 10 && r.height > 10;
+  }
+
+  // Lắng nghe sự kiện resize của window do outer iframe thay đổi geometry
+  window.addEventListener('resize', () => {
+    const frameWin = contentFrame?.contentWindow;
+    const frameDoc = contentFrame?.contentDocument || frameWin?.document;
+
+    console.log(`[SCORM Player] PLAYER_WINDOW_INNER_WIDTH_DURING=${window.innerWidth}`);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        console.log(`[SCORM Player] PLAYER_WINDOW_INNER_WIDTH_AFTER=${window.innerWidth}`);
+        const stateAfter = getSlideViewState(frameDoc, frameWin);
+        const quizVis = checkIsQuizVisible(frameDoc);
+        console.log(`[SCORM Player] SLIDEVIEW_STATE_AFTER=${stateAfter}`);
+        console.log(`[SCORM Player] QUIZ_VISIBLE_AFTER=${quizVis ? 'YES' : 'NO'}`);
+      });
+    });
+  });
+
   if (contentFrame) {
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
@@ -161,6 +199,41 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
       if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
+      }
+
+      // Kiểm tra trạng thái Resume Stuck sau 1 giây
+      const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
+      const activeApi = is2004 ? window.API_1484_11 : window.API;
+      const initialEntry = activeApi?._getCmi ? (activeApi._getCmi()['cmi.entry'] || activeApi._getCmi()['cmi.core.entry']) : '';
+      const isResume = (initialEntry === 'resume' || (persistedTracking && Object.keys(persistedTracking).length > 0));
+
+      if (isResume) {
+        setTimeout(() => {
+          if (hasSentStuckMessage) return;
+
+          const frameWin = contentFrame.contentWindow;
+          const frameDoc = contentFrame.contentDocument || frameWin?.document;
+          if (!frameDoc || !frameWin) return;
+
+          const sv = frameDoc.querySelector('.slideView, [class*="slideView"], [class*="slide"]');
+          if (sv) {
+            const s = frameWin.getComputedStyle(sv);
+            const r = sv.getBoundingClientRect();
+            const ariaHidden = sv.getAttribute('aria-hidden');
+            const isStuck = (s.display === 'none' || ariaHidden === 'true' || r.width === 0 || r.height === 0);
+
+            if (isStuck) {
+              hasSentStuckMessage = true;
+              console.log(`[SCORM Player] PLAYER_WINDOW_INNER_WIDTH_BEFORE=${window.innerWidth}`);
+              console.log(`[SCORM Player] SLIDEVIEW_STATE_BEFORE=${getSlideViewState(frameDoc, frameWin)}`);
+              console.log('[SCORM Player] Sending SCORM_RESUME_LAYOUT_STUCK to parent...');
+
+              if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
+                window.parent.postMessage({ type: 'SCORM_RESUME_LAYOUT_STUCK' }, parentOrigin);
+              }
+            }
+          }
+        }, 1000);
       }
     };
 

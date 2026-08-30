@@ -37,6 +37,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
   const scormIframeRef = useRef(null);
   const closeTimeoutRef = useRef(null);
+  const hasPulsedOuterIframeRef = useRef(false);
 
   // Cleanup timeout khi component unmount
   useEffect(() => {
@@ -50,6 +51,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
 
   useEffect(() => {
     if (isOpen && material) {
+      hasPulsedOuterIframeRef.current = false;
       const type = material.file_type?.toLowerCase();
 
       if (type === 'scorm') {
@@ -64,6 +66,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         setLoadingUrl(false);
       }
     } else {
+      hasPulsedOuterIframeRef.current = false;
       if (closeTimeoutRef.current) {
         clearTimeout(closeTimeoutRef.current);
         closeTimeoutRef.current = null;
@@ -96,7 +99,47 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         return;
       }
 
+      // Kiểm tra source window nếu scormIframeRef đã mount
+      if (scormIframeRef.current?.contentWindow && event.source !== scormIframeRef.current.contentWindow) {
+        return;
+      }
+
       const { type: msgType, payload } = event.data || {};
+
+      // Xử lý One-shot Outer Iframe Geometry Pulse khi Player thông báo Resume Stuck
+      if (msgType === 'SCORM_RESUME_LAYOUT_STUCK') {
+        if (hasPulsedOuterIframeRef.current) return;
+        hasPulsedOuterIframeRef.current = true;
+
+        const iframeEl = scormIframeRef.current;
+        if (!iframeEl) return;
+
+        const rectBefore = iframeEl.getBoundingClientRect();
+        const originalWidth = iframeEl.style.width || '';
+        const originalMaxWidth = iframeEl.style.maxWidth || '';
+
+        console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_BEFORE=${Math.round(rectBefore.width)}`);
+
+        // Giảm actual rendered width đúng 1px bằng maxWidth
+        const targetWidth = Math.max(10, Math.floor(rectBefore.width) - 1);
+        iframeEl.style.maxWidth = `${targetWidth}px`;
+
+        // Xác nhận rect thực tế đã thay đổi
+        const rectDuring = iframeEl.getBoundingClientRect();
+        console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_DURING=${Math.round(rectDuring.width)}`);
+
+        // Chờ 1–2 requestAnimationFrame rồi khôi phục chính xác style ban đầu
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            iframeEl.style.width = originalWidth;
+            iframeEl.style.maxWidth = originalMaxWidth;
+
+            const rectAfter = iframeEl.getBoundingClientRect();
+            console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_AFTER=${Math.round(rectAfter.width)}`);
+          });
+        });
+        return;
+      }
 
       if (msgType === 'SCORM_CLOSE_SNAPSHOT_FAILED') {
         console.warn('[MaterialViewerModal] SCORM Player snapshot before close failed:', payload?.error);
