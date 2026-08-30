@@ -468,22 +468,22 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    let hasGeometryNudgeRun = false;
+    let hasEventGatedExperimentRun = false;
 
-    // 6. Thử nghiệm Controlled 1px Geometry Nudge an toàn tuyệt đối (Không synthetic resize, không loop, có try/finally)
-    function executeControlledGeometryNudge() {
-      if (hasGeometryNudgeRun) return;
-      hasGeometryNudgeRun = true;
+    // 6. Thử nghiệm Native Iframe Resize Event-Gated an toàn tuyệt đối (Không manual invalidate, chỉ nghe Native Event)
+    function executeNativeEventGatedExperiment() {
+      if (hasEventGatedExperimentRun) return;
+      hasEventGatedExperimentRun = true;
 
       const frameWin = contentFrame ? contentFrame.contentWindow : null;
       const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
 
       if (!frameWin || !frameDoc) {
-        console.warn('[SCORM NUDGE] frame not ready, skip nudge');
+        console.warn('[SCORM EVENT-GATE] frame not ready, skip experiment');
         return;
       }
 
-      // Capture original geometry
+      // 1. Capture initial geometry
       const origClientW = contentFrame.clientWidth;
       const origClientH = contentFrame.clientHeight;
       const origScoW = frameWin.innerWidth;
@@ -491,108 +491,120 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       const origStyleWidth = contentFrame.style.width;
       const origStyleHeight = contentFrame.style.height;
 
-      console.log(`[SCORM NUDGE] original iframe=${origClientW}x${origClientH} sco=${origScoW}x${origScoH}`);
+      console.log(`[SCORM EVENT-GATE] initial iframe=${origClientW}x${origClientH} sco=${origScoW}x${origScoH}`);
 
+      let isCleanedUp = false;
+      let timeoutId = null;
+
+      function cleanupAndRestore() {
+        if (isCleanedUp) return;
+        isCleanedUp = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        frameWin.removeEventListener('resize', handleFirstNativeResize);
+        frameWin.removeEventListener('resize', handleRestoreNativeResize);
+        contentFrame.style.width = origStyleWidth;
+        contentFrame.style.height = origStyleHeight;
+      }
+
+      // 2. Gắn Native SCO Resize Listener (Phase 1)
+      function handleFirstNativeResize() {
+        frameWin.removeEventListener('resize', handleFirstNativeResize);
+        const scoW = frameWin.innerWidth;
+        const scoH = frameWin.innerHeight;
+        const ifrW = contentFrame.clientWidth;
+        const ifrH = contentFrame.clientHeight;
+
+        console.log(`[SCORM EVENT-GATE] NATIVE SCO RESIZE RECEIVED`);
+        console.log(`[SCORM EVENT-GATE] sco inner=${scoW}x${scoH}`);
+        console.log(`[SCORM EVENT-GATE] iframe=${ifrW}x${ifrH}`);
+
+        // Đợi 2 requestAnimationFrame cho iSpring tự xử lý native resize event của nó (KHÔNG gọi invalidatePlayerSize)
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            try {
+              const framesLayer = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+              const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+              const svgs = Array.from(frameDoc.querySelectorAll('svg'));
+              const canvases = Array.from(frameDoc.querySelectorAll('canvas'));
+
+              function rStr(el) {
+                if (!el) return 'missing';
+                const r = el.getBoundingClientRect();
+                return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+              }
+
+              const framesLayerRect = rStr(framesLayer);
+              const slidesBgRect = rStr(slidesBg);
+              const svgCount = svgs.length;
+              const canvasCount = canvases.length;
+              const contentVisible = (slidesBg && slidesBg.getBoundingClientRect().width > 10) ? 'YES' : 'NO';
+
+              console.log(`[SCORM EVENT-GATE] AFTER_NATIVE_EVENT`);
+              console.log(`  framesLayer=${framesLayerRect}`);
+              console.log(`  slidesBg=${slidesBgRect}`);
+              console.log(`  svgCount=${svgCount}`);
+              console.log(`  canvasCount=${canvasCount}`);
+              console.log(`  contentVisible=${contentVisible}`);
+
+              // Phase 2: Restore kích thước ban đầu và chờ native resize event thứ hai
+              frameWin.addEventListener('resize', handleRestoreNativeResize);
+              contentFrame.style.width = origStyleWidth;
+              contentFrame.style.height = origStyleHeight;
+              console.log('[SCORM EVENT-GATE] restore requested, waiting for restore native event...');
+            } catch (err) {
+              console.warn('[SCORM EVENT-GATE] After native event error:', err.message);
+              cleanupAndRestore();
+            }
+          });
+        });
+      }
+
+      function handleRestoreNativeResize() {
+        frameWin.removeEventListener('resize', handleRestoreNativeResize);
+        console.log(`[SCORM EVENT-GATE] RESTORE NATIVE EVENT RECEIVED`);
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const finalIfrW = contentFrame.clientWidth;
+            const finalIfrH = contentFrame.clientHeight;
+            const finalScoW = frameWin.innerWidth;
+            const finalScoH = frameWin.innerHeight;
+            console.log(`[SCORM EVENT-GATE] final verified iframe=${finalIfrW}x${finalIfrH} sco=${finalScoW}x${finalScoH}`);
+
+            const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+            const framesLayer = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+            const svgs = Array.from(frameDoc.querySelectorAll('svg'));
+            const finalContentVisible = (slidesBg && slidesBg.getBoundingClientRect().width > 10) ? 'YES' : 'NO';
+
+            function rStr(el) {
+              if (!el) return 'missing';
+              const r = el.getBoundingClientRect();
+              return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+            }
+
+            console.log(`[SCORM EVENT-GATE] FINAL_STATE slidesBg=${rStr(slidesBg)} framesLayer=${rStr(framesLayer)} svgCount=${svgs.length} contentVisible=${finalContentVisible}`);
+          });
+        });
+      }
+
+      // Arm listener & trigger 1px delta
       try {
-        // Thực hiện thay đổi 1px chiều rộng (Width - 1px)
+        frameWin.addEventListener('resize', handleFirstNativeResize);
+        console.log('[SCORM EVENT-GATE] listener armed');
+
         const targetPx = (origClientW > 10 ? origClientW - 1 : origClientW + 1) + 'px';
         contentFrame.style.width = targetPx;
 
-        // Đợi 1 frame layout
-        requestAnimationFrame(() => {
-          try {
-            const changedClientW = contentFrame.clientWidth;
-            const changedClientH = contentFrame.clientHeight;
-            const changedScoW = frameWin.innerWidth;
-            const changedScoH = frameWin.innerHeight;
-
-            console.log(`[SCORM NUDGE] changed iframe=${changedClientW}x${changedClientH} sco=${changedScoW}x${changedScoH}`);
-
-            const hasDelta = (changedScoW !== origScoW) || (changedClientW !== origClientW);
-
-            if (!hasDelta) {
-              console.warn('[SCORM NUDGE] geometry delta FAILED (SCO inner size unchanged)');
-              contentFrame.style.width = origStyleWidth;
-              contentFrame.style.height = origStyleHeight;
-              return;
-            }
-
-            console.log('[SCORM NUDGE] geometry delta confirmed');
-
-            // Invalidate tại kích thước tạm thời (Lần 1)
-            console.log('[SCORM NUDGE] invalidate at temporary geometry');
-            if (typeof frameWin.invalidatePlayerSize === 'function') {
-              frameWin.invalidatePlayerSize();
-            }
-            if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
-              frameWin.player.invalidateSize();
-            }
-
-            // Phục hồi kích thước ban đầu sau 1 rAF
-            requestAnimationFrame(() => {
-              try {
-                contentFrame.style.width = origStyleWidth;
-                contentFrame.style.height = origStyleHeight;
-                console.log('[SCORM NUDGE] geometry restored');
-
-                // Đợi 1 rAF tiếp theo để browser áp dụng lại size gốc rồi final invalidate (Lần 2)
-                requestAnimationFrame(() => {
-                  try {
-                    const finalClientW = contentFrame.clientWidth;
-                    const finalClientH = contentFrame.clientHeight;
-                    const finalScoW = frameWin.innerWidth;
-                    const finalScoH = frameWin.innerHeight;
-
-                    console.log(`[SCORM NUDGE] final verified iframe=${finalClientW}x${finalClientH} sco=${finalScoW}x${finalScoH}`);
-
-                    console.log('[SCORM NUDGE] final invalidate');
-                    if (typeof frameWin.invalidatePlayerSize === 'function') {
-                      frameWin.invalidatePlayerSize();
-                    }
-                    if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
-                      frameWin.player.invalidateSize();
-                    }
-                    console.log('[SCORM NUDGE] completed');
-
-                    // Ghi nhận snapshot và rect sau Nudge
-                    setTimeout(() => {
-                      logGeometrySnapshot('POST_NUDGE');
-                      inspectRenderSurfaces('POST_NUDGE', frameDoc, frameWin);
-
-                      const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
-                      const playerView = frameDoc.querySelector('.playerView, [class*="playerView"]');
-                      const allButtons = Array.from(frameDoc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
-                      const nextBtn = allButtons.find((b) => (b.innerText || b.textContent || b.id || '').toLowerCase().includes('next') && !b.id.includes('slidesBackground'));
-                      const submitBtn = allButtons.find((b) => (b.innerText || b.textContent || b.id || '').toLowerCase().includes('submit'));
-
-                      function rStr(el) {
-                        if (!el) return 'missing';
-                        const r = el.getBoundingClientRect();
-                        return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
-                      }
-
-                      console.log(`[SCORM NUDGE RESULT] slidesBg=${rStr(slidesBg)} playerView=${rStr(playerView)} next=${rStr(nextBtn)} submit=${submitBtn ? rStr(submitBtn) : 'missing'}`);
-                    }, 50);
-                  } catch (finalErr) {
-                    console.warn('[SCORM NUDGE] Final invalidate error:', finalErr.message);
-                  }
-                });
-              } catch (restoreErr) {
-                console.warn('[SCORM NUDGE] Restore step error:', restoreErr.message);
-                contentFrame.style.width = origStyleWidth;
-                contentFrame.style.height = origStyleHeight;
-              }
-            });
-          } catch (midErr) {
-            console.warn('[SCORM NUDGE] Temp geometry step error:', midErr.message);
-            contentFrame.style.width = origStyleWidth;
-            contentFrame.style.height = origStyleHeight;
+        // Fallback safety timeout sau 2.5s nếu browser không phát native resize event
+        timeoutId = setTimeout(() => {
+          if (!isCleanedUp) {
+            console.warn('[SCORM EVENT-GATE] EVENT_NOT_RECEIVED (timed out after 2.5s)');
+            cleanupAndRestore();
           }
-        });
-      } catch (nudgeErr) {
-        console.warn('[SCORM NUDGE] Fatal error:', nudgeErr.message);
-        contentFrame.style.width = origStyleWidth;
-        contentFrame.style.height = origStyleHeight;
+        }, 2500);
+      } catch (armErr) {
+        console.warn('[SCORM EVENT-GATE] Fatal arm error:', armErr.message);
+        cleanupAndRestore();
       }
     }
 
@@ -684,9 +696,9 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         }
       }, 1200);
 
-      // Kích hoạt Controlled 1px Geometry Nudge sau khi SCO onload hoàn tất
+      // Kích hoạt Native Iframe Resize Event-Gated Experiment sau khi SCO onload hoàn tất
       setTimeout(() => {
-        executeControlledGeometryNudge();
+        executeNativeEventGatedExperiment();
       }, 600);
     };
 
