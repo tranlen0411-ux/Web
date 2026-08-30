@@ -691,85 +691,91 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 9. DEEP DIAGNOSTIC TRACER FOR RUNTIME PROOF (RUN_ID, Call Counter, DOM Counts, Content Mutations)
-    let hasInitialLayoutTriggered = false;
-    let layoutCallCount = 0;
-    let initialTriggerTime = 0;
+    // 9. CONTENT-AWARE & SUCCESS-DRIVEN DIRECT LAYOUT ENGINE
+    let isLayoutSuccess = false;
+    let attemptCount = 0;
+    let activeContentObserver = null;
+    let pendingRafId = null;
 
-    function getDetailedDomSnapshot(frameDoc, frameWin) {
-      if (!frameDoc) return null;
+    function cleanupContentObserver() {
+      if (activeContentObserver) {
+        activeContentObserver.disconnect();
+        activeContentObserver = null;
+      }
+      if (pendingRafId) {
+        cancelAnimationFrame(pendingRafId);
+        pendingRafId = null;
+      }
+    }
+
+    function checkMeaningfulContentAndGeometry(frameDoc, frameWin) {
+      if (!frameDoc) return { hasMeaningfulContent: false, isValidGeometry: false, geomStr: 'no-doc', countsStr: 'no-doc', flW: 0, flH: 0, sbW: 0, sbH: 0 };
+
       const fl = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
       const sb = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
-      const pv = frameDoc.querySelector('.playerView, [class*="playerView"]');
-      const qr = frameDoc.querySelector('.quizView, [class*="quizView"], [id*="quiz"]');
       const svgs = frameDoc.querySelectorAll('svg');
       const canvases = frameDoc.querySelectorAll('canvas');
+      const imgs = frameDoc.querySelectorAll('img');
+      const videos = frameDoc.querySelectorAll('video');
       const iframes = frameDoc.querySelectorAll('iframe, frame');
 
-      function rStr(el) {
-        if (!el) return 'missing';
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 && r.height === 0) return '0x0';
-        return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
-      }
+      const flW = fl ? Math.round(fl.getBoundingClientRect().width) : 0;
+      const flH = fl ? Math.round(fl.getBoundingClientRect().height) : 0;
+      const sbW = sb ? Math.round(sb.getBoundingClientRect().width) : 0;
+      const sbH = sb ? Math.round(sb.getBoundingClientRect().height) : 0;
+
+      const flCount = fl ? fl.childElementCount : 0;
+      const sbCount = sb ? sb.childElementCount : 0;
+
+      // Meaningful Content: có ít nhất 1 element nội dung thực tế (svg, canvas, img, video, iframe, hoặc con của frames/slides)
+      const hasMeaningfulContent = (
+        svgs.length > 0 ||
+        canvases.length > 0 ||
+        imgs.length > 0 ||
+        videos.length > 0 ||
+        iframes.length > 0 ||
+        flCount > 0 ||
+        sbCount > 0
+      );
+
+      // Geometry Valid: bề mặt render thực sự đã bung kích thước > 0
+      const isValidGeometry = (flW > 10 && flH > 10) || (sbW > 10 && sbH > 10);
+
+      const geomStr = `frames=${flW}x${flH} slides=${sbW}x${sbH}`;
+      const countsStr = `framesChildren=${flCount} slidesChildren=${sbCount} svg=${svgs.length} canvas=${canvases.length} img=${imgs.length}`;
 
       return {
-        playerViewRect: rStr(pv),
-        framesLayerRect: rStr(fl),
-        slidesBgRect: rStr(sb),
-        quizRootRect: rStr(qr),
-        flChildrenCount: fl ? fl.children.length : 0,
-        sbChildrenCount: sb ? sb.children.length : 0,
-        qrChildrenCount: qr ? qr.children.length : 0,
-        svgCount: svgs.length,
-        canvasCount: canvases.length,
-        iframeCount: iframes.length,
-        isVisible: (sb && sb.getBoundingClientRect().width > 10) || svgs.length > 0,
+        hasMeaningfulContent,
+        isValidGeometry,
+        flW, flH, sbW, sbH,
+        geomStr,
+        countsStr,
       };
     }
 
-    // Gắn MutationObserver theo dõi sự xuất hiện của slide/quiz DOM sau initial trigger
-    function attachContentMutationObserver(frameDoc, frameWin) {
-      if (!frameDoc || !frameDoc.body || frameDoc.__scorm_content_obs_attached) return;
-      frameDoc.__scorm_content_obs_attached = true;
-
-      try {
-        const obs = new MutationObserver((mutations) => {
-          let addedCount = 0;
-          let targetSummary = [];
-
-          mutations.forEach((m) => {
-            if (m.addedNodes && m.addedNodes.length > 0) {
-              addedCount += m.addedNodes.length;
-              const tag = m.target.tagName ? m.target.tagName.toLowerCase() : 'node';
-              const id = m.target.id ? `#${m.target.id}` : '';
-              const cls = typeof m.target.className === 'string' && m.target.className ? `.${m.target.className.substring(0, 15)}` : '';
-              targetSummary.push(`${tag}${id}${cls}`);
-            }
-          });
-
-          if (addedCount > 0) {
-            const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-            const deltaMs = initialTriggerTime > 0 ? `+${(now - initialTriggerTime).toFixed(1)}ms` : '0ms';
-            const snap = getDetailedDomSnapshot(frameDoc, frameWin);
-            console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT MUTATION] time=${deltaMs} addedNodes=${addedCount} targets=[${targetSummary.slice(0, 3).join(', ')}] svgs=${snap?.svgCount} canvases=${snap?.canvasCount} framesChildren=${snap?.flChildrenCount} slidesChildren=${snap?.sbChildrenCount} isVisible=${snap?.isVisible}`);
-          }
-        });
-
-        obs.observe(frameDoc.body, { childList: true, subtree: true });
-      } catch (obsErr) {
-        console.warn(`[SCORM RUN ${runId}] [ISPRING CONTENT MUTATION] observer error:`, obsErr.message);
-      }
-    }
-
-    function triggerInitialDirectLayout(sourceLabel = 'DET_READY') {
-      if (hasInitialLayoutTriggered) return true;
+    function tryContentAwareLayout(source = 'MUTATION') {
+      if (isLayoutSuccess) return;
 
       const frameWin = contentFrame ? contentFrame.contentWindow : null;
       const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (!frameWin || !frameDoc) return false;
+      if (!frameWin || !frameDoc) return;
 
-      // Xác định chính xác API của iSpring
+      // 1. Kiểm tra nếu geometry đã tự bung chuẩn (ví dụ Fresh launch)
+      const state = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
+      if (state.isValidGeometry) {
+        isLayoutSuccess = true;
+        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${state.geomStr})`);
+        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
+        cleanupContentObserver();
+        return;
+      }
+
+      // 2. Chỉ thực hiện trigger nếu đã có meaningful content
+      if (!state.hasMeaningfulContent) {
+        return;
+      }
+
+      // 3. Tìm API updateLayout của iSpring
       let targetObj = null;
       let targetMethodName = null;
 
@@ -787,109 +793,99 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         targetMethodName = 'PresentationPlayer.invalidateSize';
       }
 
-      if (!targetObj || !targetMethodName) {
-        return false;
-      }
+      if (!targetObj || !targetMethodName) return;
 
-      hasInitialLayoutTriggered = true;
-      initialTriggerTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      // 4. Thực thi attempt layout sau 2 animation frames để browser hoàn tất paint DOM nodes
+      if (pendingRafId) cancelAnimationFrame(pendingRafId);
 
-      // Hook wrap phương thức updateLayout để theo dõi mọi lần gọi sau này (kể cả từ native resize)
-      const origMethod = targetObj[targetMethodName.split('.').pop()];
-      const methodName = targetMethodName.split('.').pop();
-      if (!targetObj.__scorm_wrapped) {
-        targetObj.__scorm_wrapped = true;
-        targetObj[methodName] = function () {
-          layoutCallCount++;
-          const callSource = layoutCallCount === 1 ? sourceLabel : 'native-resize/internal';
-          const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()).toFixed(1);
-          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] CALL number=${layoutCallCount} source=${callSource} time=${now}ms`);
-          return origMethod.apply(this, arguments);
-        };
-      }
+      pendingRafId = requestAnimationFrame(() => {
+        pendingRafId = requestAnimationFrame(() => {
+          pendingRafId = null;
+          if (isLayoutSuccess) return;
 
-      const snapBefore = getDetailedDomSnapshot(frameDoc, frameWin);
-      console.log(`[SCORM RUN ${runId}] [ISPRING PLAYER_OBJECT_FOUND] target=${targetMethodName}`);
-      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] READY method=${targetMethodName} source=${sourceLabel}`);
-      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] BEFORE frames=${snapBefore?.framesLayerRect} slides=${snapBefore?.slidesBgRect} quizRoot=${snapBefore?.quizRootRect}`);
-      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] DOM_SNAPSHOT_AT_TRIGGER: framesChildren=${snapBefore?.flChildrenCount} slidesChildren=${snapBefore?.sbChildrenCount} quizChildren=${snapBefore?.qrChildrenCount} svgs=${snapBefore?.svgCount} canvases=${snapBefore?.canvasCount} iframes=${snapBefore?.iframeCount}`);
-      console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] DIRECT_TRIGGER`);
+          attemptCount++;
+          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] CONTENT_READY_ATTEMPT number=${attemptCount} (source=${source})`);
 
-      try {
-        targetObj[methodName]();
-      } catch (triggerErr) {
-        console.warn(`[SCORM RUN ${runId}] [ISPRING LAYOUT] Error executing direct layout:`, triggerErr.message);
-      }
+          try {
+            const fnName = targetMethodName.split('.').pop();
+            targetObj[fnName]();
+          } catch (triggerErr) {
+            console.warn(`[SCORM RUN ${runId}] [ISPRING LAYOUT] Error in attempt #${attemptCount}:`, triggerErr.message);
+          }
 
-      // Kích hoạt theo dõi biến đổi DOM liên tục sau trigger
-      attachContentMutationObserver(frameDoc, frameWin);
-
-      requestAnimationFrame(() => {
-        const snapRaf1 = getDetailedDomSnapshot(frameDoc, frameWin);
-        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] AFTER_RAF1 frames=${snapRaf1?.framesLayerRect} slides=${snapRaf1?.slidesBgRect} svgs=${snapRaf1?.svgCount}`);
-
-        requestAnimationFrame(() => {
-          const snapRaf2 = getDetailedDomSnapshot(frameDoc, frameWin);
-          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] AFTER_RAF2 frames=${snapRaf2?.framesLayerRect} slides=${snapRaf2?.slidesBgRect} svgs=${snapRaf2?.svgCount} isVisible=${snapRaf2?.isVisible}`);
-        });
-      });
-
-      return true;
-    }
-
-    // Lifecycle Condition Listener: Theo dõi thời điểm sớm nhất iSpring layout API sẵn sàng
-    function watchForLayoutReadiness() {
-      if (hasInitialLayoutTriggered) return;
-
-      if (triggerInitialDirectLayout('IMMEDIATE_CHECK')) return;
-
-      const frameWin = contentFrame ? contentFrame.contentWindow : null;
-
-      if (frameWin) {
-        frameWin.addEventListener('DOMContentLoaded', () => {
-          triggerInitialDirectLayout('DOM_CONTENT_LOADED');
-        }, { once: true });
-
-        frameWin.addEventListener('load', () => {
-          triggerInitialDirectLayout('WINDOW_LOAD');
-        }, { once: true });
-      }
-
-      let frameCount = 0;
-      function checkFrameReadiness() {
-        if (hasInitialLayoutTriggered) return;
-        frameCount++;
-        if (triggerInitialDirectLayout(`rAF_CYCLE_${frameCount}`)) return;
-
-        if (frameCount < 30) {
-          requestAnimationFrame(checkFrameReadiness);
-        } else {
-          console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] NOT_READY (Waiting complete)`);
-        }
-      }
-      requestAnimationFrame(checkFrameReadiness);
-    }
-
-    // Lắng nghe Native User Resize để đo lường so sánh trước và sau
-    window.addEventListener('resize', () => {
-      const frameWin = contentFrame ? contentFrame.contentWindow : null;
-      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
-      if (frameDoc) {
-        const snapBeforeResize = getDetailedDomSnapshot(frameDoc, frameWin);
-        console.log(`[SCORM RUN ${runId}] [NATIVE RESIZE BEFORE] frames=${snapBeforeResize?.framesLayerRect} slides=${snapBeforeResize?.slidesBgRect} svgs=${snapBeforeResize?.svgCount} framesChildren=${snapBeforeResize?.flChildrenCount}`);
-
-        requestAnimationFrame(() => {
+          // Đo lại geometry sau khi updateLayout thực thi
           requestAnimationFrame(() => {
-            const snapAfterResize = getDetailedDomSnapshot(frameDoc, frameWin);
-            console.log(`[SCORM RUN ${runId}] [NATIVE RESIZE AFTER] frames=${snapAfterResize?.framesLayerRect} slides=${snapAfterResize?.slidesBgRect} svgs=${snapAfterResize?.svgCount} framesChildren=${snapAfterResize?.flChildrenCount} isVisible=${snapAfterResize?.isVisible}`);
+            requestAnimationFrame(() => {
+              const afterState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
+              const success = afterState.isValidGeometry;
+              console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] RESULT number=${attemptCount} frames=${afterState.flW}x${afterState.flH} slides=${afterState.sbW}x${afterState.sbH} success=${success}`);
+
+              if (success) {
+                isLayoutSuccess = true;
+                console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] INITIAL_LAYOUT_COMPLETE`);
+                console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
+                cleanupContentObserver();
+              }
+            });
           });
         });
+      });
+    }
+
+    // Gắn MutationObserver vào content root của iSpring
+    function setupContentAwareObserver(frameDoc, frameWin) {
+      if (!frameDoc || !frameDoc.body || isLayoutSuccess) return;
+      cleanupContentObserver();
+
+      // Kiểm tra ngay lúc đầu xem đã valid chưa
+      const initialState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
+      if (initialState.isValidGeometry) {
+        isLayoutSuccess = true;
+        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${initialState.geomStr})`);
+        console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
+        return;
       }
-    });
+
+      const targetEl = frameDoc.querySelector('.playerView') || frameDoc.body;
+      const targetTag = targetEl.tagName ? targetEl.tagName.toLowerCase() : 'div';
+      const targetCls = typeof targetEl.className === 'string' && targetEl.className ? `.${targetEl.className.substring(0, 15)}` : '';
+      console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT] OBSERVER_ATTACHED target=<${targetTag}${targetCls}>`);
+
+      activeContentObserver = new MutationObserver((mutations) => {
+        if (isLayoutSuccess) {
+          cleanupContentObserver();
+          return;
+        }
+
+        let hasNewNodes = false;
+        for (const m of mutations) {
+          if (m.addedNodes && m.addedNodes.length > 0) {
+            hasNewNodes = true;
+            break;
+          }
+        }
+
+        if (hasNewNodes) {
+          const s = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
+          console.log(`[SCORM RUN ${runId}] [ISPRING CONTENT] MUTATION ${s.countsStr} geometry=${s.geomStr}`);
+          tryContentAwareLayout('MUTATION_BATCH');
+        }
+      });
+
+      activeContentObserver.observe(targetEl, { childList: true, subtree: true });
+
+      // Nếu ngay tại lúc attach đã có meaningful content
+      if (initialState.hasMeaningfulContent) {
+        tryContentAwareLayout('INITIAL_CONTENT_CHECK');
+      }
+    }
 
     contentFrame.onload = () => {
       console.log(`[SCORM RUN ${runId}] 🎯 SCO Content loaded successfully into frame from Same-Origin Gateway.`);
       inspectFrameState('onload');
+
+      const frameWin = contentFrame.contentWindow;
+      const frameDoc = contentFrame.contentDocument || frameWin?.document;
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
 
@@ -897,9 +893,13 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Kích hoạt theo dõi và thực thi Direct Layout Trigger tại điểm sẵn sàng sớm nhất
-      watchForLayoutReadiness();
+      // Kích hoạt Content-Aware Mutation Observer
+      setupContentAwareObserver(frameDoc, frameWin);
     };
+
+    // Dọn dẹp observer khi cửa sổ đóng
+    window.addEventListener('pagehide', cleanupContentObserver);
+    window.addEventListener('beforeunload', cleanupContentObserver);
 
     contentFrame.onerror = (err) => {
       console.error(`[SCORM RUN ${runId}] ❌ Failed to load SCO content frame:`, err);
