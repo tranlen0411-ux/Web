@@ -592,6 +592,61 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       });
     }
 
+    // 7. Bộ chẩn đoán chuyên biệt FRESH QUIZ (Chỉ đọc, thụ động, không can thiệp DOM)
+    function inspectFreshQuizState(triggerLabel = '') {
+      try {
+        const frameWin = contentFrame ? contentFrame.contentWindow : null;
+        const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+        if (!frameDoc) return;
+
+        const slidesBg = frameDoc.querySelector('#slidesBackground, [id*="slidesBackground"]');
+        const framesLayer = frameDoc.querySelector('.framesLayerContent, [class*="framesLayer"]');
+        const quizRoot = frameDoc.querySelector('.quizView, [class*="quizView"], [id*="quiz"], [class*="quiz"]');
+        const questionRoot = frameDoc.querySelector('.questionView, [class*="question"], [id*="question"]');
+        const svgs = frameDoc.querySelectorAll('svg');
+        const canvases = frameDoc.querySelectorAll('canvas');
+
+        function rStr(el) {
+          if (!el) return 'missing';
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) return 'zero-size';
+          return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+        }
+
+        function btnState(selectorList) {
+          for (const s of selectorList) {
+            const btn = frameDoc.querySelector(s);
+            if (btn) {
+              const r = btn.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) return 'zero-size';
+              if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return 'disabled';
+              return 'visible';
+            }
+          }
+          return 'missing';
+        }
+
+        const submitState = btnState(['button[id*="submit"]', 'button[class*="submit"]', '[data-control="submit"]', '.submitButton', '#submitButton']);
+        const nextState = btnState(['button[id*="next"]', 'button[class*="next"]', '[data-control="next"]', '.nextButton', '#nextButton', '.control-next']);
+        const prevState = btnState(['button[id*="prev"]', 'button[class*="prev"]', '[data-control="prev"]', '.prevButton', '#prevButton', '.control-prev']);
+
+        const isQuizVisible = (slidesBg && slidesBg.getBoundingClientRect().width > 10) || svgs.length > 0;
+
+        console.log(`[SCORM FRESH QUIZ] ${triggerLabel}`);
+        console.log(`  quizVisible=${isQuizVisible ? 'YES' : 'NO'}`);
+        console.log(`  svgCount=${svgs.length}`);
+        console.log(`  canvasCount=${canvases.length}`);
+        console.log(`  slidesBg=${rStr(slidesBg)}`);
+        console.log(`  quizRoot=${quizRoot ? 'present' : 'missing'}`);
+        console.log(`  questionRoot=${questionRoot ? 'present' : 'missing'}`);
+        console.log(`  submit=${submitState}`);
+        console.log(`  next=${nextState}`);
+        console.log(`  previous=${prevState}`);
+      } catch (err) {
+        console.warn('[SCORM FRESH QUIZ] Error inspecting quiz state:', err.message);
+      }
+    }
+
     let hasHistoricalInitialReflowRun = false;
 
     contentFrame.onload = () => {
@@ -638,7 +693,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Chụp snapshot trạng thái trước resize
+      // Chụp snapshot trạng thái trước resize & kiểm tra Fresh Quiz
       setTimeout(() => {
         if (!hasLoggedBeforeNative) {
           hasLoggedBeforeNative = true;
@@ -646,7 +701,19 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           logBreakpointState('BEFORE_NATIVE');
           const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
           const frameWin = contentFrame.contentWindow;
-          if (frameDoc) inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
+          if (frameDoc) {
+            inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
+            inspectFreshQuizState('INITIAL_LOAD');
+
+            // Gắn listener lắng nghe người dùng tương tác với Quiz (chọn đáp án / bấm nút)
+            try {
+              frameDoc.addEventListener('click', () => {
+                setTimeout(() => {
+                  inspectFreshQuizState('AFTER_CLICK_INTERACTION');
+                }, 300);
+              }, true);
+            } catch {}
+          }
         }
       }, 1200);
     };
