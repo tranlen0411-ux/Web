@@ -691,7 +691,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 9. CONTENT-AWARE & SUCCESS-DRIVEN DIRECT LAYOUT ENGINE
+    // 9. DEEP VISIBILITY, COMPUTED STYLE, PAINT & OVERLAY INSPECTOR
     let isLayoutSuccess = false;
     let attemptCount = 0;
     let activeContentObserver = null;
@@ -706,6 +706,127 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         cancelAnimationFrame(pendingRafId);
         pendingRafId = null;
       }
+    }
+
+    // 1. Log chi tiết Computed Style, Rect, Z-index, Transform của toàn bộ các tầng
+    function logDeepVisibilityAndStyle(stageLabel) {
+      const frameWin = contentFrame ? contentFrame.contentWindow : null;
+      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+      if (!frameDoc || !frameWin) return;
+
+      console.log(`========================================================`);
+      console.log(`[SCORM RUN ${runId}] 🔬 [DEEP STYLE & VISIBILITY] === ${stageLabel} ===`);
+
+      const targets = [
+        { name: 'playerView', sel: '.playerView, [class*="playerView"]' },
+        { name: 'framesLayer', sel: '.framesLayerContent, [class*="framesLayer"]' },
+        { name: 'slidesBg', sel: '#slidesBackground, [id*="slidesBackground"]' },
+        { name: 'slideView', sel: '.slideView, [class*="slideView"], [class*="slide"]' },
+        { name: 'quizRoot', sel: '.quizView, [class*="quizView"], [id*="quiz"]' },
+        { name: 'firstSvg', sel: 'svg' },
+        { name: 'firstCanvas', sel: 'canvas' },
+        { name: 'firstImg', sel: 'img' },
+      ];
+
+      targets.forEach(({ name, sel }) => {
+        const el = frameDoc.querySelector(sel);
+        if (!el) {
+          console.log(`  ${name.padEnd(12)}: NOT_FOUND in DOM`);
+          return;
+        }
+
+        const s = frameWin.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        const rStr = `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+        const clientStr = `${el.clientWidth}x${el.clientHeight}`;
+        const offsetStr = `${el.offsetWidth}x${el.offsetHeight}`;
+        const tf = s.transform !== 'none' ? ` tf="${s.transform}"` : ' tf=none';
+        const z = s.zIndex !== 'auto' ? ` zIndex=${s.zIndex}` : ' zIndex=auto';
+        const pos = s.position;
+        const bg = s.backgroundColor !== 'rgba(0, 0, 0, 0)' && s.backgroundColor !== 'transparent' ? ` bg="${s.backgroundColor}"` : '';
+
+        console.log(`  ${name.padEnd(12)}: rect=${rStr} client=${clientStr} offset=${offsetStr} disp=${s.display} vis=${s.visibility} op=${s.opacity} pos=${pos}${z} ov=${s.overflow}${tf}${bg}`);
+      });
+    }
+
+    // 2. Kiểm tra Element From Point (3-5 điểm giữa slide) và Quét Layer Phủ (Overlays)
+    function inspectElementFromPointAndOverlays(stageLabel) {
+      const frameWin = contentFrame ? contentFrame.contentWindow : null;
+      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+      if (!frameDoc || !frameWin) return;
+
+      console.log(`--------------------------------------------------------`);
+      console.log(`[SCORM RUN ${runId}] 🎯 [PAINT & OVERLAY PROOF] === ${stageLabel} ===`);
+
+      const w = frameWin.innerWidth;
+      const h = frameWin.innerHeight;
+      const points = [
+        { name: 'Center', x: Math.round(w / 2), y: Math.round(h / 2) },
+        { name: 'Top-Center', x: Math.round(w / 2), y: Math.round(h * 0.25) },
+        { name: 'Bottom-Center', x: Math.round(w / 2), y: Math.round(h * 0.75) },
+        { name: 'Left-Center', x: Math.round(w * 0.25), y: Math.round(h / 2) },
+        { name: 'Right-Center', x: Math.round(w * 0.75), y: Math.round(h / 2) },
+      ];
+
+      points.forEach(({ name, x, y }) => {
+        try {
+          const topEl = frameDoc.elementFromPoint(x, y);
+          if (!topEl) {
+            console.log(`  [VISIBLE PROOF] point=(${x},${y}) [${name}] topElement=NULL`);
+            return;
+          }
+          const tag = topEl.tagName ? topEl.tagName.toLowerCase() : 'node';
+          const id = topEl.id ? `#${topEl.id}` : '';
+          const cls = typeof topEl.className === 'string' && topEl.className ? `.${topEl.className.substring(0, 20)}` : '';
+          const r = topEl.getBoundingClientRect();
+          const s = frameWin.getComputedStyle(topEl);
+          console.log(`  [VISIBLE PROOF] point=(${x},${y}) [${name}] topElement=<${tag}${id}${cls}> rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] bg="${s.backgroundColor}" z=${s.zIndex}`);
+        } catch (efpErr) {
+          console.warn(`  [VISIBLE PROOF] point=(${x},${y}) error:`, efpErr.message);
+        }
+      });
+
+      // Quét tất cả các element có khả năng là Overlay trắng che khuất
+      try {
+        const allEls = Array.from(frameDoc.querySelectorAll('*'));
+        let foundOverlays = 0;
+        allEls.forEach((el) => {
+          const s = frameWin.getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const isLarge = r.width >= (w * 0.5) && r.height >= (h * 0.4);
+          const isPositioned = s.position === 'absolute' || s.position === 'fixed';
+          const isVisible = s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
+
+          if (isLarge && isPositioned && isVisible) {
+            foundOverlays++;
+            const tag = el.tagName ? el.tagName.toLowerCase() : 'el';
+            const id = el.id ? `#${el.id}` : '';
+            const cls = typeof el.className === 'string' && el.className ? `.${el.className.substring(0, 25)}` : '';
+            console.log(`  [OVERLAY SCAN #${foundOverlays}] target=<${tag}${id}${cls}> rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] z=${s.zIndex} bg="${s.backgroundColor}" op=${s.opacity} pe=${s.pointerEvents}`);
+          }
+        });
+        if (foundOverlays === 0) {
+          console.log(`  [OVERLAY SCAN] No blocking large overlays detected.`);
+        }
+      } catch (scanErr) {
+        console.warn('  [OVERLAY SCAN] scan error:', scanErr.message);
+      }
+
+      // Quét các class/attribute kích hoạt slide (active, current, visible, hidden, aria-hidden)
+      try {
+        const activeEls = frameDoc.querySelectorAll('[class*="active"], [class*="current"], [class*="visible"], [class*="hidden"], [aria-hidden], [data-state]');
+        console.log(`  [SLIDE STATE ATTRS] Total matching state nodes: ${activeEls.length}`);
+        Array.from(activeEls).slice(0, 5).forEach((el, idx) => {
+          const tag = el.tagName ? el.tagName.toLowerCase() : 'el';
+          const cls = el.className || '-';
+          const ariaH = el.getAttribute('aria-hidden');
+          const dataSt = el.getAttribute('data-state');
+          console.log(`    stateNode#${idx + 1}: <${tag}> cls="${cls}" aria-hidden=${ariaH} data-state=${dataSt}`);
+        });
+      } catch (stErr) {
+        console.warn('  [SLIDE STATE ATTRS] error:', stErr.message);
+      }
+      console.log(`========================================================`);
     }
 
     function checkMeaningfulContentAndGeometry(frameDoc, frameWin) {
@@ -727,7 +848,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       const flCount = fl ? fl.childElementCount : 0;
       const sbCount = sb ? sb.childElementCount : 0;
 
-      // Meaningful Content: có ít nhất 1 element nội dung thực tế (svg, canvas, img, video, iframe, hoặc con của frames/slides)
       const hasMeaningfulContent = (
         svgs.length > 0 ||
         canvases.length > 0 ||
@@ -738,9 +858,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         sbCount > 0
       );
 
-      // Geometry Valid: bề mặt render thực sự đã bung kích thước > 0
       const isValidGeometry = (flW > 10 && flH > 10) || (sbW > 10 && sbH > 10);
-
       const geomStr = `frames=${flW}x${flH} slides=${sbW}x${sbH}`;
       const countsStr = `framesChildren=${flCount} slidesChildren=${sbCount} svg=${svgs.length} canvas=${canvases.length} img=${imgs.length}`;
 
@@ -760,22 +878,19 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
       if (!frameWin || !frameDoc) return;
 
-      // 1. Kiểm tra nếu geometry đã tự bung chuẩn (ví dụ Fresh launch)
       const state = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
       if (state.isValidGeometry) {
         isLayoutSuccess = true;
         console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${state.geomStr})`);
         console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
         cleanupContentObserver();
+        logDeepVisibilityAndStyle('ALREADY_VALID');
+        inspectElementFromPointAndOverlays('ALREADY_VALID');
         return;
       }
 
-      // 2. Chỉ thực hiện trigger nếu đã có meaningful content
-      if (!state.hasMeaningfulContent) {
-        return;
-      }
+      if (!state.hasMeaningfulContent) return;
 
-      // 3. Tìm API updateLayout của iSpring
       let targetObj = null;
       let targetMethodName = null;
 
@@ -795,7 +910,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
       if (!targetObj || !targetMethodName) return;
 
-      // 4. Thực thi attempt layout sau 2 animation frames để browser hoàn tất paint DOM nodes
       if (pendingRafId) cancelAnimationFrame(pendingRafId);
 
       pendingRafId = requestAnimationFrame(() => {
@@ -813,12 +927,15 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             console.warn(`[SCORM RUN ${runId}] [ISPRING LAYOUT] Error in attempt #${attemptCount}:`, triggerErr.message);
           }
 
-          // Đo lại geometry sau khi updateLayout thực thi
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               const afterState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
               const success = afterState.isValidGeometry;
               console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] RESULT number=${attemptCount} frames=${afterState.flW}x${afterState.flH} slides=${afterState.sbW}x${afterState.sbH} success=${success}`);
+
+              // Chụp toàn bộ Computed Style & ElementFromPoint ngay sau attempt
+              logDeepVisibilityAndStyle(`AFTER_ATTEMPT_${attemptCount}`);
+              inspectElementFromPointAndOverlays(`AFTER_ATTEMPT_${attemptCount}`);
 
               if (success) {
                 isLayoutSuccess = true;
@@ -837,12 +954,13 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       if (!frameDoc || !frameDoc.body || isLayoutSuccess) return;
       cleanupContentObserver();
 
-      // Kiểm tra ngay lúc đầu xem đã valid chưa
       const initialState = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
       if (initialState.isValidGeometry) {
         isLayoutSuccess = true;
         console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] ALREADY_VALID (${initialState.geomStr})`);
         console.log(`[SCORM RUN ${runId}] [ISPRING LAYOUT] observer=disconnected`);
+        logDeepVisibilityAndStyle('INITIAL_ALREADY_VALID');
+        inspectElementFromPointAndOverlays('INITIAL_ALREADY_VALID');
         return;
       }
 
@@ -858,12 +976,18 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         }
 
         let hasNewNodes = false;
-        for (const m of mutations) {
-          if (m.addedNodes && m.addedNodes.length > 0) {
-            hasNewNodes = true;
-            break;
+        mutations.forEach((m) => {
+          if (m.addedNodes && m.addedNodes.length > 0) hasNewNodes = true;
+          if (m.type === 'attributes') {
+            const attr = m.attributeName;
+            const target = m.target;
+            const tTag = target.tagName ? target.tagName.toLowerCase() : 'el';
+            const tCls = target.className || '-';
+            const oldV = m.oldValue;
+            const newV = target.getAttribute(attr);
+            console.log(`[SCORM RUN ${runId}] [ISPRING VISIBILITY MUTATION] target=<${tTag} cls="${tCls}"> attr=${attr} old="${oldV}" new="${newV}"`);
           }
-        }
+        });
 
         if (hasNewNodes) {
           const s = checkMeaningfulContentAndGeometry(frameDoc, frameWin);
@@ -872,13 +996,30 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         }
       });
 
-      activeContentObserver.observe(targetEl, { childList: true, subtree: true });
+      activeContentObserver.observe(targetEl, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
 
-      // Nếu ngay tại lúc attach đã có meaningful content
       if (initialState.hasMeaningfulContent) {
         tryContentAwareLayout('INITIAL_CONTENT_CHECK');
       }
     }
+
+    // Lắng nghe Native User Resize để đo lường so sánh trước và sau
+    window.addEventListener('resize', () => {
+      const frameWin = contentFrame ? contentFrame.contentWindow : null;
+      const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+      if (frameDoc && frameWin) {
+        console.log(`[SCORM RUN ${runId}] 🖱️ [NATIVE RESIZE TRIGGERED]`);
+        logDeepVisibilityAndStyle('NATIVE_RESIZE_BEFORE');
+        inspectElementFromPointAndOverlays('NATIVE_RESIZE_BEFORE');
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            logDeepVisibilityAndStyle('NATIVE_RESIZE_AFTER');
+            inspectElementFromPointAndOverlays('NATIVE_RESIZE_AFTER');
+          });
+        });
+      }
+    });
 
     contentFrame.onload = () => {
       console.log(`[SCORM RUN ${runId}] 🎯 SCO Content loaded successfully into frame from Same-Origin Gateway.`);
@@ -893,11 +1034,9 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Kích hoạt Content-Aware Mutation Observer
       setupContentAwareObserver(frameDoc, frameWin);
     };
 
-    // Dọn dẹp observer khi cửa sổ đóng
     window.addEventListener('pagehide', cleanupContentObserver);
     window.addEventListener('beforeunload', cleanupContentObserver);
 
