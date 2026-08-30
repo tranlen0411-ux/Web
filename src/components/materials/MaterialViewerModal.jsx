@@ -28,12 +28,26 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
   const [signedUrl, setSignedUrl] = useState(null);
   const [scormPlayerUrl, setScormPlayerUrl] = useState(null);
   const [scormVersion, setScormVersion] = useState('1.2');
+  const [scormSession, setScormSession] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  const [isClosing, setIsClosing] = useState(false);
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [urlError, setUrlError] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
 
   const scormIframeRef = useRef(null);
+  const closeTimeoutRef = useRef(null);
   const hasPulsedOuterIframeRef = useRef(false);
+
+  // Cleanup timeout khi component unmount
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (isOpen && material) {
@@ -53,14 +67,21 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       }
     } else {
       hasPulsedOuterIframeRef.current = false;
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
       setSignedUrl(null);
       setScormPlayerUrl(null);
+      setScormSession(null);
+      setSaveStatus('idle');
+      setIsClosing(false);
       setUrlError('');
       setCopiedLink(false);
     }
   }, [isOpen, material]);
 
-  // Lắng nghe và xử lý sự kiện kích hoạt lại layout từ SCORM Player qua postMessage
+  // Lắng nghe và xử lý sự kiện đồng bộ trạng thái CMI từ SCORM Player qua postMessage
   useEffect(() => {
     if (!isOpen || material?.file_type?.toLowerCase() !== 'scorm') return;
 
@@ -68,11 +89,12 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     try {
       playerOrigin = getScormPlayerOrigin();
     } catch {
+      // Player origin chưa được cấu hình -> không đăng ký / xử lý postMessage
       return;
     }
 
-    const handleMessage = (event) => {
-      // 1. Kiểm tra ranh giới Origin nghiêm ngặt
+    const handleMessage = async (event) => {
+      // 1. Kiểm tra ranh giới Origin nghiêm ngặt (Chặn đứng mọi origin khác)
       if (!playerOrigin || event.origin !== playerOrigin) {
         return;
       }
@@ -82,7 +104,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         return;
       }
 
-      const { type: msgType } = event.data || {};
+      const { type: msgType, payload } = event.data || {};
 
       // Xử lý One-shot Outer Iframe Geometry Pulse khi Player thông báo Resume Stuck
       if (msgType === 'SCORM_RESUME_LAYOUT_STUCK') {
@@ -102,10 +124,11 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         const targetWidth = Math.max(10, Math.floor(rectBefore.width) - 1);
         iframeEl.style.maxWidth = `${targetWidth}px`;
 
+        // Xác nhận rect thực tế đã thay đổi
         const rectDuring = iframeEl.getBoundingClientRect();
         console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_DURING=${Math.round(rectDuring.width)}`);
 
-        // Chờ 2 requestAnimationFrame rồi khôi phục chính xác style ban đầu
+        // Chờ 1–2 requestAnimationFrame rồi khôi phục chính xác style ban đầu
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             iframeEl.style.width = originalWidth;
@@ -115,6 +138,87 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             console.log(`[MaterialViewerModal] OUTER_IFRAME_WIDTH_AFTER=${Math.round(rectAfter.width)}`);
           });
         });
+        return;
+      }
+
+      if (msgType === 'SCORM_CLOSE_SNAPSHOT_FAILED') {
+        console.warn('[MaterialViewerModal] SCORM Player snapshot before close failed:', payload?.error);
+        if (closeTimeoutRef.current) {
+          clearTimeout(closeTimeoutRef.current);
+          closeTimeoutRef.current = null;
+        }
+        setSaveStatus('error');
+        setIsClosing(false);
+        return;
+      }
+
+      if (
+        msgType === 'SCORM_CMI_COMMIT' ||
+        msgType === 'SCORM_CMI_FINISH' ||
+        msgType === 'SCORM_CMI_TERMINATE'
+      ) {
+        if (!payload || !payload.cmi || !scormSession?.packageId) return;
+
+        const isCloseSnapshot = payload.event === 'PARENT_CLOSE_SNAPSHOT';
+
+        try {
+          setSaveStatus('saving');
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_scorm_cmi_state', {
+            p_package_id: scormSession.packageId,
+            p_cmi_payload: payload.cmi,
+            p_session_token: scormSession.sessionToken,
+          });
+
+          if (rpcErr || (rpcRes && !rpcRes.success)) {
+            console.warn('[MaterialViewerModal] Save SCORM CMI state failed:', rpcErr || rpcRes?.message);
+            setSaveStatus('error');
+            if (isCloseSnapshot) {
+              if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+              }
+              setIsClosing(false);
+            }
+            if (event.source && typeof event.source.postMessage === 'function') {
+              event.source.postMessage(
+                {
+                  type: 'SCORM_CMI_SAVE_FAILED',
+                  payload: { success: false, reason: rpcErr?.message || rpcRes?.message || 'SAVE_FAILED' },
+                },
+                playerOrigin
+              );
+            }
+          } else {
+            setSaveStatus('saved');
+            if (isCloseSnapshot) {
+              if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+              }
+              setIsClosing(false);
+              onClose();
+            }
+            if (event.source && typeof event.source.postMessage === 'function') {
+              event.source.postMessage(
+                {
+                  type: 'SCORM_CMI_SAVED',
+                  payload: { success: true, timestamp: new Date().toISOString() },
+                },
+                playerOrigin
+              );
+            }
+          }
+        } catch (err) {
+          console.error('[MaterialViewerModal] Exception saving SCORM CMI:', err);
+          setSaveStatus('error');
+          if (isCloseSnapshot) {
+            if (closeTimeoutRef.current) {
+              clearTimeout(closeTimeoutRef.current);
+              closeTimeoutRef.current = null;
+            }
+            setIsClosing(false);
+          }
+        }
       }
     };
 
@@ -122,7 +226,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [isOpen, material]);
+  }, [isOpen, material, scormSession, onClose]);
 
   // Tạo Signed URL cho file thường
   const generateSignedUrl = async (filePath) => {
@@ -153,6 +257,19 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     setLoadingUrl(true);
     setUrlError('');
     try {
+      // 1. Kiểm tra cấu hình Player Origin trước
+      try {
+        getScormPlayerOrigin();
+      } catch (originErr) {
+        if (originErr?.message === 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED') {
+          setUrlError('Trình phát SCORM chưa được cấu hình trên môi trường này.');
+          setScormPlayerUrl(null);
+          setScormSession(null);
+          return;
+        }
+        throw originErr;
+      }
+
       const { data: scormPkg, error: pkgErr } = await supabase
         .from('scorm_packages')
         .select('*')
@@ -163,21 +280,32 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         console.warn('Không tìm thấy thông tin scorm_packages:', pkgErr);
         setUrlError('Không tìm thấy dữ liệu gói SCORM trong hệ thống.');
         setScormPlayerUrl(null);
+        setScormSession(null);
         return;
       }
 
       setScormVersion(scormPkg.scorm_version || '1.2');
 
-      // Khởi tạo Player URL từ Service
+      // Khởi tạo Player URL từ Service với đúng materialId
       const session = await createScormLaunchSession({
-  materialId,
-  studentName: 'Học sinh',
-});
+        materialId: materialId,
+        studentName: 'Học sinh',
+      });
 
+      setScormSession({
+        sessionToken: session.sessionToken,
+        packageId: scormPkg.id,
+      });
       setScormPlayerUrl(session.playerUrl);
     } catch (err) {
       console.error('SCORM player init error:', err);
-      setUrlError('Lỗi khi khởi chạy bài học SCORM: ' + (err.message || 'Không xác định'));
+      if (err?.message === 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED') {
+        setUrlError('Trình phát SCORM chưa được cấu hình trên môi trường này.');
+      } else {
+        setUrlError('Lỗi khi khởi chạy bài học SCORM: ' + (err.message || 'Không xác định'));
+      }
+      setScormPlayerUrl(null);
+      setScormSession(null);
     } finally {
       setLoadingUrl(false);
     }
@@ -189,6 +317,46 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
     navigator.clipboard.writeText(shareUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleSafeClose = () => {
+    if (isClosing) return;
+
+    const isScorm = material?.file_type?.toLowerCase() === 'scorm';
+    if (!isScorm || !scormPlayerUrl || !scormIframeRef.current) {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = null;
+      }
+      onClose();
+      return;
+    }
+
+    // Đang mở bài SCORM -> Gửi yêu cầu lưu tiến độ trước khi đóng
+    setIsClosing(true);
+    setSaveStatus('saving');
+
+    let playerOrigin = '';
+    try {
+      playerOrigin = getScormPlayerOrigin();
+    } catch {
+      playerOrigin = '';
+    }
+
+    if (scormIframeRef.current?.contentWindow && playerOrigin) {
+      scormIframeRef.current.contentWindow.postMessage(
+        { type: 'SCORM_REQUEST_SAVE_BEFORE_CLOSE' },
+        playerOrigin
+      );
+    }
+
+    // Timeout phòng vệ khoảng 5 giây: nếu Player không trả lời hoặc lỗi, không tự đóng
+    if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    closeTimeoutRef.current = setTimeout(() => {
+      console.warn('[MaterialViewerModal] Save before close timed out after 5s');
+      setSaveStatus('error');
+      setIsClosing(false);
+    }, 5000);
   };
 
   if (!isOpen || !material) return null;
@@ -233,9 +401,26 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             <span className="flex items-center gap-1.5">
               <Layers className="w-4 h-4" /> Khung bài học SCORM (Chuẩn {scormVersion})
             </span>
-            <span className="text-[10px] bg-amber-100/90 px-2 py-0.5 rounded font-bold">
-              Isolated Origin Sandbox
-            </span>
+            <div className="flex items-center gap-2">
+              {saveStatus === 'saving' && (
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-bold flex items-center gap-1 animate-pulse">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Đang lưu tiến độ...
+                </span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600" /> Đã lưu tiến độ
+                </span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-[10px] bg-rose-100 text-rose-900 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 text-rose-600" /> Lỗi lưu tiến độ
+                </span>
+              )}
+              <span className="text-[10px] bg-amber-100/90 px-2 py-0.5 rounded font-bold">
+                Isolated Origin Sandbox
+              </span>
+            </div>
           </div>
 
           <iframe
@@ -357,8 +542,11 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
           </div>
 
           <button
-            onClick={onClose}
-            className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-500 transition-colors shrink-0"
+            onClick={handleSafeClose}
+            disabled={isClosing}
+            className={`p-2 rounded-full text-slate-500 transition-colors shrink-0 ${
+              isClosing ? 'opacity-50 cursor-not-allowed bg-slate-100' : 'bg-slate-100 hover:bg-slate-200'
+            }`}
           >
             <X className="w-5 h-5" />
           </button>
@@ -411,10 +599,16 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         {/* FOOTER MODAL & NÚT DOWNLOAD / SHARE */}
         <div className="pt-3 border-t-2 border-amber-100 flex items-center justify-between gap-3">
           <button
-            onClick={onClose}
-            className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+            onClick={handleSafeClose}
+            disabled={isClosing}
+            className={`px-5 py-2.5 font-bold text-xs rounded-xl transition-all ${
+              isClosing
+                ? 'bg-amber-100 text-amber-800 cursor-not-allowed opacity-80 flex items-center gap-1.5'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
           >
-            Đóng
+            {isClosing && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />}
+            {isClosing ? 'Đang lưu...' : 'Đóng'}
           </button>
 
           <div className="flex items-center gap-2 flex-wrap">
