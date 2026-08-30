@@ -257,8 +257,97 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     console.error('[SCORM DIAG] Unhandled Rejection:', event.reason);
   });
 
-  // 7. Nạp bài giảng vào Content Frame và kích hoạt bộ chẩn đoán Quiz Controls & Repaint Monitor
+  // 7. Nạp bài giảng vào Content Frame và kích hoạt bộ chẩn đoán Nested Frames & Layout Reflow Monitor
   if (contentFrame) {
+    let lastRecordedSizes = {};
+
+    // 1. Quét đệ quy tất cả nested iframe/frame
+    function enumerateNestedFrames(doc, depth = 1, prefix = 'nested frame') {
+      if (!doc) return [];
+      const iframes = Array.from(doc.querySelectorAll('iframe, frame'));
+      let results = [];
+      iframes.forEach((ifr, idx) => {
+        try {
+          const ifrWin = ifr.contentWindow;
+          const ifrDoc = ifr.contentDocument || ifrWin?.document;
+          const style = ifrWin ? ifrWin.getComputedStyle(ifr) : (doc.defaultView?.getComputedStyle(ifr) || {});
+          const rect = ifr.getBoundingClientRect();
+          const src = ifr.getAttribute('src') || ifr.src || '';
+          const href = ifrWin?.location?.href || 'unknown';
+          const readyState = ifrDoc?.readyState || 'unknown';
+          const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
+
+          console.log(`[SCORM DIAG] ${prefix} #${depth}.${idx + 1} src=${src} id=${ifr.id || '-'} name=${ifr.name || '-'} rect=${rectStr} display=${style.display || 'unknown'} visibility=${style.visibility || 'unknown'} opacity=${style.opacity || '1'} readyState=${readyState} href=${href}`);
+
+          results.push({ ifr, ifrWin, ifrDoc, depth, index: idx, rect, src, href });
+
+          // Hook iframe listeners & iSpring layout APIs trong nested window
+          if (ifrWin && !ifrWin.__scorm_diag_attached) {
+            ifrWin.__scorm_diag_attached = true;
+            hookIspringLayoutApi(ifrWin, `nested frame #${depth}.${idx + 1}`);
+
+            ifrWin.addEventListener('resize', () => {
+              console.log(`[SCORM DIAG] [Nested Frame resize #${depth}.${idx + 1}] size=${ifrWin.innerWidth}x${ifrWin.innerHeight}`);
+              diagnoseQuizDom(`Nested Frame resize #${depth}.${idx + 1}`);
+            });
+          }
+
+          if (ifrDoc) {
+            const deeper = enumerateNestedFrames(ifrDoc, depth + 1, `${prefix} #${depth}.${idx + 1} > nested frame`);
+            results = results.concat(deeper);
+          }
+        } catch (nestErr) {
+          console.warn(`[SCORM DIAG] Nested frame scan error:`, nestErr.message);
+        }
+      });
+      return results;
+    }
+
+    // 2. Hook và Log an toàn iSpring APIs layout
+    function hookIspringLayoutApi(win, contextLabel = 'SCO Window') {
+      if (!win) return;
+      try {
+        if (typeof win.invalidatePlayerSize === 'function' && !win.invalidatePlayerSize.__wrapped) {
+          const origInvalidate = win.invalidatePlayerSize;
+          win.invalidatePlayerSize = function (...args) {
+            console.log(`[SCORM DIAG] [${contextLabel}] [iSpring API Call] invalidatePlayerSize() invoked!`);
+            const res = origInvalidate.apply(this, args);
+            setTimeout(() => diagnoseQuizDom(`post-${contextLabel}-invalidatePlayerSize`), 50);
+            return res;
+          };
+          win.invalidatePlayerSize.__wrapped = true;
+        }
+
+        if (typeof win.setPlayerSize === 'function' && !win.setPlayerSize.__wrapped) {
+          const origSetSize = win.setPlayerSize;
+          win.setPlayerSize = function (w, h, ...args) {
+            console.log(`[SCORM DIAG] [${contextLabel}] [iSpring API Call] setPlayerSize(${w}, ${h}) invoked!`);
+            const res = origSetSize.apply(this, [w, h, ...args]);
+            setTimeout(() => diagnoseQuizDom(`post-${contextLabel}-setPlayerSize(${w}x${h})`), 50);
+            return res;
+          };
+          win.setPlayerSize.__wrapped = true;
+        }
+
+        // Quét các global player objects
+        ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz'].forEach((key) => {
+          if (win[key] && typeof win[key] === 'object') {
+            if (typeof win[key].invalidateSize === 'function' && !win[key].invalidateSize.__wrapped) {
+              const orig = win[key].invalidateSize;
+              win[key].invalidateSize = function (...args) {
+                console.log(`[SCORM DIAG] [${contextLabel}] [iSpring API Call] ${key}.invalidateSize() invoked!`);
+                return orig.apply(this, args);
+              };
+              win[key].invalidateSize.__wrapped = true;
+            }
+          }
+        });
+      } catch (hookErr) {
+        console.warn(`[SCORM DIAG] Hook iSpring layout on ${contextLabel} note:`, hookErr.message);
+      }
+    }
+
+    // 3. Quét Quiz Controls trên Toàn Bộ Documents (Top Document + Tất cả Nested Frame Documents)
     function diagnoseQuizDom(triggerLabel = 'Snapshot') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -274,67 +363,100 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           return;
         }
 
-        // Tìm tất cả các candidate elements trong frame
-        const allElements = Array.from(frameDoc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a, div, span, canvas, svg'));
+        // Hook iSpring APIs trên top frame window
+        if (frameWin) hookIspringLayoutApi(frameWin, 'SCO Top Window');
 
-        function inspectElementRole(keywords, roleName) {
-          const candidates = allElements.filter((el) => {
-            const text = (el.innerText || el.textContent || el.value || '').toLowerCase().trim();
-            const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
-            const id = (el.id || '').toLowerCase();
-            const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-            const title = (el.getAttribute('title') || '').toLowerCase();
-            return keywords.some((k) => text.includes(k) || aria.includes(k) || id.includes(k) || cls.includes(k) || title.includes(k));
+        // Tập hợp tất cả documents
+        const allDocs = [{ label: 'SCO Top Document', doc: frameDoc, win: frameWin }];
+        const nestedFrames = enumerateNestedFrames(frameDoc);
+
+        nestedFrames.forEach((nf) => {
+          if (nf.ifrDoc) {
+            allDocs.push({
+              label: `Nested Frame #${nf.depth}.${nf.index + 1} (${nf.src || nf.ifr.id || nf.ifr.name || 'frame'})`,
+              doc: nf.ifrDoc,
+              win: nf.ifrWin,
+              rect: nf.rect,
+            });
+          }
+        });
+
+        allDocs.forEach((docEntry) => {
+          const d = docEntry.doc;
+          const w = docEntry.win;
+          const allElements = Array.from(d.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a, div, span, canvas, svg'));
+
+          function inspectElementRole(keywords) {
+            const candidates = allElements.filter((el) => {
+              const text = (el.innerText || el.textContent || el.value || '').toLowerCase().trim();
+              const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
+              const id = (el.id || '').toLowerCase();
+              const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+              const title = (el.getAttribute('title') || '').toLowerCase();
+              return keywords.some((k) => text.includes(k) || aria.includes(k) || id.includes(k) || cls.includes(k) || title.includes(k));
+            });
+
+            if (candidates.length === 0) {
+              return { status: 'missing', summary: 'none found' };
+            }
+
+            const target = candidates[0];
+            const style = w ? w.getComputedStyle(target) : (d.defaultView?.getComputedStyle(target) || {});
+            const rect = target.getBoundingClientRect();
+            const disabled = target.disabled === true || target.getAttribute('aria-disabled') === 'true' || (typeof target.className === 'string' && target.className.includes('disabled'));
+            const display = style.display || 'unknown';
+            const visibility = style.visibility || 'unknown';
+            const opacity = style.opacity || '1';
+            const pointerEvents = style.pointerEvents || 'auto';
+            const zIndex = style.zIndex || 'auto';
+
+            let status = 'normal';
+            if (display === 'none' || visibility === 'hidden' || opacity === '0') {
+              status = 'hidden';
+            } else if (disabled) {
+              status = 'disabled';
+            } else if (rect.width === 0 || rect.height === 0) {
+              status = 'zero-size';
+            } else if (rect.bottom <= 0 || rect.top >= (contentFrame.clientHeight || window.innerHeight) || rect.right <= 0 || rect.left >= (contentFrame.clientWidth || window.innerWidth)) {
+              status = 'offscreen';
+            }
+
+            const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
+            const summary = `tag=<${target.tagName.toLowerCase()}> id=${target.id || '-'} text="${(target.innerText || target.textContent || '').trim().substring(0, 15)}" display=${display} vis=${visibility} op=${opacity} pe=${pointerEvents} zIndex=${zIndex} disabled=${disabled} rect=${rectStr}`;
+
+            return { status, summary, target, disabled, rectStr, rect, display, visibility, opacity };
+          }
+
+          const submitDiag = inspectElementRole(['submit', 'nộp bài', 'gửi', 'trả lời', 'check', 'xác nhận', 'send']);
+          const nextDiag = inspectElementRole(['next', 'tiếp', 'sau', 'forward', 'continue', 'chevron-right', 'arrow-right']);
+          const prevDiag = inspectElementRole(['prev', 'trước', 'lùi', 'back', 'chevron-left', 'arrow-left']);
+
+          console.log(`[SCORM DIAG] [${triggerLabel}] [${docEntry.label}] controls: submit=<${submitDiag.status}> next=<${nextDiag.status}> prev=<${prevDiag.status}>`);
+          if (submitDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] submit detail: ${submitDiag.summary}`);
+          if (nextDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] next detail: ${nextDiag.summary}`);
+          if (prevDiag.status !== 'missing') console.log(`[SCORM DIAG] [${docEntry.label}] prev detail: ${prevDiag.summary}`);
+
+          // Quét canvas / svg size
+          const canvases = Array.from(d.querySelectorAll('canvas, svg'));
+          canvases.slice(0, 3).forEach((cv, ci) => {
+            const cvRect = cv.getBoundingClientRect();
+            console.log(`[SCORM DIAG] [${docEntry.label}] <${cv.tagName.toLowerCase()} #${ci + 1}> size=${Math.round(cvRect.width)}x${Math.round(cvRect.height)} rect=[${Math.round(cvRect.left)},${Math.round(cvRect.top)}]`);
           });
 
-          if (candidates.length === 0) {
-            return { status: 'missing', summary: 'none found' };
+          // Quét iSpring Runtime State objects
+          if (w) {
+            ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz', 'courseData'].forEach((key) => {
+              if (w[key] && typeof w[key] === 'object') {
+                try {
+                  const stateKeys = Object.keys(w[key]).slice(0, 15);
+                  console.log(`[SCORM DIAG] [${docEntry.label}] iSpring object [${key}]: methods/props=[${stateKeys.join(', ')}]`);
+                } catch {
+                  // ignore
+                }
+              }
+            });
           }
-
-          // Lấy candidate nổi bật nhất
-          const target = candidates[0];
-          const style = frameWin ? frameWin.getComputedStyle(target) : {};
-          const rect = target.getBoundingClientRect();
-          const disabled = target.disabled === true || target.getAttribute('aria-disabled') === 'true' || (typeof target.className === 'string' && target.className.includes('disabled'));
-          const display = style.display || 'unknown';
-          const visibility = style.visibility || 'unknown';
-          const opacity = style.opacity || '1';
-          const pointerEvents = style.pointerEvents || 'auto';
-          const zIndex = style.zIndex || 'auto';
-
-          let status = 'normal';
-          if (display === 'none' || visibility === 'hidden' || opacity === '0') {
-            status = 'hidden';
-          } else if (disabled) {
-            status = 'disabled';
-          } else if (rect.width === 0 || rect.height === 0) {
-            status = 'zero-size';
-          } else if (rect.bottom <= 0 || rect.top >= (contentFrame.clientHeight || window.innerHeight) || rect.right <= 0 || rect.left >= (contentFrame.clientWidth || window.innerWidth)) {
-            status = 'offscreen';
-          }
-
-          const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
-          const summary = `tag=<${target.tagName.toLowerCase()}> id=${target.id || '-'} text="${(target.innerText || target.textContent || '').trim().substring(0, 15)}" display=${display} vis=${visibility} op=${opacity} pe=${pointerEvents} zIndex=${zIndex} disabled=${disabled} rect=${rectStr}`;
-
-          return { status, summary, target, disabled };
-        }
-
-        const submitDiag = inspectElementRole(['submit', 'nộp bài', 'gửi', 'trả lời', 'check', 'xác nhận', 'send'], 'submit');
-        const nextDiag = inspectElementRole(['next', 'tiếp', 'sau', 'forward', 'continue', 'chevron-right', 'arrow-right'], 'next');
-        const prevDiag = inspectElementRole(['prev', 'trước', 'lùi', 'back', 'chevron-left', 'arrow-left'], 'prev');
-
-        console.log(`[SCORM DIAG] [${triggerLabel}] quiz controls DOM submit=<${submitDiag.status}> next=<${nextDiag.status}> prev=<${prevDiag.status}>`);
-        console.log(`[SCORM DIAG] control computedStyle submit: ${submitDiag.summary}`);
-        console.log(`[SCORM DIAG] control computedStyle next: ${nextDiag.summary}`);
-        console.log(`[SCORM DIAG] control computedStyle prev: ${prevDiag.summary}`);
-
-        // iSpring Object Inspector
-        if (frameWin) {
-          const ispringKeys = Object.keys(frameWin).filter((k) => /ispring|player|quiz|presentation|course/i.test(k));
-          if (ispringKeys.length > 0) {
-            console.log(`[SCORM DIAG] iSpring globals detected: ${ispringKeys.join(', ')}`);
-          }
-        }
+        });
       } catch (domErr) {
         console.warn(`[SCORM DIAG] [${triggerLabel}] DOM inspection note:`, domErr.message);
       }
@@ -356,6 +478,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
         if (frameWin && !frameWin.__scorm_diag_attached) {
           frameWin.__scorm_diag_attached = true;
+          hookIspringLayoutApi(frameWin, 'SCO Top Window');
 
           frameWin.addEventListener('error', (e) => {
             if (e.target && e.target !== frameWin && (e.target.src || e.target.href)) {
