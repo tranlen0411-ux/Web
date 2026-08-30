@@ -101,8 +101,34 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
       return;
     }
 
+    const isDiagFresh = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('scormDiagFresh') === '1';
+
     const executeSaveCmi = async (cmiData, isCloseSnapshot = false, sourceEvent = null) => {
       if (!cmiData || !scormSession?.packageId || !scormSession?.sessionToken) return;
+
+      // Chế độ chẩn đoán Forced Fresh: Tuyệt đối READ-ONLY với Database
+      if (isDiagFresh) {
+        console.log(`[SCORM DIAG FRESH MODE] CMI save suppressed: ${isCloseSnapshot ? 'PARENT_CLOSE_SNAPSHOT' : 'AUTO_COMMIT'}`);
+        setSaveStatus('idle');
+        if (isCloseSnapshot) {
+          if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+          }
+          setIsClosing(false);
+          onClose();
+        }
+        if (sourceEvent && typeof sourceEvent.postMessage === 'function') {
+          sourceEvent.postMessage(
+            {
+              type: 'SCORM_CMI_SAVED',
+              payload: { success: true, timestamp: new Date().toISOString(), simulated: true },
+            },
+            playerOrigin
+          );
+        }
+        return;
+      }
 
       try {
         setSaveStatus('saving');
@@ -193,7 +219,7 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
             {
               type: 'INITIAL_CMI_STATE',
               payload: {
-                tracking: scormTrackingRef.current,
+                tracking: isDiagFresh ? null : scormTrackingRef.current,
               },
             },
             playerOrigin
@@ -312,29 +338,39 @@ export const MaterialViewerModal = ({ isOpen, onClose, material }) => {
         studentName: 'Học sinh',
       });
 
-      // Gọi RPC load_scorm_cmi_state để lấy tiến độ học tập đã lưu (nếu có)
-      try {
-        const { data: loadRes, error: loadErr } = await supabase.rpc('load_scorm_cmi_state', {
-          p_package_id: scormPkg.id,
-          p_session_token: session.sessionToken,
-        });
+      const isDiagFresh = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('scormDiagFresh') === '1';
 
-        if (!loadErr && loadRes && loadRes.success && loadRes.tracking) {
-          scormTrackingRef.current = loadRes.tracking;
-          console.log('[MaterialViewerModal] Loaded persisted SCORM CMI tracking:', loadRes.tracking);
-        } else {
+      if (isDiagFresh) {
+        scormTrackingRef.current = null;
+        console.log('[SCORM DIAG FRESH MODE] ENABLED');
+        console.log('[SCORM DIAG FRESH MODE] persisted tracking intentionally ignored in-memory only');
+        console.log('[SCORM DIAG FRESH MODE] database writes disabled');
+      } else {
+        // Gọi RPC load_scorm_cmi_state để lấy tiến độ học tập đã lưu (nếu có)
+        try {
+          const { data: loadRes, error: loadErr } = await supabase.rpc('load_scorm_cmi_state', {
+            p_package_id: scormPkg.id,
+            p_session_token: session.sessionToken,
+          });
+
+          if (!loadErr && loadRes && loadRes.success && loadRes.tracking) {
+            scormTrackingRef.current = loadRes.tracking;
+            console.log('[MaterialViewerModal] Loaded persisted SCORM CMI tracking:', loadRes.tracking);
+          } else {
+            scormTrackingRef.current = null;
+          }
+        } catch (loadExc) {
+          console.warn('[MaterialViewerModal] load_scorm_cmi_state caught exception:', loadExc);
           scormTrackingRef.current = null;
         }
-      } catch (loadExc) {
-        console.warn('[MaterialViewerModal] load_scorm_cmi_state caught exception:', loadExc);
-        scormTrackingRef.current = null;
       }
 
       setScormSession({
         sessionToken: session.sessionToken,
         packageId: scormPkg.id,
       });
-      setScormPlayerUrl(session.playerUrl);
+      const finalPlayerUrl = isDiagFresh ? `${session.playerUrl}&scormDiagFresh=1` : session.playerUrl;
+      setScormPlayerUrl(finalPlayerUrl);
     } catch (err) {
       console.error('SCORM player init error:', err);
       if (err?.message === 'SCORM_PLAYER_ORIGIN_NOT_CONFIGURED') {

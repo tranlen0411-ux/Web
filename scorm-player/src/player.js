@@ -15,6 +15,13 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   const studentName = urlParams.get('studentName') || 'Học sinh';
   const parentOrigin = urlParams.get('parentOrigin') || '';
   let scormVersion = urlParams.get('version') || '1.2';
+  const isDiagFresh = urlParams.get('scormDiagFresh') === '1';
+
+  if (isDiagFresh) {
+    console.log('[SCORM DIAG FRESH MODE] ENABLED');
+    console.log('[SCORM DIAG FRESH MODE] persisted tracking intentionally ignored in-memory only');
+    console.log('[SCORM DIAG FRESH MODE] database writes disabled');
+  }
 
   const contentFrame = document.getElementById('scorm-content-frame');
   const loadingOverlay = document.getElementById('loading-overlay');
@@ -50,7 +57,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
 
       scormVersion = infoData.scorm_version || scormVersion;
-      persistedTracking = infoData.tracking || null;
+      persistedTracking = isDiagFresh ? null : (infoData.tracking || null);
 
       const resolvedLaunchPath = (infoData.launch_path || explicitLaunch || 'index.html').replace(/^\/+/, '');
       finalScoUrl = `/session/${encodeURIComponent(sessionToken)}/${resolvedLaunchPath}`;
@@ -158,7 +165,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   async function waitForInitialCmiState() {
     // Nếu chạy độc lập không có parent hoặc parentOrigin không thiết lập
     if (!window.parent || window.parent === window || !parentOrigin || parentOrigin === '*') {
-      if (persistedTracking) {
+      if (persistedTracking && !isDiagFresh) {
         console.log('[SCORM DIAG] persisted state received');
         const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
         const activeApi = is2004 ? window.API_1484_11 : window.API;
@@ -166,6 +173,8 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           activeApi._restoreCmi(persistedTracking);
         }
         console.log('[SCORM DIAG] persisted state applied before SCO load');
+      } else {
+        console.log('[SCORM DIAG] persisted state applied before SCO load (ab-initio)');
       }
       return;
     }
@@ -184,7 +193,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             window.removeEventListener('message', messageListener);
             console.log('[SCORM DIAG] persisted state received');
 
-            if (payload && payload.tracking) {
+            if (payload && payload.tracking && !isDiagFresh) {
               const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
               const activeApi = is2004 ? window.API_1484_11 : window.API;
               if (activeApi && typeof activeApi._restoreCmi === 'function') {
@@ -215,7 +224,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         if (!resolved) {
           resolved = true;
           window.removeEventListener('message', messageListener);
-          if (persistedTracking) {
+          if (persistedTracking && !isDiagFresh) {
             console.log('[SCORM DIAG] persisted state received');
             const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
             const activeApi = is2004 ? window.API_1484_11 : window.API;
