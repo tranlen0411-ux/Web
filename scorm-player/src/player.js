@@ -262,6 +262,8 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     let hasInitialReflowRun = false;
     let hasLoggedBeforeResize = false;
     let hasLoggedAfterResize = false;
+    let lastWinSize = `${window.innerWidth}x${window.innerHeight}`;
+    let callSeq = 0;
 
     // 1. Quét đệ quy tất cả nested iframe/frame
     function enumerateNestedFrames(doc, depth = 1, prefix = 'nested frame') {
@@ -285,7 +287,7 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             const deeper = enumerateNestedFrames(ifrDoc, depth + 1, `${prefix} #${depth}.${idx + 1} > nested frame`);
             results = results.concat(deeper);
           }
-        } catch (nestErr) {
+        } catch {
           // ignore
         }
       });
@@ -312,27 +314,137 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
       // Tìm button thật (loại trừ slidesBackground)
       const allButtons = Array.from(doc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
-      
-      const nextBtn = allButtons.find(b => {
+
+      const nextBtn = allButtons.find((b) => {
         const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
         return (txt.includes('next') || txt.includes('tiếp')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
       });
       console.log(`[SCORM TARGET] ${stagePrefix} next ${getElementDetails(nextBtn, '')}`);
 
-      const prevBtn = allButtons.find(b => {
+      const prevBtn = allButtons.find((b) => {
         const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
         return (txt.includes('prev') || txt.includes('previous') || txt.includes('back') || txt.includes('trước')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
       });
       console.log(`[SCORM TARGET] ${stagePrefix} prev ${getElementDetails(prevBtn, '')}`);
 
-      const submitBtn = allButtons.find(b => {
+      const submitBtn = allButtons.find((b) => {
         const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
         return (txt.includes('submit') || txt.includes('check') || txt.includes('nộp')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
       });
       console.log(`[SCORM TARGET] ${stagePrefix} submit ${getElementDetails(submitBtn, '')}`);
     }
 
-    // 3. One-Shot Reflow an toàn tuyệt đối (Không synthetic event, không ResizeObserver loop, có Guard)
+    // 3. Khảo sát bề mặt hiển thị (Render Surfaces: Canvas, SVG, Matrix, Slide Roots)
+    function inspectRenderSurfaces(stagePrefix, doc, win) {
+      if (!doc || !doc.body) return;
+
+      try {
+        console.log(`--------------------------------------------------------`);
+        console.log(`[SCORM RENDER] === RENDER SURFACES: ${stagePrefix} ===`);
+
+        // Canvas inspection
+        const canvases = Array.from(doc.querySelectorAll('canvas'));
+        console.log(`[SCORM RENDER] ${stagePrefix} Total canvases: ${canvases.length}`);
+        canvases.slice(0, 4).forEach((cv, idx) => {
+          const r = cv.getBoundingClientRect();
+          const s = win ? win.getComputedStyle(cv) : {};
+          console.log(`[SCORM RENDER] ${stagePrefix} canvas#${idx + 1} attr=[${cv.width}x${cv.height}] client=[${cv.clientWidth}x${cv.clientHeight}] rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] vis=${s.visibility} disp=${s.display} op=${s.opacity}`);
+        });
+
+        // SVG inspection
+        const svgs = Array.from(doc.querySelectorAll('svg'));
+        console.log(`[SCORM RENDER] ${stagePrefix} Total SVGs: ${svgs.length}`);
+        svgs.slice(0, 4).forEach((svg, idx) => {
+          const r = svg.getBoundingClientRect();
+          const s = win ? win.getComputedStyle(svg) : {};
+          console.log(`[SCORM RENDER] ${stagePrefix} svg#${idx + 1} attr=[${svg.getAttribute('width')}x${svg.getAttribute('height')}] viewBox="${svg.getAttribute('viewBox') || '-'}" rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] vis=${s.visibility} disp=${s.display}`);
+        });
+
+        // Slide view children
+        const playerView = doc.querySelector('.playerView') || doc.querySelector('[class*="playerView"]') || doc.body;
+        if (playerView && playerView.children) {
+          Array.from(playerView.children).slice(0, 5).forEach((ch, idx) => {
+            const r = ch.getBoundingClientRect();
+            const s = win ? win.getComputedStyle(ch) : {};
+            console.log(`[SCORM RENDER] ${stagePrefix} playerView.child#${idx + 1} <${ch.tagName.toLowerCase()} id="${ch.id || '-'}" cls="${(ch.className || '').toString().substring(0, 25)}"> rect=[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}] transform="${s.transform || 'none'}" vis=${s.visibility}`);
+          });
+        }
+        console.log(`--------------------------------------------------------`);
+      } catch (rErr) {
+        console.warn(`[SCORM RENDER] ${stagePrefix} note:`, rErr.message);
+      }
+    }
+
+    // 4. Hook an toàn Read-Only Call Chain Tracer cho tất cả iSpring Methods
+    function hookIspringCallTracer(win, contextLabel = 'SCO Window') {
+      if (!win || win.__scorm_call_tracer_attached) return;
+      win.__scorm_call_tracer_attached = true;
+
+      try {
+        function wrapMethod(obj, objName, methodName) {
+          if (!obj || typeof obj[methodName] !== 'function' || obj[methodName].__traced) return;
+          const original = obj[methodName];
+          obj[methodName] = function (...args) {
+            callSeq++;
+            const argSummary = args.map((a) => (typeof a === 'object' ? (a ? Object.keys(a).slice(0, 3).join(',') : 'null') : String(a))).join(', ');
+            console.log(`[SCORM RESIZE CALL CHAIN] #${callSeq} [${contextLabel}] ${objName}.${methodName}(${argSummary.substring(0, 35)})`);
+            return original.apply(this, args);
+          };
+          obj[methodName].__traced = true;
+        }
+
+        // Global functions
+        ['invalidatePlayerSize', 'setPlayerSize', 'updatePlayerSize', 'resizePlayer', 'onResize'].forEach((m) => {
+          wrapMethod(win, 'window', m);
+        });
+
+        // Global objects
+        ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz', 'PresentationPlayer'].forEach((key) => {
+          const obj = win[key];
+          if (obj && typeof obj === 'object') {
+            const methodNames = ['invalidateSize', 'setPlayerSize', 'resize', 'updateLayout', 'render', 'draw', 'renderSlide', 'updateView', 'refresh', 'update', 'redraw', 'layout', 'fitToWindow', 'scaleToFit'];
+            methodNames.forEach((m) => wrapMethod(obj, key, m));
+          }
+        });
+      } catch (hookErr) {
+        console.warn(`[SCORM RESIZE TRACE] Hook note:`, hookErr.message);
+      }
+    }
+
+    // 5. Diagnostic MutationObserver (Chỉ quan sát thay đổi DOM quanh Native Resize)
+    function attachDiagnosticMutationObserver(doc, win) {
+      if (!doc || !doc.body || doc.__scorm_observer_attached || typeof MutationObserver === 'undefined') return;
+      doc.__scorm_observer_attached = true;
+
+      try {
+        let mutationCount = 0;
+        const observer = new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            if (mutationCount < 15) {
+              mutationCount++;
+              const target = m.target;
+              const tag = target.tagName ? target.tagName.toLowerCase() : 'node';
+              const id = target.id || '-';
+              const cls = typeof target.className === 'string' ? target.className.substring(0, 25) : '-';
+
+              if (m.type === 'attributes') {
+                const newVal = target.getAttribute(m.attributeName) || (m.attributeName === 'style' ? target.style.cssText : '');
+                console.log(`[SCORM MUTATION] #${mutationCount} attr: <${tag} id="${id}" cls="${cls}"> [${m.attributeName}] -> "${(newVal || '').substring(0, 35)}"`);
+              } else if (m.type === 'childList') {
+                console.log(`[SCORM MUTATION] #${mutationCount} childList: <${tag} id="${id}"> added=${m.addedNodes.length} removed=${m.removedNodes.length}`);
+              }
+            }
+          });
+        });
+
+        const targetEl = doc.querySelector('.playerView') || doc.body;
+        observer.observe(targetEl, { attributes: true, childList: true, subtree: true, attributeOldValue: true });
+      } catch (obsErr) {
+        console.warn('[SCORM MUTATION] Observer note:', obsErr.message);
+      }
+    }
+
+    // 6. One-Shot Reflow an toàn để so sánh với Native Resize
     function executeSafeOneShotReflow(triggerSource = 'rAF2') {
       if (hasInitialReflowRun) return;
       hasInitialReflowRun = true;
@@ -341,23 +453,24 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         const frameWin = contentFrame.contentWindow;
         const frameDoc = contentFrame.contentDocument || frameWin?.document;
 
-        console.log(`[SCORM ONE-SHOT] Running safe one-shot reflow (source=${triggerSource}, guard: hasInitialReflowRun=true)`);
+        console.log(`========================================================`);
+        console.log(`[SCORM ONE-SHOT] Running safe one-shot reflow (source=${triggerSource})`);
 
         if (frameDoc && !hasLoggedBeforeResize) {
           hasLoggedBeforeResize = true;
-          logTargetElementSnapshot('BEFORE_RESIZE', frameDoc, frameWin);
+          logTargetElementSnapshot('BEFORE_ONE_SHOT', frameDoc, frameWin);
+          inspectRenderSurfaces('BEFORE_ONE_SHOT', frameDoc, frameWin);
         }
 
         let reflowMethodCalled = false;
 
-        // Gọi trực tiếp API iSpring nếu có (không wrap, không recursion)
+        // Gọi trực tiếp API iSpring nếu có
         if (frameWin) {
           if (typeof frameWin.invalidatePlayerSize === 'function') {
             frameWin.invalidatePlayerSize();
             reflowMethodCalled = true;
             console.log('[SCORM ONE-SHOT] invalidatePlayerSize() invoked directly on SCO window');
           }
-
           if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
             frameWin.player.invalidateSize();
             reflowMethodCalled = true;
@@ -365,34 +478,17 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           }
         }
 
-        // Quét nested frames nếu có
-        if (frameDoc) {
-          const nestedFrames = enumerateNestedFrames(frameDoc);
-          nestedFrames.forEach((nf) => {
-            if (nf.ifrWin) {
-              if (typeof nf.ifrWin.invalidatePlayerSize === 'function') {
-                nf.ifrWin.invalidatePlayerSize();
-                reflowMethodCalled = true;
-                console.log(`[SCORM ONE-SHOT] invalidatePlayerSize() invoked on nested frame (#${nf.depth}.${nf.index + 1})`);
-              }
-              if (nf.ifrWin.player && typeof nf.ifrWin.player.invalidateSize === 'function') {
-                nf.ifrWin.player.invalidateSize();
-                reflowMethodCalled = true;
-              }
-            }
-          });
-        }
+        console.log(`[SCORM ONE-SHOT] One-shot execution complete. API called: ${reflowMethodCalled ? 'YES' : 'NO'}`);
 
-        console.log(`[SCORM ONE-SHOT] Reflow execution complete. API called: ${reflowMethodCalled ? 'YES' : 'NO (none available)'}`);
-
-        // Chụp snapshot sau 1 microtask
         requestAnimationFrame(() => {
           if (frameDoc) {
             logTargetElementSnapshot('POST_ONE_SHOT', frameDoc, frameWin);
+            inspectRenderSurfaces('POST_ONE_SHOT', frameDoc, frameWin);
           }
         });
+        console.log(`========================================================`);
       } catch (err) {
-        console.warn('[SCORM ONE-SHOT] One-shot reflow note:', err.message);
+        console.warn('[SCORM ONE-SHOT] Note:', err.message);
       }
     }
 
@@ -406,12 +502,10 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
         console.log(`[SCORM DIAG] [${eventLabel}] frame.src=${currentSrc} frame.href=${currentHref} readyState=${readyState}`);
 
-        if (currentHref === 'about:blank') {
-          console.warn('[SCORM DIAG] WARNING: Frame has navigated or reset to about:blank!');
-        }
-
         if (frameWin && !frameWin.__scorm_diag_attached) {
           frameWin.__scorm_diag_attached = true;
+          hookIspringCallTracer(frameWin, 'SCO Top Window');
+          attachDiagnosticMutationObserver(frameDoc, frameWin);
 
           frameWin.addEventListener('error', (e) => {
             if (e.target && e.target !== frameWin && (e.target.src || e.target.href)) {
@@ -426,9 +520,12 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           });
 
           frameWin.addEventListener('resize', () => {
+            const currentWinSize = `${frameWin.innerWidth}x${frameWin.innerHeight}`;
+            console.log(`[SCORM RESIZE TRACE] native SCO frame resize event innerSize=${currentWinSize}`);
             if (!hasLoggedAfterResize) {
               hasLoggedAfterResize = true;
-              logTargetElementSnapshot('AFTER_RESIZE', frameDoc, frameWin);
+              logTargetElementSnapshot('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
+              inspectRenderSurfaces('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
             }
           });
         }
@@ -437,13 +534,23 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // Lắng nghe sự kiện resize tự nhiên của người dùng
+    // Lắng nghe sự kiện resize tự nhiên của người dùng trên player window
     window.addEventListener('resize', () => {
+      const currentWinSize = `${window.innerWidth}x${window.innerHeight}`;
+      console.log(`[SCORM RESIZE TRACE] native browser resize BEGIN: window size ${lastWinSize} -> ${currentWinSize}`);
+      lastWinSize = currentWinSize;
+
       const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
       const frameWin = contentFrame.contentWindow;
+
+      if (frameWin) {
+        hookIspringCallTracer(frameWin, 'SCO Top Window');
+      }
+
       if (!hasLoggedAfterResize && frameDoc) {
         hasLoggedAfterResize = true;
-        logTargetElementSnapshot('AFTER_RESIZE', frameDoc, frameWin);
+        logTargetElementSnapshot('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
+        inspectRenderSurfaces('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
       }
     });
 
