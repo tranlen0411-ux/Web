@@ -347,7 +347,92 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 3. Quét Quiz Controls trên Toàn Bộ Documents (Top Document + Tất cả Nested Frame Documents)
+    // 3. Hàm kích hoạt Lifecycle Reflow & Invalidate Player Layout
+    function triggerLifecycleReflow(triggerSource = 'Unknown') {
+      if (!contentFrame) return;
+
+      try {
+        const frameWin = contentFrame.contentWindow;
+        const frameDoc = contentFrame.contentDocument || frameWin?.document;
+        const beforeReflowSize = `${contentFrame.clientWidth}x${contentFrame.clientHeight}`;
+
+        console.log(`[SCORM DIAG] lifecycle reflow requested (source=${triggerSource})`);
+        console.log(`[SCORM DIAG] before reflow size=${beforeReflowSize}`);
+
+        let invalidateCalled = false;
+
+        // A. Gọi API layout trên Top SCO Window
+        if (frameWin) {
+          if (typeof frameWin.invalidatePlayerSize === 'function') {
+            frameWin.invalidatePlayerSize();
+            invalidateCalled = true;
+            console.log('[SCORM DIAG] invalidatePlayerSize called on SCO window');
+          }
+
+          if (typeof frameWin.setPlayerSize === 'function' && contentFrame.clientWidth > 0 && contentFrame.clientHeight > 0) {
+            frameWin.setPlayerSize(contentFrame.clientWidth, contentFrame.clientHeight);
+            console.log(`[SCORM DIAG] setPlayerSize called on SCO window (${contentFrame.clientWidth}x${contentFrame.clientHeight})`);
+          }
+
+          // Quét player objects của iSpring
+          ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz'].forEach((key) => {
+            if (frameWin[key] && typeof frameWin[key] === 'object') {
+              if (typeof frameWin[key].invalidateSize === 'function') {
+                frameWin[key].invalidateSize();
+                invalidateCalled = true;
+                console.log(`[SCORM DIAG] ${key}.invalidateSize called on SCO window`);
+              }
+              if (typeof frameWin[key].resize === 'function' && contentFrame.clientWidth > 0 && contentFrame.clientHeight > 0) {
+                frameWin[key].resize(contentFrame.clientWidth, contentFrame.clientHeight);
+              }
+            }
+          });
+        }
+
+        // B. Quét và gọi trên các Nested Frames nếu có
+        if (frameDoc) {
+          const nestedFrames = enumerateNestedFrames(frameDoc);
+          nestedFrames.forEach((nf) => {
+            if (nf.ifrWin) {
+              if (typeof nf.ifrWin.invalidatePlayerSize === 'function') {
+                nf.ifrWin.invalidatePlayerSize();
+                invalidateCalled = true;
+                console.log(`[SCORM DIAG] invalidatePlayerSize called on nested frame (#${nf.depth}.${nf.index + 1})`);
+              }
+              if (typeof nf.ifrWin.setPlayerSize === 'function' && nf.ifr.clientWidth > 0 && nf.ifr.clientHeight > 0) {
+                nf.ifrWin.setPlayerSize(nf.ifr.clientWidth, nf.ifr.clientHeight);
+              }
+              ['player', 'quizPlayer', 'ispringCourse', 'presentation', 'quiz'].forEach((key) => {
+                if (nf.ifrWin[key] && typeof nf.ifrWin[key] === 'object') {
+                  if (typeof nf.ifrWin[key].invalidateSize === 'function') {
+                    nf.ifrWin[key].invalidateSize();
+                    invalidateCalled = true;
+                  }
+                }
+              });
+            }
+          });
+        }
+
+        // C. Kích hoạt synthetic resize event chuẩn W3C trên SCO window và Player window
+        if (frameWin) {
+          try {
+            frameWin.dispatchEvent(new Event('resize'));
+          } catch {}
+        }
+        window.dispatchEvent(new Event('resize'));
+
+        // D. Đo kích thước sau reflow qua requestAnimationFrame
+        requestAnimationFrame(() => {
+          const afterReflowSize = `${contentFrame.clientWidth}x${contentFrame.clientHeight}`;
+          console.log(`[SCORM DIAG] after reflow size=${afterReflowSize}`);
+        });
+      } catch (err) {
+        console.warn('[SCORM DIAG] Lifecycle reflow execution note:', err.message);
+      }
+    }
+
+    // 4. Quét Quiz Controls trên Toàn Bộ Documents (Top Document + Tất cả Nested Frame Documents)
     function diagnoseQuizDom(triggerLabel = 'Snapshot') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -507,12 +592,14 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
 
           frameWin.addEventListener('focus', () => {
             console.log('[SCORM DIAG] [Frame focus event]');
+            triggerLifecycleReflow('Frame focus');
             diagnoseQuizDom('Frame focus');
           });
 
           frameWin.addEventListener('click', () => {
+            requestAnimationFrame(() => triggerLifecycleReflow('Frame click rAF'));
+            setTimeout(() => triggerLifecycleReflow('Frame click + 300ms'), 300);
             setTimeout(() => diagnoseQuizDom('Frame click + 300ms'), 300);
-            setTimeout(() => diagnoseQuizDom('Frame click + 1000ms'), 1000);
           });
         }
       } catch (inspectErr) {
@@ -520,30 +607,56 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
+    // Gắn ResizeObserver để tự động kích hoạt reflow khi container/frame có kích thước thực tế
+    if (typeof ResizeObserver !== 'undefined') {
+      let lastObservedWidth = 0;
+      let lastObservedHeight = 0;
+      const containerEl = document.getElementById('player-container') || contentFrame;
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width > 0 && height > 0 && (width !== lastObservedWidth || height !== lastObservedHeight)) {
+            lastObservedWidth = width;
+            lastObservedHeight = height;
+            triggerLifecycleReflow('ResizeObserver');
+          }
+        }
+      });
+      if (containerEl) ro.observe(containerEl);
+      if (contentFrame && contentFrame !== containerEl) ro.observe(contentFrame);
+    }
+
     // Lắng nghe các sự kiện repaint/resize/visibility trên player window
     window.addEventListener('resize', () => {
       console.log(`[SCORM DIAG] [Window resize event] size=${window.innerWidth}x${window.innerHeight}`);
+      triggerLifecycleReflow('Window resize');
       diagnoseQuizDom('Window resize');
     });
 
     document.addEventListener('visibilitychange', () => {
       console.log(`[SCORM DIAG] [VisibilityChange event] state=${document.visibilityState}`);
+      if (document.visibilityState === 'visible') {
+        triggerLifecycleReflow('Visibility visible');
+      }
       diagnoseQuizDom(`Visibility ${document.visibilityState}`);
     });
 
     window.addEventListener('focus', () => {
       console.log('[SCORM DIAG] [Window focus event]');
+      triggerLifecycleReflow('Window focus');
       diagnoseQuizDom('Window focus');
     });
 
     window.addEventListener('click', () => {
+      requestAnimationFrame(() => triggerLifecycleReflow('Window click rAF'));
+      setTimeout(() => triggerLifecycleReflow('Window click + 300ms'), 300);
       setTimeout(() => diagnoseQuizDom('Window click + 300ms'), 300);
-      setTimeout(() => diagnoseQuizDom('Window click + 1000ms'), 1000);
     });
 
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
       inspectFrameState('onload');
+      triggerLifecycleReflow('onload');
       diagnoseQuizDom('onload T+0');
 
       if (loadingOverlay) loadingOverlay.style.display = 'none';
@@ -552,11 +665,27 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Schedule interval diagnostics để bắt trạng thái sau khi user bấm YES Resume
-      setTimeout(() => diagnoseQuizDom('Post-load T+1s'), 1000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+2s'), 2000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+4s'), 4000);
-      setTimeout(() => diagnoseQuizDom('Post-load T+7s'), 7000);
+      // Kích hoạt chuỗi reflow bằng requestAnimationFrame chaining sau khi iframe render
+      requestAnimationFrame(() => {
+        triggerLifecycleReflow('rAF 1 post-load');
+        requestAnimationFrame(() => {
+          triggerLifecycleReflow('rAF 2 post-load');
+        });
+      });
+
+      // Schedule interval reflow & diagnostics sau khi user tương tác / Resume YES
+      setTimeout(() => {
+        triggerLifecycleReflow('post-load T+300ms');
+        diagnoseQuizDom('Post-load T+300ms');
+      }, 300);
+      setTimeout(() => {
+        triggerLifecycleReflow('post-load T+1000ms');
+        diagnoseQuizDom('Post-load T+1s');
+      }, 1000);
+      setTimeout(() => {
+        triggerLifecycleReflow('post-load T+2500ms');
+        diagnoseQuizDom('Post-load T+2.5s');
+      }, 2500);
     };
 
     contentFrame.onerror = (err) => {
