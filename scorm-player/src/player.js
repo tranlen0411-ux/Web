@@ -260,12 +260,69 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
   // 7. Nạp bài giảng vào Content Frame và kích hoạt bộ chẩn đoán Nested Frames & Layout Reflow Monitor
   if (contentFrame) {
     let hasInitialReflowRun = false;
-    let hasLoggedBeforeResize = false;
-    let hasLoggedAfterResize = false;
+    let hasLoggedBeforeNative = false;
+    let hasLoggedResizeEntry = false;
     let lastWinSize = `${window.innerWidth}x${window.innerHeight}`;
     let callSeq = 0;
 
-    // 1. Quét đệ quy tất cả nested iframe/frame
+    // 1. Hàm chụp chi tiết toàn bộ Geometry & Media Parameters
+    function logGeometrySnapshot(stageLabel) {
+      try {
+        const frameWin = contentFrame ? contentFrame.contentWindow : null;
+        const frameDoc = contentFrame ? (contentFrame.contentDocument || frameWin?.document) : null;
+
+        // Window & Viewport
+        const winInner = `${window.innerWidth}x${window.innerHeight}`;
+        const winOuter = `${window.outerWidth}x${window.outerHeight}`;
+        const docClient = `${document.documentElement.clientWidth}x${document.documentElement.clientHeight}`;
+        const dpr = window.devicePixelRatio || 1;
+        const vv = window.visualViewport
+          ? `[w=${Math.round(window.visualViewport.width)},h=${Math.round(window.visualViewport.height)},scale=${window.visualViewport.scale.toFixed(2)}]`
+          : 'none';
+
+        // Content Iframe
+        const ifrRect = contentFrame ? contentFrame.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+        const ifrRectStr = `[${Math.round(ifrRect.left)},${Math.round(ifrRect.top)},${Math.round(ifrRect.width)}x${Math.round(ifrRect.height)}]`;
+        const ifrClient = contentFrame ? `${contentFrame.clientWidth}x${contentFrame.clientHeight}` : '0x0';
+        const ifrOffset = contentFrame ? `${contentFrame.offsetWidth}x${contentFrame.offsetHeight}` : '0x0';
+
+        // SCO Window / Document
+        const scoInner = frameWin ? `${frameWin.innerWidth}x${frameWin.innerHeight}` : 'unknown';
+        const scoDocClient = frameDoc ? `${frameDoc.documentElement.clientWidth}x${frameDoc.documentElement.clientHeight}` : 'unknown';
+        const bodyRect = frameDoc && frameDoc.body ? frameDoc.body.getBoundingClientRect() : { width: 0, height: 0 };
+        const bodyRectStr = `[${Math.round(bodyRect.width)}x${Math.round(bodyRect.height)}]`;
+
+        // Specific SCO Elements
+        function getElRectStr(selector) {
+          if (!frameDoc) return 'missing';
+          const el = frameDoc.querySelector(selector);
+          if (!el) return 'missing';
+          const r = el.getBoundingClientRect();
+          return `[${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)}x${Math.round(r.height)}]`;
+        }
+
+        const playerViewRect = getElRectStr('.playerView, [class*="playerView"], [class*="player"]');
+        const framesLayerRect = getElRectStr('.framesLayerContent, [class*="framesLayer"]');
+        const slidesBgRect = getElRectStr('#slidesBackground, [id*="slidesBackground"]');
+
+        // Media queries
+        const isLandscape = window.matchMedia ? window.matchMedia('(orientation: landscape)').matches : 'unknown';
+        const isMin768 = window.matchMedia ? window.matchMedia('(min-width: 768px)').matches : 'unknown';
+
+        console.log(`========================================================`);
+        console.log(`[SCORM GEOMETRY] ${stageLabel}:`);
+        console.log(`  - MAIN_WINDOW: inner=${winInner} outer=${winOuter} docClient=${docClient} dpr=${dpr} visualViewport=${vv}`);
+        console.log(`  - IFRAME: rect=${ifrRectStr} client=${ifrClient} offset=${ifrOffset}`);
+        console.log(`  - SCO_DOC: inner=${scoInner} docClient=${scoDocClient} bodyRect=${bodyRectStr}`);
+        console.log(`  - ELEMENTS: playerView=${playerViewRect} framesLayer=${framesLayerRect} slidesBg=${slidesBgRect}`);
+        console.log(`  - MEDIA: landscape=${isLandscape} min768=${isMin768}`);
+        console.log(`========================================================`);
+      } catch (geomErr) {
+        console.warn(`[SCORM GEOMETRY] Snapshot error:`, geomErr.message);
+      }
+    }
+
+    // 2. Quét đệ quy tất cả nested iframe/frame
     function enumerateNestedFrames(doc, depth = 1, prefix = 'nested frame') {
       if (!doc) return [];
       const iframes = Array.from(doc.querySelectorAll('iframe, frame'));
@@ -292,46 +349,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         }
       });
       return results;
-    }
-
-    // 2. Chụp Snapshot chính xác các Element trọng tâm (Target Elements)
-    function logTargetElementSnapshot(stagePrefix, doc, win) {
-      if (!doc || !doc.body) return;
-
-      function getElementDetails(el, label) {
-        if (!el) return `${label}=missing`;
-        const rect = el.getBoundingClientRect();
-        const style = win ? win.getComputedStyle(el) : {};
-        const rectStr = `[${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)}x${Math.round(rect.height)}]`;
-        const offsetStr = `${el.offsetWidth || 0}x${el.offsetHeight || 0}`;
-        const clientStr = `${el.clientWidth || 0}x${el.clientHeight || 0}`;
-        return `${label} rect=${rectStr} offset=${offsetStr} client=${clientStr} display=${style.display || 'unknown'} vis=${style.visibility || 'unknown'} op=${style.opacity || '1'} transform=${style.transform || 'none'} pos=${style.position || 'static'} overflow=${style.overflow || 'visible'}`;
-      }
-
-      // Quét .playerView
-      const playerView = doc.querySelector('.playerView') || doc.querySelector('[class*="playerView"]') || doc.querySelector('[class*="player"]');
-      console.log(`[SCORM TARGET] ${stagePrefix} playerView ${getElementDetails(playerView, '')}`);
-
-      // Tìm button thật (loại trừ slidesBackground)
-      const allButtons = Array.from(doc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
-
-      const nextBtn = allButtons.find((b) => {
-        const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
-        return (txt.includes('next') || txt.includes('tiếp')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
-      });
-      console.log(`[SCORM TARGET] ${stagePrefix} next ${getElementDetails(nextBtn, '')}`);
-
-      const prevBtn = allButtons.find((b) => {
-        const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
-        return (txt.includes('prev') || txt.includes('previous') || txt.includes('back') || txt.includes('trước')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
-      });
-      console.log(`[SCORM TARGET] ${stagePrefix} prev ${getElementDetails(prevBtn, '')}`);
-
-      const submitBtn = allButtons.find((b) => {
-        const txt = (b.innerText || b.textContent || b.id || b.className || b.getAttribute('aria-label') || '').toLowerCase();
-        return (txt.includes('submit') || txt.includes('check') || txt.includes('nộp')) && !b.id.includes('slidesBackground') && !b.className.includes('slidesBackground');
-      });
-      console.log(`[SCORM TARGET] ${stagePrefix} submit ${getElementDetails(submitBtn, '')}`);
     }
 
     // 3. Khảo sát bề mặt hiển thị (Render Surfaces: Canvas, SVG, Matrix, Slide Roots)
@@ -388,7 +405,14 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
             callSeq++;
             const argSummary = args.map((a) => (typeof a === 'object' ? (a ? Object.keys(a).slice(0, 3).join(',') : 'null') : String(a))).join(', ');
             console.log(`[SCORM RESIZE CALL CHAIN] #${callSeq} [${contextLabel}] ${objName}.${methodName}(${argSummary.substring(0, 35)})`);
-            return original.apply(this, args);
+            
+            const res = original.apply(this, args);
+
+            if (methodName === 'invalidatePlayerSize' || methodName === 'invalidateSize') {
+              logGeometrySnapshot('AFTER_INVALIDATE');
+            }
+
+            return res;
           };
           obj[methodName].__traced = true;
         }
@@ -444,54 +468,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 6. One-Shot Reflow an toàn để so sánh với Native Resize
-    function executeSafeOneShotReflow(triggerSource = 'rAF2') {
-      if (hasInitialReflowRun) return;
-      hasInitialReflowRun = true;
-
-      try {
-        const frameWin = contentFrame.contentWindow;
-        const frameDoc = contentFrame.contentDocument || frameWin?.document;
-
-        console.log(`========================================================`);
-        console.log(`[SCORM ONE-SHOT] Running safe one-shot reflow (source=${triggerSource})`);
-
-        if (frameDoc && !hasLoggedBeforeResize) {
-          hasLoggedBeforeResize = true;
-          logTargetElementSnapshot('BEFORE_ONE_SHOT', frameDoc, frameWin);
-          inspectRenderSurfaces('BEFORE_ONE_SHOT', frameDoc, frameWin);
-        }
-
-        let reflowMethodCalled = false;
-
-        // Gọi trực tiếp API iSpring nếu có
-        if (frameWin) {
-          if (typeof frameWin.invalidatePlayerSize === 'function') {
-            frameWin.invalidatePlayerSize();
-            reflowMethodCalled = true;
-            console.log('[SCORM ONE-SHOT] invalidatePlayerSize() invoked directly on SCO window');
-          }
-          if (frameWin.player && typeof frameWin.player.invalidateSize === 'function') {
-            frameWin.player.invalidateSize();
-            reflowMethodCalled = true;
-            console.log('[SCORM ONE-SHOT] player.invalidateSize() invoked directly on SCO player');
-          }
-        }
-
-        console.log(`[SCORM ONE-SHOT] One-shot execution complete. API called: ${reflowMethodCalled ? 'YES' : 'NO'}`);
-
-        requestAnimationFrame(() => {
-          if (frameDoc) {
-            logTargetElementSnapshot('POST_ONE_SHOT', frameDoc, frameWin);
-            inspectRenderSurfaces('POST_ONE_SHOT', frameDoc, frameWin);
-          }
-        });
-        console.log(`========================================================`);
-      } catch (err) {
-        console.warn('[SCORM ONE-SHOT] Note:', err.message);
-      }
-    }
-
     function inspectFrameState(eventLabel = 'Frame event') {
       try {
         const frameWin = contentFrame.contentWindow;
@@ -522,11 +498,6 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
           frameWin.addEventListener('resize', () => {
             const currentWinSize = `${frameWin.innerWidth}x${frameWin.innerHeight}`;
             console.log(`[SCORM RESIZE TRACE] native SCO frame resize event innerSize=${currentWinSize}`);
-            if (!hasLoggedAfterResize) {
-              hasLoggedAfterResize = true;
-              logTargetElementSnapshot('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
-              inspectRenderSurfaces('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
-            }
           });
         }
       } catch (inspectErr) {
@@ -540,6 +511,9 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       console.log(`[SCORM RESIZE TRACE] native browser resize BEGIN: window size ${lastWinSize} -> ${currentWinSize}`);
       lastWinSize = currentWinSize;
 
+      // Log ngay đầu resize event BEFORE iSpring handler
+      logGeometrySnapshot('RESIZE_EVENT_ENTRY');
+
       const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
       const frameWin = contentFrame.contentWindow;
 
@@ -547,12 +521,19 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         hookIspringCallTracer(frameWin, 'SCO Top Window');
       }
 
-      if (!hasLoggedAfterResize && frameDoc) {
-        hasLoggedAfterResize = true;
-        logTargetElementSnapshot('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
-        inspectRenderSurfaces('AFTER_NATIVE_RESIZE', frameDoc, frameWin);
-      }
+      // Schedule log sau khi render hoàn tất
+      requestAnimationFrame(() => {
+        logGeometrySnapshot('CONTENT_VISIBLE');
+        if (frameDoc) inspectRenderSurfaces('CONTENT_VISIBLE', frameDoc, frameWin);
+      });
     });
+
+    // Lắng nghe visualViewport resize nếu trình duyệt hỗ trợ
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        console.log(`[SCORM RESIZE TRACE] visualViewport resize: w=${window.visualViewport.width}, h=${window.visualViewport.height}, scale=${window.visualViewport.scale}`);
+      });
+    }
 
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
@@ -564,12 +545,16 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Đợi đúng 2 requestAnimationFrame để DOM ổn định layout thật rồi kích hoạt One-Shot Reflow
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          executeSafeOneShotReflow('2x-requestAnimationFrame');
-        });
-      });
+      // Chụp snapshot trạng thái trước resize
+      setTimeout(() => {
+        if (!hasLoggedBeforeNative) {
+          hasLoggedBeforeNative = true;
+          logGeometrySnapshot('BEFORE_NATIVE');
+          const frameDoc = contentFrame.contentDocument || contentFrame.contentWindow?.document;
+          const frameWin = contentFrame.contentWindow;
+          if (frameDoc) inspectRenderSurfaces('BEFORE_NATIVE', frameDoc, frameWin);
+        }
+      }, 1200);
     };
 
     contentFrame.onerror = (err) => {
