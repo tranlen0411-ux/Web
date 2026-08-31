@@ -14,7 +14,8 @@ import {
   KeyRound,
   FileSpreadsheet,
   UserCheck,
-  RotateCcw
+  RotateCcw,
+  QrCode
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +24,7 @@ import { EditGameModal } from '../components/dashboard/EditGameModal';
 import { UserFormModal } from '../components/dashboard/UserFormModal';
 import { UserDeleteModal } from '../components/dashboard/UserDeleteModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
+import { StudentQrModal } from '../components/dashboard/StudentQrModal';
 import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
 import { AssignTeacherModal } from '../components/dashboard/AssignTeacherModal';
 import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
@@ -58,6 +60,10 @@ export const AdminDashboard = () => {
   const [userForPin, setUserForPin] = useState(null);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+
+  // Trạng thái Quản lý QR học sinh
+  const [userForQr, setUserForQr] = useState(null);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   // Modals state
   const [isAddGameOpen, setIsAddGameOpen] = useState(false);
@@ -286,6 +292,7 @@ export const AdminDashboard = () => {
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                 <tr>
                   <th className="p-3">Họ và Tên</th>
+                  <th className="p-3">Mã Học Sinh</th>
                   <th className="p-3">Email</th>
                   <th className="p-3">Vai Trò</th>
                   <th className="p-3">Mã Tra Cứu PH</th>
@@ -311,6 +318,9 @@ export const AdminDashboard = () => {
                             <span className="px-1.5 py-0.5 bg-amber-400 text-amber-950 text-[9px] font-black rounded uppercase">Bạn</span>
                           )}
                         </div>
+                      </td>
+                      <td className="p-3 font-mono font-black text-sky-700">
+                        {u.student_code || '—'}
                       </td>
                       <td className="p-3 text-slate-500 font-mono">{u.email}</td>
                       <td className="p-3 uppercase">
@@ -347,21 +357,35 @@ export const AdminDashboard = () => {
                       <td className="p-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {isStudent && (
-                            <button
-                              onClick={() => {
-                                setUserForPin(u);
-                                setIsPinModalOpen(true);
-                                triggerSound('click');
-                              }}
-                              className={`p-1.5 rounded-lg transition-colors ${
-                                hasPin
-                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
-                                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
-                              }`}
-                              title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
-                            >
-                              <KeyRound className="w-4 h-4" />
-                            </button>
+                            <>
+                              <button
+                                onClick={() => {
+                                  setUserForQr(u);
+                                  setIsQrModalOpen(true);
+                                  triggerSound('click');
+                                }}
+                                className="p-1.5 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 transition-colors"
+                                title="Quản lý Thẻ QR Đăng Nhập"
+                              >
+                                <QrCode className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setUserForPin(u);
+                                  setIsPinModalOpen(true);
+                                  triggerSound('click');
+                                }}
+                                className={`p-1.5 rounded-lg transition-colors ${
+                                  hasPin
+                                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                                    : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                                }`}
+                                title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                              >
+                                <KeyRound className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
 
                           <button
@@ -535,6 +559,12 @@ export const AdminDashboard = () => {
           setToastMsg(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
           setTimeout(() => setToastMsg(''), 3500);
         }}
+      />
+
+      <StudentQrModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        student={userForQr}
       />
 
       <ImportStudentsModal

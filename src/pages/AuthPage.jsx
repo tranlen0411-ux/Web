@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock, KeyRound } from 'lucide-react';
+import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock, KeyRound, Camera, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../context/SoundContext';
 import { ParentReportModal } from '../components/parent/ParentReportModal';
+import { StudentQrScannerModal } from '../components/auth/StudentQrScannerModal';
 
 export const AuthPage = () => {
-  const { signIn, signUp, signInWithGoogle, quickStudentSignIn } = useAuth();
+  const { signIn, signUp, signInWithGoogle, quickStudentSignIn, qrStudentSignIn } = useAuth();
   const { triggerSound } = useSound();
   const navigate = useNavigate();
 
@@ -18,7 +19,10 @@ export const AuthPage = () => {
   const [gradeLevel, setGradeLevel] = useState(1);
   const [studentCode, setStudentCode] = useState('');
   const [pin, setPin] = useState('');
+  const [showPin, setShowPin] = useState(false);
 
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
+  const [scannedQrId, setScannedQrId] = useState(null);
   const [isParentModalOpen, setIsParentModalOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,16 +35,32 @@ export const AuthPage = () => {
 
     try {
       if (mode === 'student_quick') {
-        if (!studentCode.trim() || !pin.trim()) {
-          setErrorMsg('Vui lòng nhập đủ Mã Học Sinh và Mã PIN!');
-          setLoading(false);
-          return;
+        if (scannedQrId) {
+          // Luồng 1: Đăng nhập bằng Thẻ QR + Mã PIN
+          if (!pin.trim()) {
+            setErrorMsg('Vui lòng nhập mã PIN bí mật!');
+            setLoading(false);
+            return;
+          }
+          const res = await qrStudentSignIn(scannedQrId, pin.trim());
+          setPin(''); // Xóa PIN khỏi state ngay sau khi xử lý
+          if (res.error) throw res.error;
+          setScannedQrId(null); // Xóa QR ID khỏi bộ nhớ sau khi đăng nhập thành công
+          triggerSound('victory');
+          navigate('/student');
+        } else {
+          // Luồng 2: Đăng nhập bằng Mã Học Sinh + Mã PIN truyền thống
+          if (!studentCode.trim() || !pin.trim()) {
+            setErrorMsg('Vui lòng nhập đủ Mã Học Sinh và Mã PIN!');
+            setLoading(false);
+            return;
+          }
+          const res = await quickStudentSignIn(studentCode.trim(), pin.trim());
+          setPin(''); // Xóa PIN khỏi state ngay sau khi xử lý
+          if (res.error) throw res.error;
+          triggerSound('victory');
+          navigate('/student');
         }
-        const res = await quickStudentSignIn(studentCode.trim(), pin.trim());
-        setPin(''); // Xóa PIN khỏi state ngay sau khi xử lý
-        if (res.error) throw res.error;
-        triggerSound('victory');
-        navigate('/student');
       } else if (mode === 'email_login') {
         const res = await signIn({ email: email.trim(), password });
         if (res.error) throw res.error;
@@ -53,8 +73,8 @@ export const AuthPage = () => {
         navigate('/');
       }
     } catch (err) {
-      console.error('Auth error:', err);
-      setErrorMsg(err.message || 'Mã học sinh hoặc PIN không hợp lệ.');
+      console.error('Auth error:', err?.message || 'Authentication failed');
+      setErrorMsg(err?.message || (scannedQrId ? 'Mã QR hoặc PIN không hợp lệ.' : 'Mã học sinh hoặc PIN không hợp lệ.'));
       setPin('');
     } finally {
       setLoading(false);
@@ -97,7 +117,7 @@ export const AuthPage = () => {
         {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ ĐĂNG NHẬP */}
         <div className="flex bg-amber-100 p-1.5 rounded-2xl mb-5 border-2 border-amber-200">
           <button
-            onClick={() => { setMode('student_quick'); setErrorMsg(''); triggerSound('click'); }}
+            onClick={() => { setMode('student_quick'); setScannedQrId(null); setErrorMsg(''); triggerSound('click'); }}
             className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
               mode === 'student_quick'
                 ? 'bg-amber-400 text-amber-950 shadow-sm'
@@ -107,7 +127,7 @@ export const AuthPage = () => {
             🎒 Học Sinh Đăng Nhập Nhanh
           </button>
           <button
-            onClick={() => { setMode('email_login'); setErrorMsg(''); triggerSound('click'); }}
+            onClick={() => { setMode('email_login'); setScannedQrId(null); setErrorMsg(''); triggerSound('click'); }}
             className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
               mode !== 'student_quick'
                 ? 'bg-sky-500 text-white shadow-sm'
@@ -156,33 +176,79 @@ export const AuthPage = () => {
           {/* LUỒNG ĐĂNG NHẬP NHANH CHO HỌC SINH THẬT KÈM MÃ PIN BẢO MẬT */}
           {mode === 'student_quick' && (
             <>
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5">
-                  Mã Học Sinh / Tên Đăng Nhập:
-                </label>
-                <input
-                  type="text"
-                  placeholder="Nhập Mã Học Sinh..."
-                  value={studentCode}
-                  onChange={(e) => setStudentCode(e.target.value)}
-                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner uppercase"
-                  required
-                />
-              </div>
+              {/* NÚT QUÉT MÃ QR HOẶC TRẠNG THÁI ĐÃ NHẬN QR */}
+              {!scannedQrId ? (
+                <button
+                  type="button"
+                  onClick={() => { triggerSound('click'); setIsQrScannerOpen(true); }}
+                  className="w-full py-3 bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-500 hover:to-yellow-500 text-amber-950 font-black text-xs rounded-2xl border-2 border-amber-300 shadow-sm flex items-center justify-center gap-2 active:translate-y-0.5 transition-all mb-3"
+                >
+                  <Camera className="w-4 h-4 text-amber-900" /> 📷 QUÉT THẺ QR ĐĂNG NHẬP
+                </button>
+              ) : (
+                <div className="p-3.5 bg-emerald-50 border-2 border-emerald-300 rounded-2xl flex items-center justify-between text-emerald-900 text-xs font-black mb-3 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">✅</span>
+                    <div className="text-left">
+                      <p className="font-black text-emerald-950">Đã nhận thẻ QR — hãy nhập mã PIN</p>
+                      <p className="text-[11px] font-bold text-emerald-700">Mã học sinh đã được điền tự động</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScannedQrId(null);
+                      setErrorMsg('');
+                    }}
+                    className="px-2.5 py-1 bg-white border border-emerald-300 rounded-xl text-[11px] text-rose-600 hover:bg-rose-50 font-bold transition-colors"
+                  >
+                    Quét lại
+                  </button>
+                </div>
+              )}
+
+              {/* ẨN TRƯỜNG MÃ HỌC SINH NẾU ĐÃ NHẬN MÃ QR */}
+              {!scannedQrId && (
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1.5">
+                    Mã Học Sinh / Tên Đăng Nhập:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Nhập Mã Học Sinh..."
+                    value={studentCode}
+                    onChange={(e) => setStudentCode(e.target.value)}
+                    className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner uppercase"
+                    required={!scannedQrId}
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
                   <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Mã PIN Bí Mật:
                 </label>
-                <input
-                  type="password"
-                  maxLength={6}
-                  placeholder="Nhập mã PIN..."
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  className="w-full p-3.5 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner tracking-widest"
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type={showPin ? 'text' : 'password'}
+                    maxLength={6}
+                    placeholder="Nhập mã PIN..."
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    className="w-full p-3.5 pr-12 bg-amber-50 border-2 border-amber-200 rounded-2xl font-black text-sm text-slate-800 focus:outline-none focus:border-amber-400 shadow-inner tracking-widest"
+                    required
+                    autoFocus={Boolean(scannedQrId)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPin(!showPin)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-amber-700 rounded-xl transition-colors"
+                    aria-label={showPin ? 'Ẩn mã PIN' : 'Hiện mã PIN'}
+                    title={showPin ? 'Ẩn mã PIN' : 'Hiện mã PIN'}
+                  >
+                    {showPin ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -281,6 +347,17 @@ export const AuthPage = () => {
         isOpen={isParentModalOpen}
         onClose={() => setIsParentModalOpen(false)}
       />
+
+      {/* MODAL QUÉT QR HỌC SINH (PHASE 2C UI) */}
+      {isQrScannerOpen && (
+        <StudentQrScannerModal
+          onClose={() => setIsQrScannerOpen(false)}
+          onScanSuccess={(qrId) => {
+            setScannedQrId(qrId);
+            setIsQrScannerOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };
