@@ -10,6 +10,7 @@ const AuthContext = createContext({
   signUp: async () => {},
   signIn: async () => {},
   quickStudentSignIn: async () => {},
+  qrStudentSignIn: async () => {},
   signOut: async () => {},
   refreshProfile: async () => {},
   awardStars: async () => {},
@@ -221,6 +222,62 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Đăng nhập bằng Thẻ QR & Mã PIN dành cho Học sinh (AUTH-QR)
+  const qrStudentSignIn = async (qrId, pin) => {
+    setLoading(true);
+    const cleanQrId = qrId ? qrId.trim() : '';
+    const cleanPin = pin ? pin.trim() : '';
+
+    if (!cleanQrId || !cleanPin) {
+      setLoading(false);
+      return { data: null, error: { message: 'Mã QR hoặc PIN không hợp lệ.' } };
+    }
+
+    try {
+      // 1. Gọi Edge Function server-side 'student-qr-login'
+      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('student-qr-login', {
+        body: { qrId: cleanQrId, pin: cleanPin }
+      });
+
+      if (edgeErr || !edgeData?.success || !edgeData?.token_hash) {
+        setLoading(false);
+        const userMessage = edgeData?.message === 'Mã QR hoặc PIN không hợp lệ. Vui lòng thử lại sau.'
+          ? edgeData.message
+          : 'Mã QR hoặc PIN không hợp lệ.';
+        return {
+          data: null,
+          error: { message: userMessage }
+        };
+      }
+
+      const { token_hash } = edgeData;
+
+      // 2. Xác thực Magic Link token thu được qua Supabase Auth SDK client-side
+      const verifyRes = await supabase.auth.verifyOtp({
+        token_hash: token_hash,
+        type: 'magiclink'
+      });
+
+      if (verifyRes.error || !verifyRes.data?.session) {
+        setLoading(false);
+        return { data: null, error: { message: 'Mã QR hoặc PIN không hợp lệ.' } };
+      }
+
+      // 3. Thiết lập User và Profile
+      const sessionUser = verifyRes.data.session.user;
+      setUser(sessionUser);
+      await fetchProfile(sessionUser.id, sessionUser.email);
+
+      return { data: verifyRes.data, error: null };
+
+    } catch (_error) {
+      return { data: null, error: { message: 'Mã QR hoặc PIN không hợp lệ.' } };
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   // Đăng xuất - Đưa toàn bộ trạng thái về mặc định
   const signOut = async () => {
     setLoading(true);
@@ -305,6 +362,7 @@ export const AuthProvider = ({ children }) => {
       signIn,
       signInWithGoogle,
       quickStudentSignIn,
+      qrStudentSignIn,
       signOut,
       refreshProfile,
       awardStars
