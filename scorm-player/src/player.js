@@ -190,8 +190,8 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
       }
     }
 
-    // 2. Quiz Canvas analysis
-    const quizCanvases = frameDoc.querySelectorAll('canvas.quizCanvas, canvas, [class*="quiz"]');
+    // 2. Quiz Canvas analysis (strictly canvas elements to avoid false READY on quiz shell container)
+    const quizCanvases = frameDoc.querySelectorAll('canvas.quizCanvas, canvas');
     const quizCanvasCount = quizCanvases ? quizCanvases.length : 0;
     let visibleQuizCanvasCount = 0;
     if (quizCanvases && quizCanvases.length > 0) {
