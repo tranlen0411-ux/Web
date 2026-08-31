@@ -434,4 +434,3 @@ export const StudentQrScannerModal = ({ isOpen = true, onClose, onScanSuccess })
     </div>
   );
 };
-

@@ -454,4 +454,3 @@ export const StudentQrModal = ({ isOpen, onClose, student, onStatusChange }) => 
     </div>
   );
 };
-
