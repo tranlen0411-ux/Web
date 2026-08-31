@@ -15,7 +15,8 @@ import {
   RefreshCw,
   Calendar,
   Clock,
-  RotateCcw
+  RotateCcw,
+  QrCode
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -25,6 +26,7 @@ import { AddGameModal } from '../components/dashboard/AddGameModal';
 import { EditGameModal } from '../components/dashboard/EditGameModal';
 import { EditAssignmentModal } from '../components/dashboard/EditAssignmentModal';
 import { StudentPinModal } from '../components/dashboard/StudentPinModal';
+import { StudentQrModal } from '../components/dashboard/StudentQrModal';
 import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
@@ -79,6 +81,11 @@ export const TeacherDashboard = () => {
   const [pinStatusMap, setPinStatusMap] = useState({});
   const [userForPin, setUserForPin] = useState(null);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+
+  // Trạng thái Quản lý QR học sinh
+  const [userForQr, setUserForQr] = useState(null);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+
   const [isResetScoresOpen, setIsResetScoresOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
@@ -367,6 +374,7 @@ export const TeacherDashboard = () => {
                   <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                     <tr>
                       <th className="p-3">Tên Học Sinh</th>
+                      <th className="p-3">Mã Học Sinh</th>
                       <th className="p-3">Lớp Học</th>
                       <th className="p-3">Khối</th>
                       <th className="p-3">Tổng Sao</th>
@@ -383,6 +391,9 @@ export const TeacherDashboard = () => {
                             <img src={st.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${st.id}`} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
                             <span>{st.full_name}</span>
                           </td>
+                          <td className="p-3 font-mono font-black text-sky-700">
+                            {st.student_code || '—'}
+                          </td>
                           <td className="p-3 text-sky-700 font-extrabold">{st.className || 'Chưa xếp lớp'}</td>
                           <td className="p-3">Khối {st.grade_level || 1}</td>
                           <td className="p-3 text-amber-600 font-extrabold">{st.total_stars || 0} 🌟</td>
@@ -390,21 +401,35 @@ export const TeacherDashboard = () => {
                             <ParentCodeCell code={st.parent_access_code} />
                           </td>
                           <td className="p-3 text-right">
-                            <button
-                              onClick={() => {
-                                setUserForPin(st);
-                                setIsPinModalOpen(true);
-                                triggerSound('click');
-                              }}
-                              className={`p-1.5 rounded-lg transition-colors ${
-                                hasPin
-                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
-                                  : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
-                              }`}
-                              title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
-                            >
-                              <KeyRound className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setUserForQr(st);
+                                  setIsQrModalOpen(true);
+                                  triggerSound('click');
+                                }}
+                                className="p-1.5 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 transition-colors"
+                                title="Quản lý Thẻ QR Đăng Nhập"
+                              >
+                                <QrCode className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setUserForPin(st);
+                                  setIsPinModalOpen(true);
+                                  triggerSound('click');
+                                }}
+                                className={`p-1.5 rounded-lg transition-colors ${
+                                  hasPin
+                                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                                    : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                                }`}
+                                title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                              >
+                                <KeyRound className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -662,6 +687,13 @@ export const TeacherDashboard = () => {
           const isReset = pinStatusMap[studentId] === true;
           showToast(isReset ? 'Đã reset mã PIN cho học sinh.' : 'Đã đặt mã PIN cho học sinh.');
         }}
+      />
+
+      {/* MODAL QUẢN LÝ THẺ QR DÀNH CHO HỌC SINH THUỘC LỚP CỦA GIÁO VIÊN */}
+      <StudentQrModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        student={userForQr}
       />
 
       <ResetScoresModal

@@ -18,22 +18,14 @@ export function parseScormManifest(xmlText) {
     throw new Error('Nội dung imsmanifest.xml rỗng hoặc không hợp lệ.');
   }
 
-  // Khởi tạo DOMParser an toàn trong trình duyệt hoặc Node.js (với jsdom nếu có)
+  // Khởi tạo DOMParser an toàn trong trình duyệt hoặc fallback trong Node.js
   let doc;
   if (typeof window !== 'undefined' && window.DOMParser) {
     const parser = new window.DOMParser();
     doc = parser.parseFromString(xmlText, 'application/xml');
   } else {
-    // Trường hợp chạy trong Node.js testing environment (sử dụng xmldom hoặc DOMParser giả lập)
-    try {
-      const { JSDOM } = require('jsdom');
-      const dom = new JSDOM();
-      const parser = new dom.window.DOMParser();
-      doc = parser.parseFromString(xmlText, 'application/xml');
-    } catch {
-      // Fallback parser tối giản cho node testing nếu jsdom chưa import
-      doc = fallbackXmlParser(xmlText);
-    }
+    // Fallback parser tối giản cho môi trường Node.js testing
+    doc = fallbackXmlParser(xmlText);
   }
 
   // Kiểm tra lỗi parse XML
