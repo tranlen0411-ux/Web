@@ -13,7 +13,8 @@ import {
   Check,
   Lock,
   Globe,
-  Layers
+  Layers,
+  Save
 } from 'lucide-react';
 import {
   parseExcelQuestions,
@@ -22,6 +23,10 @@ import {
   downloadWordTemplate,
   normalizeImportedQuestion
 } from '../../../utils/questionFileParsers';
+import {
+  downloadQuestionBankExcelTemplate,
+  downloadQuestionBankWordTemplate
+} from '../../../utils/questionBankTemplateGenerators';
 import {
   toQuestionBankPayload,
   findDuplicatesInQuestionList
@@ -297,22 +302,22 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                   <Download className="w-4 h-4 text-indigo-600" /> Tải tệp mẫu chuẩn:
                 </h4>
                 <div className="flex flex-wrap gap-3">
-                  <a
-                    href="/templates/Mau_Nhap_Cau_Hoi_Question_Bank.xlsx"
-                    download="Mau_Nhap_Cau_Hoi_Question_Bank.xlsx"
+                  <button
+                    type="button"
+                    onClick={downloadQuestionBankExcelTemplate}
                     className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs cursor-pointer"
                   >
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                     Tải mẫu Excel (.xlsx)
-                  </a>
-                  <a
-                    href="/templates/Mau_Nhap_Cau_Hoi_Question_Bank.docx"
-                    download="Mau_Nhap_Cau_Hoi_Question_Bank.docx"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadQuestionBankWordTemplate}
                     className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs cursor-pointer"
                   >
                     <FileText className="w-4 h-4 text-blue-600" />
                     Tải mẫu Word (.docx)
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>
