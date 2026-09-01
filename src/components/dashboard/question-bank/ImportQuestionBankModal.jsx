@@ -132,7 +132,7 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
         const subject = String(q.subject || currentSubject || '').trim();
         const grade_level = Number(q.grade_level || currentGrade);
         const visibility = role === 'admin'
-          ? String(q.visibility || currentVisibility || 'private').trim()
+          ? currentVisibility
           : 'private';
 
         if (!subject || isNaN(grade_level) || !visibility) continue;

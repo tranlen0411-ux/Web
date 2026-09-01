@@ -26,16 +26,16 @@ export const normalizePromptForDuplicateCheck = (prompt) => {
 export const buildQuestionDuplicateKey = (question) => {
   if (!question || typeof question !== 'object') return null;
 
-  const rawPrompt = question.prompt || question.title || (typeof question.version?.prompt === 'string' ? question.version.prompt : '');
+  const rawPrompt = question.prompt || (typeof question.version?.prompt === 'string' ? question.version.prompt : '');
   const normalizedPrompt = normalizePromptForDuplicateCheck(rawPrompt);
   if (!normalizedPrompt) return null;
 
-  const rawType = question.question_type || 'single_choice';
-  const normalizedType = String(rawType).trim().toLowerCase();
+  if (!question.question_type || typeof question.question_type !== 'string') return null;
+  const normalizedType = question.question_type.trim().toLowerCase();
   if (!normalizedType) return null;
 
-  const rawSubject = question.subject || '';
-  const normalizedSubject = String(rawSubject).trim().toLowerCase();
+  if (!question.subject || typeof question.subject !== 'string') return null;
+  const normalizedSubject = question.subject.trim().toLowerCase();
   if (!normalizedSubject) return null;
 
   const rawGrade = question.grade_level;
@@ -43,8 +43,8 @@ export const buildQuestionDuplicateKey = (question) => {
   const normalizedGrade = Number(rawGrade);
   if (isNaN(normalizedGrade)) return null;
 
-  const rawVisibility = question.visibility || 'private';
-  const normalizedVisibility = String(rawVisibility).trim().toLowerCase();
+  if (!question.visibility || typeof question.visibility !== 'string') return null;
+  const normalizedVisibility = question.visibility.trim().toLowerCase();
   if (!normalizedVisibility) return null;
 
   return [
@@ -66,7 +66,8 @@ export const findDuplicatesInQuestionList = (questions) => {
   const duplicateIndexes = new Set();
 
   (questions || []).forEach((q, idx) => {
-    const norm = normalizePromptForDuplicateCheck(q?.prompt || q?.title || '');
+    const rawPrompt = q?.prompt || (typeof q?.version?.prompt === 'string' ? q.version.prompt : '');
+    const norm = normalizePromptForDuplicateCheck(rawPrompt);
     if (!norm) return;
     if (seen.has(norm)) {
       duplicateIndexes.add(idx);
@@ -105,15 +106,18 @@ export const findExistingQuestionDuplicateIndices = (
 
   (candidateQuestions || []).forEach((q, idx) => {
     const effectiveSubject = q?.subject || batchDefaults?.subject || '';
-    const effectiveGrade = q?.grade_level || batchDefaults?.grade_level || batchDefaults?.grade;
+    const effectiveGrade = q?.grade_level !== undefined && q?.grade_level !== null && String(q?.grade_level).trim() !== ''
+      ? q.grade_level
+      : (batchDefaults?.grade_level !== undefined && batchDefaults?.grade_level !== null ? batchDefaults.grade_level : batchDefaults?.grade);
     const effectiveVisibility = role === 'admin'
-      ? (q?.visibility || batchDefaults?.visibility || 'private')
+      ? (batchDefaults?.visibility || 'private')
       : 'private';
-    const effectiveType = q?.question_type || 'single_choice';
+    const effectiveType = q?.question_type;
+    const effectivePrompt = q?.prompt || (typeof q?.version?.prompt === 'string' ? q.version.prompt : '');
 
     const effectiveQ = {
       ...q,
-      prompt: q?.prompt || q?.title || '',
+      prompt: effectivePrompt,
       question_type: effectiveType,
       subject: effectiveSubject,
       grade_level: effectiveGrade,
