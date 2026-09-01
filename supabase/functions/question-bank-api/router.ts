@@ -503,7 +503,7 @@ export async function handleQuestionBankRequest(
           p_caller_id: callerId,
           p_actor_role: actorRole,
           p_item_id: itemId,
-          p_updates: validation.sanitizedData,
+          p_payload: validation.sanitizedData,
         }
       );
 

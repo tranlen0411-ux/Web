@@ -963,6 +963,8 @@ Deno.test('RT-31 - RPC7 rpc_qb_update_item_metadata thành công -> 200 OK', asy
 
   assertStrictEquals(mockRpc.calls.length, 1);
   assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertEquals(mockRpc.calls[0].args.p_payload, { title: 'New Valid Title' });
+  assertStrictEquals('p_updates' in mockRpc.calls[0].args, false);
 });
 
 // ============================================================================
