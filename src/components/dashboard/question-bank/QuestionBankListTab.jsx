@@ -17,6 +17,9 @@ import {
   Plus,
   Upload
 } from 'lucide-react';
+import { supabase } from '../../../lib/supabase';
+import { useAuth } from '../../../context/AuthContext';
+import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
 import { listQuestions } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
@@ -44,7 +47,20 @@ const VISIBILITY_LABELS = {
   public_template: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' }
 };
 
-export const QuestionBankListTab = ({ role = 'teacher' }) => {
+export const QuestionBankListTab = ({
+  role = 'teacher',
+  globalClassFilter: propGlobalClassFilter,
+  classes: propClasses,
+  availableClasses: propAvailableClasses
+}) => {
+  const auth = useAuth();
+  const activeGlobalClassFilter = propGlobalClassFilter !== undefined
+    ? propGlobalClassFilter
+    : auth?.globalClassFilter;
+  const activeClasses = propClasses || propAvailableClasses;
+
+  const [resolvedClass, setResolvedClass] = useState(null);
+
   const [questions, setQuestions] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -65,6 +81,62 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
+  // 1. Đồng bộ và giải mã metadata của lớp học từ globalClassFilter
+  useEffect(() => {
+    let isMounted = true;
+    const resolveSelectedClass = async () => {
+      if (!activeGlobalClassFilter || activeGlobalClassFilter === 'ALL' || activeGlobalClassFilter === 'NO_CLASS') {
+        if (isMounted) setResolvedClass(null);
+        return;
+      }
+
+      // Ưu tiên tìm trong danh sách classes / availableClasses truyền từ Dashboard
+      if (Array.isArray(activeClasses) && activeClasses.length > 0) {
+        const found = activeClasses.find(c => c && String(c.id) === String(activeGlobalClassFilter));
+        if (found) {
+          if (isMounted) setResolvedClass(found);
+          return;
+        }
+      }
+
+      // Fallback: Truy vấn từ bảng classes nếu Dashboard chưa có sẵn metadata
+      try {
+        const { data, error } = await supabase
+          .from('classes')
+          .select('id, name, grade_level')
+          .eq('id', activeGlobalClassFilter)
+          .maybeSingle();
+
+        if (!error && data && isMounted) {
+          setResolvedClass(data);
+        } else if (isMounted) {
+          setResolvedClass(null);
+        }
+      } catch (err) {
+        console.error('Lỗi khi phân giải class metadata cho Question Bank:', err);
+        if (isMounted) setResolvedClass(null);
+      }
+    };
+
+    resolveSelectedClass();
+    return () => { isMounted = false; };
+  }, [activeGlobalClassFilter, activeClasses]);
+
+  // 2. Tính toán globalGrade từ metadata lớp
+  const globalGrade = (activeGlobalClassFilter && activeGlobalClassFilter !== 'ALL' && activeGlobalClassFilter !== 'NO_CLASS')
+    ? deriveGradeFromClass(resolvedClass)
+    : null;
+
+  // 3. Khóa effectiveGrade: Nếu Header đang chọn lớp cụ thể -> ép theo globalGrade
+  const effectiveGrade = globalGrade != null
+    ? globalGrade
+    : (selectedGrade ? Number(selectedGrade) : undefined);
+
+  // 4. Reset phân trang về trang 1 khi thay đổi Header hoặc Grade
+  useEffect(() => {
+    setPage(1);
+  }, [activeGlobalClassFilter, globalGrade]);
+
   const showToast = (msg) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 4000);
@@ -79,7 +151,7 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
         page_size: pageSize,
         search: appliedSearch || undefined,
         subject: selectedSubject || undefined,
-        grade_level: selectedGrade ? Number(selectedGrade) : undefined,
+        grade_level: effectiveGrade != null ? Number(effectiveGrade) : undefined,
         difficulty: selectedDifficulty || undefined,
         question_type: selectedType || undefined
       };
@@ -95,7 +167,8 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, appliedSearch, selectedSubject, selectedGrade, selectedDifficulty, selectedType]);
+  }, [page, pageSize, appliedSearch, selectedSubject, effectiveGrade, selectedDifficulty, selectedType]);
+
 
   useEffect(() => {
     fetchQuestions();
@@ -231,25 +304,46 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
           </div>
 
           <div>
-            <label className="block text-[11px] font-black text-slate-500 mb-1">Khối lớp</label>
+            <label className="block text-[11px] font-black text-slate-500 mb-1 flex items-center justify-between">
+              <span>Khối lớp</span>
+              {globalGrade != null && (
+                <span className="text-[10px] text-amber-700 font-bold bg-amber-100/80 px-1.5 py-0.5 rounded border border-amber-300">
+                  Khóa theo Header
+                </span>
+              )}
+            </label>
             <select
-              value={selectedGrade}
+              value={globalGrade != null ? String(globalGrade) : selectedGrade}
               onChange={(e) => { setSelectedGrade(e.target.value); setPage(1); }}
-              className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-indigo-500"
+              disabled={globalGrade != null}
+              className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${
+                globalGrade != null
+                  ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
+                  : 'bg-white border border-slate-300 text-slate-700 focus:border-indigo-500'
+              }`}
+              title={globalGrade != null ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}` : 'Chọn khối lớp để lọc'}
             >
-              <option value="">Tất cả khối lớp</option>
-              <option value="1">Lớp 1</option>
-              <option value="2">Lớp 2</option>
-              <option value="3">Lớp 3</option>
-              <option value="4">Lớp 4</option>
-              <option value="5">Lớp 5</option>
-              <option value="6">Lớp 6</option>
-              <option value="7">Lớp 7</option>
-              <option value="8">Lớp 8</option>
-              <option value="9">Lớp 9</option>
-              <option value="10">Lớp 10</option>
-              <option value="11">Lớp 11</option>
-              <option value="12">Lớp 12</option>
+              {globalGrade != null ? (
+                <option value={globalGrade}>
+                  {resolvedClass?.name ? `Lớp ${globalGrade} (${formatClassLabel(resolvedClass.name)})` : `Lớp ${globalGrade} (theo bộ lọc Header)`}
+                </option>
+              ) : (
+                <>
+                  <option value="">Tất cả khối lớp</option>
+                  <option value="1">Lớp 1</option>
+                  <option value="2">Lớp 2</option>
+                  <option value="3">Lớp 3</option>
+                  <option value="4">Lớp 4</option>
+                  <option value="5">Lớp 5</option>
+                  <option value="6">Lớp 6</option>
+                  <option value="7">Lớp 7</option>
+                  <option value="8">Lớp 8</option>
+                  <option value="9">Lớp 9</option>
+                  <option value="10">Lớp 10</option>
+                  <option value="11">Lớp 11</option>
+                  <option value="12">Lớp 12</option>
+                </>
+              )}
             </select>
           </div>
 

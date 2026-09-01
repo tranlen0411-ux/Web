@@ -35,7 +35,7 @@ import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListT
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 
 export const AdminDashboard = () => {
-  const { profile } = useAuth();
+  const { profile, globalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   const [searchParams] = useSearchParams();
 
@@ -248,7 +248,10 @@ export const AdminDashboard = () => {
       )}
       {activeAdminTab === 'question-bank' && (
         <div className="mb-10 animate-fadeIn">
-          <QuestionBankListTab role="admin" />
+          <QuestionBankListTab
+            role="admin"
+            globalClassFilter={globalClassFilter}
+          />
         </div>
       )}
 
