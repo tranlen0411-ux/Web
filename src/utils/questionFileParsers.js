@@ -424,7 +424,10 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
     }
 
     // 1. Trích xuất text thuần từ .docx bằng mammoth
-    const result = await mammoth.extractRawText({ arrayBuffer });
+    const mammothOptions = (typeof Buffer !== 'undefined' && (Buffer.isBuffer(arrayBuffer) || arrayBuffer instanceof ArrayBuffer))
+      ? { buffer: Buffer.isBuffer(arrayBuffer) ? arrayBuffer : Buffer.from(arrayBuffer) }
+      : { arrayBuffer };
+    const result = await mammoth.extractRawText(mammothOptions);
     const rawText = result.value || '';
 
     if (!rawText.trim()) {
@@ -441,9 +444,23 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
 
     const blocks = [];
     let currentBlock = null;
+    let inInstructionSection = false;
 
     lines.forEach((line, lineIdx) => {
-      const upperLine = line.toUpperCase();
+      const upperLine = line.trim().toUpperCase();
+
+      // Bỏ qua phần hướng dẫn ở cuối tệp Word
+      if (/^(HƯỚNG DẪN|HUONG DAN|--- HƯỚNG DẪN ---)/i.test(upperLine)) {
+        if (currentBlock) {
+          blocks.push(currentBlock);
+          currentBlock = null;
+        }
+        inInstructionSection = true;
+        return;
+      }
+
+      if (inInstructionSection) return;
+
       if (upperLine.includes('[TRẮC NGHIỆM]') || upperLine.includes('[TRAC NGHIEM]')) {
         if (currentBlock) blocks.push(currentBlock);
         currentBlock = { type: 'single_choice', lines: [], startLine: lineIdx + 1 };
