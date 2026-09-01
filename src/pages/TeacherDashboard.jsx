@@ -16,7 +16,8 @@ import {
   Calendar,
   Clock,
   RotateCcw,
-  QrCode
+  QrCode,
+  Layers
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -32,6 +33,7 @@ import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { formatClassLabel } from '../utils/helpers';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
+import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 
 export const TeacherDashboard = () => {
   const { profile } = useAuth();
@@ -40,6 +42,7 @@ export const TeacherDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'question-bank') return 'question-bank';
     if (tabParam === 'academic-assignments' || tabParam === 'exercises') return 'academic-assignments';
     if (tabParam === 'games') return 'games';
     if (tabParam === 'classes') return 'classes';
@@ -49,7 +52,7 @@ export const TeacherDashboard = () => {
   // Tự động đồng bộ URL query parameter cho Giáo viên
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'classes') {
+    if (tab === 'games' || tab === 'classes' || tab === 'question-bank') {
       setActiveTab(tab);
     } else if (tab === 'academic-assignments' || tab === 'exercises') {
       setActiveTab('academic-assignments');
@@ -288,10 +291,27 @@ export const TeacherDashboard = () => {
         >
           <BookOpen className="w-4 h-4" /> Quản Lý Bài Tập Học Thuật
         </button>
+        <button
+          onClick={() => {
+            setActiveTab('question-bank');
+            triggerSound('click');
+            setSearchParams({ tab: 'question-bank' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'question-bank'
+              ? 'bg-indigo-600 text-white shadow-md border-b-4 border-indigo-800'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <Layers className="w-4 h-4" /> Ngân Hàng Câu Hỏi
+        </button>
       </div>
 
       {(activeTab === 'academic-assignments' || activeTab === 'exercises') && (
         <ExerciseListTab role="teacher" />
+      )}
+      {activeTab === 'question-bank' && (
+        <QuestionBankListTab role="teacher" />
       )}
 
       {/* KHU VỰC 1: QUẢN LÝ LỚP HỌC & HỌC SINH (tab=classes) */}
