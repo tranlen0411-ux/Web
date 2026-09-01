@@ -61,10 +61,36 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   });
   const [copiedErrors, setCopiedErrors] = useState(false);
 
-    useEffect(() => {
+  const resetImportState = () => {
+    setStep(1);
+    setFile(null);
+    setParsedQuestions([]);
+    setParsingErrors([]);
+    setIsParsing(false);
+    setSelectedIndices(new Set());
+    setProgressCount(0);
+    setImportResults({
+      successCount: 0,
+      failedCount: 0,
+      errors: []
+    });
+    setCopiedErrors(false);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleClose = () => {
+    if (step === 3) return;
+    resetImportState();
+    onClose();
+  };
+
+  useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && step !== 3) {
-        onClose();
+        handleClose();
       }
     };
     if (isOpen) {
@@ -238,7 +264,7 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
     if (importResults.successCount > 0 && typeof onSuccess === 'function') {
       onSuccess(`Đã nhập thành công ${importResults.successCount} câu hỏi vào Ngân hàng câu hỏi!`);
     }
-    onClose();
+    handleClose();
   };
 
   const nonDuplicateTotal = parsedQuestions.length - duplicates.size;
@@ -258,7 +284,7 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={step === 3}
             className="p-2 hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-30"
           >
