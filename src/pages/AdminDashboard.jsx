@@ -15,7 +15,8 @@ import {
   FileSpreadsheet,
   UserCheck,
   RotateCcw,
-  QrCode
+  QrCode,
+  Layers
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -31,6 +32,7 @@ import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
+import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 
 export const AdminDashboard = () => {
   const { profile } = useAuth();
@@ -40,12 +42,12 @@ export const AdminDashboard = () => {
   // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=academic-assignments
   const tabParam = searchParams.get('tab');
   const [activeAdminTab, setActiveAdminTab] = useState(
-    (tabParam === 'exercises' || tabParam === 'academic-assignments') ? 'academic-assignments' : tabParam === 'games' ? 'games' : 'users'
+    tabParam === 'question-bank' ? 'question-bank' : (tabParam === 'exercises' || tabParam === 'academic-assignments') ? 'academic-assignments' : tabParam === 'games' ? 'games' : 'users'
   );
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments') {
+    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments' || tab === 'question-bank') {
       setActiveAdminTab(tab === 'exercises' ? 'academic-assignments' : tab);
     }
   }, [searchParams]);
@@ -227,11 +229,26 @@ export const AdminDashboard = () => {
         >
           <ShieldCheck className="w-4 h-4" /> Quản Lý Bài Tập Học Thuật
         </button>
+        <button
+          onClick={() => { setActiveAdminTab('question-bank'); triggerSound('click'); }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeAdminTab === 'question-bank'
+              ? 'bg-indigo-600 text-white shadow-md border-b-4 border-indigo-800'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <Layers className="w-4 h-4" /> Ngân Hàng Câu Hỏi
+        </button>
       </div>
 
       {activeAdminTab === 'exercises' && (
         <div className="mb-10">
           <ExerciseListTab role="admin" />
+        </div>
+      )}
+      {activeAdminTab === 'question-bank' && (
+        <div className="mb-10 animate-fadeIn">
+          <QuestionBankListTab role="admin" />
         </div>
       )}
 
