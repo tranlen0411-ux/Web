@@ -10,6 +10,7 @@ import { formatClassLabel } from '../../../utils/helpers';
 import { CreateExerciseModal } from './CreateExerciseModal';
 import { ExercisePlayModal } from './ExercisePlayModal';
 import { SubmissionGradingModal } from './SubmissionGradingModal';
+import { SaveExerciseQuestionsModal } from '../question-bank/SaveExerciseQuestionsModal';
 
 export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const { profile } = useAuth();
@@ -29,6 +30,8 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const [selectedExerciseToEdit, setSelectedExerciseToEdit] = useState(null);
   const [selectedExerciseToPlay, setSelectedExerciseToPlay] = useState(null);
   const [selectedSubmissionToGrade, setSelectedSubmissionToGrade] = useState(null);
+  const [selectedExerciseToSaveToBank, setSelectedExerciseToSaveToBank] = useState(null);
+  const [isSaveToBankModalOpen, setIsSaveToBankModalOpen] = useState(false);
 
   // Modal Giao Bài Cho Lớp Nhanh
   const [assignModalExercise, setAssignModalExercise] = useState(null);
@@ -508,6 +511,18 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                   ) : (
                     <div className="w-full flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        {(role === 'teacher' || role === 'admin') && (
+                          <button
+                            onClick={() => {
+                              setSelectedExerciseToSaveToBank(ex);
+                              setIsSaveToBankModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold text-xs rounded-lg border border-indigo-200 flex items-center gap-1 transition-all"
+                            title="Sao chép câu hỏi bài tập này vào Ngân hàng câu hỏi"
+                          >
+                            <Layers className="w-3.5 h-3.5 text-indigo-600" /> Lưu Vào Ngân Hàng
+                          </button>
+                        )}
                         {canEditSourceExercise && (
                           <button
                             onClick={() => setSelectedExerciseToEdit(ex)}
@@ -674,6 +689,15 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
           onClose={() => { setSelectedExerciseToPlay(null); fetchData(); }}
         />
       )}
+
+      {/* MODAL LƯU CÂU HỎI VÀO NGÂN HÀNG CÂU HỎI */}
+      <SaveExerciseQuestionsModal
+        isOpen={isSaveToBankModalOpen}
+        onClose={() => setIsSaveToBankModalOpen(false)}
+        onSuccess={(msg) => showToast(msg)}
+        exercise={selectedExerciseToSaveToBank}
+        role={role}
+      />
 
       {/* MODAL CHẤM BÀI GIÁO VIÊN / ADMIN */}
       {selectedSubmissionToGrade && (
