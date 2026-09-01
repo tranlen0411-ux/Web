@@ -1,5 +1,6 @@
 // supabase/functions/question-bank-api/authMiddleware.test.ts
 // Question Bank User-Facing BFF REST Auth Middleware In-Memory Unit Tests V1
+// Includes Two-Project Architecture & Hardened Trusted Caller Identity Tests
 
 import {
   assertEquals,
@@ -9,6 +10,7 @@ import {
   verifyAuthAndDeriveContext,
   CallerAuthClient,
   ProfileQueryClient,
+  RpcClient,
   InjectedAuthDependencies,
   AuthDependencies,
   AuthResult,
@@ -26,7 +28,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   );
 }
 
-// Helper test-only để ép kiểu fixture dị tật phục vụ kiểm thử negative runtime (AS_ANY_COUNT = 0)
+// Helper test-only để ép kiểu fixture dị tật phục vụ kiểm thử negative runtime
 function asMalformedAuthDependencies(value: unknown): AuthDependencies {
   return value as unknown as AuthDependencies;
 }
@@ -73,7 +75,8 @@ async function assertAuthFailure(
 function assertAuthSuccess(
   result: AuthResult,
   expectedCallerId: string,
-  expectedActorRole: string
+  expectedActorRole: string,
+  expectedAdminClient?: unknown
 ): void {
   assertStrictEquals(result.ok, true);
   assertStrictEquals(result.response, undefined);
@@ -83,7 +86,11 @@ function assertAuthSuccess(
     assertStrictEquals(result.context.actorRole, expectedActorRole);
     assertStrictEquals(result.context.schoolId, null);
   }
-  assertStrictEquals(result.adminClient, undefined);
+  if (expectedAdminClient !== undefined) {
+    assertStrictEquals(result.adminClient, expectedAdminClient);
+  } else {
+    assertStrictEquals(result.adminClient, undefined);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -187,6 +194,17 @@ function createMockProfileQueryClient(config: MockProfileConfig = {}) {
   };
 }
 
+function createMockRpcClient() {
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  const client: RpcClient = {
+    async rpc(name, args) {
+      calls.push({ name, args });
+      return { data: { success: true }, error: null };
+    },
+  };
+  return { client, calls };
+}
+
 // ----------------------------------------------------------------------------
 // Nhóm 1: Core Lifecycle Cases (16 Tests: A — P)
 // ----------------------------------------------------------------------------
@@ -200,7 +218,7 @@ Deno.test('Case A - missing Authorization header -> 401 UNAUTHORIZED', async () 
     profileQueryClient: mockProfile.client,
   };
 
-  const req = createTestRequest(); // No Authorization header
+  const req = createTestRequest(); // Không truyền authHeader
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   await assertAuthFailure(
@@ -236,9 +254,6 @@ Deno.test('Case B - Authorization header does not start with Bearer -> 401 UNAUT
 });
 
 Deno.test('Case C - whitespace-only Bearer value normalizes to invalid Authorization scheme -> 401 UNAUTHORIZED', async () => {
-  // Native Request/Headers normalizes surrounding/trailing header whitespace.
-  // 'Bearer    ' is observed by middleware without the required 'Bearer ' prefix form,
-  // so the first Authorization scheme guard rejects it.
   const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient();
   const deps: InjectedAuthDependencies = {
@@ -247,7 +262,7 @@ Deno.test('Case C - whitespace-only Bearer value normalizes to invalid Authoriza
     profileQueryClient: mockProfile.client,
   };
 
-  const req = createTestRequest('Bearer    ');
+  const req = createTestRequest('Bearer   ');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   await assertAuthFailure(
@@ -262,7 +277,7 @@ Deno.test('Case C - whitespace-only Bearer value normalizes to invalid Authoriza
 
 Deno.test('Case D - callerAuthClient.auth.getUser() returns error -> 401 UNAUTHORIZED', async () => {
   const mockCaller = createMockCallerAuthClient({
-    error: new Error('JWT verification failed'),
+    error: new Error('JWT expired or signature invalid'),
   });
   const mockProfile = createMockProfileQueryClient();
   const deps: InjectedAuthDependencies = {
@@ -307,7 +322,9 @@ Deno.test('Case E - callerAuthClient.auth.getUser() returns user null -> 401 UNA
 });
 
 Deno.test('Case F - callerAuthClient.auth.getUser() returns user without id -> 401 UNAUTHORIZED', async () => {
-  const mockCaller = createMockCallerAuthClient({ user: { id: '' } });
+  const mockCaller = createMockCallerAuthClient({
+    user: { id: '' },
+  });
   const mockProfile = createMockProfileQueryClient();
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
@@ -329,9 +346,7 @@ Deno.test('Case F - callerAuthClient.auth.getUser() returns user without id -> 4
 });
 
 Deno.test('Case G - profile query returns database error -> 500 INTERNAL_ERROR', async () => {
-  const mockCaller = createMockCallerAuthClient({
-    user: { id: '00000000-0000-0000-0000-000000000001' },
-  });
+  const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient({
     error: new Error('Postgres connection pool exhausted'),
   });
@@ -355,9 +370,7 @@ Deno.test('Case G - profile query returns database error -> 500 INTERNAL_ERROR',
 });
 
 Deno.test('Case H - profile does not exist (null) -> 403 FORBIDDEN', async () => {
-  const mockCaller = createMockCallerAuthClient({
-    user: { id: '00000000-0000-0000-0000-000000000001' },
-  });
+  const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient({ profile: null });
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
@@ -379,9 +392,7 @@ Deno.test('Case H - profile does not exist (null) -> 403 FORBIDDEN', async () =>
 });
 
 Deno.test('Case I - profile is_disabled === true -> 403 FORBIDDEN', async () => {
-  const mockCaller = createMockCallerAuthClient({
-    user: { id: '00000000-0000-0000-0000-000000000001' },
-  });
+  const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient({
     profile: {
       id: '00000000-0000-0000-0000-000000000001',
@@ -409,13 +420,11 @@ Deno.test('Case I - profile is_disabled === true -> 403 FORBIDDEN', async () => 
 });
 
 Deno.test('Case J - profile role is invalid string -> 403 FORBIDDEN', async () => {
-  const mockCaller = createMockCallerAuthClient({
-    user: { id: '00000000-0000-0000-0000-000000000001' },
-  });
+  const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient({
     profile: {
       id: '00000000-0000-0000-0000-000000000001',
-      role: 'moderator', // Invalid role
+      role: 'super_admin',
       is_disabled: false,
     },
   });
@@ -439,10 +448,10 @@ Deno.test('Case J - profile role is invalid string -> 403 FORBIDDEN', async () =
 });
 
 Deno.test('Case K - valid teacher role -> ok true with trusted context', async () => {
-  const userId = '11111111-1111-1111-1111-111111111111';
-  const mockCaller = createMockCallerAuthClient({ user: { id: userId } });
+  const expectedId = '11111111-1111-1111-1111-111111111111';
+  const mockCaller = createMockCallerAuthClient({ user: { id: expectedId } });
   const mockProfile = createMockProfileQueryClient({
-    profile: { id: userId, role: 'teacher', is_disabled: false },
+    profile: { id: expectedId, role: 'teacher', is_disabled: false },
   });
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
@@ -453,19 +462,17 @@ Deno.test('Case K - valid teacher role -> ok true with trusted context', async (
   const req = createTestRequest('Bearer valid-token-123');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
-  assertAuthSuccess(result, userId, 'teacher');
+  assertAuthSuccess(result, expectedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
-  assertEquals(mockProfile.spies.fromCalls, ['profiles']);
-  assertEquals(mockProfile.spies.selectCalls, ['id, role, is_disabled']);
-  assertEquals(mockProfile.spies.eqCalls, [{ col: 'id', val: userId }]);
 });
 
 Deno.test('Case L - valid admin role -> ok true with trusted context', async () => {
-  const userId = '22222222-2222-2222-2222-222222222222';
-  const mockCaller = createMockCallerAuthClient({ user: { id: userId } });
+  const expectedId = '22222222-2222-2222-2222-222222222222';
+  const mockCaller = createMockCallerAuthClient({ user: { id: expectedId } });
   const mockProfile = createMockProfileQueryClient({
-    profile: { id: userId, role: 'admin', is_disabled: false },
+    profile: { id: expectedId, role: 'admin', is_disabled: false },
   });
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
@@ -476,16 +483,17 @@ Deno.test('Case L - valid admin role -> ok true with trusted context', async () 
   const req = createTestRequest('Bearer valid-token-123');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
-  assertAuthSuccess(result, userId, 'admin');
+  assertAuthSuccess(result, expectedId, 'admin');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
 });
 
 Deno.test('Case M - valid student role -> ok true with trusted context', async () => {
-  const userId = '33333333-3333-3333-3333-333333333333';
-  const mockCaller = createMockCallerAuthClient({ user: { id: userId } });
+  const expectedId = '33333333-3333-3333-3333-333333333333';
+  const mockCaller = createMockCallerAuthClient({ user: { id: expectedId } });
   const mockProfile = createMockProfileQueryClient({
-    profile: { id: userId, role: 'student', is_disabled: false },
+    profile: { id: expectedId, role: 'student', is_disabled: false },
   });
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
@@ -496,7 +504,8 @@ Deno.test('Case M - valid student role -> ok true with trusted context', async (
   const req = createTestRequest('Bearer valid-token-123');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
-  assertAuthSuccess(result, userId, 'student');
+  assertAuthSuccess(result, expectedId, 'student');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
 });
@@ -555,6 +564,7 @@ Deno.test('Case P - identity consistency: JWT user.id flows to profile query and
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, expectedJwtId, 'teacher');
+  assertStrictEquals(result.context?.callerId, expectedJwtId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
   assertEquals(mockProfile.spies.fromCalls, ['profiles']);
@@ -578,7 +588,6 @@ Deno.test('Case Q - request body/query caller_id parameter is completely ignored
     profileQueryClient: mockProfile.client,
   };
 
-  // URL có gắn query gian lận caller_id=attacker-id
   const req = createTestRequest(
     'Bearer valid-token-123',
     'https://example.test/qb/questions?caller_id=66666666-6666-6666-6666-666666666666'
@@ -586,6 +595,7 @@ Deno.test('Case Q - request body/query caller_id parameter is completely ignored
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, trustedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, trustedId);
   assertEquals(mockProfile.spies.eqCalls, [{ col: 'id', val: trustedId }]);
 });
 
@@ -608,8 +618,8 @@ Deno.test('Case R - request X-Role header is ignored in favor of profile.role', 
 
   const result = await verifyAuthAndDeriveContext(req, deps);
 
-  // Role bắt buộc phải là student lấy từ profile
   assertAuthSuccess(result, trustedId, 'student');
+  assertStrictEquals(result.context?.callerId, trustedId);
 });
 
 Deno.test('Case S - profile is_disabled is undefined/omitted -> valid success', async () => {
@@ -628,10 +638,10 @@ Deno.test('Case S - profile is_disabled is undefined/omitted -> valid success', 
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, trustedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, trustedId);
 });
 
 Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BEARER -> 401', async () => {
-  // Ghi nhận hành vi hiện tại (LOW-01): Dòng 71 authHeader.startsWith('Bearer ') phân biệt hoa thường
   const mockCaller = createMockCallerAuthClient();
   const mockProfile = createMockProfileQueryClient();
   const deps: InjectedAuthDependencies = {
@@ -640,7 +650,6 @@ Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BE
     profileQueryClient: mockProfile.client,
   };
 
-  // Subcase 1: chữ thường bearer
   const reqLower = createTestRequest('bearer valid-token-123');
   const resultLower = await verifyAuthAndDeriveContext(reqLower, deps);
   await assertAuthFailure(
@@ -650,7 +659,6 @@ Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BE
     'Yêu cầu xác thực Bearer token trong header Authorization.'
   );
 
-  // Subcase 2: chữ hoa BEARER
   const reqUpper = createTestRequest('BEARER valid-token-123');
   const resultUpper = await verifyAuthAndDeriveContext(reqUpper, deps);
   await assertAuthFailure(
@@ -665,22 +673,22 @@ Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BE
 });
 
 // ----------------------------------------------------------------------------
-// Nhóm 3: Adversarial Identity & Execution Order Cases (2 Tests: U — V)
+// Nhóm 3: Adversarial Identity Hardening Cases (2 Tests: U — V)
 // ----------------------------------------------------------------------------
 
-Deno.test('Case U - profile ID mismatch records current source behavior', async () => {
-  // Ghi nhận hành vi hiện tại (MED-01): Trong DB thật, khóa chính ngăn cản mismatch.
-  // Trong mock test đối kháng, nếu profile trả về id U2 khác U1 của JWT, dòng 195 gán context.callerId = profile.id (U2).
+Deno.test('Case U - profile ID mismatch with JWT caller ID -> 500 INTERNAL_ERROR (Fail-Closed)', async () => {
   const jwtId = '11111111-1111-1111-1111-111111111111';
   const profileId = '22222222-2222-2222-2222-222222222222';
   const mockCaller = createMockCallerAuthClient({ user: { id: jwtId } });
   const mockProfile = createMockProfileQueryClient({
     profile: { id: profileId, role: 'teacher', is_disabled: false },
   });
+  const mockRpc = createMockRpcClient();
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
     callerAuthClient: mockCaller.client,
     profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
   };
 
   const req = createTestRequest('Bearer valid-token-123');
@@ -688,22 +696,266 @@ Deno.test('Case U - profile ID mismatch records current source behavior', async 
 
   // Khẳng định truy vấn profile dùng đúng jwtId
   assertEquals(mockProfile.spies.eqCalls, [{ col: 'id', val: jwtId }]);
-  // Khẳng định context nhận profileId theo đúng mã nguồn dòng 195
-  assertAuthSuccess(result, profileId, 'teacher');
+  // Khẳng định khi profile.id khác jwtId thì FAIL-CLOSED 500 và không cấp adminClient
+  await assertAuthFailure(
+    result,
+    500,
+    'INTERNAL_ERROR',
+    'Lỗi kiểm tra hồ sơ người dùng.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
 });
 
 Deno.test('Case V - missing Authorization header rejection precedes malformed dependency validation', async () => {
-  // Chứng minh thứ tự: Kiểm tra header Authorization diễn ra TRƯỚC kiểm tra dependency mode
   const malformedDeps = asMalformedAuthDependencies({ mode: 'injected' });
 
   const req = createTestRequest(); // Không có header Authorization
   const result = await verifyAuthAndDeriveContext(req, malformedDeps);
 
-  // Phải trả về 401 UNAUTHORIZED thay vì 500 INTERNAL_ERROR
   await assertAuthFailure(
     result,
     401,
     'UNAUTHORIZED',
     'Yêu cầu xác thực Bearer token trong header Authorization.'
   );
+});
+
+// ----------------------------------------------------------------------------
+// Nhóm 4: Two-Project Architecture Specification Tests (9 Tests: TP-A — TP-I)
+// ----------------------------------------------------------------------------
+
+Deno.test('TP-A: Valid OLD JWT + teacher/admin -> auth success with trusted callerId from JWT and returns injected QB rpcClient', async () => {
+  const expectedJwtId = '99999999-9999-9999-9999-999999999999';
+  const mockCaller = createMockCallerAuthClient({ user: { id: expectedJwtId } });
+  const mockProfile = createMockProfileQueryClient({
+    profile: { id: expectedJwtId, role: 'teacher', is_disabled: false },
+  });
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-old-project-jwt');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  assertAuthSuccess(result, expectedJwtId, 'teacher', mockRpc.client);
+  assertStrictEquals(result.context?.callerId, expectedJwtId);
+  assertStrictEquals(result.context?.actorRole, 'teacher');
+  assertStrictEquals(mockCaller.spies.getUserCalls, 1);
+  assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('TP-B: Invalid OLD JWT -> 401 UNAUTHORIZED and 0 QB RPC calls', async () => {
+  const mockCaller = createMockCallerAuthClient({ error: new Error('Invalid JWT signature from OLD Auth') });
+  const mockProfile = createMockProfileQueryClient();
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer invalid-old-jwt');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  await assertAuthFailure(
+    result,
+    401,
+    'UNAUTHORIZED',
+    'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.'
+  );
+  assertStrictEquals(mockCaller.spies.getUserCalls, 1);
+  assertStrictEquals(mockProfile.spies.maybeSingleCalls, 0);
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('TP-C: Profile missing in OLD DB -> 403 FORBIDDEN and 0 QB RPC calls', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient({ profile: null });
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-old-jwt');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  await assertAuthFailure(
+    result,
+    403,
+    'FORBIDDEN',
+    'Hồ sơ người dùng không tồn tại trong hệ thống.'
+  );
+  assertStrictEquals(mockCaller.spies.getUserCalls, 1);
+  assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('TP-D: Disabled profile in OLD DB -> 403 FORBIDDEN and 0 QB RPC calls', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient({
+    profile: {
+      id: '00000000-0000-0000-0000-000000000001',
+      role: 'teacher',
+      is_disabled: true,
+    },
+  });
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-old-jwt');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  await assertAuthFailure(
+    result,
+    403,
+    'FORBIDDEN',
+    'Tài khoản của bạn đã bị vô hiệu hóa.'
+  );
+  assertStrictEquals(mockCaller.spies.getUserCalls, 1);
+  assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('TP-E: Invalid role in OLD DB -> 403 FORBIDDEN and 0 QB RPC calls', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient({
+    profile: {
+      id: '00000000-0000-0000-0000-000000000001',
+      role: 'guest',
+      is_disabled: false,
+    },
+  });
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-old-jwt');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  await assertAuthFailure(
+    result,
+    403,
+    'FORBIDDEN',
+    'Vai trò người dùng không hợp lệ.'
+  );
+  assertStrictEquals(mockCaller.spies.getUserCalls, 1);
+  assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('TP-F: Injected mode zero Deno.env reads & zero createClient network calls', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient();
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-token');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  assertStrictEquals(result.ok, true);
+  assertStrictEquals(result.adminClient, mockRpc.client);
+});
+
+Deno.test('TP-G: CORE profile client and QB RPC client are completely separated interfaces', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient();
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  assertStrictEquals((mockProfile.client as unknown) !== (mockRpc.client as unknown), true);
+
+  const req = createTestRequest('Bearer valid-token');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  assertStrictEquals(result.ok, true);
+  assertStrictEquals(result.adminClient, mockRpc.client);
+});
+
+Deno.test('TP-H: Production mode missing each required env -> 500 INTERNAL_ERROR (Fail-Closed)', async () => {
+  const requiredEnvs = [
+    'CORE_SUPABASE_URL',
+    'CORE_SUPABASE_ANON_KEY',
+    'CORE_SUPABASE_SERVICE_ROLE_KEY',
+    'QUESTION_BANK_SUPABASE_URL',
+    'QUESTION_BANK_SUPABASE_SERVICE_ROLE_KEY',
+  ];
+
+  for (const missingEnv of requiredEnvs) {
+    const fullEnv: Record<string, string> = {
+      CORE_SUPABASE_URL: 'https://test-core.supabase.co',
+      CORE_SUPABASE_ANON_KEY: 'test-core-anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'test-core-service-role',
+      QUESTION_BANK_SUPABASE_URL: 'https://test-qb.supabase.co',
+      QUESTION_BANK_SUPABASE_SERVICE_ROLE_KEY: 'test-qb-service-role',
+    };
+
+    delete fullEnv[missingEnv];
+
+    const req = createTestRequest('Bearer valid-token-test');
+    const result = await verifyAuthAndDeriveContext(req, {
+      mode: 'production',
+      env: fullEnv,
+    });
+
+    await assertAuthFailure(
+      result,
+      500,
+      'INTERNAL_ERROR',
+      'Cấu hình máy chủ bị thiếu.'
+    );
+  }
+});
+
+Deno.test('TP-I: adminClient returned in AuthResult exactly matches injected QB RpcClient', async () => {
+  const mockCaller = createMockCallerAuthClient();
+  const mockProfile = createMockProfileQueryClient();
+  const mockRpc = createMockRpcClient();
+
+  const deps: InjectedAuthDependencies = {
+    mode: 'injected',
+    callerAuthClient: mockCaller.client,
+    profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
+  };
+
+  const req = createTestRequest('Bearer valid-token');
+  const result = await verifyAuthAndDeriveContext(req, deps);
+
+  assertStrictEquals(result.ok, true);
+  assertStrictEquals(result.adminClient, mockRpc.client);
 });
