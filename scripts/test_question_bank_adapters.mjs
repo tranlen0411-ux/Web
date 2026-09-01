@@ -6,6 +6,8 @@ import {
   toQuestionBankPayload,
   normalizePromptForDuplicateCheck,
   buildQuestionDuplicateKey,
+  buildExistingListDuplicateKey,
+  buildCandidateListDuplicateKey,
   findDuplicatesInQuestionList,
   findExistingQuestionDuplicateIndices,
   normalizeOptionsToStableIds,
@@ -13,7 +15,7 @@ import {
   buildMultipleChoiceAnswerKey
 } from '../src/utils/questionBankAdapters.js';
 
-console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
+console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS ===');
 
 // 1. single_choice letter A/B/C -> correct opt id
 {
@@ -337,7 +339,7 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
   console.log('PASS Test 21 (Case F): Same prompt but visibility private vs public_template -> NOT duplicate');
 }
 
-// 22. findExistingQuestionDuplicateIndices: 4 Excel candidates match 4 existing Word-equivalent questions -> duplicate size = 4
+// 22. findExistingQuestionDuplicateIndices: 4 Excel candidates match 4 existing questions with prompt_snippet -> duplicate size = 4
 {
   const candidates = [
     { prompt: 'Câu 1: 1 + 1 = ?', question_type: 'single_choice' },
@@ -347,10 +349,10 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
   ];
 
   const existingBank = [
-    { prompt: '  câu 1: 1 + 1 = ?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'câu 2: 2 + 2 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'câu 3: 3 + 3 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'câu 4: 4 + 4 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+    { prompt_snippet: '  câu 1: 1 + 1 = ?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'câu 2: 2 + 2 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'câu 3: 3 + 3 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'câu 4: 4 + 4 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
   ];
 
   const dupes = findExistingQuestionDuplicateIndices(
@@ -365,7 +367,7 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
   assert.equal(dupes.has(1), true);
   assert.equal(dupes.has(2), true);
   assert.equal(dupes.has(3), true);
-  console.log('PASS Test 22 (Case G): 4 Excel candidates match 4 existing Word questions -> duplicate indices size = 4');
+  console.log('PASS Test 22 (Case G): 4 Excel candidates match 4 existing Word questions (via prompt_snippet) -> duplicate indices size = 4');
 }
 
 // 23. findExistingQuestionDuplicateIndices: 1 new + 3 existing -> only 1 available
@@ -378,9 +380,9 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
   ];
 
   const existingBank = [
-    { prompt: 'câu cũ 1', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
-    { prompt: 'câu cũ 3', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
-    { prompt: 'câu cũ 4', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' }
+    { prompt_snippet: 'câu cũ 1', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
+    { prompt_snippet: 'câu cũ 3', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
+    { prompt_snippet: 'câu cũ 4', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' }
   ];
 
   const dupes = findExistingQuestionDuplicateIndices(
@@ -398,4 +400,222 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
   console.log('PASS Test 23 (Case H): 1 new + 3 existing -> only new question available');
 }
 
-console.log('=== ALL 23 TESTS PASSED SUCCESSFULLY! ===');
+// 24. (Case I): Admin candidate có q.visibility='private', batchVisibility='public_template', existing bank visibility='public_template' -> DUPLICATE
+{
+  const candidates = [
+    { prompt: 'Admin candidate with private file visibility', question_type: 'single_choice', visibility: 'private' }
+  ];
+
+  const existingBank = [
+    { prompt_snippet: 'admin candidate with private file visibility', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'public_template' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    candidates,
+    existingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'public_template' },
+    'admin'
+  );
+
+  assert.equal(dupes.size, 1);
+  assert.equal(dupes.has(0), true);
+  console.log('PASS Test 24 (Case I): Admin candidate (batchVisibility=public_template) matches existing public_template -> DUPLICATE');
+}
+
+// 25. (Case J): Cùng dữ liệu nhưng existing bank visibility='private', batchVisibility='public_template' -> KHÔNG DUPLICATE
+{
+  const candidates = [
+    { prompt: 'Admin candidate with private file visibility', question_type: 'single_choice', visibility: 'private' }
+  ];
+
+  const existingBank = [
+    { prompt_snippet: 'admin candidate with private file visibility', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    candidates,
+    existingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'public_template' },
+    'admin'
+  );
+
+  assert.equal(dupes.size, 0);
+  console.log('PASS Test 25 (Case J): Admin candidate (batchVisibility=public_template) vs existing private -> NOT DUPLICATE');
+}
+
+// 26. (Case K): buildQuestionDuplicateKey thiếu question_type -> null
+{
+  const invalidTypeQ = {
+    prompt: 'Question without type',
+    subject: 'Toán',
+    grade_level: 1,
+    visibility: 'private'
+  };
+  assert.equal(buildQuestionDuplicateKey(invalidTypeQ), null);
+  assert.equal(buildQuestionDuplicateKey({ ...invalidTypeQ, question_type: '' }), null);
+  assert.equal(buildQuestionDuplicateKey({ ...invalidTypeQ, question_type: '   ' }), null);
+  console.log('PASS Test 26 (Case K): buildQuestionDuplicateKey missing question_type -> null');
+}
+
+// 27. (Case L): buildQuestionDuplicateKey thiếu visibility -> null
+{
+  const invalidVisibilityQ = {
+    prompt: 'Question without visibility',
+    question_type: 'single_choice',
+    subject: 'Toán',
+    grade_level: 1
+  };
+  assert.equal(buildQuestionDuplicateKey(invalidVisibilityQ), null);
+  assert.equal(buildQuestionDuplicateKey({ ...invalidVisibilityQ, visibility: '' }), null);
+  assert.equal(buildQuestionDuplicateKey({ ...invalidVisibilityQ, visibility: '   ' }), null);
+  console.log('PASS Test 27 (Case L): buildQuestionDuplicateKey missing visibility -> null');
+}
+
+// 28. buildQuestionDuplicateKey thiếu subject / grade_level / prompt -> null
+{
+  const base = {
+    prompt: 'Full prompt',
+    question_type: 'single_choice',
+    subject: 'Toán',
+    grade_level: 1,
+    visibility: 'private'
+  };
+  assert.equal(buildQuestionDuplicateKey({ ...base, subject: '' }), null);
+  assert.equal(buildQuestionDuplicateKey({ ...base, grade_level: null }), null);
+  assert.equal(buildQuestionDuplicateKey({ ...base, grade_level: 'abc' }), null);
+  assert.equal(buildQuestionDuplicateKey({ ...base, prompt: '' }), null);
+  console.log('PASS Test 28: buildQuestionDuplicateKey missing subject/grade/prompt -> null');
+}
+
+// 29. Regression Contract A: Existing has prompt_snippet (no prompt), candidate prompt <=150 and same normalized text => DUPLICATE
+{
+  const candidate = { prompt: 'Tính 25 + 75 = ?', question_type: 'single_choice' };
+  const existingItem = { prompt_snippet: '  tính 25 + 75 = ?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 3, visibility: 'private' };
+  assert.equal(existingItem.prompt, undefined); // Không có prompt full
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItem],
+    { subject: 'Toán', grade_level: 3, visibility: 'private' },
+    'teacher'
+  );
+  assert.equal(dupes.has(0), true);
+  console.log('PASS Test 29 (Contract A): Existing has prompt_snippet & candidate prompt <= 150 -> DUPLICATE');
+}
+
+// 30. Regression Contract B: Existing prompt_snippet differs => NOT DUPLICATE
+{
+  const candidate = { prompt: 'Tính 25 + 75 = ?', question_type: 'single_choice' };
+  const existingItem = { prompt_snippet: 'Tính 25 + 80 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 3, visibility: 'private' };
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItem],
+    { subject: 'Toán', grade_level: 3, visibility: 'private' },
+    'teacher'
+  );
+  assert.equal(dupes.size, 0);
+  console.log('PASS Test 30 (Contract B): Existing prompt_snippet differs -> NOT DUPLICATE');
+}
+
+// 31. Regression Contract C: Candidate prompt exactly 150 chars and matching prompt_snippet => DUPLICATE
+{
+  const exact150Prompt = 'A'.repeat(150);
+  assert.equal(exact150Prompt.length, 150);
+
+  const candidate = { prompt: exact150Prompt, question_type: 'essay' };
+  const existingItem = { prompt_snippet: exact150Prompt.toLowerCase(), question_type: 'essay', subject: 'Văn', grade_level: 5, visibility: 'private' };
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItem],
+    { subject: 'Văn', grade_level: 5, visibility: 'private' },
+    'teacher'
+  );
+  assert.equal(dupes.has(0), true);
+  console.log('PASS Test 31 (Contract C): Candidate prompt exactly 150 chars matching prompt_snippet -> DUPLICATE');
+}
+
+// 32. Regression Contract D: Candidate prompt 151+ chars => NOT marked duplicate from snippet-only evidence (fails safe)
+{
+  const prompt151Chars = 'A'.repeat(151);
+  assert.equal(prompt151Chars.length, 151);
+
+  const candidate = { prompt: prompt151Chars, question_type: 'essay' };
+  const existingItem = { prompt_snippet: prompt151Chars.slice(0, 150).toLowerCase(), question_type: 'essay', subject: 'Văn', grade_level: 5, visibility: 'private' };
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItem],
+    { subject: 'Văn', grade_level: 5, visibility: 'private' },
+    'teacher'
+  );
+  assert.equal(dupes.size, 0); // Fails safe: không đánh dấu trùng vì không thể chứng minh toàn bộ nội dung trùng lặp
+  console.log('PASS Test 32 (Contract D): Candidate prompt 151+ chars fails safe from snippet-only evidence -> NOT DUPLICATE');
+}
+
+// 33. Regression Contract E: Existing item missing prompt_snippet => NOT DUPLICATE
+{
+  const candidate = { prompt: 'Câu hỏi bất kỳ', question_type: 'single_choice' };
+  const existingItemMissingSnippet = { question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }; // No prompt_snippet
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItemMissingSnippet],
+    { subject: 'Toán', grade_level: 1, visibility: 'private' },
+    'teacher'
+  );
+  assert.equal(dupes.size, 0);
+  console.log('PASS Test 33 (Contract E): Existing item missing prompt_snippet -> NOT DUPLICATE');
+}
+
+// 34. Regression Contract F: Admin batch public_template contract still works with prompt_snippet
+{
+  const candidate = { prompt: 'Admin template question', question_type: 'single_choice' };
+  const existingItem = { prompt_snippet: 'admin template question', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'public_template' };
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    [candidate],
+    [existingItem],
+    { subject: 'Toán', grade_level: 1, visibility: 'public_template' },
+    'admin'
+  );
+  assert.equal(dupes.has(0), true);
+  console.log('PASS Test 34 (Contract F): Admin batch public_template works with prompt_snippet -> DUPLICATE');
+}
+
+// 35. Helper Unit Tests: buildExistingListDuplicateKey validations
+{
+  const valid = { prompt_snippet: 'Hello snippet', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  assert.notEqual(buildExistingListDuplicateKey(valid), null);
+
+  assert.equal(buildExistingListDuplicateKey(null), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, prompt_snippet: '' }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, prompt_snippet: '   ' }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, question_type: '' }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, subject: '' }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, grade_level: null }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, grade_level: 'xyz' }), null);
+  assert.equal(buildExistingListDuplicateKey({ ...valid, visibility: '' }), null);
+  console.log('PASS Test 35: buildExistingListDuplicateKey validates required fields');
+}
+
+// 36. Helper Unit Tests: buildCandidateListDuplicateKey validations
+{
+  const valid = { prompt: 'Hello candidate', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  assert.notEqual(buildCandidateListDuplicateKey(valid), null);
+
+  assert.equal(buildCandidateListDuplicateKey(null), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, prompt: '' }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, prompt: '   ' }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, prompt: 'A'.repeat(151) }), null); // > 150 chars -> null
+  assert.notEqual(buildCandidateListDuplicateKey({ ...valid, prompt: 'A'.repeat(150) }), null); // exactly 150 chars -> valid
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, question_type: '' }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, subject: '' }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, grade_level: null }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, grade_level: 'xyz' }), null);
+  assert.equal(buildCandidateListDuplicateKey({ ...valid, visibility: '' }), null);
+  console.log('PASS Test 36: buildCandidateListDuplicateKey validates length <= 150 and required fields');
+}
+
+console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');

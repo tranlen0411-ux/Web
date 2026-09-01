@@ -19,10 +19,10 @@ console.log('=== RUNNING QUESTION BANK IMPORT DUPLICATE WORKFLOW TESTS ===');
   ];
 
   const existingBank = [
-    { prompt: '  phép tính 5 + 5 bằng mấy?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'điền số tiếp theo: 2, 4, 6, [_____]', question_type: 'fill_blank', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'số nào sau đây là số lẻ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
-    { prompt: 'em hãy nêu cảm nghĩ về bài thơ.', question_type: 'essay', subject: 'Toán', grade_level: 1, visibility: 'private' }
+    { prompt_snippet: '  phép tính 5 + 5 bằng mấy?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'điền số tiếp theo: 2, 4, 6, [_____]', question_type: 'fill_blank', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'số nào sau đây là số lẻ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt_snippet: 'em hãy nêu cảm nghĩ về bài thơ.', question_type: 'essay', subject: 'Toán', grade_level: 1, visibility: 'private' }
   ];
 
   const batchConfig = { subject: 'Toán', grade_level: 1, visibility: 'private' };
@@ -56,9 +56,9 @@ console.log('=== RUNNING QUESTION BANK IMPORT DUPLICATE WORKFLOW TESTS ===');
   ];
 
   const existingBank = [
-    { prompt: 'câu 1 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' },
-    { prompt: 'câu 2 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' },
-    { prompt: 'câu 4 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' }
+    { prompt_snippet: 'câu 1 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' },
+    { prompt_snippet: 'câu 2 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' },
+    { prompt_snippet: 'câu 4 (đã có)', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' }
   ];
 
   const batchConfig = { subject: 'Toán', grade_level: 2, visibility: 'private' };
@@ -93,7 +93,7 @@ console.log('=== RUNNING QUESTION BANK IMPORT DUPLICATE WORKFLOW TESTS ===');
   ];
 
   const existingBank = [
-    { prompt: 'câu b (đã có trong bank)', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 3, visibility: 'private' }
+    { prompt_snippet: 'câu b (đã có trong bank)', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 3, visibility: 'private' }
   ];
 
   const batchConfig = { subject: 'Tiếng Việt', grade_level: 3, visibility: 'private' };
@@ -126,7 +126,7 @@ console.log('=== RUNNING QUESTION BANK IMPORT DUPLICATE WORKFLOW TESTS ===');
 
   // Bank chỉ có câu này ở môn Toán, Lớp 1
   const existingBank = [
-    { prompt: 'phép tính cộng trừ cơ bản', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+    { prompt_snippet: 'phép tính cộng trừ cơ bản', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
   ];
 
   // TH 1: Batch config là Toán, Lớp 1 -> Trùng
@@ -138,6 +138,49 @@ console.log('=== RUNNING QUESTION BANK IMPORT DUPLICATE WORKFLOW TESTS ===');
   assert.equal(dupesGrade2.size, 0);
 
   console.log('PASS Workflow 4: Batch scope change re-evaluates duplicate identity correctly');
+}
+
+// 5. Test Admin batchVisibility=public_template với q.visibility=private vs existing public_template -> duplicate
+{
+  const parsedQuestions = [
+    { prompt: 'Admin import question', question_type: 'single_choice', visibility: 'private' }
+  ];
+
+  const existingBank = [
+    { prompt_snippet: 'admin import question', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'public_template' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    parsedQuestions,
+    existingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'public_template' },
+    'admin'
+  );
+
+  assert.equal(dupes.size, 1);
+  assert.equal(dupes.has(0), true);
+  console.log('PASS Workflow 5: Admin q.visibility=private + batchVisibility=public_template vs existing public_template -> duplicate');
+}
+
+// 6. Test Admin batchVisibility=public_template vs existing private -> không duplicate
+{
+  const parsedQuestions = [
+    { prompt: 'Admin import question', question_type: 'single_choice', visibility: 'private' }
+  ];
+
+  const existingBank = [
+    { prompt_snippet: 'admin import question', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    parsedQuestions,
+    existingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'public_template' },
+    'admin'
+  );
+
+  assert.equal(dupes.size, 0);
+  console.log('PASS Workflow 6: Admin batchVisibility=public_template vs existing private -> không duplicate');
 }
 
 console.log('=== ALL IMPORT DUPLICATE WORKFLOW TESTS PASSED! ===');

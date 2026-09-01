@@ -57,6 +57,109 @@ export const buildQuestionDuplicateKey = (question) => {
 };
 
 /**
+ * Tạo khóa định danh cho câu hỏi đã lưu lấy từ danh sách (List questions API / rpc_qb_list_questions)
+ * API trả về prompt_snippet = left(prompt, 150) thay vì prompt đầy đủ.
+ * Yêu cầu bắt buộc: question_type, subject, grade_level, visibility, prompt_snippet
+ * Nếu thiếu bất kỳ trường nào -> trả về null (fail-closed)
+ *
+ * @param {Object} item
+ * @returns {string|null}
+ */
+export const buildExistingListDuplicateKey = (item) => {
+  if (!item || typeof item !== 'object') return null;
+
+  const rawSnippet = item.prompt_snippet !== undefined && item.prompt_snippet !== null
+    ? String(item.prompt_snippet)
+    : (typeof item.version?.prompt_snippet === 'string' ? item.version.prompt_snippet : '');
+  const normalizedSnippet = normalizePromptForDuplicateCheck(rawSnippet);
+  if (!normalizedSnippet) return null;
+
+  if (!item.question_type || typeof item.question_type !== 'string') return null;
+  const normalizedType = item.question_type.trim().toLowerCase();
+  if (!normalizedType) return null;
+
+  if (!item.subject || typeof item.subject !== 'string') return null;
+  const normalizedSubject = item.subject.trim().toLowerCase();
+  if (!normalizedSubject) return null;
+
+  const rawGrade = item.grade_level;
+  if (rawGrade === undefined || rawGrade === null || String(rawGrade).trim() === '') return null;
+  const normalizedGrade = Number(rawGrade);
+  if (isNaN(normalizedGrade)) return null;
+
+  if (!item.visibility || typeof item.visibility !== 'string') return null;
+  const normalizedVisibility = item.visibility.trim().toLowerCase();
+  if (!normalizedVisibility) return null;
+
+  return [
+    normalizedSnippet,
+    normalizedType,
+    normalizedSubject,
+    normalizedGrade,
+    normalizedVisibility
+  ].join('||');
+};
+
+/**
+ * Tạo khóa định danh tương thích danh sách cho câu hỏi ứng viên (candidate imported question).
+ * Chỉ tạo khóa khi prompt gốc có độ dài <= 150 ký tự (do list API chỉ trả về tối đa 150 ký tự).
+ * Nếu raw prompt > 150 ký tự -> trả về null (fail-safe để tránh so khớp sai do cắt chuỗi).
+ *
+ * @param {Object} question
+ * @param {Object} effectiveOverrides
+ * @returns {string|null}
+ */
+export const buildCandidateListDuplicateKey = (question, effectiveOverrides = {}) => {
+  if (!question || typeof question !== 'object') return null;
+
+  const rawPrompt = effectiveOverrides.prompt !== undefined
+    ? effectiveOverrides.prompt
+    : (question.prompt || (typeof question.version?.prompt === 'string' ? question.version.prompt : ''));
+
+  if (!rawPrompt || typeof rawPrompt !== 'string') return null;
+  if (rawPrompt.length > 150) return null;
+
+  const normalizedPrompt = normalizePromptForDuplicateCheck(rawPrompt);
+  if (!normalizedPrompt) return null;
+
+  const rawType = effectiveOverrides.question_type !== undefined
+    ? effectiveOverrides.question_type
+    : question.question_type;
+  if (!rawType || typeof rawType !== 'string') return null;
+  const normalizedType = rawType.trim().toLowerCase();
+  if (!normalizedType) return null;
+
+  const rawSubject = effectiveOverrides.subject !== undefined
+    ? effectiveOverrides.subject
+    : question.subject;
+  if (!rawSubject || typeof rawSubject !== 'string') return null;
+  const normalizedSubject = rawSubject.trim().toLowerCase();
+  if (!normalizedSubject) return null;
+
+  const rawGrade = effectiveOverrides.grade_level !== undefined
+    ? effectiveOverrides.grade_level
+    : question.grade_level;
+  if (rawGrade === undefined || rawGrade === null || String(rawGrade).trim() === '') return null;
+  const normalizedGrade = Number(rawGrade);
+  if (isNaN(normalizedGrade)) return null;
+
+  const rawVisibility = effectiveOverrides.visibility !== undefined
+    ? effectiveOverrides.visibility
+    : question.visibility;
+  if (!rawVisibility || typeof rawVisibility !== 'string') return null;
+  const normalizedVisibility = rawVisibility.trim().toLowerCase();
+  if (!normalizedVisibility) return null;
+
+  return [
+    normalizedPrompt,
+    normalizedType,
+    normalizedSubject,
+    normalizedGrade,
+    normalizedVisibility
+  ].join('||');
+};
+
+/**
  * Kiểm tra các câu hỏi bị trùng lặp trong cùng một danh sách file tải lên
  * @param {Array} questions
  * @returns {Set<number>} Tập hợp các index bị trùng lặp trong file
@@ -81,8 +184,10 @@ export const findDuplicatesInQuestionList = (questions) => {
 
 /**
  * Tìm tập hợp index của các candidate questions đã tồn tại trong Question Bank
+ * So khớp dựa trên list contract (prompt_snippet <= 150 ký tự)
+ *
  * @param {Array<Object>} candidateQuestions Danh sách câu hỏi ứng viên từ file import
- * @param {Array<Object>} existingQuestions Danh sách câu hỏi đã lưu lấy từ BFF
+ * @param {Array<Object>} existingQuestions Danh sách câu hỏi đã lưu lấy từ BFF listQuestions
  * @param {Object} batchDefaults { subject, grade_level, visibility }
  * @param {string} role 'teacher' | 'admin'
  * @returns {Set<number>} Set các index của candidateQuestions bị trùng với existing bank
@@ -96,7 +201,7 @@ export const findExistingQuestionDuplicateIndices = (
   const existingKeySet = new Set();
 
   (existingQuestions || []).forEach((eq) => {
-    const key = buildQuestionDuplicateKey(eq);
+    const key = buildExistingListDuplicateKey(eq);
     if (key) {
       existingKeySet.add(key);
     }
@@ -124,7 +229,7 @@ export const findExistingQuestionDuplicateIndices = (
       visibility: effectiveVisibility
     };
 
-    const candidateKey = buildQuestionDuplicateKey(effectiveQ);
+    const candidateKey = buildCandidateListDuplicateKey(effectiveQ);
     if (candidateKey && existingKeySet.has(candidateKey)) {
       duplicateIndices.add(idx);
     }
@@ -441,7 +546,11 @@ export const toQuestionBankPayload = (input = {}, contextOptions = {}) => {
 export default {
   toQuestionBankPayload,
   normalizePromptForDuplicateCheck,
+  buildQuestionDuplicateKey,
+  buildExistingListDuplicateKey,
+  buildCandidateListDuplicateKey,
   findDuplicatesInQuestionList,
+  findExistingQuestionDuplicateIndices,
   normalizeOptionsToStableIds,
   buildSingleChoiceAnswerKey,
   buildMultipleChoiceAnswerKey
