@@ -1,6 +1,6 @@
 // supabase/functions/question-bank-api/authMiddleware.test.ts
 // Question Bank User-Facing BFF REST Auth Middleware In-Memory Unit Tests V1
-// Includes Two-Project Architecture Tests (Core Project & Question Bank Project Boundary)
+// Includes Two-Project Architecture & Hardened Trusted Caller Identity Tests
 
 import {
   assertEquals,
@@ -463,6 +463,7 @@ Deno.test('Case K - valid teacher role -> ok true with trusted context', async (
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, expectedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
 });
@@ -483,6 +484,7 @@ Deno.test('Case L - valid admin role -> ok true with trusted context', async () 
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, expectedId, 'admin');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
 });
@@ -503,6 +505,7 @@ Deno.test('Case M - valid student role -> ok true with trusted context', async (
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, expectedId, 'student');
+  assertStrictEquals(result.context?.callerId, expectedId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
 });
@@ -561,6 +564,7 @@ Deno.test('Case P - identity consistency: JWT user.id flows to profile query and
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, expectedJwtId, 'teacher');
+  assertStrictEquals(result.context?.callerId, expectedJwtId);
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
   assertEquals(mockProfile.spies.fromCalls, ['profiles']);
@@ -591,6 +595,7 @@ Deno.test('Case Q - request body/query caller_id parameter is completely ignored
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, trustedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, trustedId);
   assertEquals(mockProfile.spies.eqCalls, [{ col: 'id', val: trustedId }]);
 });
 
@@ -614,6 +619,7 @@ Deno.test('Case R - request X-Role header is ignored in favor of profile.role', 
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, trustedId, 'student');
+  assertStrictEquals(result.context?.callerId, trustedId);
 });
 
 Deno.test('Case S - profile is_disabled is undefined/omitted -> valid success', async () => {
@@ -632,6 +638,7 @@ Deno.test('Case S - profile is_disabled is undefined/omitted -> valid success', 
   const result = await verifyAuthAndDeriveContext(req, deps);
 
   assertAuthSuccess(result, trustedId, 'teacher');
+  assertStrictEquals(result.context?.callerId, trustedId);
 });
 
 Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BEARER -> 401', async () => {
@@ -666,27 +673,37 @@ Deno.test('Case T - Bearer scheme case-sensitivity rejects lowercase bearer / BE
 });
 
 // ----------------------------------------------------------------------------
-// Nhóm 3: Adversarial Identity & Execution Order Cases (2 Tests: U — V)
+// Nhóm 3: Adversarial Identity Hardening Cases (2 Tests: U — V)
 // ----------------------------------------------------------------------------
 
-Deno.test('Case U - profile ID mismatch records current source behavior', async () => {
+Deno.test('Case U - profile ID mismatch with JWT caller ID -> 500 INTERNAL_ERROR (Fail-Closed)', async () => {
   const jwtId = '11111111-1111-1111-1111-111111111111';
   const profileId = '22222222-2222-2222-2222-222222222222';
   const mockCaller = createMockCallerAuthClient({ user: { id: jwtId } });
   const mockProfile = createMockProfileQueryClient({
     profile: { id: profileId, role: 'teacher', is_disabled: false },
   });
+  const mockRpc = createMockRpcClient();
   const deps: InjectedAuthDependencies = {
     mode: 'injected',
     callerAuthClient: mockCaller.client,
     profileQueryClient: mockProfile.client,
+    rpcClient: mockRpc.client,
   };
 
   const req = createTestRequest('Bearer valid-token-123');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
+  // Khẳng định truy vấn profile dùng đúng jwtId
   assertEquals(mockProfile.spies.eqCalls, [{ col: 'id', val: jwtId }]);
-  assertAuthSuccess(result, profileId, 'teacher');
+  // Khẳng định khi profile.id khác jwtId thì FAIL-CLOSED 500 và không cấp adminClient
+  await assertAuthFailure(
+    result,
+    500,
+    'INTERNAL_ERROR',
+    'Lỗi kiểm tra hồ sơ người dùng.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
 });
 
 Deno.test('Case V - missing Authorization header rejection precedes malformed dependency validation', async () => {
@@ -707,11 +724,11 @@ Deno.test('Case V - missing Authorization header rejection precedes malformed de
 // Nhóm 4: Two-Project Architecture Specification Tests (9 Tests: TP-A — TP-I)
 // ----------------------------------------------------------------------------
 
-Deno.test('TP-A: Valid OLD JWT + teacher/admin -> auth success and returns injected QB rpcClient as adminClient', async () => {
-  const expectedId = '99999999-9999-9999-9999-999999999999';
-  const mockCaller = createMockCallerAuthClient({ user: { id: expectedId } });
+Deno.test('TP-A: Valid OLD JWT + teacher/admin -> auth success with trusted callerId from JWT and returns injected QB rpcClient', async () => {
+  const expectedJwtId = '99999999-9999-9999-9999-999999999999';
+  const mockCaller = createMockCallerAuthClient({ user: { id: expectedJwtId } });
   const mockProfile = createMockProfileQueryClient({
-    profile: { id: expectedId, role: 'teacher', is_disabled: false },
+    profile: { id: expectedJwtId, role: 'teacher', is_disabled: false },
   });
   const mockRpc = createMockRpcClient();
 
@@ -725,10 +742,12 @@ Deno.test('TP-A: Valid OLD JWT + teacher/admin -> auth success and returns injec
   const req = createTestRequest('Bearer valid-old-project-jwt');
   const result = await verifyAuthAndDeriveContext(req, deps);
 
-  assertAuthSuccess(result, expectedId, 'teacher', mockRpc.client);
+  assertAuthSuccess(result, expectedJwtId, 'teacher', mockRpc.client);
+  assertStrictEquals(result.context?.callerId, expectedJwtId);
+  assertStrictEquals(result.context?.actorRole, 'teacher');
   assertStrictEquals(mockCaller.spies.getUserCalls, 1);
   assertStrictEquals(mockProfile.spies.maybeSingleCalls, 1);
-  assertStrictEquals(mockRpc.calls.length, 0); // Auth middleware does not call RPC itself
+  assertStrictEquals(mockRpc.calls.length, 0);
 });
 
 Deno.test('TP-B: Invalid OLD JWT -> 401 UNAUTHORIZED and 0 QB RPC calls', async () => {
@@ -878,7 +897,6 @@ Deno.test('TP-G: CORE profile client and QB RPC client are completely separated 
     rpcClient: mockRpc.client,
   };
 
-  // Verify that mockProfile and mockRpc are distinct object references
   assertStrictEquals((mockProfile.client as unknown) !== (mockRpc.client as unknown), true);
 
   const req = createTestRequest('Bearer valid-token');

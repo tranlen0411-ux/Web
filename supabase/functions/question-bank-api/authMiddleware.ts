@@ -165,7 +165,7 @@ export async function verifyAuthAndDeriveContext(
     rpcClient = questionBankRpcClient as unknown as RpcClient;
   }
 
-  // 1. Xác thực JWT thông qua CORE Auth API
+  // 1. Xác thực JWT thông qua CORE Auth API (BẮT BUỘC LÀ NGUỒN DUY NHẤT CỦA CALLER ID)
   const { data: userData, error: authError } = await callerClient.auth.getUser();
   if (authError || !userData?.user?.id) {
     return {
@@ -205,6 +205,18 @@ export async function verifyAuthAndDeriveContext(
     };
   }
 
+  // Khẳng định tính nhất quán bất biến giữa JWT user.id và profile.id
+  if (profile.id !== callerId) {
+    return {
+      ok: false,
+      response: createErrorResponse(
+        500,
+        'INTERNAL_ERROR',
+        'Lỗi kiểm tra hồ sơ người dùng.'
+      ),
+    };
+  }
+
   if (profile.is_disabled === true) {
     return {
       ok: false,
@@ -223,9 +235,9 @@ export async function verifyAuthAndDeriveContext(
     };
   }
 
-  // 3. Thiết lập Trusted Context hoàn toàn từ Server
+  // 3. Thiết lập Trusted Context hoàn toàn từ Server: callerId BẮT BUỘC lấy trực tiếp từ JWT user.id
   const trustedContext: TrustedContext = {
-    callerId: profile.id,
+    callerId,
     actorRole: profile.role as ActorRole,
     schoolId: null, // Hardcoded null in V1
   };
