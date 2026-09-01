@@ -25,19 +25,19 @@ const DIFFICULTY_LABELS = {
 };
 
 const TYPE_LABELS = {
-  multiple_choice: 'Trắc nghiệm đơn',
-  multiple_select: 'Trắc nghiệm nhiều đáp án',
-  true_false: 'Đúng / Sai',
+  single_choice: 'Trắc nghiệm một đáp án',
+  multiple_choice: 'Trắc nghiệm nhiều đáp án',
   fill_blank: 'Điền khuyết',
-  matching: 'Nối cặp',
   short_answer: 'Trả lời ngắn',
-  essay: 'Tự luận'
+  essay: 'Tự luận',
+  image_upload: 'Tải ảnh',
+  file_upload: 'Tải tệp'
 };
 
 const VISIBILITY_LABELS = {
   private: { label: 'Cá nhân', icon: Lock, color: 'text-slate-500 bg-slate-100' },
   school_shared: { label: 'Toàn trường', icon: Globe, color: 'text-indigo-600 bg-indigo-50' },
-  public: { label: 'Công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' }
+  public_template: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' }
 };
 
 export const QuestionBankListTab = ({ role = 'teacher' }) => {
@@ -48,8 +48,9 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Filters state
+  // Search and filters state
   const [searchText, setSearchText] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState('');
@@ -62,7 +63,7 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
       const filters = {
         page,
         page_size: pageSize,
-        search: searchText.trim() || undefined,
+        search: appliedSearch || undefined,
         subject: selectedSubject || undefined,
         grade_level: selectedGrade ? Number(selectedGrade) : undefined,
         difficulty: selectedDifficulty || undefined,
@@ -80,7 +81,7 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, searchText, selectedSubject, selectedGrade, selectedDifficulty, selectedType]);
+  }, [page, pageSize, appliedSearch, selectedSubject, selectedGrade, selectedDifficulty, selectedType]);
 
   useEffect(() => {
     fetchQuestions();
@@ -89,11 +90,12 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     setPage(1);
-    fetchQuestions();
+    setAppliedSearch(searchText.trim());
   };
 
   const handleResetFilters = () => {
     setSearchText('');
+    setAppliedSearch('');
     setSelectedSubject('');
     setSelectedGrade('');
     setSelectedDifficulty('');
@@ -188,6 +190,13 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
               <option value="3">Lớp 3</option>
               <option value="4">Lớp 4</option>
               <option value="5">Lớp 5</option>
+              <option value="6">Lớp 6</option>
+              <option value="7">Lớp 7</option>
+              <option value="8">Lớp 8</option>
+              <option value="9">Lớp 9</option>
+              <option value="10">Lớp 10</option>
+              <option value="11">Lớp 11</option>
+              <option value="12">Lớp 12</option>
             </select>
           </div>
 
@@ -214,18 +223,18 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
               className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-indigo-500"
             >
               <option value="">Tất cả dạng câu</option>
-              <option value="multiple_choice">Trắc nghiệm đơn</option>
-              <option value="multiple_select">Trắc nghiệm nhiều đáp án</option>
-              <option value="true_false">Đúng / Sai</option>
+              <option value="single_choice">Trắc nghiệm một đáp án</option>
+              <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
               <option value="fill_blank">Điền khuyết</option>
-              <option value="matching">Nối cặp</option>
               <option value="short_answer">Trả lời ngắn</option>
               <option value="essay">Tự luận</option>
+              <option value="image_upload">Tải ảnh</option>
+              <option value="file_upload">Tải tệp</option>
             </select>
           </div>
         </div>
 
-        {(searchText || selectedSubject || selectedGrade || selectedDifficulty || selectedType) && (
+        {(searchText || appliedSearch || selectedSubject || selectedGrade || selectedDifficulty || selectedType) && (
           <div className="mt-3 pt-2 border-t border-slate-200 flex justify-end">
             <button
               onClick={handleResetFilters}
