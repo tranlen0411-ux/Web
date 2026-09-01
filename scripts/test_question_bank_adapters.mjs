@@ -1,4 +1,4 @@
-﻿// scripts/test_question_bank_adapters.mjs
+// scripts/test_question_bank_adapters.mjs
 // Unit tests for Question Bank V2A Adapters and Security Contracts
 
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import {
   buildMultipleChoiceAnswerKey
 } from '../src/utils/questionBankAdapters.js';
 
-console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (12 CASES) ===');
+console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (15 CASES) ===');
 
 // 1. single_choice letter A/B/C -> correct opt id
 {
@@ -195,4 +195,83 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (12 CASES) ===');
   console.log('PASS Test 12: forbidden security fields absent from output');
 }
 
-console.log('=== ALL 12 TESTS PASSED SUCCESSFULLY! ===');
+// 13. Regression: single_choice without tags/hints/media_urls -> array contract enforced
+{
+  const input = {
+    prompt: 'Thủ đô của Việt Nam là gì?',
+    question_type: 'single_choice',
+    options: ['Hà Nội', 'Đà Nẵng', 'TP. Hồ Chí Minh', 'Cần Thơ'],
+    correct_answer: 'A'
+  };
+  const payload = toQuestionBankPayload(input, { role: 'teacher' });
+
+  assert.equal(Array.isArray(payload.options), true);
+  assert.equal(Array.isArray(payload.hints), true);
+  assert.equal(Array.isArray(payload.tags), true);
+  assert.equal(Array.isArray(payload.media_urls), true);
+
+  assert.notEqual(payload.options, null);
+  assert.notEqual(payload.hints, null);
+  assert.notEqual(payload.tags, null);
+  assert.notEqual(payload.media_urls, null);
+
+  assert.equal(payload.options.length, 4);
+  assert.deepEqual(payload.hints, []);
+  assert.deepEqual(payload.tags, []);
+  assert.deepEqual(payload.media_urls, []);
+  console.log('PASS Test 13: single_choice without tags/hints/media_urls -> array contract enforced');
+}
+
+// 14. Regression: fill_blank without tags/options/hints/media_urls -> array contract enforced
+{
+  const input = {
+    prompt: 'Số chẵn nhỏ nhất có một chữ số là [_____]',
+    question_type: 'fill_blank',
+    correct_answer: '0'
+  };
+  const payload = toQuestionBankPayload(input, { role: 'teacher' });
+
+  assert.equal(Array.isArray(payload.options), true);
+  assert.equal(Array.isArray(payload.hints), true);
+  assert.equal(Array.isArray(payload.tags), true);
+  assert.equal(Array.isArray(payload.media_urls), true);
+
+  assert.notEqual(payload.options, null);
+  assert.notEqual(payload.hints, null);
+  assert.notEqual(payload.tags, null);
+  assert.notEqual(payload.media_urls, null);
+
+  assert.deepEqual(payload.options, []);
+  assert.deepEqual(payload.hints, []);
+  assert.deepEqual(payload.tags, []);
+  assert.deepEqual(payload.media_urls, []);
+  console.log('PASS Test 14: fill_blank without tags/options/hints/media_urls -> array contract enforced');
+}
+
+// 15. Regression: essay without tags/options/hints/media_urls -> array contract enforced
+{
+  const input = {
+    prompt: 'Em hãy viết đoạn văn ngắn tả một loài hoa em yêu thích.',
+    question_type: 'essay',
+    explanation: 'Tiêu chí: mở đoạn, thân đoạn, kết đoạn.'
+  };
+  const payload = toQuestionBankPayload(input, { role: 'teacher' });
+
+  assert.equal(Array.isArray(payload.options), true);
+  assert.equal(Array.isArray(payload.hints), true);
+  assert.equal(Array.isArray(payload.tags), true);
+  assert.equal(Array.isArray(payload.media_urls), true);
+
+  assert.notEqual(payload.options, null);
+  assert.notEqual(payload.hints, null);
+  assert.notEqual(payload.tags, null);
+  assert.notEqual(payload.media_urls, null);
+
+  assert.deepEqual(payload.options, []);
+  assert.deepEqual(payload.hints, []);
+  assert.deepEqual(payload.tags, []);
+  assert.deepEqual(payload.media_urls, []);
+  console.log('PASS Test 15: essay without tags/options/hints/media_urls -> array contract enforced');
+}
+
+console.log('=== ALL 15 TESTS PASSED SUCCESSFULLY! ===');
