@@ -318,12 +318,16 @@ export const toQuestionBankPayload = (input = {}, contextOptions = {}) => {
     difficulty,
     visibility,
     prompt: rawPrompt,
-    options: options && options.length > 0 ? options : null,
+    options: options && options.length > 0 ? options : [],
     answer_key: answerKey,
-    hints: Array.isArray(input.hints) ? input.hints.map(String) : null,
+    hints: Array.isArray(input.hints) ? input.hints.map(String) : [],
     explanation: input.explanation ? String(input.explanation).trim() : null,
-    tags: Array.isArray(input.tags) ? input.tags.map(String) : (typeof input.tags === 'string' ? input.tags.split(',').map(s => s.trim()).filter(Boolean) : null),
-    media_urls: Array.isArray(input.media_urls) ? input.media_urls.map(String) : null,
+    tags: Array.isArray(input.tags)
+      ? input.tags.map(String)
+      : typeof input.tags === 'string'
+        ? input.tags.split(',').map(s => s.trim()).filter(Boolean)
+        : [],
+    media_urls: Array.isArray(input.media_urls) ? input.media_urls.map(String) : [],
     metadata
   };
 
