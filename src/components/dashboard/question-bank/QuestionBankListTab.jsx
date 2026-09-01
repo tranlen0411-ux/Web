@@ -59,7 +59,16 @@ export const QuestionBankListTab = ({
     : auth?.globalClassFilter;
   const activeClasses = propClasses || propAvailableClasses;
 
+  const hasSpecificGlobalClass = Boolean(
+    activeGlobalClassFilter &&
+    activeGlobalClassFilter !== 'ALL' &&
+    activeGlobalClassFilter !== 'NO_CLASS'
+  );
+
   const [resolvedClass, setResolvedClass] = useState(null);
+  const [classResolutionStatus, setClassResolutionStatus] = useState(() => {
+    return hasSpecificGlobalClass ? 'loading' : 'idle';
+  });
 
   const [questions, setQuestions] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -81,20 +90,32 @@ export const QuestionBankListTab = ({
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  // 1. Đồng bộ và giải mã metadata của lớp học từ globalClassFilter
+  // Sequence ref để chặn stale responses từ các request cũ
+  const fetchSeqRef = React.useRef(0);
+
+  // 1. Đồng bộ và giải mã metadata của lớp học từ globalClassFilter (Fail-Closed & Clear Stale ngay lập tức)
   useEffect(() => {
     let isMounted = true;
-    const resolveSelectedClass = async () => {
-      if (!activeGlobalClassFilter || activeGlobalClassFilter === 'ALL' || activeGlobalClassFilter === 'NO_CLASS') {
-        if (isMounted) setResolvedClass(null);
-        return;
-      }
 
+    if (!hasSpecificGlobalClass) {
+      setResolvedClass(null);
+      setClassResolutionStatus('idle');
+      return;
+    }
+
+    // XÓA NGAY LẬP TỨC resolvedClass cũ để tránh stale race khi đổi lớp ở Header
+    setResolvedClass(null);
+    setClassResolutionStatus('loading');
+
+    const resolveSelectedClass = async () => {
       // Ưu tiên tìm trong danh sách classes / availableClasses truyền từ Dashboard
       if (Array.isArray(activeClasses) && activeClasses.length > 0) {
         const found = activeClasses.find(c => c && String(c.id) === String(activeGlobalClassFilter));
         if (found) {
-          if (isMounted) setResolvedClass(found);
+          if (isMounted) {
+            setResolvedClass(found);
+            setClassResolutionStatus('resolved');
+          }
           return;
         }
       }
@@ -107,35 +128,50 @@ export const QuestionBankListTab = ({
           .eq('id', activeGlobalClassFilter)
           .maybeSingle();
 
-        if (!error && data && isMounted) {
+        if (!isMounted) return;
+
+        if (!error && data) {
           setResolvedClass(data);
-        } else if (isMounted) {
+          setClassResolutionStatus('resolved');
+        } else {
           setResolvedClass(null);
+          setClassResolutionStatus('failed');
         }
       } catch (err) {
         console.error('Lỗi khi phân giải class metadata cho Question Bank:', err);
-        if (isMounted) setResolvedClass(null);
+        if (isMounted) {
+          setResolvedClass(null);
+          setClassResolutionStatus('failed');
+        }
       }
     };
 
     resolveSelectedClass();
     return () => { isMounted = false; };
-  }, [activeGlobalClassFilter, activeClasses]);
+  }, [activeGlobalClassFilter, activeClasses, hasSpecificGlobalClass]);
 
   // 2. Tính toán globalGrade từ metadata lớp
-  const globalGrade = (activeGlobalClassFilter && activeGlobalClassFilter !== 'ALL' && activeGlobalClassFilter !== 'NO_CLASS')
+  const globalGrade = hasSpecificGlobalClass && classResolutionStatus === 'resolved'
     ? deriveGradeFromClass(resolvedClass)
     : null;
 
-  // 3. Khóa effectiveGrade: Nếu Header đang chọn lớp cụ thể -> ép theo globalGrade
-  const effectiveGrade = globalGrade != null
-    ? globalGrade
-    : (selectedGrade ? Number(selectedGrade) : undefined);
+  // 3. FAIL-CLOSED CONTRACT: Khóa effectiveGrade
+  let effectiveGrade = undefined;
+  if (hasSpecificGlobalClass) {
+    if (classResolutionStatus === 'resolved' && globalGrade != null) {
+      effectiveGrade = globalGrade;
+    } else {
+      // Blocked state: Tuyệt đối KHÔNG fallback sang selectedGrade hay undefined khi Header đang chọn lớp cụ thể!
+      effectiveGrade = null;
+    }
+  } else {
+    effectiveGrade = selectedGrade ? Number(selectedGrade) : undefined;
+  }
 
-  // 4. Reset phân trang về trang 1 khi thay đổi Header hoặc Grade
+  // 4. Reset phân trang về trang 1 khi thay đổi Header
   useEffect(() => {
     setPage(1);
-  }, [activeGlobalClassFilter, globalGrade]);
+  }, [activeGlobalClassFilter]);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -143,8 +179,27 @@ export const QuestionBankListTab = ({
   };
 
   const fetchQuestions = useCallback(async () => {
+    const currentSeq = ++fetchSeqRef.current;
+
+    // GUARD 1: Nếu Header đang chọn lớp cụ thể nhưng đang loading metadata -> Chờ, không phát request không-filter
+    if (hasSpecificGlobalClass && (classResolutionStatus === 'loading' || classResolutionStatus === 'idle')) {
+      setLoading(true);
+      setError(null);
+      return;
+    }
+
+    // GUARD 2: Nếu Header đang chọn lớp cụ thể nhưng resolution thất bại hoặc không parse được grade -> FAIL-CLOSED
+    if (hasSpecificGlobalClass && (classResolutionStatus === 'failed' || globalGrade == null)) {
+      setQuestions([]);
+      setTotalCount(0);
+      setLoading(false);
+      setError('Không thể xác định khối lớp từ bộ lọc Header.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
+
     try {
       const filters = {
         page,
@@ -157,17 +212,35 @@ export const QuestionBankListTab = ({
       };
 
       const result = await listQuestions(filters);
+
+      // Stale response guard: Nếu có request mới hơn được phát đi thì bỏ qua response cũ này
+      if (currentSeq !== fetchSeqRef.current) return;
+
       setQuestions(result?.items || []);
       setTotalCount(result?.total_count || 0);
     } catch (err) {
+      if (currentSeq !== fetchSeqRef.current) return;
       console.error('Lỗi khi tải Question Bank:', err);
       setError(err?.message || 'Không thể tải danh sách câu hỏi. Vui lòng thử lại.');
       setQuestions([]);
       setTotalCount(0);
     } finally {
-      setLoading(false);
+      if (currentSeq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
-  }, [page, pageSize, appliedSearch, selectedSubject, effectiveGrade, selectedDifficulty, selectedType]);
+  }, [
+    page,
+    pageSize,
+    appliedSearch,
+    selectedSubject,
+    hasSpecificGlobalClass,
+    classResolutionStatus,
+    globalGrade,
+    effectiveGrade,
+    selectedDifficulty,
+    selectedType
+  ]);
 
 
   useEffect(() => {
@@ -306,27 +379,55 @@ export const QuestionBankListTab = ({
           <div>
             <label className="block text-[11px] font-black text-slate-500 mb-1 flex items-center justify-between">
               <span>Khối lớp</span>
-              {globalGrade != null && (
-                <span className="text-[10px] text-amber-700 font-bold bg-amber-100/80 px-1.5 py-0.5 rounded border border-amber-300">
-                  Khóa theo Header
+              {hasSpecificGlobalClass && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                  classResolutionStatus === 'loading'
+                    ? 'text-indigo-700 bg-indigo-100 border-indigo-300 animate-pulse'
+                    : classResolutionStatus === 'resolved' && globalGrade != null
+                    ? 'text-amber-700 bg-amber-100/80 border-amber-300'
+                    : 'text-rose-700 bg-rose-100 border-rose-300'
+                }`}>
+                  {classResolutionStatus === 'loading'
+                    ? 'Đang xác định...'
+                    : classResolutionStatus === 'resolved' && globalGrade != null
+                    ? 'Khóa theo Header'
+                    : 'Lỗi bộ lọc'}
                 </span>
               )}
             </label>
             <select
-              value={globalGrade != null ? String(globalGrade) : selectedGrade}
+              value={hasSpecificGlobalClass ? (globalGrade != null ? String(globalGrade) : '') : selectedGrade}
               onChange={(e) => { setSelectedGrade(e.target.value); setPage(1); }}
-              disabled={globalGrade != null}
+              disabled={hasSpecificGlobalClass}
               className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${
-                globalGrade != null
-                  ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
+                hasSpecificGlobalClass
+                  ? classResolutionStatus === 'loading'
+                    ? 'bg-indigo-50/50 border-2 border-indigo-200 text-indigo-800 font-bold cursor-wait'
+                    : classResolutionStatus === 'resolved' && globalGrade != null
+                    ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
+                    : 'bg-rose-50/80 border-2 border-rose-300 text-rose-950 font-bold cursor-not-allowed'
                   : 'bg-white border border-slate-300 text-slate-700 focus:border-indigo-500'
               }`}
-              title={globalGrade != null ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}` : 'Chọn khối lớp để lọc'}
+              title={
+                hasSpecificGlobalClass
+                  ? classResolutionStatus === 'loading'
+                    ? 'Đang tải thông tin khối lớp từ Header...'
+                    : classResolutionStatus === 'resolved' && globalGrade != null
+                    ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}`
+                    : 'Không thể xác định khối lớp từ bộ lọc Header'
+                  : 'Chọn khối lớp để lọc'
+              }
             >
-              {globalGrade != null ? (
-                <option value={globalGrade}>
-                  {resolvedClass?.name ? `Lớp ${globalGrade} (${formatClassLabel(resolvedClass.name)})` : `Lớp ${globalGrade} (theo bộ lọc Header)`}
-                </option>
+              {hasSpecificGlobalClass ? (
+                classResolutionStatus === 'loading' ? (
+                  <option value="">Đang xác định khối lớp...</option>
+                ) : classResolutionStatus === 'resolved' && globalGrade != null ? (
+                  <option value={globalGrade}>
+                    {resolvedClass?.name ? `Lớp ${globalGrade} (${formatClassLabel(resolvedClass.name)})` : `Lớp ${globalGrade} (theo bộ lọc Header)`}
+                  </option>
+                ) : (
+                  <option value="">Không xác định được khối lớp</option>
+                )
               ) : (
                 <>
                   <option value="">Tất cả khối lớp</option>
