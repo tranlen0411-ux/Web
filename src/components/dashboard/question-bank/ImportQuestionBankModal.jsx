@@ -297,26 +297,23 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                   <Download className="w-4 h-4 text-indigo-600" /> Tải tệp mẫu chuẩn:
                 </h4>
                 <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={downloadExcelTemplate}
-                    className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs"
+                  <a
+                    href="/templates/Mau_Nhap_Cau_Hoi_Question_Bank.xlsx"
+                    download="Mau_Nhap_Cau_Hoi_Question_Bank.xlsx"
+                    className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs cursor-pointer"
                   >
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                     Tải mẫu Excel (.xlsx)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={downloadWordTemplate}
-                    className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs"
+                  </a>
+                  <a
+                    href="/templates/Mau_Nhap_Cau_Hoi_Question_Bank.docx"
+                    download="Mau_Nhap_Cau_Hoi_Question_Bank.docx"
+                    className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-colors flex items-center gap-2 shadow-xs cursor-pointer"
                   >
                     <FileText className="w-4 h-4 text-blue-600" />
-                    Tải mẫu cấu trúc Word (.txt)
-                  </button>
+                    Tải mẫu Word (.docx)
+                  </a>
                 </div>
-                <p className="text-[11px] text-slate-500 font-medium italic">
-                  Mẫu này dùng để xem cấu trúc. Khi nhập Word, hãy lưu nội dung thành tệp .docx.
-                </p>
               </div>
             </div>
           )}
