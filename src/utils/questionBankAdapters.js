@@ -15,9 +15,51 @@ export const normalizePromptForDuplicateCheck = (prompt) => {
 };
 
 /**
- * Kiểm tra các câu hỏi bị trùng lặp trong cùng một danh sách
+ * Tạo khóa định danh duy nhất phục vụ so khớp trùng lặp chính xác (Exact Normalized Duplicate Key)
+ * Bao gồm: normalized prompt, question_type, subject, grade_level, visibility
+ * Tuyệt đối KHÔNG dùng: difficulty, metadata, imported_at, title, answer_key
+ * Nếu thiếu bất kỳ trường bắt buộc nào -> trả về null (fail-closed)
+ *
+ * @param {Object} question
+ * @returns {string|null}
+ */
+export const buildQuestionDuplicateKey = (question) => {
+  if (!question || typeof question !== 'object') return null;
+
+  const rawPrompt = question.prompt || question.title || (typeof question.version?.prompt === 'string' ? question.version.prompt : '');
+  const normalizedPrompt = normalizePromptForDuplicateCheck(rawPrompt);
+  if (!normalizedPrompt) return null;
+
+  const rawType = question.question_type || 'single_choice';
+  const normalizedType = String(rawType).trim().toLowerCase();
+  if (!normalizedType) return null;
+
+  const rawSubject = question.subject || '';
+  const normalizedSubject = String(rawSubject).trim().toLowerCase();
+  if (!normalizedSubject) return null;
+
+  const rawGrade = question.grade_level;
+  if (rawGrade === undefined || rawGrade === null || String(rawGrade).trim() === '') return null;
+  const normalizedGrade = Number(rawGrade);
+  if (isNaN(normalizedGrade)) return null;
+
+  const rawVisibility = question.visibility || 'private';
+  const normalizedVisibility = String(rawVisibility).trim().toLowerCase();
+  if (!normalizedVisibility) return null;
+
+  return [
+    normalizedPrompt,
+    normalizedType,
+    normalizedSubject,
+    normalizedGrade,
+    normalizedVisibility
+  ].join('||');
+};
+
+/**
+ * Kiểm tra các câu hỏi bị trùng lặp trong cùng một danh sách file tải lên
  * @param {Array} questions
- * @returns {Set<number>} Tập hợp các index bị trùng lặp
+ * @returns {Set<number>} Tập hợp các index bị trùng lặp trong file
  */
 export const findDuplicatesInQuestionList = (questions) => {
   const seen = new Map();
@@ -34,6 +76,57 @@ export const findDuplicatesInQuestionList = (questions) => {
   });
 
   return duplicateIndexes;
+};
+
+/**
+ * Tìm tập hợp index của các candidate questions đã tồn tại trong Question Bank
+ * @param {Array<Object>} candidateQuestions Danh sách câu hỏi ứng viên từ file import
+ * @param {Array<Object>} existingQuestions Danh sách câu hỏi đã lưu lấy từ BFF
+ * @param {Object} batchDefaults { subject, grade_level, visibility }
+ * @param {string} role 'teacher' | 'admin'
+ * @returns {Set<number>} Set các index của candidateQuestions bị trùng với existing bank
+ */
+export const findExistingQuestionDuplicateIndices = (
+  candidateQuestions = [],
+  existingQuestions = [],
+  batchDefaults = {},
+  role = 'teacher'
+) => {
+  const existingKeySet = new Set();
+
+  (existingQuestions || []).forEach((eq) => {
+    const key = buildQuestionDuplicateKey(eq);
+    if (key) {
+      existingKeySet.add(key);
+    }
+  });
+
+  const duplicateIndices = new Set();
+
+  (candidateQuestions || []).forEach((q, idx) => {
+    const effectiveSubject = q?.subject || batchDefaults?.subject || '';
+    const effectiveGrade = q?.grade_level || batchDefaults?.grade_level || batchDefaults?.grade;
+    const effectiveVisibility = role === 'admin'
+      ? (q?.visibility || batchDefaults?.visibility || 'private')
+      : 'private';
+    const effectiveType = q?.question_type || 'single_choice';
+
+    const effectiveQ = {
+      ...q,
+      prompt: q?.prompt || q?.title || '',
+      question_type: effectiveType,
+      subject: effectiveSubject,
+      grade_level: effectiveGrade,
+      visibility: effectiveVisibility
+    };
+
+    const candidateKey = buildQuestionDuplicateKey(effectiveQ);
+    if (candidateKey && existingKeySet.has(candidateKey)) {
+      duplicateIndices.add(idx);
+    }
+  });
+
+  return duplicateIndices;
 };
 
 /**

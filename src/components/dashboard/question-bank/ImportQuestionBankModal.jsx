@@ -27,12 +27,12 @@ import {
 import {
   downloadQuestionBankExcelTemplate,
   downloadQuestionBankWordTemplate
-} from '../../../utils/questionBankTemplateGenerators';
 import {
   toQuestionBankPayload,
-  findDuplicatesInQuestionList
+  findDuplicatesInQuestionList,
+  findExistingQuestionDuplicateIndices
 } from '../../../utils/questionBankAdapters';
-import { createQuestion } from '../../../services/questionBankService';
+import { listQuestions, createQuestion } from '../../../services/questionBankService';
 
 export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'teacher' }) => {
   const fileInputRef = useRef(null);
@@ -52,6 +52,12 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   // Selected questions indices to import
   const [selectedIndices, setSelectedIndices] = useState(new Set());
 
+  // Existing Duplicate Check States
+  const [existingDuplicateIndices, setExistingDuplicateIndices] = useState(new Set());
+  const [duplicateCheckStatus, setDuplicateCheckStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'failed'
+  const [duplicateCheckError, setDuplicateCheckError] = useState('');
+  const duplicateCheckSeqRef = useRef(0);
+
   // Import Progress & Results
   const [progressCount, setProgressCount] = useState(0);
   const [importResults, setImportResults] = useState({
@@ -62,12 +68,16 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   const [copiedErrors, setCopiedErrors] = useState(false);
 
   const resetImportState = () => {
+    duplicateCheckSeqRef.current++; // Invalidate pending duplicate check requests
     setStep(1);
     setFile(null);
     setParsedQuestions([]);
     setParsingErrors([]);
     setIsParsing(false);
     setSelectedIndices(new Set());
+    setExistingDuplicateIndices(new Set());
+    setDuplicateCheckStatus('idle');
+    setDuplicateCheckError('');
     setProgressCount(0);
     setImportResults({
       successCount: 0,
@@ -100,6 +110,113 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, step, onClose]);
+
+  // Kiểm tra câu hỏi đã tồn tại trong Ngân hàng câu hỏi qua BFF listQuestions()
+  const runExistingDuplicateCheck = useCallback(async (questionsList, currentSubject, currentGrade, currentVisibility) => {
+    if (!questionsList || questionsList.length === 0) {
+      setExistingDuplicateIndices(new Set());
+      setDuplicateCheckStatus('idle');
+      setDuplicateCheckError('');
+      return;
+    }
+
+    const currentSeq = ++duplicateCheckSeqRef.current;
+    setDuplicateCheckStatus('loading');
+    setDuplicateCheckError('');
+
+    try {
+      // 1. Gom nhóm các scope duy nhất (subject, grade_level, visibility) từ danh sách câu hỏi
+      const uniqueScopesMap = new Map();
+      for (const q of questionsList) {
+        const subject = String(q.subject || currentSubject || '').trim();
+        const grade_level = Number(q.grade_level || currentGrade);
+        const visibility = role === 'admin'
+          ? String(q.visibility || currentVisibility || 'private').trim()
+          : 'private';
+
+        if (!subject || isNaN(grade_level) || !visibility) continue;
+
+        const scopeKey = `${subject}||${grade_level}||${visibility}`;
+        if (!uniqueScopesMap.has(scopeKey)) {
+          uniqueScopesMap.set(scopeKey, { subject, grade_level, visibility });
+        }
+      }
+
+      // 2. Phân trang tải toàn bộ danh sách câu hỏi đã lưu cho từng scope từ BFF listQuestions()
+      const existingQuestionsMap = new Map();
+      const PAGE_SIZE_MAX = 100; // Hạn mức tối đa được BFF hỗ trợ
+
+      for (const scope of uniqueScopesMap.values()) {
+        let page = 1;
+        let totalCount = 0;
+
+        do {
+          if (currentSeq !== duplicateCheckSeqRef.current) return;
+
+          const res = await listQuestions({
+            page,
+            page_size: PAGE_SIZE_MAX,
+            subject: scope.subject,
+            grade_level: scope.grade_level,
+            visibility: scope.visibility
+          });
+
+          if (currentSeq !== duplicateCheckSeqRef.current) return;
+
+          const items = res?.items || [];
+          totalCount = res?.total_count || 0;
+
+          for (const item of items) {
+            const id = item.id || item.item_id || Math.random().toString();
+            existingQuestionsMap.set(id, item);
+          }
+
+          if (items.length === 0 || page * PAGE_SIZE_MAX >= totalCount) {
+            break;
+          }
+          page++;
+        } while (true);
+      }
+
+      if (currentSeq !== duplicateCheckSeqRef.current) return;
+
+      const existingList = Array.from(existingQuestionsMap.values());
+      const existingDupes = findExistingQuestionDuplicateIndices(
+        questionsList,
+        existingList,
+        { subject: currentSubject, grade_level: currentGrade, visibility: currentVisibility },
+        role
+      );
+
+      setExistingDuplicateIndices(existingDupes);
+      setDuplicateCheckStatus('ready');
+
+      // Khử trùng lặp kết hợp: Mặc định chỉ chọn các câu KHÔNG bị trùng trong tệp và KHÔNG có trong Ngân hàng
+      const fileDupes = findDuplicatesInQuestionList(questionsList);
+      const combined = new Set([...fileDupes, ...existingDupes]);
+      const initialSelected = new Set(
+        questionsList
+          .map((_, idx) => idx)
+          .filter(idx => !combined.has(idx))
+      );
+      setSelectedIndices(initialSelected);
+
+    } catch (err) {
+      if (currentSeq !== duplicateCheckSeqRef.current) return;
+      console.error('Lỗi khi kiểm tra trùng lặp Question Bank:', err);
+      setExistingDuplicateIndices(new Set());
+      setDuplicateCheckStatus('failed');
+      setDuplicateCheckError(err?.message || 'Không thể kiểm tra câu hỏi trùng với Ngân hàng câu hỏi.');
+      setSelectedIndices(new Set()); // FAIL-CLOSED
+    }
+  }, [role]);
+
+  // Tự động kiểm tra trùng lặp khi vào Step 2 hoặc khi thay đổi Batch Config
+  useEffect(() => {
+    if (step === 2 && parsedQuestions.length > 0) {
+      runExistingDuplicateCheck(parsedQuestions, batchSubject, batchGrade, batchVisibility);
+    }
+  }, [step, parsedQuestions, batchSubject, batchGrade, batchVisibility, runExistingDuplicateCheck]);
 
   if (!isOpen || typeof document === 'undefined') return null;
 
@@ -135,16 +252,6 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
       }
 
       setParsedQuestions(questionsList);
-
-      // Khử trùng lặp: Mặc định CHỈ chọn các câu KHÔNG bị trùng lặp
-      const duplicatesSet = findDuplicatesInQuestionList(questionsList);
-      const initialSelected = new Set(
-        questionsList
-          .map((_, idx) => idx)
-          .filter(idx => !duplicatesSet.has(idx))
-      );
-      setSelectedIndices(initialSelected);
-
       setStep(2);
     } catch (err) {
       console.error('Lỗi khi phân tích tệp:', err);
@@ -154,12 +261,16 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
     }
   };
 
-  const duplicates = findDuplicatesInQuestionList(parsedQuestions);
+  const fileDuplicates = findDuplicatesInQuestionList(parsedQuestions);
+  const combinedDuplicates = new Set([...fileDuplicates, ...existingDuplicateIndices]);
+  const nonDuplicateTotal = parsedQuestions.length - combinedDuplicates.size;
 
   const handleToggleSelectAll = () => {
+    if (duplicateCheckStatus !== 'ready') return;
+
     const nonDuplicateIndices = parsedQuestions
       .map((_, idx) => idx)
-      .filter(idx => !duplicates.has(idx));
+      .filter(idx => !combinedDuplicates.has(idx));
 
     if (selectedIndices.size === nonDuplicateIndices.length) {
       setSelectedIndices(new Set());
@@ -169,8 +280,9 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   };
 
   const handleToggleIndex = (idx) => {
+    if (duplicateCheckStatus !== 'ready') return;
     // Không cho phép chọn câu trùng lặp
-    if (duplicates.has(idx)) return;
+    if (combinedDuplicates.has(idx)) return;
 
     const next = new Set(selectedIndices);
     if (next.has(idx)) {
@@ -182,15 +294,26 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   };
 
   const handleStartImport = async () => {
+    if (duplicateCheckStatus !== 'ready') return;
     if (selectedIndices.size === 0) return;
 
     setStep(3);
     setProgressCount(0);
 
-    // Defense-in-depth: lọc nghiêm ngặt selectedIndices && !duplicates.has
+    // Defense-in-depth: lọc nghiêm ngặt selectedIndices && !fileDuplicates.has && !existingDuplicateIndices.has
     const questionsToImport = parsedQuestions
       .map((q, idx) => ({ q, originalIndex: idx }))
-      .filter(({ originalIndex }) => selectedIndices.has(originalIndex) && !duplicates.has(originalIndex));
+      .filter(({ originalIndex }) =>
+        selectedIndices.has(originalIndex) &&
+        !fileDuplicates.has(originalIndex) &&
+        !existingDuplicateIndices.has(originalIndex)
+      );
+
+    if (questionsToImport.length === 0) {
+      setImportResults({ successCount: 0, failedCount: 0, errors: [] });
+      setStep(4);
+      return;
+    }
 
     let successCount = 0;
     let failedCount = 0;
@@ -266,8 +389,6 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
     }
     handleClose();
   };
-
-  const nonDuplicateTotal = parsedQuestions.length - duplicates.size;
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -369,9 +490,18 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
             <div className="space-y-5">
               {/* THÔNG TIN TỆP & CẤU HÌNH MẶC ĐỊNH */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-700 pb-2 border-b border-slate-200">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700 pb-2 border-b border-slate-200 flex-wrap gap-2">
                   <span>Tệp: <strong className="text-indigo-700">{file?.name}</strong></span>
-                  <span>Tổng số: <strong className="text-slate-900">{parsedQuestions.length}</strong> câu hỏi (Khả dụng: <strong className="text-emerald-700">{nonDuplicateTotal}</strong>)</span>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span>Tổng số: <strong className="text-slate-900">{parsedQuestions.length}</strong></span>
+                    <span>Khả dụng: <strong className="text-emerald-700">{nonDuplicateTotal}</strong></span>
+                    {fileDuplicates.size > 0 && (
+                      <span className="text-amber-700">Trùng trong tệp: <strong>{fileDuplicates.size}</strong></span>
+                    )}
+                    {existingDuplicateIndices.size > 0 && (
+                      <span className="text-indigo-700">Đã có trong Ngân hàng: <strong>{existingDuplicateIndices.size}</strong></span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-bold text-slate-700">
@@ -440,23 +570,57 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                 </div>
               </div>
 
+              {/* DUPLICATE CHECK STATUS BANNER */}
+              {duplicateCheckStatus === 'loading' && (
+                <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center gap-2.5 text-xs font-bold text-indigo-800 animate-pulse">
+                  <RefreshCw className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+                  <span>Đang kiểm tra câu hỏi đã có trong Ngân hàng câu hỏi...</span>
+                </div>
+              )}
+
+              {duplicateCheckStatus === 'failed' && (
+                <div className="p-3 bg-rose-50 border-2 border-rose-200 rounded-xl flex items-center justify-between gap-2.5 text-xs font-bold text-rose-800">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Không thể kiểm tra câu hỏi trùng với Ngân hàng câu hỏi: {duplicateCheckError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => runExistingDuplicateCheck(parsedQuestions, batchSubject, batchGrade, batchVisibility)}
+                    className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-black shrink-0 transition-colors"
+                  >
+                    Kiểm tra lại
+                  </button>
+                </div>
+              )}
+
               {/* BẢNG XEM TRƯỚC */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <label className="flex items-center gap-2 text-xs font-black text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={selectedIndices.size === nonDuplicateTotal && nonDuplicateTotal > 0}
+                      disabled={duplicateCheckStatus !== 'ready'}
                       onChange={handleToggleSelectAll}
-                      className="w-4 h-4 text-indigo-600 rounded"
+                      className="w-4 h-4 text-indigo-600 rounded disabled:opacity-40"
                     />
                     <span>Chọn tất cả câu hợp lệ ({selectedIndices.size}/{nonDuplicateTotal} câu đã chọn)</span>
                   </label>
 
-                  {duplicates.size > 0 && (
-                    <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Loại bỏ {duplicates.size} câu trùng lặp
-                    </span>
+                  {combinedDuplicates.size > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap text-[11px] font-bold">
+                      {fileDuplicates.size > 0 && (
+                        <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> {fileDuplicates.size} câu trùng trong tệp
+                        </span>
+                      )}
+                      {existingDuplicateIndices.size > 0 && (
+                        <span className="text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200 flex items-center gap-1">
+                          <Lock className="w-3.5 h-3.5 text-indigo-600" /> {existingDuplicateIndices.size} câu đã có trong Ngân hàng
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -468,33 +632,46 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                         <th className="py-2.5 px-3">Nội dung câu hỏi</th>
                         <th className="py-2.5 px-3 w-28">Dạng câu</th>
                         <th className="py-2.5 px-3 w-24">Đáp án</th>
-                        <th className="py-2.5 px-3 w-28 text-center">Trạng thái</th>
+                        <th className="py-2.5 px-3 w-36 text-center">Trạng thái</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-800">
                       {parsedQuestions.map((q, idx) => {
-                        const isDuplicate = duplicates.has(idx);
+                        const isFileDuplicate = fileDuplicates.has(idx);
+                        const isExistingDuplicate = existingDuplicateIndices.has(idx);
+                        const isDuplicate = isFileDuplicate || isExistingDuplicate;
                         const isSelected = selectedIndices.has(idx) && !isDuplicate;
 
                         return (
                           <tr
                             key={idx}
-                            className={`hover:bg-indigo-50/30 transition-colors ${isDuplicate ? 'bg-amber-50/60 opacity-80' : ''}`}
+                            className={`hover:bg-indigo-50/30 transition-colors ${
+                              isFileDuplicate
+                                ? 'bg-amber-50/60 opacity-80'
+                                : isExistingDuplicate
+                                ? 'bg-indigo-50/40 opacity-80'
+                                : ''
+                            }`}
                           >
                             <td className="py-2.5 px-3 text-center">
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                disabled={isDuplicate}
+                                disabled={isDuplicate || duplicateCheckStatus !== 'ready'}
                                 onChange={() => handleToggleIndex(idx)}
                                 className="w-4 h-4 text-indigo-600 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                               />
                             </td>
                             <td className="py-2.5 px-3">
                               <div className="font-bold text-slate-900 line-clamp-1">{q.prompt}</div>
-                              {isDuplicate && (
-                                <span className="text-[10px] font-bold text-amber-700">
+                              {isFileDuplicate && (
+                                <span className="text-[10px] font-bold text-amber-700 block mt-0.5">
                                   ⚠️ Trùng lặp nội dung với câu khác trong tệp
+                                </span>
+                              )}
+                              {isExistingDuplicate && (
+                                <span className="text-[10px] font-bold text-indigo-700 block mt-0.5">
+                                  🔒 Đã có trong Ngân hàng câu hỏi
                                 </span>
                               )}
                             </td>
@@ -507,9 +684,13 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                              {isDuplicate ? (
+                              {isFileDuplicate ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200">
-                                  <AlertTriangle className="w-3 h-3 text-amber-600" /> Trùng — không nhập
+                                  <AlertTriangle className="w-3 h-3 text-amber-600" /> Trùng trong tệp
+                                </span>
+                              ) : isExistingDuplicate ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200">
+                                  <Lock className="w-3 h-3 text-indigo-600" /> Đã có trong Ngân hàng
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
@@ -537,7 +718,7 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                 <button
                   type="button"
                   onClick={handleStartImport}
-                  disabled={selectedIndices.size === 0}
+                  disabled={selectedIndices.size === 0 || duplicateCheckStatus !== 'ready'}
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
                 >
                   <Save className="w-4 h-4" />

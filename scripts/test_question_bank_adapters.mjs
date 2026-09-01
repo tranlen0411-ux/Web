@@ -5,13 +5,15 @@ import assert from 'node:assert/strict';
 import {
   toQuestionBankPayload,
   normalizePromptForDuplicateCheck,
+  buildQuestionDuplicateKey,
   findDuplicatesInQuestionList,
+  findExistingQuestionDuplicateIndices,
   normalizeOptionsToStableIds,
   buildSingleChoiceAnswerKey,
   buildMultipleChoiceAnswerKey
 } from '../src/utils/questionBankAdapters.js';
 
-console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (15 CASES) ===');
+console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (23 CASES) ===');
 
 // 1. single_choice letter A/B/C -> correct opt id
 {
@@ -274,4 +276,126 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS (15 CASES) ===');
   console.log('PASS Test 15: essay without tags/options/hints/media_urls -> array contract enforced');
 }
 
-console.log('=== ALL 15 TESTS PASSED SUCCESSFULLY! ===');
+// 16. Duplicate key: Same prompt/type/subject/grade/visibility -> duplicate
+{
+  const q1 = { prompt: '3 + 4 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  const q2 = { prompt: '3 + 4 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.notEqual(key1, null);
+  assert.equal(key1, key2);
+  console.log('PASS Test 16 (Case A): Same prompt/type/subject/grade/visibility -> duplicate');
+}
+
+// 17. Duplicate key: Different whitespace/case in prompt -> duplicate
+{
+  const q1 = { prompt: '3 + 4 bằng bao nhiêu?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  const q2 = { prompt: '  3 + 4 BẰNG bao nhiêu?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.equal(key1, key2);
+  console.log('PASS Test 17 (Case B): Different whitespace/case in prompt -> duplicate');
+}
+
+// 18. Duplicate key: Same prompt but grade 1 vs grade 2 -> NOT duplicate
+{
+  const q1 = { prompt: 'Tính 10 + 20', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' };
+  const q2 = { prompt: 'Tính 10 + 20', question_type: 'single_choice', subject: 'Toán', grade_level: 2, visibility: 'private' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.notEqual(key1, key2);
+  console.log('PASS Test 18 (Case C): Same prompt but grade 1 vs grade 2 -> NOT duplicate');
+}
+
+// 19. Duplicate key: Same prompt but subject different -> NOT duplicate
+{
+  const q1 = { prompt: 'Điền từ còn thiếu vào chỗ trống', question_type: 'fill_blank', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' };
+  const q2 = { prompt: 'Điền từ còn thiếu vào chỗ trống', question_type: 'fill_blank', subject: 'Tiếng Anh', grade_level: 2, visibility: 'private' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.notEqual(key1, key2);
+  console.log('PASS Test 19 (Case D): Same prompt but subject different -> NOT duplicate');
+}
+
+// 20. Duplicate key: Same prompt but question_type different -> NOT duplicate
+{
+  const q1 = { prompt: 'Mặt trời mọc ở hướng nào?', question_type: 'single_choice', subject: 'Khoa học', grade_level: 3, visibility: 'private' };
+  const q2 = { prompt: 'Mặt trời mọc ở hướng nào?', question_type: 'short_answer', subject: 'Khoa học', grade_level: 3, visibility: 'private' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.notEqual(key1, key2);
+  console.log('PASS Test 20 (Case E): Same prompt but question_type different -> NOT duplicate');
+}
+
+// 21. Duplicate key: Same prompt but visibility private vs public_template -> NOT duplicate
+{
+  const q1 = { prompt: 'Câu hỏi mẫu', question_type: 'essay', subject: 'Toán', grade_level: 4, visibility: 'private' };
+  const q2 = { prompt: 'Câu hỏi mẫu', question_type: 'essay', subject: 'Toán', grade_level: 4, visibility: 'public_template' };
+  const key1 = buildQuestionDuplicateKey(q1);
+  const key2 = buildQuestionDuplicateKey(q2);
+  assert.notEqual(key1, key2);
+  console.log('PASS Test 21 (Case F): Same prompt but visibility private vs public_template -> NOT duplicate');
+}
+
+// 22. findExistingQuestionDuplicateIndices: 4 Excel candidates match 4 existing Word-equivalent questions -> duplicate size = 4
+{
+  const candidates = [
+    { prompt: 'Câu 1: 1 + 1 = ?', question_type: 'single_choice' },
+    { prompt: 'Câu 2: 2 + 2 = ?', question_type: 'single_choice' },
+    { prompt: 'Câu 3: 3 + 3 = ?', question_type: 'single_choice' },
+    { prompt: 'Câu 4: 4 + 4 = ?', question_type: 'single_choice' }
+  ];
+
+  const existingBank = [
+    { prompt: '  câu 1: 1 + 1 = ?  ', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt: 'câu 2: 2 + 2 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt: 'câu 3: 3 + 3 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' },
+    { prompt: 'câu 4: 4 + 4 = ?', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    candidates,
+    existingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'private' },
+    'teacher'
+  );
+
+  assert.equal(dupes.size, 4);
+  assert.equal(dupes.has(0), true);
+  assert.equal(dupes.has(1), true);
+  assert.equal(dupes.has(2), true);
+  assert.equal(dupes.has(3), true);
+  console.log('PASS Test 22 (Case G): 4 Excel candidates match 4 existing Word questions -> duplicate indices size = 4');
+}
+
+// 23. findExistingQuestionDuplicateIndices: 1 new + 3 existing -> only 1 available
+{
+  const candidates = [
+    { prompt: 'Câu cũ 1', question_type: 'single_choice' },
+    { prompt: 'Câu mới 2', question_type: 'single_choice' },
+    { prompt: 'Câu cũ 3', question_type: 'single_choice' },
+    { prompt: 'Câu cũ 4', question_type: 'single_choice' }
+  ];
+
+  const existingBank = [
+    { prompt: 'câu cũ 1', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
+    { prompt: 'câu cũ 3', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
+    { prompt: 'câu cũ 4', question_type: 'single_choice', subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    candidates,
+    existingBank,
+    { subject: 'Tiếng Việt', grade_level: 2, visibility: 'private' },
+    'teacher'
+  );
+
+  assert.equal(dupes.size, 3);
+  assert.equal(dupes.has(0), true);
+  assert.equal(dupes.has(1), false); // Câu mới 2 khả dụng
+  assert.equal(dupes.has(2), true);
+  assert.equal(dupes.has(3), true);
+  console.log('PASS Test 23 (Case H): 1 new + 3 existing -> only new question available');
+}
+
+console.log('=== ALL 23 TESTS PASSED SUCCESSFULLY! ===');
