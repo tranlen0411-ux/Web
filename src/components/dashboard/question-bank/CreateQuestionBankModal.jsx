@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Plus,
@@ -44,7 +45,21 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  if (!isOpen) return null;
+    useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, isSubmitting, onClose]);
+
+  if (!isOpen || typeof document === 'undefined') return null;
 
   const handleAddOption = () => {
     if (options.length >= 8) return;
@@ -153,7 +168,7 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-2xl rounded-3xl border-4 border-amber-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* HEADER */}
@@ -517,7 +532,8 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

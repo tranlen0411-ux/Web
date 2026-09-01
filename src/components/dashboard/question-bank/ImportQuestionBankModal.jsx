@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Upload,
@@ -60,7 +61,21 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   });
   const [copiedErrors, setCopiedErrors] = useState(false);
 
-  if (!isOpen) return null;
+    useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && step !== 3) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, step, onClose]);
+
+  if (!isOpen || typeof document === 'undefined') return null;
 
   const handleFileSelect = async (e) => {
     const selectedFile = e.target.files?.[0];
@@ -228,7 +243,7 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
 
   const nonDuplicateTotal = parsedQuestions.length - duplicates.size;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-3xl rounded-3xl border-4 border-amber-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* HEADER */}
@@ -575,7 +590,8 @@ export const ImportQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
