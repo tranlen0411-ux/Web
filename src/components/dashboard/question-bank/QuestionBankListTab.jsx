@@ -13,9 +13,13 @@ import {
   HelpCircle,
   CheckCircle2,
   Lock,
-  Globe
+  Globe,
+  Plus,
+  Upload
 } from 'lucide-react';
 import { listQuestions } from '../../../services/questionBankService';
+import { CreateQuestionBankModal } from './CreateQuestionBankModal';
+import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -47,6 +51,7 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
   const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [toastMsg, setToastMsg] = useState('');
 
   // Search and filters state
   const [searchText, setSearchText] = useState('');
@@ -55,6 +60,15 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState('');
   const [selectedType, setSelectedType] = useState('');
+
+  // Modals state
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 4000);
+  };
 
   const fetchQuestions = useCallback(async () => {
     setLoading(true);
@@ -103,30 +117,69 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
     setPage(1);
   };
 
+  const handleCreateSuccess = (msg) => {
+    showToast(msg);
+    fetchQuestions();
+  };
+
+  const handleImportSuccess = (msg) => {
+    showToast(msg);
+    fetchQuestions();
+  };
+
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
     <div className="bg-white rounded-3xl border-4 border-amber-200 p-4 sm:p-6 shadow-sm mb-8 animate-fadeIn">
-      {/* HEADER KHU VỰC */}
+      {/* TOAST THÔNG BÁO THÀNH CÔNG */}
+      {toastMsg && (
+        <div className="fixed top-6 right-6 z-[10000] bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce">
+          <CheckCircle2 className="w-5 h-5" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* HEADER KHU VỰC VÀ NÚT TẠO / IMPORT */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-amber-100 mb-6">
         <div>
           <div className="flex items-center gap-2 text-indigo-900 font-black text-lg sm:text-xl">
             <Layers className="w-6 h-6 text-indigo-600" />
             <span>Ngân Hàng Câu Hỏi Chuẩn Hóa</span>
             <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-indigo-100 text-indigo-700">
-              V1 Read-Only
+              V2A Authoring
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-            Tra cứu và xem kho câu hỏi học thuật ({role === 'admin' ? 'Quyền Quản trị viên' : 'Quyền Giáo viên'})
+            Tra cứu, tạo mới và nhập kho câu hỏi học thuật ({role === 'admin' ? 'Quyền Quản trị viên' : 'Quyền Giáo viên'})
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* NÚT IMPORT TỪ FILE */}
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="px-3.5 py-2 text-xs font-black rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 transition-colors flex items-center gap-1.5 shadow-xs"
+            title="Nhập câu hỏi hàng loạt từ Excel hoặc Word"
+          >
+            <Upload className="w-3.5 h-3.5 text-indigo-600" />
+            Nhập Excel / Word
+          </button>
+
+          {/* NÚT TẠO CÂU HỎI MỚI */}
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="px-4 py-2 text-xs font-black rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors flex items-center gap-1.5 shadow-sm"
+            title="Soạn câu hỏi thủ công"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Tạo Câu Hỏi Mới
+          </button>
+
+          {/* NÚT LÀM MỚI */}
           <button
             onClick={() => fetchQuestions()}
             disabled={loading}
-            className="px-3.5 py-2 text-xs font-black rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            className="px-3 py-2 text-xs font-black rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             title="Tải lại danh sách"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -275,9 +328,25 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
         <div className="py-16 text-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200">
           <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h4 className="text-base font-black text-slate-700 mb-1">Ngân hàng câu hỏi hiện chưa có dữ liệu.</h4>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
+          <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
             Chưa có câu hỏi nào phù hợp với bộ lọc hiện tại hoặc kho câu hỏi đang được cập nhật.
           </p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              Soạn câu hỏi đầu tiên
+            </button>
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-colors flex items-center gap-1.5"
+            >
+              <Upload className="w-4 h-4 text-slate-600" />
+              Nhập từ Excel/Word
+            </button>
+          </div>
         </div>
       ) : (
         /* QUESTION LIST TABLE */
@@ -392,6 +461,22 @@ export const QuestionBankListTab = ({ role = 'teacher' }) => {
           </div>
         </div>
       )}
+
+      {/* CREATE MODAL */}
+      <CreateQuestionBankModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={handleCreateSuccess}
+        role={role}
+      />
+
+      {/* IMPORT MODAL */}
+      <ImportQuestionBankModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onSuccess={handleImportSuccess}
+        role={role}
+      />
     </div>
   );
 };
