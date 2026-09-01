@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -27,6 +27,7 @@ import {
 import {
   downloadQuestionBankExcelTemplate,
   downloadQuestionBankWordTemplate
+} from '../../../utils/questionBankTemplateGenerators';
 import {
   toQuestionBankPayload,
   findDuplicatesInQuestionList,
