@@ -36,7 +36,7 @@ import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListT
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 
 export const TeacherDashboard = () => {
-  const { profile } = useAuth();
+  const { profile, globalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -311,7 +311,11 @@ export const TeacherDashboard = () => {
         <ExerciseListTab role="teacher" />
       )}
       {activeTab === 'question-bank' && (
-        <QuestionBankListTab role="teacher" />
+        <QuestionBankListTab
+          role="teacher"
+          globalClassFilter={globalClassFilter}
+          classes={classes}
+        />
       )}
 
       {/* KHU VỰC 1: QUẢN LÝ LỚP HỌC & HỌC SINH (tab=classes) */}
