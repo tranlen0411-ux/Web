@@ -108,7 +108,7 @@ export const buildSingleChoiceAnswerKey = (options, rawCorrectAnswer) => {
 };
 
 /**
- * Tạo answer_key chuẩn cho dạng multiple_choice
+ * Tạo answer_key chuẩn cho dạng multiple_choice (FAIL-CLOSED)
  * @param {Array<{ id: string, text: string }>} options
  * @param {Array<string>|string} rawCorrectAnswers
  * @returns {{ correct_option_ids: string[] }}
@@ -120,7 +120,7 @@ export const buildMultipleChoiceAnswerKey = (options, rawCorrectAnswers) => {
 
   let answersArr = [];
   if (Array.isArray(rawCorrectAnswers)) {
-    answersArr = rawCorrectAnswers;
+    answersArr = rawCorrectAnswers.map((s) => String(s).trim()).filter(Boolean);
   } else if (typeof rawCorrectAnswers === 'string') {
     answersArr = rawCorrectAnswers.split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
   }
@@ -132,26 +132,35 @@ export const buildMultipleChoiceAnswerKey = (options, rawCorrectAnswers) => {
   const correctIds = [];
   for (const ans of answersArr) {
     const ansStr = String(ans).trim();
-    // Direct ID match
+    let matchedId = null;
+
+    // 1. Direct ID match
     const directMatch = options.find((o) => o.id === ansStr);
     if (directMatch) {
-      if (!correctIds.includes(directMatch.id)) correctIds.push(directMatch.id);
-      continue;
-    }
-    // Text match
-    const textMatch = options.find((o) => o.text.toLowerCase() === ansStr.toLowerCase());
-    if (textMatch) {
-      if (!correctIds.includes(textMatch.id)) correctIds.push(textMatch.id);
-      continue;
-    }
-    // Letter match A, B, C...
-    const letterMatch = ansStr.toUpperCase().match(/^([A-Z])$/);
-    if (letterMatch) {
-      const idx = letterMatch[1].charCodeAt(0) - 65;
-      if (idx >= 0 && idx < options.length) {
-        if (!correctIds.includes(options[idx].id)) correctIds.push(options[idx].id);
-        continue;
+      matchedId = directMatch.id;
+    } else {
+      // 2. Text match
+      const textMatch = options.find((o) => o.text.toLowerCase() === ansStr.toLowerCase());
+      if (textMatch) {
+        matchedId = textMatch.id;
+      } else {
+        // 3. Letter match A, B, C...
+        const letterMatch = ansStr.toUpperCase().match(/^([A-Z])$/);
+        if (letterMatch) {
+          const idx = letterMatch[1].charCodeAt(0) - 65;
+          if (idx >= 0 && idx < options.length) {
+            matchedId = options[idx].id;
+          }
+        }
       }
+    }
+
+    if (!matchedId) {
+      throw new Error(`Không thể ánh xạ đáp án đúng "${ansStr}" sang lựa chọn hợp lệ nào trong danh sách.`);
+    }
+
+    if (!correctIds.includes(matchedId)) {
+      correctIds.push(matchedId);
     }
   }
 
@@ -323,7 +332,7 @@ export const toQuestionBankPayload = (input = {}, contextOptions = {}) => {
   delete payload.actor_role;
   delete payload.school_id;
   delete payload.server_grading;
-  delete payload.service_role;
+  delete payload['service_role'];
 
   return payload;
 };

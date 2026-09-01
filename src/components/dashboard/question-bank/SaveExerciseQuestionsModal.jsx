@@ -4,6 +4,7 @@ import {
   Layers,
   Save,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Lock,
   Globe,
@@ -62,7 +63,12 @@ export const SaveExerciseQuestionsModal = ({
 
       const items = data || [];
       setQuestions(items);
-      setSelectedIndices(new Set(items.map((_, idx) => idx)));
+
+      const duplicatesSet = findDuplicatesInQuestionList(items);
+      const initialSelected = new Set(
+        items.map((_, idx) => idx).filter(idx => !duplicatesSet.has(idx))
+      );
+      setSelectedIndices(initialSelected);
     } catch (err) {
       console.error('Lỗi khi tải câu hỏi bài tập:', err);
       setErrorMsg(err.message || 'Không thể tải danh sách câu hỏi của bài tập này.');
@@ -71,17 +77,27 @@ export const SaveExerciseQuestionsModal = ({
     }
   };
 
+  const duplicates = findDuplicatesInQuestionList(questions);
+
   if (!isOpen || !exercise) return null;
 
+  const nonDuplicateTotal = questions.length - duplicates.size;
+
   const handleToggleSelectAll = () => {
-    if (selectedIndices.size === questions.length) {
+    const nonDuplicateIndices = questions
+      .map((_, idx) => idx)
+      .filter(idx => !duplicates.has(idx));
+
+    if (selectedIndices.size === nonDuplicateIndices.length) {
       setSelectedIndices(new Set());
     } else {
-      setSelectedIndices(new Set(questions.map((_, idx) => idx)));
+      setSelectedIndices(new Set(nonDuplicateIndices));
     }
   };
 
   const handleToggleIndex = (idx) => {
+    if (duplicates.has(idx)) return;
+
     const next = new Set(selectedIndices);
     if (next.has(idx)) {
       next.delete(idx);
@@ -98,9 +114,10 @@ export const SaveExerciseQuestionsModal = ({
     setErrorMsg('');
     setSavedCount(0);
 
+    // Defense-in-depth: lọc bỏ duplicates
     const questionsToSave = questions
       .map((q, idx) => ({ q, idx }))
-      .filter(({ idx }) => selectedIndices.has(idx));
+      .filter(({ idx }) => selectedIndices.has(idx) && !duplicates.has(idx));
 
     let successCount = 0;
     let failCount = 0;
@@ -163,8 +180,6 @@ export const SaveExerciseQuestionsModal = ({
       setErrorMsg('Không thể lưu câu hỏi vào Ngân hàng. Vui lòng kiểm tra lại kết nối.');
     }
   };
-
-  const duplicates = findDuplicatesInQuestionList(questions);
 
   return (
     <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -282,33 +297,44 @@ export const SaveExerciseQuestionsModal = ({
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={selectedIndices.size === questions.length && questions.length > 0}
+                      checked={selectedIndices.size === nonDuplicateTotal && nonDuplicateTotal > 0}
                       onChange={handleToggleSelectAll}
                       className="w-4 h-4 text-indigo-600 rounded"
                     />
-                    <span>Chọn tất cả ({selectedIndices.size}/{questions.length} câu)</span>
+                    <span>Chọn tất cả câu hợp lệ ({selectedIndices.size}/{nonDuplicateTotal} câu)</span>
                   </label>
+
+                  {duplicates.size > 0 && (
+                    <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Loại bỏ {duplicates.size} câu trùng lặp
+                    </span>
+                  )}
                 </div>
 
                 <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-60 overflow-y-auto custom-scrollbar">
                   <div className="divide-y divide-slate-100">
                     {questions.map((q, idx) => {
-                      const isSelected = selectedIndices.has(idx);
                       const isDuplicate = duplicates.has(idx);
+                      const isSelected = selectedIndices.has(idx) && !isDuplicate;
 
                       return (
                         <div
                           key={q.id || idx}
                           onClick={() => handleToggleIndex(idx)}
-                          className={`p-3 flex items-start gap-3 cursor-pointer hover:bg-slate-50 transition-colors ${
-                            isSelected ? 'bg-indigo-50/20' : ''
+                          className={`p-3 flex items-start gap-3 transition-colors ${
+                            isDuplicate
+                              ? 'bg-amber-50/60 opacity-80 cursor-not-allowed'
+                              : isSelected
+                              ? 'bg-indigo-50/20 cursor-pointer'
+                              : 'hover:bg-slate-50 cursor-pointer'
                           }`}
                         >
                           <input
                             type="checkbox"
                             checked={isSelected}
+                            disabled={isDuplicate}
                             onChange={() => {}}
-                            className="w-4 h-4 text-indigo-600 rounded mt-0.5 cursor-pointer"
+                            className="w-4 h-4 text-indigo-600 rounded mt-0.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                           <div className="flex-1 min-w-0 text-xs">
                             <div className="font-bold text-slate-900 line-clamp-2">
@@ -317,8 +343,14 @@ export const SaveExerciseQuestionsModal = ({
                             </div>
                             <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500 font-medium">
                               <span className="px-1.5 py-0.2 rounded bg-slate-100 font-bold">{q.question_type}</span>
-                              {isDuplicate && (
-                                <span className="text-amber-600 font-bold">⚠️ Trùng nội dung với câu khác trong bài</span>
+                              {isDuplicate ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">
+                                  <AlertTriangle className="w-3 h-3 text-amber-600" /> Trùng — không lưu
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                  <CheckCircle2 className="w-3 h-3" /> Hợp lệ
+                                </span>
                               )}
                             </div>
                           </div>
