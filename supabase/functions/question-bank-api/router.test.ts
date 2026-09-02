@@ -1515,3 +1515,252 @@ Deno.test('RT-54 - Injected RouterDependencies thiếu authDeps -> 500 INTERNAL_
   );
   assertStrictEquals(mockRpc.calls.length, 0);
 });
+
+// ============================================================================
+// Group H: Soft Delete / Archive Question Tests (8 Tests: RT-ARCHIVE-01 — RT-ARCHIVE-08)
+// ============================================================================
+
+Deno.test('RT-ARCHIVE-01 - Admin archive câu hỏi bất kỳ thành công -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'admin', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string; message: string }>(
+    res,
+    200
+  );
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'archived');
+  assertStrictEquals(data.message, 'Item metadata updated successfully');
+
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'admin');
+  assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'archived' });
+});
+
+Deno.test('RT-ARCHIVE-02 - Teacher archive câu hỏi của chính mình thành công -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string; message: string }>(
+    res,
+    200
+  );
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'archived');
+
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertStrictEquals(mockRpc.calls[0].args.p_caller_id, VALID_USER_ID);
+  assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'teacher');
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'archived' });
+});
+
+Deno.test('RT-ARCHIVE-03 - Teacher cố archive câu hỏi của giáo viên khác -> 403 FORBIDDEN', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'FORBIDDEN',
+      message: 'You can only update your own questions',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Bạn không có quyền thực hiện thao tác này trên câu hỏi.'
+  );
+
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+});
+
+Deno.test('RT-ARCHIVE-04 - Student cố archive câu hỏi -> 403 FORBIDDEN (Chặn ngay tại BFF Gateway)', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Chỉ giáo viên và quản trị viên mới có quyền ẩn câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-ARCHIVE-05 - ID câu hỏi không phải UUID (/qb/questions/invalid-id/archive) -> 400 INVALID_INPUT', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/questions/invalid-uuid-format/archive', {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    400,
+    'INVALID_INPUT',
+    'ID câu hỏi không đúng định dạng UUID.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-ARCHIVE-06 - Item không tồn tại (ITEM_NOT_FOUND) -> 404 NOT_FOUND', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'ITEM_NOT_FOUND',
+      message: 'Question item not found',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    404,
+    'NOT_FOUND',
+    'Không tìm thấy câu hỏi yêu cầu.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+});
+
+Deno.test('RT-ARCHIVE-07 - Câu hỏi đã được archive trước đó (Idempotent Archive) -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string }>(res, 200);
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'archived');
+  assertStrictEquals(mockRpc.calls.length, 1);
+});
+
+Deno.test('RT-ARCHIVE-08 - Không dùng hard DELETE (Khẳng định dùng rpc_qb_update_item_metadata PATCH)', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'admin', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/archive`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertSuccessResponse(res, 200);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'archived' });
+});
+
+Deno.test('RT-ARCHIVE-09 - Default list query (GET /qb/questions) không truyền status -> DB RPC nhận filter mặc định để tự loại archived', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      total_count: 1,
+      page: 1,
+      page_size: 20,
+      items: [{ id: VALID_ITEM_ID, status: 'published', title: 'Active item' }],
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/questions?page=1&page_size=20');
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ total_count: number; items: unknown[] }>(res, 200);
+  assertStrictEquals(data.total_count, 1);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_questions');
+  assertEquals(mockRpc.calls[0].args.p_filters, { page: 1, page_size: 20 });
+});
+
+Deno.test('RT-ARCHIVE-10 - Explicit status=archived query supported in listQuestions -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      total_count: 1,
+      page: 1,
+      page_size: 20,
+      items: [{ id: VALID_ITEM_ID, status: 'archived', title: 'Archived item' }],
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/questions?status=archived&page=1&page_size=20');
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ total_count: number; items: unknown[] }>(res, 200);
+  assertStrictEquals(data.total_count, 1);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_questions');
+  assertEquals(mockRpc.calls[0].args.p_filters, {
+    status: 'archived',
+    page: 1,
+    page_size: 20,
+  });
+});

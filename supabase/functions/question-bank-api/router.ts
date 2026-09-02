@@ -12,6 +12,7 @@ import {
   mapListQuestionsSuccess,
   mapForkQuestionSuccess,
   mapUpdateMetadataSuccess,
+  mapArchiveQuestionSuccess,
   normalizeRpcError,
 } from './errors.ts';
 import {
@@ -514,6 +515,57 @@ export async function handleQuestionBankRequest(
       }
 
       const mapped = mapUpdateMetadataSuccess(rpcPayload);
+      if (!mapped.ok) {
+        return createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          'Phản hồi máy chủ không hợp lệ.'
+        );
+      }
+
+      return createSuccessResponse(mapped.data, 200);
+    }
+
+    // ------------------------------------------------------------------------
+    // ROUTE 8: PATCH /qb/questions/:id/archive -> rpc_qb_update_item_metadata (status: 'archived')
+    // ------------------------------------------------------------------------
+    const archiveMatch = pathname.match(/\/qb\/questions\/([^\/]+)\/archive$/);
+    if (method === 'PATCH' && archiveMatch) {
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(
+          403,
+          'FORBIDDEN',
+          'Chỉ giáo viên và quản trị viên mới có quyền ẩn câu hỏi.'
+        );
+      }
+
+      const itemId = archiveMatch[1];
+      if (!isValidUUID(itemId)) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'ID câu hỏi không đúng định dạng UUID.'
+        );
+      }
+
+      // Gọi RPC với payload { status: 'archived' }
+      const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
+        'rpc_qb_update_item_metadata',
+        {
+          p_caller_id: callerId,
+          p_actor_role: actorRole,
+          p_item_id: itemId,
+          p_payload: { status: 'archived' },
+        }
+      );
+
+      const rpcPayload = isPlainObject(rpcRes) ? rpcRes : null;
+      if (rpcError || !rpcPayload || rpcPayload.success !== true) {
+        const err = normalizeRpcError(rpcError, rpcPayload);
+        return createErrorResponse(err.status, err.errorCode, err.message);
+      }
+
+      const mapped = mapArchiveQuestionSuccess(rpcPayload);
       if (!mapped.ok) {
         return createErrorResponse(
           500,
