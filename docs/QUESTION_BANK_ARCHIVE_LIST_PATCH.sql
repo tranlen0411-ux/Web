@@ -1,0 +1,24 @@
+-- QUESTION BANK ARCHIVE V1
+-- DO NOT EXECUTE DIRECTLY
+--
+-- Target:
+-- public.rpc_qb_list_questions(
+--   p_caller_id uuid,
+--   p_actor_role text,
+--   p_filters jsonb
+-- )
+--
+-- Existing predicate:
+-- AND (v_status IS NULL OR v_status='' OR i.status=v_status)
+--
+-- Required replacement:
+-- AND (
+--   (v_status IS NOT NULL AND v_status <> '' AND i.status = v_status)
+--   OR
+--   ((v_status IS NULL OR v_status = '') AND i.status <> 'archived')
+-- )
+--
+-- IMPORTANT:
+-- Production migration must be generated from pg_get_functiondef()
+-- of the installed function and must change ONLY this predicate.
+-- No other function logic may change.

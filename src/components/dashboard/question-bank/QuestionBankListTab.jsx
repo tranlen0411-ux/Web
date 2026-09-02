@@ -15,12 +15,13 @@ import {
   Lock,
   Globe,
   Plus,
-  Upload
+  Upload,
+  Archive
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
-import { listQuestions } from '../../../services/questionBankService';
+import { listQuestions, archiveQuestion } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 
@@ -89,6 +90,8 @@ export const QuestionBankListTab = ({
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [archiveModalItem, setArchiveModalItem] = useState(null);
+  const [isArchiving, setIsArchiving] = useState(false);
 
   // Sequence ref để chặn stale responses từ các request cũ
   const fetchSeqRef = React.useRef(0);
@@ -271,6 +274,31 @@ export const QuestionBankListTab = ({
   const handleImportSuccess = (msg) => {
     showToast(msg);
     fetchQuestions();
+  };
+
+  const handleConfirmArchive = async () => {
+    if (!archiveModalItem || isArchiving) return;
+    const targetId = archiveModalItem.id || archiveModalItem.item_id;
+    if (!targetId) return;
+
+    setIsArchiving(true);
+    try {
+      await archiveQuestion(targetId);
+      setArchiveModalItem(null);
+      showToast('Đã ẩn câu hỏi thành công.');
+
+      // Nếu trang hiện tại chỉ có 1 phần tử và page > 1, tự động quay về trang trước
+      if (questions.length <= 1 && page > 1) {
+        setPage((p) => Math.max(1, p - 1));
+      } else {
+        fetchQuestions();
+      }
+    } catch (err) {
+      console.error('Lỗi khi ẩn câu hỏi:', err);
+      showToast(err?.message || 'Không thể ẩn câu hỏi. Vui lòng thử lại.');
+    } finally {
+      setIsArchiving(false);
+    }
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -557,6 +585,7 @@ export const QuestionBankListTab = ({
                   <th className="py-3 px-3">Độ khó</th>
                   <th className="py-3 px-3">Phạm vi</th>
                   <th className="py-3 px-3 text-center">Trạng thái</th>
+                  <th className="py-3 px-3 text-center">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -565,6 +594,9 @@ export const QuestionBankListTab = ({
                   const typeLabel = TYPE_LABELS[item.question_type] || item.question_type || 'Trắc nghiệm';
                   const visInfo = VISIBILITY_LABELS[item.visibility] || { label: item.visibility || 'Cá nhân', color: 'text-slate-500 bg-slate-100' };
                   const VisIcon = visInfo.icon || Lock;
+
+                  const currentUserId = auth?.user?.id;
+                  const canArchive = role === 'admin' || (role === 'teacher' && item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
 
                   return (
                     <tr key={item.id || item.item_id || idx} className="hover:bg-amber-50/40 transition-colors">
@@ -609,6 +641,20 @@ export const QuestionBankListTab = ({
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           {item.status === 'published' ? 'Đã duyệt' : item.status || 'Khả dụng'}
                         </span>
+                      </td>
+                      <td className="py-3 px-3 text-center whitespace-nowrap">
+                        {canArchive ? (
+                          <button
+                            onClick={() => setArchiveModalItem(item)}
+                            className="px-2 py-1 text-slate-500 hover:text-amber-700 hover:bg-amber-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                            title="Ẩn câu hỏi"
+                          >
+                            <Archive className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Ẩn</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -672,6 +718,58 @@ export const QuestionBankListTab = ({
         onSuccess={handleImportSuccess}
         role={role}
       />
+
+      {/* CONFIRM ARCHIVE MODAL */}
+      {archiveModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-amber-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0">
+                <Archive className="w-5 h-5 text-amber-700" />
+              </div>
+              <span>Ẩn câu hỏi này khỏi Ngân hàng câu hỏi?</span>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Câu hỏi sẽ không còn xuất hiện trong danh sách sử dụng mới. Dữ liệu lịch sử và các tham chiếu đã có sẽ không bị xóa.
+            </p>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-amber-50/50 p-2.5 rounded-xl border border-amber-100">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {archiveModalItem.title || archiveModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isArchiving && setArchiveModalItem(null)}
+                disabled={isArchiving}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmArchive}
+                disabled={isArchiving}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-amber-600 hover:bg-amber-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isArchiving ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <Archive className="w-3.5 h-3.5" />
+                    <span>Ẩn câu hỏi</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

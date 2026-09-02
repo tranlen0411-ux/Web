@@ -109,10 +109,47 @@ export const createQuestion = async (payload) => {
   return jsonResult.data;
 };
 
+/**
+ * Ẩn câu hỏi (Soft Delete / Archive) khỏi Ngân hàng câu hỏi
+ * @param {string} itemId UUID của câu hỏi cần ẩn
+ * @returns {Promise<{ item_id: string, status: string, message: string }>}
+ */
+export const archiveQuestion = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    throw new Error('ID câu hỏi không hợp lệ.');
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/archive`;
+
+  const response = await fetch(requestUrl, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    throw new Error(`Lỗi kết nối máy chủ khi ẩn câu hỏi (HTTP ${response.status})`);
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi ẩn câu hỏi (${response.status})`;
+    throw new Error(errorMsg);
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
-  createQuestion
+  createQuestion,
+  archiveQuestion
 };
 
 export default questionBankService;

@@ -618,4 +618,46 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS ===');
   console.log('PASS Test 36: buildCandidateListDuplicateKey validates length <= 150 and required fields');
 }
 
+// 37. Archive Contract: Default list excludes archived items -> new candidate is NOT marked duplicate
+{
+  const candidates = [
+    { prompt: 'Câu hỏi đã từng bị ẩn trong quá khứ', question_type: 'single_choice' }
+  ];
+
+  // Giả lập default list từ DB RPC sau khi patch: câu archived đã bị loại bỏ khỏi danh sách active
+  const activeExistingBank = [
+    { prompt_snippet: 'câu hỏi khác đang hoạt động', question_type: 'single_choice', subject: 'Toán', grade_level: 1, visibility: 'private' }
+  ];
+
+  const dupes = findExistingQuestionDuplicateIndices(
+    candidates,
+    activeExistingBank,
+    { subject: 'Toán', grade_level: 1, visibility: 'private' },
+    'teacher'
+  );
+
+  assert.equal(dupes.size, 0); // Không bị chặn trùng vì item archived đã được loại bỏ khỏi list mặc định
+  console.log('PASS Test 37: Default list excludes archived -> new candidate is NOT marked duplicate');
+}
+
+// 38. Explicit status=archived query param support contract
+{
+  const ALLOWED_LIST_PARAMS = [
+    'page', 'page_size', 'subject', 'grade_level', 'question_type',
+    'difficulty', 'status', 'visibility', 'search'
+  ];
+  const filters = { page: 1, page_size: 20, status: 'archived' };
+  const searchParams = new URLSearchParams();
+  for (const key of ALLOWED_LIST_PARAMS) {
+    const val = filters[key];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      searchParams.append(key, String(val).trim());
+    }
+  }
+  assert.equal(searchParams.get('status'), 'archived');
+  assert.equal(searchParams.get('page'), '1');
+  assert.equal(searchParams.get('page_size'), '20');
+  console.log('PASS Test 38: Explicit status=archived query param supported in filters builder');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');

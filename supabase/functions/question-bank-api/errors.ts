@@ -294,6 +294,30 @@ export function mapUpdateMetadataSuccess(
   };
 }
 
+export interface ArchiveQuestionSuccessData {
+  item_id: string;
+  status: 'archived';
+  message: string;
+}
+
+export function mapArchiveQuestionSuccess(
+  res: unknown
+): SuccessMapResult<ArchiveQuestionSuccessData> {
+  if (!isPlainRecord(res)) return { ok: false };
+  if (!isUuidString(res.item_id) || !isNonEmptyString(res.message)) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    data: {
+      item_id: res.item_id,
+      status: 'archived',
+      message: res.message,
+    },
+  };
+}
+
+
 // ----------------------------------------------------------------------------
 // Sanitized Error Normalization from Database RPC to Public API
 // ----------------------------------------------------------------------------
