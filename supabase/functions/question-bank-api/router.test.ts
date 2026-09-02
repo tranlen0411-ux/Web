@@ -1764,3 +1764,202 @@ Deno.test('RT-ARCHIVE-10 - Explicit status=archived query supported in listQuest
     page_size: 20,
   });
 });
+
+// ----------------------------------------------------------------------------
+// RESTORE TESTS: PATCH /qb/questions/:id/restore -> rpc_qb_update_item_metadata ({ status: 'draft' })
+// ----------------------------------------------------------------------------
+
+Deno.test('RT-RESTORE-01 - Admin được phép khôi phục mọi câu hỏi -> 200 OK & status: draft', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'admin', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string }>(res, 200);
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'draft');
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'draft' });
+});
+
+Deno.test('RT-RESTORE-02 - Giáo viên được phép khôi phục câu hỏi của chính mình -> 200 OK & status: draft', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string }>(res, 200);
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'draft');
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'draft' });
+});
+
+Deno.test('RT-RESTORE-03 - Giáo viên khôi phục câu hỏi của người khác -> DB RPC trả FORBIDDEN -> 403 FORBIDDEN', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'FORBIDDEN',
+      message: 'You are not allowed to modify this item',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Bạn không có quyền thực hiện thao tác này trên câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+});
+
+Deno.test('RT-RESTORE-04 - Học sinh (Student) gọi restore -> 403 FORBIDDEN ngay tại BFF', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Chỉ giáo viên và quản trị viên mới có quyền khôi phục câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-RESTORE-05 - ID câu hỏi không đúng định dạng UUID -> 400 INVALID_INPUT', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/questions/invalid-uuid-format/restore', {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    400,
+    'INVALID_INPUT',
+    'ID câu hỏi không đúng định dạng UUID.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-RESTORE-06 - Không tìm thấy câu hỏi (ITEM_NOT_FOUND) -> 404 NOT_FOUND', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'ITEM_NOT_FOUND',
+      message: 'Question item not found',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    404,
+    'NOT_FOUND',
+    'Không tìm thấy câu hỏi yêu cầu.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+});
+
+Deno.test('RT-RESTORE-07 - Payload RPC truyền đúng { status: \'draft\' } và không đổi visibility/author', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertSuccessResponse(res, 200);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'draft' });
+  assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
+});
+
+Deno.test('RT-RESTORE-08 - Method không phải PATCH (POST / GET) -> 404 NOT_FOUND', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'POST',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(res, 404, 'NOT_FOUND', 'Đường dẫn API không tồn tại.');
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-RESTORE-09 - Idempotent restore (câu hỏi đã draft) -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      message: 'Item metadata updated successfully',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/restore`, {
+    method: 'PATCH',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{ item_id: string; status: string }>(res, 200);
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.status, 'draft');
+  assertStrictEquals(mockRpc.calls.length, 1);
+});

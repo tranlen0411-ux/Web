@@ -317,6 +317,29 @@ export function mapArchiveQuestionSuccess(
   };
 }
 
+export interface RestoreQuestionSuccessData {
+  item_id: string;
+  status: 'draft';
+  message: string;
+}
+
+export function mapRestoreQuestionSuccess(
+  res: unknown
+): SuccessMapResult<RestoreQuestionSuccessData> {
+  if (!isPlainRecord(res)) return { ok: false };
+  if (!isUuidString(res.item_id) || !isNonEmptyString(res.message)) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    data: {
+      item_id: res.item_id,
+      status: 'draft',
+      message: res.message,
+    },
+  };
+}
+
 
 // ----------------------------------------------------------------------------
 // Sanitized Error Normalization from Database RPC to Public API

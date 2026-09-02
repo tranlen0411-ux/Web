@@ -1,0 +1,60 @@
+-- docs/QUESTION_BANK_RESTORE_VISIBILITY_PATCH.sql
+-- QUESTION BANK ARCHIVE MANAGEMENT V1
+-- DO NOT EXECUTE DIRECTLY
+--
+-- Target:
+-- public.rpc_qb_list_questions(
+--   p_caller_id uuid,
+--   p_actor_role text,
+--   p_filters jsonb
+-- )
+--
+-- Current Teacher Shared Predicate:
+--   p_actor_role = 'teacher'
+--   AND (
+--     (v_only_my_questions = true AND i.author_id = p_caller_id)
+--     OR (
+--       v_only_my_questions = false
+--       AND (
+--         i.author_id = p_caller_id
+--         OR i.visibility = 'public_template'
+--         OR (
+--           i.visibility = 'school_shared'
+--           AND v_school_id IS NOT NULL
+--           AND i.school_id = v_school_id
+--         )
+--       )
+--     )
+--   )
+--
+-- Required Target Semantics:
+-- Teacher may only see other teachers' shared questions IF status = 'published'.
+-- Draft questions (including newly restored from archived) must remain visible ONLY to their author.
+--
+-- Required Replacement:
+--   p_actor_role = 'teacher'
+--   AND (
+--     (v_only_my_questions = true AND i.author_id = p_caller_id)
+--     OR (
+--       v_only_my_questions = false
+--       AND (
+--         i.author_id = p_caller_id
+--         OR (
+--           i.status = 'published'
+--           AND (
+--             i.visibility = 'public_template'
+--             OR (
+--               i.visibility = 'school_shared'
+--               AND v_school_id IS NOT NULL
+--               AND i.school_id = v_school_id
+--             )
+--           )
+--         )
+--       )
+--     )
+--   )
+--
+-- IMPORTANT:
+-- Production migration must be generated from pg_get_functiondef()
+-- of the installed function and must change ONLY this authorization predicate.
+-- No other function logic or contracts may change.
