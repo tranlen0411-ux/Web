@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock, KeyRound, Camera, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Gamepad2, Sparkles, User, ShieldCheck, GraduationCap, BookOpen, Lock, KeyRound, Camera, Eye, EyeOff, CheckCircle2, ArrowLeft, Mail } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useSound } from '../context/SoundContext';
 import { ParentReportModal } from '../components/parent/ParentReportModal';
@@ -10,8 +11,9 @@ export const AuthPage = () => {
   const { signIn, signUp, signInWithGoogle, quickStudentSignIn, qrStudentSignIn } = useAuth();
   const { triggerSound } = useSound();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [mode, setMode] = useState('student_quick'); // 'student_quick' | 'email_login' | 'email_signup'
+  const [mode, setMode] = useState('student_quick'); // 'student_quick' | 'email_login' | 'email_signup' | 'forgot_password'
   const [role, setRole] = useState('student');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,7 +27,14 @@ export const AuthPage = () => {
   const [scannedQrId, setScannedQrId] = useState(null);
   const [isParentModalOpen, setIsParentModalOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.message) {
+      setSuccessMsg(location.state.message);
+    }
+  }, [location.state]);
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
@@ -71,6 +80,23 @@ export const AuthPage = () => {
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/');
+      } else if (mode === 'forgot_password') {
+        const cleanEmail = email.trim().toLowerCase();
+        if (!cleanEmail) {
+          setErrorMsg('Vui lòng nhập email đăng ký.');
+          setLoading(false);
+          return;
+        }
+        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+          redirectTo: `${window.location.origin}/reset-password`
+        });
+
+        if (error) {
+          setErrorMsg('Hiện chưa thể gửi liên kết đặt lại mật khẩu. Vui lòng thử lại sau.');
+        } else {
+          setSuccessMsg('Nếu email tồn tại trong hệ thống, hướng dẫn đặt lại mật khẩu đã được gửi đến hộp thư của bạn.');
+          setEmail('');
+        }
       }
     } catch (err) {
       console.error('Auth error:', err?.message || 'Authentication failed');
@@ -114,38 +140,49 @@ export const AuthPage = () => {
           👨‍👩‍👧 PHỤ HUYNH TRA CỨU BÁO CÁO (Không cần tài khoản)
         </button>
 
-        {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ ĐĂNG NHẬP */}
-        <div className="flex bg-amber-100 p-1.5 rounded-2xl mb-5 border-2 border-amber-200">
-          <button
-            onClick={() => { setMode('student_quick'); setScannedQrId(null); setErrorMsg(''); triggerSound('click'); }}
-            className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
-              mode === 'student_quick'
-                ? 'bg-amber-400 text-amber-950 shadow-sm'
-                : 'text-amber-800 hover:bg-amber-200'
-            }`}
-          >
-            🎒 Học Sinh Đăng Nhập Nhanh
-          </button>
-          <button
-            onClick={() => { setMode('email_login'); setScannedQrId(null); setErrorMsg(''); triggerSound('click'); }}
-            className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
-              mode !== 'student_quick'
-                ? 'bg-sky-500 text-white shadow-sm'
-                : 'text-amber-800 hover:bg-amber-200'
-            }`}
-          >
-            📧 Giáo Viên / Phụ Huynh
-          </button>
-        </div>
+        {/* TAB CHUYỂN ĐỔI CHẾ ĐỘ ĐĂNG NHẬP (Chỉ hiện khi không ở chế độ Quên mật khẩu) */}
+        {mode !== 'forgot_password' && (
+          <div className="flex bg-amber-100 p-1.5 rounded-2xl mb-5 border-2 border-amber-200">
+            <button
+              onClick={() => { setMode('student_quick'); setScannedQrId(null); setErrorMsg(''); setSuccessMsg(''); triggerSound('click'); }}
+              className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
+                mode === 'student_quick'
+                  ? 'bg-amber-400 text-amber-950 shadow-sm'
+                  : 'text-amber-800 hover:bg-amber-200'
+              }`}
+            >
+              🎒 Học Sinh Đăng Nhập Nhanh
+            </button>
+            <button
+              onClick={() => { setMode('email_login'); setScannedQrId(null); setErrorMsg(''); setSuccessMsg(''); triggerSound('click'); }}
+              className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${
+                mode !== 'student_quick'
+                  ? 'bg-sky-500 text-white shadow-sm'
+                  : 'text-amber-800 hover:bg-amber-200'
+              }`}
+            >
+              📧 Giáo Viên / Phụ Huynh
+            </button>
+          </div>
+        )}
 
+        {/* THÔNG BÁO LỖI */}
         {errorMsg && (
           <div className="mb-4 p-3 bg-rose-100 border-2 border-rose-300 text-rose-800 text-xs font-bold rounded-xl text-center">
             ⚠️ {errorMsg}
           </div>
         )}
 
-        {/* GOOGLE OAUTH */}
-        {mode !== 'student_quick' && (
+        {/* THÔNG BÁO THÀNH CÔNG (TRUNG TÍNH) */}
+        {successMsg && (
+          <div className="mb-4 p-3 bg-emerald-100 border-2 border-emerald-300 text-emerald-900 text-xs font-bold rounded-xl text-center flex items-center justify-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        {/* GOOGLE OAUTH (Chỉ hiện khi ở tab email thông thường) */}
+        {mode !== 'student_quick' && mode !== 'forgot_password' && (
           <div className="mb-4">
             <button
               type="button"
@@ -253,8 +290,35 @@ export const AuthPage = () => {
             </>
           )}
 
+          {/* LUỒNG QUÊN MẬT KHẨU (RESET PASSWORD V1) */}
+          {mode === 'forgot_password' && (
+            <>
+              <div className="mb-2 text-center">
+                <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-amber-200">
+                  <Mail className="w-5 h-5 text-amber-700" />
+                </div>
+                <h3 className="text-sm font-black text-amber-950 uppercase tracking-tight">Quên Mật Khẩu</h3>
+                <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                  Nhập địa chỉ email tài khoản để nhận liên kết đặt lại mật khẩu mới.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1">Email tài khoản:</label>
+                <input
+                  type="email"
+                  placeholder="co.hoa@hoclapvui.edu.vn"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl font-bold text-sm"
+                  required
+                />
+              </div>
+            </>
+          )}
+
           {/* LUỒNG EMAIL PASS FOR TEACHER / ADMIN / PARENTS */}
-          {mode !== 'student_quick' && (
+          {mode !== 'student_quick' && mode !== 'forgot_password' && (
             <>
               {mode === 'email_signup' && (
                 <>
@@ -297,7 +361,18 @@ export const AuthPage = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-black text-slate-700 mb-1">Mật khẩu:</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-black text-slate-700">Mật khẩu:</label>
+                  {mode === 'email_login' && (
+                    <button
+                      type="button"
+                      onClick={() => { setMode('forgot_password'); setErrorMsg(''); setSuccessMsg(''); }}
+                      className="text-[11px] font-bold text-sky-600 hover:underline"
+                    >
+                      Quên mật khẩu?
+                    </button>
+                  )}
+                </div>
                 <input
                   type="password"
                   placeholder="••••••••"
@@ -315,23 +390,32 @@ export const AuthPage = () => {
             disabled={loading}
             className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-black text-base rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center justify-center gap-2 active:translate-y-0.5 transition-all mt-4"
           >
-            {loading ? 'Đang Xử Lý...' : mode === 'email_signup' ? 'ĐĂNG KÝ TÀI KHOẢN 🚀' : 'VÀO HỌC NGAY 🚀'}
+            {loading ? 'Đang Xử Lý...' : mode === 'forgot_password' ? 'GỬI LIÊN KẾT ĐẶT LẠI MẬT KHẨU 📨' : mode === 'email_signup' ? 'ĐĂNG KÝ TÀI KHOẢN 🚀' : 'VÀO HỌC NGAY 🚀'}
           </button>
         </form>
 
         {/* FOOTER SWITCH MODES */}
-        {mode !== 'student_quick' && (
+        {mode === 'forgot_password' ? (
+          <div className="mt-5 text-center">
+            <button
+              onClick={() => { setMode('email_login'); setErrorMsg(''); setSuccessMsg(''); }}
+              className="text-xs font-bold text-sky-600 hover:underline inline-flex items-center gap-1.5"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Quay lại Đăng nhập
+            </button>
+          </div>
+        ) : mode !== 'student_quick' && (
           <div className="mt-5 text-center">
             {mode === 'email_login' ? (
               <button
-                onClick={() => setMode('email_signup')}
+                onClick={() => { setMode('email_signup'); setErrorMsg(''); setSuccessMsg(''); }}
                 className="text-xs font-bold text-sky-600 hover:underline"
               >
                 Chưa có tài khoản? Tạo tài khoản Giáo viên / Học sinh mới
               </button>
             ) : (
               <button
-                onClick={() => setMode('email_login')}
+                onClick={() => { setMode('email_login'); setErrorMsg(''); setSuccessMsg(''); }}
                 className="text-xs font-bold text-sky-600 hover:underline"
               >
                 Đã có tài khoản? Đăng nhập ngay
