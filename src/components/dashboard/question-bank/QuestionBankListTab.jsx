@@ -16,12 +16,14 @@ import {
   Globe,
   Plus,
   Upload,
-  Archive
+  Archive,
+  RotateCcw,
+  User
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
-import { listQuestions, archiveQuestion } from '../../../services/questionBankService';
+import { listQuestions, archiveQuestion, restoreQuestion } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 
@@ -79,6 +81,9 @@ export const QuestionBankListTab = ({
   const [error, setError] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
 
+  // Status view filter state ('active' | 'archived')
+  const [selectedStatusView, setSelectedStatusView] = useState('active');
+
   // Search and filters state
   const [searchText, setSearchText] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -87,11 +92,16 @@ export const QuestionBankListTab = ({
   const [selectedDifficulty, setSelectedDifficulty] = useState('');
   const [selectedType, setSelectedType] = useState('');
 
+  // Author profile resolution cache
+  const [authorProfilesById, setAuthorProfilesById] = useState({});
+
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [archiveModalItem, setArchiveModalItem] = useState(null);
   const [isArchiving, setIsArchiving] = useState(false);
+  const [restoreModalItem, setRestoreModalItem] = useState(null);
+  const [isRestoring, setIsRestoring] = useState(false);
 
   // Sequence ref để chặn stale responses từ các request cũ
   const fetchSeqRef = React.useRef(0);
@@ -123,29 +133,30 @@ export const QuestionBankListTab = ({
         }
       }
 
-      // Fallback: Truy vấn từ bảng classes nếu Dashboard chưa có sẵn metadata
+      // Fallback: Query bảng classes từ Supabase
       try {
-        const { data, error } = await supabase
+        const { data, error: queryError } = await supabase
           .from('classes')
-          .select('id, name, grade_level')
+          .select('id, name, grade_level, grade')
           .eq('id', activeGlobalClassFilter)
           .maybeSingle();
 
         if (!isMounted) return;
 
-        if (!error && data) {
-          setResolvedClass(data);
-          setClassResolutionStatus('resolved');
-        } else {
+        if (queryError || !data) {
+          console.warn('[QuestionBankListTab] Không tìm thấy metadata lớp học:', activeGlobalClassFilter);
           setResolvedClass(null);
           setClassResolutionStatus('failed');
+          return;
         }
+
+        setResolvedClass(data);
+        setClassResolutionStatus('resolved');
       } catch (err) {
-        console.error('Lỗi khi phân giải class metadata cho Question Bank:', err);
-        if (isMounted) {
-          setResolvedClass(null);
-          setClassResolutionStatus('failed');
-        }
+        if (!isMounted) return;
+        console.error('[QuestionBankListTab] Lỗi giải mã lớp học:', err);
+        setResolvedClass(null);
+        setClassResolutionStatus('failed');
       }
     };
 
@@ -211,7 +222,8 @@ export const QuestionBankListTab = ({
         subject: selectedSubject || undefined,
         grade_level: effectiveGrade != null ? Number(effectiveGrade) : undefined,
         difficulty: selectedDifficulty || undefined,
-        question_type: selectedType || undefined
+        question_type: selectedType || undefined,
+        status: selectedStatusView === 'archived' ? 'archived' : undefined
       };
 
       const result = await listQuestions(filters);
@@ -219,8 +231,32 @@ export const QuestionBankListTab = ({
       // Stale response guard: Nếu có request mới hơn được phát đi thì bỏ qua response cũ này
       if (currentSeq !== fetchSeqRef.current) return;
 
-      setQuestions(result?.items || []);
+      const items = result?.items || [];
+      setQuestions(items);
       setTotalCount(result?.total_count || 0);
+
+      // Batch resolve unique author_id qua Supabase CORE profiles
+      const authorIds = [...new Set(items.map((i) => i.author_id).filter(Boolean))];
+      if (authorIds.length > 0) {
+        try {
+          const { data: profiles, error: profileErr } = await supabase
+            .from('profiles')
+            .select('id, full_name, email')
+            .in('id', authorIds);
+
+          if (!profileErr && Array.isArray(profiles) && currentSeq === fetchSeqRef.current) {
+            const profileMap = {};
+            profiles.forEach((p) => {
+              if (p && p.id) {
+                profileMap[p.id] = p;
+              }
+            });
+            setAuthorProfilesById((prev) => ({ ...prev, ...profileMap }));
+          }
+        } catch (pErr) {
+          console.warn('[QuestionBankListTab] Không thể tải thông tin tác giả:', pErr);
+        }
+      }
     } catch (err) {
       if (currentSeq !== fetchSeqRef.current) return;
       console.error('Lỗi khi tải Question Bank:', err);
@@ -242,9 +278,9 @@ export const QuestionBankListTab = ({
     globalGrade,
     effectiveGrade,
     selectedDifficulty,
-    selectedType
+    selectedType,
+    selectedStatusView
   ]);
-
 
   useEffect(() => {
     fetchQuestions();
@@ -263,6 +299,11 @@ export const QuestionBankListTab = ({
     setSelectedGrade('');
     setSelectedDifficulty('');
     setSelectedType('');
+    setPage(1);
+  };
+
+  const handleStatusViewChange = (statusView) => {
+    setSelectedStatusView(statusView);
     setPage(1);
   };
 
@@ -301,6 +342,47 @@ export const QuestionBankListTab = ({
     }
   };
 
+  const handleConfirmRestore = async () => {
+    if (!restoreModalItem || isRestoring) return;
+    const targetId = restoreModalItem.id || restoreModalItem.item_id;
+    if (!targetId) return;
+
+    setIsRestoring(true);
+    try {
+      await restoreQuestion(targetId);
+      setRestoreModalItem(null);
+      showToast('Đã khôi phục câu hỏi về bản nháp thành công.');
+
+      // Nếu trang hiện tại chỉ có 1 phần tử và page > 1, tự động quay về trang trước
+      if (questions.length <= 1 && page > 1) {
+        setPage((p) => Math.max(1, p - 1));
+      } else {
+        fetchQuestions();
+      }
+    } catch (err) {
+      console.error('Lỗi khi khôi phục câu hỏi:', err);
+      showToast(err?.message || 'Không thể khôi phục câu hỏi. Vui lòng thử lại.');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  const getAuthorDisplay = (authorId) => {
+    if (!authorId) return 'Không xác định';
+    const currentUserId = auth?.user?.id;
+    if (currentUserId && String(authorId) === String(currentUserId)) {
+      return { label: 'Của tôi', isOwn: true };
+    }
+    const profile = authorProfilesById[authorId];
+    if (profile?.full_name?.trim()) {
+      return { label: profile.full_name.trim(), isOwn: false };
+    }
+    if (profile?.email?.trim()) {
+      return { label: profile.email.trim(), isOwn: false };
+    }
+    return { label: 'Không xác định', isOwn: false };
+  };
+
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
@@ -324,7 +406,7 @@ export const QuestionBankListTab = ({
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-            Tra cứu, tạo mới và nhập kho câu hỏi học thuật ({role === 'admin' ? 'Quyền Quản trị viên' : 'Quyền Giáo viên'})
+            Tra cứu, tạo mới và quản lý kho câu hỏi học thuật ({role === 'admin' ? 'Quyền Quản trị viên' : 'Quyền Giáo viên'})
           </p>
         </div>
 
@@ -360,6 +442,32 @@ export const QuestionBankListTab = ({
             Làm mới
           </button>
         </div>
+      </div>
+
+      {/* TABS CHUYỂN ĐỔI TRẠNG THÁI: ĐANG SỬ DỤNG / ĐÃ ẨN */}
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          onClick={() => handleStatusViewChange('active')}
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
+            selectedStatusView === 'active'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+          }`}
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>Đang sử dụng</span>
+        </button>
+        <button
+          onClick={() => handleStatusViewChange('archived')}
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
+            selectedStatusView === 'archived'
+              ? 'bg-amber-600 text-white shadow-sm'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+          }`}
+        >
+          <Archive className="w-3.5 h-3.5" />
+          <span>Đã ẩn</span>
+        </button>
       </div>
 
       {/* THANH TÌM KIẾM VÀ BỘ LỌC */}
@@ -550,26 +658,34 @@ export const QuestionBankListTab = ({
         /* EMPTY STATE */
         <div className="py-16 text-center bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-200">
           <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h4 className="text-base font-black text-slate-700 mb-1">Ngân hàng câu hỏi hiện chưa có dữ liệu.</h4>
+          <h4 className="text-base font-black text-slate-700 mb-1">
+            {selectedStatusView === 'archived'
+              ? 'Không có câu hỏi nào trong kho đã ẩn.'
+              : 'Ngân hàng câu hỏi hiện chưa có dữ liệu.'}
+          </h4>
           <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
-            Chưa có câu hỏi nào phù hợp với bộ lọc hiện tại hoặc kho câu hỏi đang được cập nhật.
+            {selectedStatusView === 'archived'
+              ? 'Các câu hỏi bị ẩn sẽ được lưu trữ tại đây và có thể khôi phục về bản nháp bất cứ lúc nào.'
+              : 'Chưa có câu hỏi nào phù hợp với bộ lọc hiện tại hoặc kho câu hỏi đang được cập nhật.'}
           </p>
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={() => setIsCreateModalOpen(true)}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              Soạn câu hỏi đầu tiên
-            </button>
-            <button
-              onClick={() => setIsImportModalOpen(true)}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-colors flex items-center gap-1.5"
-            >
-              <Upload className="w-4 h-4 text-slate-600" />
-              Nhập từ Excel/Word
-            </button>
-          </div>
+          {selectedStatusView !== 'archived' && (
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={() => setIsCreateModalOpen(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                Soạn câu hỏi đầu tiên
+              </button>
+              <button
+                onClick={() => setIsImportModalOpen(true)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-colors flex items-center gap-1.5"
+              >
+                <Upload className="w-4 h-4 text-slate-600" />
+                Nhập từ Excel/Word
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         /* QUESTION LIST TABLE */
@@ -584,6 +700,7 @@ export const QuestionBankListTab = ({
                   <th className="py-3 px-3">Dạng câu</th>
                   <th className="py-3 px-3">Độ khó</th>
                   <th className="py-3 px-3">Phạm vi</th>
+                  <th className="py-3 px-3">Người tạo</th>
                   <th className="py-3 px-3 text-center">Trạng thái</th>
                   <th className="py-3 px-3 text-center">Thao tác</th>
                 </tr>
@@ -596,7 +713,14 @@ export const QuestionBankListTab = ({
                   const VisIcon = visInfo.icon || Lock;
 
                   const currentUserId = auth?.user?.id;
-                  const canArchive = role === 'admin' || (role === 'teacher' && item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
+                  const isAuthor = Boolean(item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
+                  const isArchived = item.status === 'archived';
+
+                  // Permissions
+                  const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
+
+                  const authorInfo = getAuthorDisplay(item.author_id);
 
                   return (
                     <tr key={item.id || item.item_id || idx} className="hover:bg-amber-50/40 transition-colors">
@@ -636,11 +760,33 @@ export const QuestionBankListTab = ({
                           {visInfo.label}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-center whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          {item.status === 'published' ? 'Đã duyệt' : item.status || 'Khả dụng'}
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${
+                          authorInfo.isOwn
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                            : 'bg-slate-100 text-slate-700'
+                        }`}>
+                          <User className="w-3 h-3" />
+                          {authorInfo.label}
                         </span>
+                      </td>
+                      <td className="py-3 px-3 text-center whitespace-nowrap">
+                        {item.status === 'published' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3" />
+                            Đã xuất bản
+                          </span>
+                        ) : item.status === 'archived' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 text-slate-600 border border-slate-200">
+                            <Archive className="w-3 h-3" />
+                            Đã ẩn
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] bg-amber-50 text-amber-700 border border-amber-200">
+                            <Sparkles className="w-3 h-3" />
+                            Bản nháp
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         {canArchive ? (
@@ -651,6 +797,15 @@ export const QuestionBankListTab = ({
                           >
                             <Archive className="w-3.5 h-3.5 text-amber-600" />
                             <span>Ẩn</span>
+                          </button>
+                        ) : canRestore ? (
+                          <button
+                            onClick={() => setRestoreModalItem(item)}
+                            className="px-2 py-1 text-slate-500 hover:text-indigo-700 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                            title="Khôi phục câu hỏi về bản nháp"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Khôi phục</span>
                           </button>
                         ) : (
                           <span className="text-slate-300 text-xs">—</span>
@@ -763,6 +918,58 @@ export const QuestionBankListTab = ({
                   <>
                     <Archive className="w-3.5 h-3.5" />
                     <span>Ẩn câu hỏi</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM RESTORE MODAL */}
+      {restoreModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-indigo-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-100 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-indigo-700" />
+              </div>
+              <span>Khôi phục câu hỏi này?</span>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Câu hỏi sẽ quay lại trạng thái bản nháp và xuất hiện lại trong kho làm việc. Câu hỏi không tự động được xuất bản.
+            </p>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-indigo-50/50 p-2.5 rounded-xl border border-indigo-100">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {restoreModalItem.title || restoreModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isRestoring && setRestoreModalItem(null)}
+                disabled={isRestoring}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRestore}
+                disabled={isRestoring}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRestoring ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Khôi phục</span>
                   </>
                 )}
               </button>

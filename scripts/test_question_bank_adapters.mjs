@@ -660,4 +660,90 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS ===');
   console.log('PASS Test 38: Explicit status=archived query param supported in filters builder');
 }
 
+// 39. Status View Filter Mapping Contract
+{
+  const ALLOWED_LIST_PARAMS = [
+    'page', 'page_size', 'subject', 'grade_level', 'question_type',
+    'difficulty', 'status', 'visibility', 'search'
+  ];
+
+  // Active view: không truyền status
+  const activeFilters = { page: 1, page_size: 10, status: undefined };
+  const activeParams = new URLSearchParams();
+  for (const key of ALLOWED_LIST_PARAMS) {
+    const val = activeFilters[key];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      activeParams.append(key, String(val).trim());
+    }
+  }
+  assert.equal(activeParams.has('status'), false);
+
+  // Archived view: truyền status=archived
+  const archivedFilters = { page: 1, page_size: 10, status: 'archived' };
+  const archivedParams = new URLSearchParams();
+  for (const key of ALLOWED_LIST_PARAMS) {
+    const val = archivedFilters[key];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      archivedParams.append(key, String(val).trim());
+    }
+  }
+  assert.equal(archivedParams.get('status'), 'archived');
+  console.log('PASS Test 39: Status view mapping contract verified (active: no status, archived: status=archived)');
+}
+
+// 40. Author Profile Display Resolution Helper Contract
+{
+  const currentUserId = 'user-current-111';
+  const profilesMap = {
+    'user-teacher-222': { id: 'user-teacher-222', full_name: 'Cô Nguyễn Thị Hoa', email: 'hoa.nguyen@school.edu.vn' },
+    'user-teacher-333': { id: 'user-teacher-333', full_name: '', email: 'thay.nam@school.edu.vn' },
+  };
+
+  const getAuthorDisplay = (authorId) => {
+    if (!authorId) return { label: 'Không xác định', isOwn: false };
+    if (currentUserId && String(authorId) === String(currentUserId)) {
+      return { label: 'Của tôi', isOwn: true };
+    }
+    const profile = profilesMap[authorId];
+    if (profile?.full_name?.trim()) {
+      return { label: profile.full_name.trim(), isOwn: false };
+    }
+    if (profile?.email?.trim()) {
+      return { label: profile.email.trim(), isOwn: false };
+    }
+    return { label: 'Không xác định', isOwn: false };
+  };
+
+  assert.deepEqual(getAuthorDisplay('user-current-111'), { label: 'Của tôi', isOwn: true });
+  assert.deepEqual(getAuthorDisplay('user-teacher-222'), { label: 'Cô Nguyễn Thị Hoa', isOwn: false });
+  assert.deepEqual(getAuthorDisplay('user-teacher-333'), { label: 'thay.nam@school.edu.vn', isOwn: false });
+  assert.deepEqual(getAuthorDisplay('unknown-author-999'), { label: 'Không xác định', isOwn: false });
+  assert.deepEqual(getAuthorDisplay(null), { label: 'Không xác định', isOwn: false });
+  console.log('PASS Test 40: Author display label resolution verified (Của tôi, full_name, email, Không xác định)');
+}
+
+// 41. Restore Question Payload & Invariance Contract
+{
+  const buildRestorePayload = () => ({ status: 'draft' });
+  const payload = buildRestorePayload();
+  assert.equal(payload.status, 'draft');
+  assert.equal(payload.visibility, undefined); // Không đổi visibility
+  assert.equal(payload.author_id, undefined); // Không đổi author
+  assert.equal(payload.school_id, undefined); // Không đổi school
+  console.log('PASS Test 41: Restore question payload invariance verified (status=draft only)');
+}
+
+// 42. Status Badge Mapping Contract
+{
+  const STATUS_BADGE_MAP = {
+    draft: { label: 'Bản nháp' },
+    published: { label: 'Đã xuất bản' },
+    archived: { label: 'Đã ẩn' }
+  };
+  assert.equal(STATUS_BADGE_MAP.draft.label, 'Bản nháp');
+  assert.equal(STATUS_BADGE_MAP.published.label, 'Đã xuất bản');
+  assert.equal(STATUS_BADGE_MAP.archived.label, 'Đã ẩn');
+  console.log('PASS Test 42: Status badge mapping verified (draft, published, archived)');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');

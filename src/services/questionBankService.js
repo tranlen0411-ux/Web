@@ -145,11 +145,48 @@ export const archiveQuestion = async (itemId) => {
   return jsonResult.data;
 };
 
+/**
+ * Khôi phục câu hỏi đã ẩn (Archived -> Draft) trong Ngân hàng câu hỏi
+ * @param {string} itemId UUID của câu hỏi cần khôi phục
+ * @returns {Promise<{ item_id: string, status: string, message: string }>}
+ */
+export const restoreQuestion = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    throw new Error('ID câu hỏi không hợp lệ.');
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/restore`;
+
+  const response = await fetch(requestUrl, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    throw new Error(`Lỗi kết nối máy chủ khi khôi phục câu hỏi (HTTP ${response.status})`);
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi khôi phục câu hỏi (${response.status})`;
+    throw new Error(errorMsg);
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
   createQuestion,
-  archiveQuestion
+  archiveQuestion,
+  restoreQuestion
 };
 
 export default questionBankService;
