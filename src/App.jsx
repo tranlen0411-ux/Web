@@ -5,6 +5,7 @@ import { SoundProvider } from './context/SoundContext';
 import { Navbar } from './components/common/Navbar';
 import { Footer } from './components/common/Footer';
 import { AuthPage } from './pages/AuthPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { StudentDashboard } from './pages/StudentDashboard';
 import { TeacherDashboard } from './pages/TeacherDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
@@ -79,6 +80,7 @@ function AppRoutes() {
         <Routes>
           <Route path="/" element={<HomeDispatcher />} />
           <Route path="/auth" element={<AuthPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
 
           <Route

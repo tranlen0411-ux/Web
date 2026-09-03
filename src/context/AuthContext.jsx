@@ -5,6 +5,7 @@ const AuthContext = createContext({
   user: null,
   profile: null,
   loading: true,
+  isPasswordRecovery: false,
   globalClassFilter: 'ALL',
   setGlobalClassFilter: () => {},
   signUp: async () => {},
@@ -14,13 +15,19 @@ const AuthContext = createContext({
   signOut: async () => {},
   refreshProfile: async () => {},
   awardStars: async () => {},
+  clearPasswordRecoveryState: () => {},
 });
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
   const [globalClassFilter, setGlobalClassFilter] = useState('ALL');
+
+  const clearPasswordRecoveryState = () => {
+    setIsPasswordRecovery(false);
+  };
 
   // Lấy thông tin profile người dùng từ bảng public.profiles bằng UUID Auth hoặc email sau khi có session
   const fetchProfile = async (userId, userEmail = null) => {
@@ -94,8 +101,14 @@ export const AuthProvider = ({ children }) => {
 
     initAuth();
 
-    // 2. Lắng nghe thay đổi auth state (đăng nhập / đăng xuất)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // 2. Lắng nghe thay đổi auth state (đăng nhập / đăng xuất / phục hồi mật khẩu)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY' && session?.user) {
+        setIsPasswordRecovery(true);
+      } else if (event === 'SIGNED_OUT') {
+        setIsPasswordRecovery(false);
+      }
+
       if (session?.user) {
         setUser(session.user);
         await fetchProfile(session.user.id, session.user.email);
@@ -289,6 +302,7 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
       setProfile(null);
       setGlobalClassFilter('ALL');
+      setIsPasswordRecovery(false);
       setLoading(false);
     }
   };
@@ -356,6 +370,7 @@ export const AuthProvider = ({ children }) => {
       user,
       profile,
       loading,
+      isPasswordRecovery,
       globalClassFilter,
       setGlobalClassFilter,
       signUp,
@@ -365,7 +380,8 @@ export const AuthProvider = ({ children }) => {
       qrStudentSignIn,
       signOut,
       refreshProfile,
-      awardStars
+      awardStars,
+      clearPasswordRecoveryState
     }}>
       {children}
     </AuthContext.Provider>
