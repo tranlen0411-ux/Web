@@ -323,6 +323,61 @@ export const getQuestionAuthoringDetail = async (itemId, versionId) => {
   return jsonResult.data;
 };
 
+/**
+ * Cập nhật chế độ hiển thị / chia sẻ của câu hỏi (Teacher Publish Sharing Hotfix V1)
+ * @param {string} itemId UUID của câu hỏi
+ * @param {'private' | 'public_template'} visibility Chế độ hiển thị cho phép
+ * @returns {Promise<{ item_id: string, message: string }>}
+ */
+export const updateQuestionVisibility = async (itemId, visibility) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  if (visibility !== 'private' && visibility !== 'public_template') {
+    const err = new Error('Chế độ hiển thị không hợp lệ. Chỉ chấp nhận private hoặc public_template.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/metadata`;
+
+  const response = await fetch(requestUrl, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({ visibility })
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi cập nhật chế độ hiển thị (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi cập nhật chế độ hiển thị (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
@@ -330,6 +385,7 @@ export const questionBankService = {
   archiveQuestion,
   restoreQuestion,
   publishQuestion,
+  updateQuestionVisibility,
   listQuestionVersions,
   getQuestionAuthoringDetail
 };

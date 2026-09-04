@@ -20,12 +20,13 @@ import {
   RotateCcw,
   User,
   Send,
-  History
+  History,
+  Share2
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
-import { listQuestions, archiveQuestion, restoreQuestion, publishQuestion } from '../../../services/questionBankService';
+import { listQuestions, archiveQuestion, restoreQuestion, publishQuestion, updateQuestionVisibility } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 import { QuestionVersionHistoryModal } from './QuestionVersionHistoryModal';
@@ -108,6 +109,13 @@ export const QuestionBankListTab = ({
   const [isRestoring, setIsRestoring] = useState(false);
   const [publishModalItem, setPublishModalItem] = useState(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [shareOnPublish, setShareOnPublish] = useState(true);
+
+  // Sharing modals state for already-published questions
+  const [shareModalItem, setShareModalItem] = useState(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [unshareModalItem, setUnshareModalItem] = useState(null);
+  const [isUnsharing, setIsUnsharing] = useState(false);
 
   // Version History modals state
   const [historyModalItem, setHistoryModalItem] = useState(null);
@@ -378,6 +386,11 @@ export const QuestionBankListTab = ({
     }
   };
 
+  const handleOpenPublishModal = (item) => {
+    setShareOnPublish(true);
+    setPublishModalItem(item);
+  };
+
   const handleConfirmPublish = async () => {
     if (!publishModalItem || isPublishing) return;
     const targetId = publishModalItem.id || publishModalItem.item_id;
@@ -385,9 +398,24 @@ export const QuestionBankListTab = ({
 
     setIsPublishing(true);
     try {
+      // 1. Xác định visibility dựa trên lựa chọn checkbox
+      const visibility = shareOnPublish === true ? 'public_template' : 'private';
+
+      // 2. Cập nhật visibility khi câu hỏi vẫn đang ở trạng thái bản nháp
+      await updateQuestionVisibility(targetId, visibility);
+
+      // 3. Tiến hành xuất bản câu hỏi
       await publishQuestion(targetId);
+
       setPublishModalItem(null);
-      showToast('Đã xuất bản câu hỏi thành công.');
+
+      // 4. Hiển thị thông báo Toast phù hợp
+      if (visibility === 'public_template') {
+        showToast('Đã xuất bản và chia sẻ câu hỏi với giáo viên khác.');
+      } else {
+        showToast('Đã xuất bản câu hỏi ở chế độ cá nhân.');
+      }
+
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi xuất bản câu hỏi:', err);
@@ -398,6 +426,44 @@ export const QuestionBankListTab = ({
       }
     } finally {
       setIsPublishing(false);
+    }
+  };
+
+  const handleConfirmShare = async () => {
+    if (!shareModalItem || isSharing) return;
+    const targetId = shareModalItem.id || shareModalItem.item_id;
+    if (!targetId) return;
+
+    setIsSharing(true);
+    try {
+      await updateQuestionVisibility(targetId, 'public_template');
+      setShareModalItem(null);
+      showToast('Đã chia sẻ câu hỏi với giáo viên khác thành công.');
+      fetchQuestions();
+    } catch (err) {
+      console.error('Lỗi khi chia sẻ câu hỏi:', err);
+      showToast(err?.message || 'Không thể chia sẻ câu hỏi. Vui lòng thử lại.');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleConfirmUnshare = async () => {
+    if (!unshareModalItem || isUnsharing) return;
+    const targetId = unshareModalItem.id || unshareModalItem.item_id;
+    if (!targetId) return;
+
+    setIsUnsharing(true);
+    try {
+      await updateQuestionVisibility(targetId, 'private');
+      setUnshareModalItem(null);
+      showToast('Đã chuyển câu hỏi về chế độ cá nhân thành công.');
+      fetchQuestions();
+    } catch (err) {
+      console.error('Lỗi khi ngừng chia sẻ câu hỏi:', err);
+      showToast(err?.message || 'Không thể cập nhật chế độ chia sẻ. Vui lòng thử lại.');
+    } finally {
+      setIsUnsharing(false);
     }
   };
 
@@ -766,6 +832,8 @@ export const QuestionBankListTab = ({
 
                   // Permissions
                   const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canShare = item.status === 'published' && item.visibility === 'private' && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canUnshare = item.status === 'published' && item.visibility === 'public_template' && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
@@ -852,12 +920,32 @@ export const QuestionBankListTab = ({
                           )}
                           {canPublish && (
                             <button
-                              onClick={() => setPublishModalItem(item)}
+                              onClick={() => handleOpenPublishModal(item)}
                               className="px-2 py-1 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
                               title="Xuất bản câu hỏi"
                             >
                               <Send className="w-3.5 h-3.5 text-emerald-600" />
                               <span>Xuất bản</span>
+                            </button>
+                          )}
+                          {canShare && (
+                            <button
+                              onClick={() => setShareModalItem(item)}
+                              className="px-2 py-1 text-indigo-700 hover:text-indigo-800 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Chia sẻ với giáo viên khác"
+                            >
+                              <Share2 className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Chia sẻ</span>
+                            </button>
+                          )}
+                          {canUnshare && (
+                            <button
+                              onClick={() => setUnshareModalItem(item)}
+                              className="px-2 py-1 text-slate-600 hover:text-slate-800 hover:bg-slate-200/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Ngừng chia sẻ với giáo viên khác"
+                            >
+                              <Lock className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Ngừng chia sẻ</span>
                             </button>
                           )}
                           {canArchive && (
@@ -880,7 +968,7 @@ export const QuestionBankListTab = ({
                               <span>Khôi phục</span>
                             </button>
                           )}
-                          {!canPublish && !canArchive && !canRestore && !canViewHistory && (
+                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canViewHistory && (
                             <span className="text-slate-300 text-xs">—</span>
                           )}
                         </div>
@@ -1063,9 +1151,33 @@ export const QuestionBankListTab = ({
               <span>Bạn có chắc muốn xuất bản câu hỏi này?</span>
             </div>
 
-            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
-              Sau khi xuất bản, câu hỏi sẽ được sử dụng theo phạm vi chia sẻ hiện tại.
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-3 leading-relaxed bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
+              Sau khi xuất bản, câu hỏi sẽ sẵn sàng để sử dụng và giao bài tập.
             </p>
+
+            {/* CHECKBOX CHIA SẺ VỚI GIÁO VIÊN KHÁC */}
+            <div className="my-3.5 p-3.5 bg-indigo-50/70 border-2 border-indigo-200 rounded-2xl text-left">
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={shareOnPublish}
+                  onChange={(e) => setShareOnPublish(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                />
+                <div>
+                  <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-indigo-600" />
+                    Chia sẻ với giáo viên khác
+                  </span>
+                  <p className="text-[11px] text-indigo-900 font-medium mt-0.5 leading-relaxed">
+                    Khi bật, câu hỏi sau khi xuất bản sẽ xuất hiện trong Ngân hàng câu hỏi của giáo viên khác. Lịch sử phiên bản vẫn chỉ Admin và tác giả được xem.
+                  </p>
+                  <p className="text-[10px] text-slate-500 italic mt-1">
+                    Bỏ chọn nếu muốn giữ câu hỏi chỉ trong kho cá nhân.
+                  </p>
+                </div>
+              </label>
+            </div>
 
             <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
               <span className="font-bold text-slate-700">Câu hỏi: </span>
@@ -1095,7 +1207,111 @@ export const QuestionBankListTab = ({
                 ) : (
                   <>
                     <Send className="w-3.5 h-3.5" />
-                    <span>Xuất bản</span>
+                    <span>Xuất bản ngay</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM SHARE MODAL */}
+      {shareModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-indigo-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-100 flex items-center justify-center shrink-0">
+                <Share2 className="w-5 h-5 text-indigo-700" />
+              </div>
+              <span>Chia sẻ câu hỏi đã xuất bản này với giáo viên khác?</span>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Câu hỏi sẽ xuất hiện trong Ngân hàng câu hỏi dùng chung để các giáo viên khác cùng tham khảo và sử dụng. Lịch sử phiên bản vẫn chỉ Admin và tác giả được xem.
+            </p>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-indigo-50/50 p-2.5 rounded-xl border border-indigo-100">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {shareModalItem.title || shareModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isSharing && setShareModalItem(null)}
+                disabled={isSharing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmShare}
+                disabled={isSharing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSharing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Chia sẻ ngay</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM UNSHARE MODAL */}
+      {unshareModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-slate-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-slate-100 flex items-center justify-center shrink-0">
+                <Lock className="w-5 h-5 text-slate-700" />
+              </div>
+              <span>Ngừng chia sẻ câu hỏi này?</span>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Câu hỏi sẽ chuyển về chế độ cá nhân và không còn hiển thị cho các giáo viên khác, nhưng vẫn giữ nguyên trạng thái đã xuất bản trong kho của bạn.
+            </p>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {unshareModalItem.title || unshareModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isUnsharing && setUnshareModalItem(null)}
+                disabled={isUnsharing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmUnshare}
+                disabled={isUnsharing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-700 hover:bg-slate-800 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isUnsharing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Ngừng chia sẻ</span>
                   </>
                 )}
               </button>
