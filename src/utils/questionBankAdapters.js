@@ -543,6 +543,114 @@ export const toQuestionBankPayload = (input = {}, contextOptions = {}) => {
   return payload;
 };
 
+/**
+ * Chuyển đổi một câu hỏi từ Question Bank (với Snapshot Version & Answer Key) sang Academic Exercise Payload
+ * @param {Object} item Thông tin item câu hỏi từ Question Bank
+ * @param {Object} version Thông tin snapshot version hiện tại của câu hỏi
+ * @param {Object} [answerKey] Thông tin đáp án từ authoring detail
+ * @param {Object} [options] Các tùy chỉnh bài tập (title, due_date, reward_stars, counts_toward_ranking)
+ * @returns {{ exercise: Object, questions: Array }}
+ */
+export const transformQuestionBankToAcademicExercise = (item, version, answerKey = null, options = {}) => {
+  if (!item || typeof item !== 'object') {
+    throw new Error('Thông tin câu hỏi Question Bank không hợp lệ.');
+  }
+  if (!version || typeof version !== 'object') {
+    throw new Error('Thông tin phiên bản Question Bank không hợp lệ.');
+  }
+
+  const qType = item.question_type || version.question_type || 'single_choice';
+  const prompt = version.prompt || item.title || '(Không có nội dung)';
+  
+  // Trích xuất options_json thành mảng chuỗi
+  const rawOpts = Array.isArray(version.options) ? version.options : [];
+  const options_json = rawOpts.map((opt) => {
+    if (typeof opt === 'string') return opt.trim();
+    if (opt && typeof opt === 'object' && typeof opt.text === 'string') return opt.text.trim();
+    return String(opt).trim();
+  });
+
+  // Map answer key
+  let correct_answer_key = null;
+  const ca = answerKey?.correct_answers;
+
+  if (qType === 'single_choice') {
+    let correctText = '';
+    const correctOptId = ca?.correct_option_id || (typeof ca === 'string' ? ca : '');
+    const foundOpt = rawOpts.find((o) => (typeof o === 'object' && o?.id === correctOptId) || o === correctOptId);
+    if (foundOpt) {
+      correctText = typeof foundOpt === 'object' ? foundOpt.text.trim() : String(foundOpt).trim();
+    } else if (options_json.length > 0) {
+      correctText = options_json[0];
+    }
+    correct_answer_key = {
+      correct_answer: correctText,
+      accepted_answers: [correctText],
+      case_sensitive: Boolean(answerKey?.case_sensitive)
+    };
+  } else if (qType === 'multiple_choice') {
+    const correctOptIds = Array.isArray(ca?.correct_option_ids) ? ca.correct_option_ids : (Array.isArray(ca) ? ca : []);
+    const correctTexts = rawOpts
+      .filter((o) => typeof o === 'object' ? correctOptIds.includes(o.id) : correctOptIds.includes(o))
+      .map((o) => typeof o === 'object' ? o.text.trim() : String(o).trim());
+    const finalAns = correctTexts.length > 0 ? correctTexts : [options_json[0] || ''];
+    correct_answer_key = {
+      correct_answer: finalAns,
+      accepted_answers: finalAns,
+      case_sensitive: Boolean(answerKey?.case_sensitive)
+    };
+  } else if (qType === 'fill_blank' || qType === 'short_answer') {
+    const textAns = Array.isArray(ca?.correct_answers)
+      ? ca.correct_answers[0]
+      : (typeof ca === 'string' ? ca : (ca?.correct_answer || ''));
+    const cleanTextAns = String(textAns || '').trim();
+    correct_answer_key = {
+      correct_answer: cleanTextAns,
+      accepted_answers: Array.isArray(ca?.correct_answers) ? ca.correct_answers.map(s => String(s).trim()) : [cleanTextAns],
+      case_sensitive: Boolean(answerKey?.case_sensitive)
+    };
+  } else {
+    // essay, image_upload, file_upload
+    correct_answer_key = null;
+  }
+
+  const questionPayload = {
+    question_number: 1,
+    question_type: qType,
+    prompt: prompt.trim(),
+    options_json: options_json,
+    options: options_json,
+    points: 10,
+    correct_answer_key
+  };
+
+  const exerciseTitle = options.title?.trim() || item.title?.trim() || prompt.trim().slice(0, 100) || 'Bài tập học thuật';
+  const gradeLevel = parseInt(item.grade_level, 10) || 1;
+  const subject = item.subject || 'Toán';
+
+  const exercisePayload = {
+    title: exerciseTitle,
+    description: options.description?.trim() || `Bài tập từ Question Bank: ${item.code || item.id} (Version ${version.version_number || 1})`,
+    grade_level: gradeLevel,
+    subject: subject,
+    exercise_type: 'mixed',
+    status: 'published',
+    reward_stars: parseInt(options.reward_stars, 10) || 10,
+    due_date: options.due_date ? new Date(options.due_date).toISOString() : null,
+    max_attempts: 1,
+    show_score_after_submit: true,
+    show_correct_answers: true,
+    is_global: false,
+    source_question_bank_item_id: item.id,
+    source_question_bank_version_id: version.id || item.current_version_id
+  };
+
+  return {
+    exercise: exercisePayload,
+    questions: [questionPayload]
+  };
+};
+
 export default {
   toQuestionBankPayload,
   normalizePromptForDuplicateCheck,
@@ -553,5 +661,7 @@ export default {
   findExistingQuestionDuplicateIndices,
   normalizeOptionsToStableIds,
   buildSingleChoiceAnswerKey,
-  buildMultipleChoiceAnswerKey
+  buildMultipleChoiceAnswerKey,
+  transformQuestionBankToAcademicExercise
 };
+

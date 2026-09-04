@@ -39,6 +39,7 @@ import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 import { QuestionVersionHistoryModal } from './QuestionVersionHistoryModal';
 import { QuestionVersionDetailModal } from './QuestionVersionDetailModal';
+import { AssignQuestionBankToClassModal } from './AssignQuestionBankToClassModal';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -128,6 +129,9 @@ export const QuestionBankListTab = ({
   // Clone / Fork modal state for shared questions (Teacher Fork / Clone UI V1)
   const [cloneModalItem, setCloneModalItem] = useState(null);
   const [isCloning, setIsCloning] = useState(false);
+
+  // Assign to class modal state (Teacher Assign to Class V1)
+  const [assignModalItem, setAssignModalItem] = useState(null);
 
   // Version History modals state
   const [historyModalItem, setHistoryModalItem] = useState(null);
@@ -881,6 +885,7 @@ export const QuestionBankListTab = ({
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
                   const canClone = isSharedFromOtherTeacher;
+                  const canAssignToClass = isOwnQuestion && item.status === 'published' && (role === 'admin' || role === 'teacher');
 
                   const authorInfo = getAuthorDisplay(item.author_id);
 
@@ -952,6 +957,16 @@ export const QuestionBankListTab = ({
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
+                          {canAssignToClass && (
+                            <button
+                              onClick={() => setAssignModalItem(item)}
+                              className="px-2 py-1 text-indigo-700 hover:text-indigo-800 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Giao câu hỏi này cho lớp học"
+                            >
+                              <Send className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Giao cho lớp</span>
+                            </button>
+                          )}
                           {canClone && (
                             <button
                               onClick={() => setCloneModalItem(item)}
@@ -1022,7 +1037,7 @@ export const QuestionBankListTab = ({
                               <span>Khôi phục</span>
                             </button>
                           )}
-                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canViewHistory && !canClone && (
+                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canViewHistory && !canClone && !canAssignToClass && (
                             <span className="text-slate-300 text-xs">—</span>
                           )}
                         </div>
@@ -1464,6 +1479,20 @@ export const QuestionBankListTab = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ASSIGN TO CLASS MODAL (Teacher Assign to Class V1) */}
+      {assignModalItem && (
+        <AssignQuestionBankToClassModal
+          isOpen={Boolean(assignModalItem)}
+          onClose={() => setAssignModalItem(null)}
+          onSuccess={(msg) => {
+            showToast(msg);
+            fetchQuestions();
+          }}
+          item={assignModalItem}
+          classes={activeClasses}
+        />
       )}
     </div>
   );
