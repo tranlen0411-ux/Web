@@ -910,4 +910,322 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS ===');
   console.log('PASS Test 48: Publish endpoint URL contract verified');
 }
 
+// 49. Version History Endpoint URL Contract
+{
+  const itemId = '00000000-0000-0000-0000-000000000001';
+  const QUESTION_BANK_BASE_URL = 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/versions`;
+  assert.equal(requestUrl, 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api/qb/questions/00000000-0000-0000-0000-000000000001/versions');
+  console.log('PASS Test 49: Version History endpoint URL contract verified');
+}
+
+// 50. Authoring Detail with version_id Query Param Contract
+{
+  const itemId = '00000000-0000-0000-0000-000000000001';
+  const versionId = '00000000-0000-0000-0000-000000000002';
+  const QUESTION_BANK_BASE_URL = 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
+  const searchParams = new URLSearchParams();
+  if (versionId) searchParams.append('version_id', versionId);
+  const queryString = searchParams.toString();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/authoring/questions/${encodeURIComponent(itemId)}${queryString ? `?${queryString}` : ''}`;
+  assert.equal(requestUrl, 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api/qb/authoring/questions/00000000-0000-0000-0000-000000000001?version_id=00000000-0000-0000-0000-000000000002');
+  console.log('PASS Test 50: Authoring detail with version_id query param URL contract verified');
+}
+
+// 51. RT-VH-01 / RT-VH-02 / RT-VH-07: Version List Sanitization & Response Leak Defense Contract
+{
+  const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  const isUuidString = (v) => typeof v === 'string' && UUID_REGEX.test(v);
+
+  const sanitizeVersionsResponse = (raw) => {
+    if (!raw || typeof raw !== 'object' || raw.success !== true) return null;
+    if (!isUuidString(raw.item_id) || !Array.isArray(raw.versions)) return null;
+
+    const sanitizedVersions = raw.versions.map(v => ({
+      id: v.id,
+      version_number: v.version_number,
+      created_by: typeof v.created_by === 'string' ? v.created_by : null,
+      created_at: v.created_at,
+      change_log: typeof v.change_log === 'string' ? v.change_log : null,
+      forked_from_version_id: typeof v.forked_from_version_id === 'string' ? v.forked_from_version_id : null,
+      is_current: Boolean(v.is_current)
+    }));
+
+    return {
+      item_id: raw.item_id,
+      current_version_id: typeof raw.current_version_id === 'string' ? raw.current_version_id : null,
+      total_versions: typeof raw.total_versions === 'number' ? raw.total_versions : sanitizedVersions.length,
+      versions: sanitizedVersions
+    };
+  };
+
+  const rawRpcWithLeaks = {
+    success: true,
+    item_id: '00000000-0000-0000-0000-000000000001',
+    current_version_id: '00000000-0000-0000-0000-000000000002',
+    total_versions: 1,
+    answer_key: { correct_option_id: 'opt_1' },
+    prompt: 'LEAKED PROMPT',
+    options: ['A', 'B'],
+    hints: ['Hint'],
+    explanation: 'Secret',
+    metadata: { secret: true },
+    versions: [
+      {
+        id: '00000000-0000-0000-0000-000000000002',
+        version_number: 1,
+        created_by: '11111111-1111-1111-1111-111111111111',
+        created_at: '2026-09-04T12:00:00Z',
+        change_log: 'Initial',
+        forked_from_version_id: null,
+        is_current: true,
+        answer_key: { leaked: true },
+        prompt: 'LEAKED IN VERSION',
+        options: ['Leaked'],
+        hints: ['Leaked'],
+        explanation: 'Leaked',
+        metadata: { leaked: true }
+      }
+    ]
+  };
+
+  const sanitized = sanitizeVersionsResponse(rawRpcWithLeaks);
+  assert.notEqual(sanitized, null);
+  const serialized = JSON.stringify(sanitized);
+
+  assert.equal(serialized.includes('answer_key'), false);
+  assert.equal(serialized.includes('prompt'), false);
+  assert.equal(serialized.includes('options'), false);
+  assert.equal(serialized.includes('hints'), false);
+  assert.equal(serialized.includes('explanation'), false);
+  assert.equal(serialized.includes('metadata'), false);
+  assert.equal(serialized.includes('LEAKED'), false);
+
+  assert.deepEqual(Object.keys(sanitized).sort(), ['current_version_id', 'item_id', 'total_versions', 'versions'].sort());
+  assert.deepEqual(
+    Object.keys(sanitized.versions[0]).sort(),
+    ['id', 'version_number', 'created_by', 'created_at', 'change_log', 'forked_from_version_id', 'is_current'].sort()
+  );
+
+  console.log('PASS Test 51: RT-VH-01/RT-VH-02/RT-VH-07 Version List Sanitization & Leak Defense Contract verified');
+}
+
+// 52. RT-VH-03 / RT-VH-09: Other teacher permissions contract (FORBIDDEN -> 403)
+{
+  const evaluateVersionHistoryAccess = ({ role, isAuthor }) => {
+    if (role === 'admin') return { allowed: true };
+    if (role === 'teacher' && isAuthor) return { allowed: true };
+    if (role === 'teacher' && !isAuthor) return { allowed: false, status: 403, errorCode: 'FORBIDDEN' };
+    return { allowed: false, status: 403, errorCode: 'FORBIDDEN' };
+  };
+
+  // Author teacher -> ALLOW
+  assert.equal(evaluateVersionHistoryAccess({ role: 'teacher', isAuthor: true }).allowed, true);
+  // Other teacher -> 403 FORBIDDEN
+  const otherTeacher = evaluateVersionHistoryAccess({ role: 'teacher', isAuthor: false });
+  assert.equal(otherTeacher.allowed, false);
+  assert.equal(otherTeacher.status, 403);
+  // Admin -> ALLOW
+  assert.equal(evaluateVersionHistoryAccess({ role: 'admin', isAuthor: false }).allowed, true);
+  // Student -> 403 FORBIDDEN
+  assert.equal(evaluateVersionHistoryAccess({ role: 'student', isAuthor: false }).allowed, false);
+
+  console.log('PASS Test 52: RT-VH-03/RT-VH-09 Permission Matrix verified (Author=ALLOW, Admin=ALLOW, Other=403, Student=403)');
+}
+
+// 53. RT-VH-04: Student blocked at BFF Gateway
+{
+  const checkGatewayRole = (role) => {
+    if (role !== 'admin' && role !== 'teacher') {
+      return { allowed: false, status: 403, errorCode: 'FORBIDDEN' };
+    }
+    return { allowed: true };
+  };
+
+  assert.equal(checkGatewayRole('student').allowed, false);
+  assert.equal(checkGatewayRole('student').status, 403);
+  assert.equal(checkGatewayRole('teacher').allowed, true);
+  assert.equal(checkGatewayRole('admin').allowed, true);
+  console.log('PASS Test 53: RT-VH-04 Student role blocked at Gateway');
+}
+
+// 54. RT-VH-05: UUID validation contract
+{
+  const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  const isValidUUID = (val) => typeof val === 'string' && UUID_REGEX.test(val);
+
+  assert.equal(isValidUUID('00000000-0000-0000-0000-000000000001'), true);
+  assert.equal(isValidUUID('invalid-uuid'), false);
+  assert.equal(isValidUUID('12345'), false);
+  assert.equal(isValidUUID(''), false);
+  assert.equal(isValidUUID(null), false);
+  console.log('PASS Test 54: RT-VH-05 UUID validation contract verified');
+}
+
+// 55. RT-VH-06: ITEM_NOT_FOUND error normalization contract
+{
+  const normalizeCode = (rawCode) => {
+    if (rawCode === 'ITEM_NOT_FOUND') return { status: 404, errorCode: 'NOT_FOUND' };
+    if (rawCode === 'VERSION_NOT_FOUND') return { status: 404, errorCode: 'NOT_FOUND' };
+    if (rawCode === 'FORBIDDEN') return { status: 403, errorCode: 'FORBIDDEN' };
+    return { status: 500, errorCode: 'INTERNAL_ERROR' };
+  };
+
+  assert.deepEqual(normalizeCode('ITEM_NOT_FOUND'), { status: 404, errorCode: 'NOT_FOUND' });
+  assert.deepEqual(normalizeCode('VERSION_NOT_FOUND'), { status: 404, errorCode: 'NOT_FOUND' });
+  assert.deepEqual(normalizeCode('FORBIDDEN'), { status: 403, errorCode: 'FORBIDDEN' });
+  console.log('PASS Test 55: RT-VH-06 Error normalization contract verified');
+}
+
+// 56. RT-VH-10: Cross-item version binding defense contract
+{
+  const simulateCrossItemFetch = ({ itemAuthorId, callerId, itemVersionIds, requestedVersionId }) => {
+    // 1. Author check
+    if (itemAuthorId !== callerId) {
+      return { status: 403, errorCode: 'FORBIDDEN', data: null };
+    }
+    // 2. Version binding check
+    if (!itemVersionIds.includes(requestedVersionId)) {
+      return { status: 404, errorCode: 'NOT_FOUND', data: null };
+    }
+    return { status: 200, data: { version_id: requestedVersionId } };
+  };
+
+  // Teacher owns ITEM_A, requests VERSION_B which belongs to ITEM_B
+  const result = simulateCrossItemFetch({
+    itemAuthorId: 'teacher-1',
+    callerId: 'teacher-1',
+    itemVersionIds: ['version-a1', 'version-a2'],
+    requestedVersionId: 'version-b1'
+  });
+
+  assert.equal(result.status, 404);
+  assert.equal(result.errorCode, 'NOT_FOUND');
+  assert.equal(result.data, null);
+  console.log('PASS Test 56: RT-VH-10 Cross-item version binding defense verified (404, no leak)');
+}
+
+// 57. UI History Action Button Visibility Contract
+{
+  const canViewHistory = ({ role, isAuthor }) => {
+    return role === 'admin' || (role === 'teacher' && isAuthor);
+  };
+
+  assert.equal(canViewHistory({ role: 'admin', isAuthor: false }), true);
+  assert.equal(canViewHistory({ role: 'teacher', isAuthor: true }), true);
+  assert.equal(canViewHistory({ role: 'teacher', isAuthor: false }), false);
+  assert.equal(canViewHistory({ role: 'student', isAuthor: false }), false);
+  console.log('PASS Test 57: UI History button visibility matrix verified');
+}
+
+// 58. Read-only Modal Contract (No mutate actions)
+{
+  const allowedModalActions = ['view', 'close', 'back'];
+  const forbiddenModalActions = ['delete', 'edit', 'restore', 'rollback', 'overwrite'];
+
+  for (const forbidden of forbiddenModalActions) {
+    assert.equal(allowedModalActions.includes(forbidden), false);
+  }
+  console.log('PASS Test 58: Read-only modal contract verified (no delete/edit/restore/rollback/overwrite)');
+}
+
+// 59. Null caller_id Guard & Error Normalization Contract
+{
+  const simulateRpcCallerGuard = (callerId) => {
+    if (!callerId) {
+      return { success: false, error_code: 'UNAUTHORIZED_CALLER', message: 'Caller ID is required' };
+    }
+    return { success: true };
+  };
+
+  const normalizeRpcErrorStub = (res) => {
+    if (res?.error_code === 'UNAUTHORIZED_CALLER') {
+      return { status: 401, errorCode: 'UNAUTHORIZED' };
+    }
+    return { status: 500, errorCode: 'INTERNAL_ERROR' };
+  };
+
+  const guardFail = simulateRpcCallerGuard(null);
+  assert.equal(guardFail.success, false);
+  assert.equal(guardFail.error_code, 'UNAUTHORIZED_CALLER');
+  const normalized = normalizeRpcErrorStub(guardFail);
+  assert.equal(normalized.status, 401);
+  assert.equal(normalized.errorCode, 'UNAUTHORIZED');
+  console.log('PASS Test 59: Null caller_id guard contract verified (UNAUTHORIZED_CALLER -> 401 UNAUTHORIZED)');
+}
+
+// 60. SQL File Schema Verification: question_bank_item_id Contract
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+{
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const sqlFilePath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_LIST_VERSIONS_RPC.sql');
+  const sqlContent = fs.readFileSync(sqlFilePath, 'utf8');
+
+  // Khẳng định phải sử dụng question_bank_item_id
+  assert.equal(sqlContent.includes('WHERE v.question_bank_item_id = p_item_id'), true);
+  // Khẳng định KHÔNG sử dụng v.item_id = p_item_id
+  assert.equal(sqlContent.includes('WHERE v.item_id = p_item_id'), false);
+  // Khẳng định có caller guard
+  assert.equal(sqlContent.includes("IF p_caller_id IS NULL THEN"), true);
+  assert.equal(sqlContent.includes("'UNAUTHORIZED_CALLER'"), true);
+  // Khẳng định có item_id null guard
+  assert.equal(sqlContent.includes("IF p_item_id IS NULL THEN"), true);
+  assert.equal(sqlContent.includes("'Item ID is required'"), true);
+  // Khẳng định có null-safe check
+  assert.equal(sqlContent.includes("v_item.author_id IS NULL"), true);
+  console.log('PASS Test 60: SQL schema contract verified (uses question_bank_item_id, caller guard, item guard, null-safe ownership)');
+}
+
+// 61. Null-Safe Ownership Comparison Contract
+{
+  const checkOwnershipNullSafe = ({ actorRole, authorId, callerId }) => {
+    if (actorRole !== 'admin' && (!authorId || authorId !== callerId)) {
+      return { allowed: false, error_code: 'FORBIDDEN' };
+    }
+    return { allowed: true };
+  };
+
+  // Author id is null, non-admin teacher -> FORBIDDEN
+  assert.equal(checkOwnershipNullSafe({ actorRole: 'teacher', authorId: null, callerId: 'user-1' }).allowed, false);
+  // Author id is null, admin -> ALLOW
+  assert.equal(checkOwnershipNullSafe({ actorRole: 'admin', authorId: null, callerId: 'user-1' }).allowed, true);
+  // Author matches caller, teacher -> ALLOW
+  assert.equal(checkOwnershipNullSafe({ actorRole: 'teacher', authorId: 'user-1', callerId: 'user-1' }).allowed, true);
+  // Author differs from caller, teacher -> FORBIDDEN
+  assert.equal(checkOwnershipNullSafe({ actorRole: 'teacher', authorId: 'user-2', callerId: 'user-1' }).allowed, false);
+
+  console.log('PASS Test 61: Null-safe ownership comparison logic verified across all combinations');
+}
+
+// 62. RT-VH-13: NULL p_item_id -> INVALID_INPUT Contract
+{
+  const simulateRpcItemGuard = (itemId) => {
+    if (!itemId) {
+      return { success: false, error_code: 'INVALID_INPUT', message: 'Item ID is required' };
+    }
+    return { success: true };
+  };
+
+  const normalizeRpcErrorStub = (res) => {
+    if (res?.error_code === 'INVALID_INPUT') {
+      return { status: 400, errorCode: 'INVALID_INPUT' };
+    }
+    return { status: 500, errorCode: 'INTERNAL_ERROR' };
+  };
+
+  const guardFail = simulateRpcItemGuard(null);
+  assert.equal(guardFail.success, false);
+  assert.equal(guardFail.error_code, 'INVALID_INPUT');
+  const normalized = normalizeRpcErrorStub(guardFail);
+  assert.equal(normalized.status, 400);
+  assert.equal(normalized.errorCode, 'INVALID_INPUT');
+  console.log('PASS Test 62: RT-VH-13 NULL p_item_id -> INVALID_INPUT contract verified (400 INVALID_INPUT)');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
+
+
+

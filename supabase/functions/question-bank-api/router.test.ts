@@ -2203,3 +2203,466 @@ Deno.test('RT-PUBLISH-10 - Method không phải PATCH (POST / GET) -> 404 NOT_FO
   await assertErrorResponse(res, 404, 'NOT_FOUND', 'Đường dẫn API không tồn tại.');
   assertStrictEquals(mockRpc.calls.length, 0);
 });
+
+// ============================================================================
+// Group: Version History V2.1 Tests (10 Tests: RT-VH-01 — RT-VH-10)
+// ============================================================================
+
+Deno.test('RT-VH-01 - Author teacher requests version history -> 200 OK & summary fields', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      current_version_id: VALID_VERSION_ID,
+      total_versions: 2,
+      versions: [
+        {
+          id: VALID_VERSION_ID,
+          version_number: 2,
+          created_by: VALID_USER_ID,
+          created_at: '2026-09-04T12:00:00Z',
+          change_log: 'Cập nhật lựa chọn đáp án',
+          forked_from_version_id: null,
+          is_current: true,
+        },
+        {
+          id: '00000000-0000-0000-0000-000000000003',
+          version_number: 1,
+          created_by: VALID_USER_ID,
+          created_at: '2026-09-01T10:00:00Z',
+          change_log: 'Khởi tạo phiên bản đầu tiên',
+          forked_from_version_id: null,
+          is_current: false,
+        },
+      ],
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{
+    item_id: string;
+    current_version_id: string;
+    total_versions: number;
+    versions: Array<{
+      id: string;
+      version_number: number;
+      created_by: string;
+      created_at: string;
+      change_log: string;
+      forked_from_version_id: string | null;
+      is_current: boolean;
+    }>;
+  }>(res, 200);
+
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.current_version_id, VALID_VERSION_ID);
+  assertStrictEquals(data.total_versions, 2);
+  assertStrictEquals(data.versions.length, 2);
+  assertStrictEquals(data.versions[0].version_number, 2);
+  assertStrictEquals(data.versions[0].is_current, true);
+  assertStrictEquals(data.versions[1].version_number, 1);
+  assertStrictEquals(data.versions[1].is_current, false);
+
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+  assertStrictEquals(mockRpc.calls[0].args.p_caller_id, VALID_USER_ID);
+  assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'teacher');
+  assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
+});
+
+Deno.test('RT-VH-02 - Admin requests version history -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'admin', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      current_version_id: VALID_VERSION_ID,
+      total_versions: 1,
+      versions: [
+        {
+          id: VALID_VERSION_ID,
+          version_number: 1,
+          created_by: '33333333-3333-3333-3333-333333333333',
+          created_at: '2026-09-04T12:00:00Z',
+          change_log: 'Admin review version',
+          forked_from_version_id: null,
+          is_current: true,
+        },
+      ],
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{
+    item_id: string;
+    current_version_id: string;
+    total_versions: number;
+    versions: unknown[];
+  }>(res, 200);
+
+  assertStrictEquals(data.item_id, VALID_ITEM_ID);
+  assertStrictEquals(data.total_versions, 1);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+  assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'admin');
+});
+
+Deno.test('RT-VH-03 - Other teacher on public_template item -> DB RPC trả FORBIDDEN -> 403 FORBIDDEN', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: '44444444-4444-4444-4444-444444444444' });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'FORBIDDEN',
+      message: 'You can only view version history of your own questions',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Bạn không có quyền thực hiện thao tác này trên câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+});
+
+Deno.test('RT-VH-04 - Student requests version history -> 403 FORBIDDEN at BFF Gateway', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Chỉ giáo viên và quản trị viên mới có quyền xem lịch sử phiên bản.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-VH-05 - Invalid item UUID (/qb/questions/bad-uuid/versions) -> 400 INVALID_INPUT', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/questions/not-a-valid-uuid/versions', {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    400,
+    'INVALID_INPUT',
+    'ID câu hỏi không đúng định dạng UUID.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-VH-06 - Missing item (ITEM_NOT_FOUND) -> 404 NOT_FOUND', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'ITEM_NOT_FOUND',
+      message: 'Question item not found',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    404,
+    'NOT_FOUND',
+    'Không tìm thấy câu hỏi yêu cầu.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+});
+
+Deno.test('RT-VH-07 - Response leak test: response MUST NOT contain answer_key, prompt, options, hints, explanation, metadata', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      item_id: VALID_ITEM_ID,
+      current_version_id: VALID_VERSION_ID,
+      total_versions: 1,
+      // RPC mock trả kèm các trường nhạy cảm nhằm test bộ lọc sanitize whitelist
+      answer_key: { correct_option_id: 'opt_leak' },
+      prompt: 'LEAKED PROMPT CONTENT',
+      options: ['Option A', 'Option B'],
+      hints: ['Hint 1'],
+      explanation: 'Secret explanation',
+      metadata: { secret: 'meta' },
+      versions: [
+        {
+          id: VALID_VERSION_ID,
+          version_number: 1,
+          created_by: VALID_USER_ID,
+          created_at: '2026-09-04T12:00:00Z',
+          change_log: 'Initial',
+          forked_from_version_id: null,
+          is_current: true,
+          // Trong từng version cũng cố tình nhồi trường nhạy cảm
+          answer_key: { correct_option_id: 'opt_leak_2' },
+          prompt: 'LEAKED PROMPT IN VERSION',
+          options: ['Option C'],
+          hints: ['Hint 2'],
+          explanation: 'Secret explanation in version',
+          metadata: { subsecret: 'data' },
+        },
+      ],
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  assertStrictEquals(res.status, 200);
+  const json = await res.json();
+  const rawString = JSON.stringify(json);
+
+  const forbiddenKeys = [
+    'answer_key',
+    'prompt',
+    'options',
+    'hints',
+    'explanation',
+    'metadata',
+    'LEAKED PROMPT CONTENT',
+    'opt_leak',
+    'Secret explanation',
+  ];
+
+  for (const forbidden of forbiddenKeys) {
+    if (rawString.includes(forbidden)) {
+      throw new Error(`Public response leaked forbidden field or value: "${forbidden}"`);
+    }
+  }
+
+  // Khẳng định response chỉ có đúng top level whitelist: item_id, current_version_id, total_versions, versions
+  const topKeys = Object.keys(json.data).sort();
+  assertEquals(topKeys, ['current_version_id', 'item_id', 'total_versions', 'versions'].sort());
+
+  // Khẳng định mỗi version chỉ có đúng 7 trường whitelist
+  const versionKeys = Object.keys(json.data.versions[0]).sort();
+  assertEquals(
+    versionKeys,
+    ['id', 'version_number', 'created_by', 'created_at', 'change_log', 'forked_from_version_id', 'is_current'].sort()
+  );
+});
+
+Deno.test('RT-VH-08 - Author requests old version through existing authoring route -> 200 OK', async () => {
+  const OLD_VERSION_ID = '00000000-0000-0000-0000-000000000009';
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: true,
+      projection: 'AUTHORING_SAFE',
+      item: { id: VALID_ITEM_ID, author_id: VALID_USER_ID },
+      version: {
+        id: OLD_VERSION_ID,
+        version_number: 1,
+        prompt: 'Nội dung câu hỏi cũ',
+        options: [{ id: 'opt_1', text: 'Đáp án 1' }],
+      },
+      answer_key: { correct_option_id: 'opt_1' },
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(
+    `https://example.test/qb/authoring/questions/${VALID_ITEM_ID}?version_id=${OLD_VERSION_ID}`,
+    { method: 'GET' }
+  );
+  const res = await handleQuestionBankRequest(req, deps);
+
+  const data = await assertSuccessResponse<{
+    projection: string;
+    item: Record<string, unknown>;
+    version: Record<string, unknown>;
+    answer_key: Record<string, unknown>;
+  }>(res, 200);
+
+  assertStrictEquals(data.projection, 'AUTHORING_SAFE');
+  assertStrictEquals(data.version.id, OLD_VERSION_ID);
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_get_authoring_detail');
+  assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
+  assertStrictEquals(mockRpc.calls[0].args.p_version_id, OLD_VERSION_ID);
+});
+
+Deno.test('RT-VH-09 - Other teacher requests authoring detail -> DB RPC returns FORBIDDEN -> 403 FORBIDDEN', async () => {
+  const OLD_VERSION_ID = '00000000-0000-0000-0000-000000000009';
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: '55555555-5555-5555-5555-555555555555' });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'FORBIDDEN',
+      message: 'You can only view authoring details of your own questions',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(
+    `https://example.test/qb/authoring/questions/${VALID_ITEM_ID}?version_id=${OLD_VERSION_ID}`,
+    { method: 'GET' }
+  );
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Bạn không có quyền thực hiện thao tác này trên câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_get_authoring_detail');
+});
+
+Deno.test('RT-VH-10 - Cross-item version binding defense: requesting VERSION_B under ITEM_A -> 404 VERSION_NOT_FOUND with zero leaks', async () => {
+  const ITEM_A_ID = '00000000-0000-0000-0000-000000000001';
+  const VERSION_B_ID = '00000000-0000-0000-0000-000000000099';
+
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'VERSION_NOT_FOUND',
+      message: 'Version not found or does not belong to this item',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(
+    `https://example.test/qb/authoring/questions/${ITEM_A_ID}?version_id=${VERSION_B_ID}`,
+    { method: 'GET' }
+  );
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    404,
+    'NOT_FOUND',
+    'Không tìm thấy phiên bản câu hỏi yêu cầu.',
+    ['answer_key', 'prompt', 'options', 'hints', 'explanation', 'metadata']
+  );
+
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_get_authoring_detail');
+  assertStrictEquals(mockRpc.calls[0].args.p_item_id, ITEM_A_ID);
+  assertStrictEquals(mockRpc.calls[0].args.p_version_id, VERSION_B_ID);
+});
+
+Deno.test('RT-VH-11 - Null caller guard: DB RPC returns UNAUTHORIZED_CALLER -> 401 UNAUTHORIZED', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'UNAUTHORIZED_CALLER',
+      message: 'Caller ID is required',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    401,
+    'UNAUTHORIZED',
+    'Yêu cầu xác thực danh tính người gọi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+});
+
+Deno.test('RT-VH-12 - Null-safe author comparison: when item author_id is null, non-admin teacher -> 403 FORBIDDEN', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'FORBIDDEN',
+      message: 'You can only view version history of your own questions',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Bạn không có quyền thực hiện thao tác này trên câu hỏi.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+});
+
+Deno.test('RT-VH-13 - NULL p_item_id -> DB RPC returns INVALID_INPUT -> 400 INVALID_INPUT', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher', userId: VALID_USER_ID });
+  const mockRpc = createMockRpcClient({
+    data: {
+      success: false,
+      error_code: 'INVALID_INPUT',
+      message: 'Item ID is required',
+    },
+  });
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/versions`, {
+    method: 'GET',
+  });
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    400,
+    'INVALID_INPUT',
+    'Dữ liệu đầu vào hoặc cấu trúc đáp án không hợp lệ theo quy chuẩn.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 1);
+  assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_list_versions');
+});
+
+
+

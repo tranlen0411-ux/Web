@@ -15,6 +15,7 @@ import {
   mapArchiveQuestionSuccess,
   mapRestoreQuestionSuccess,
   mapPublishQuestionSuccess,
+  mapListVersionsSuccess,
   normalizeRpcError,
 } from './errors.ts';
 import {
@@ -229,6 +230,55 @@ export async function handleQuestionBankRequest(
       }
 
       return createSuccessResponse(mapped.data, 201);
+    }
+
+    // ------------------------------------------------------------------------
+    // ROUTE 2B: GET /qb/questions/:id/versions -> rpc_qb_list_versions
+    // ------------------------------------------------------------------------
+    if (method === 'GET' && versionMatch) {
+      const itemId = versionMatch[1];
+      if (!isValidUUID(itemId)) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'ID câu hỏi không đúng định dạng UUID.'
+        );
+      }
+
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(
+          403,
+          'FORBIDDEN',
+          'Chỉ giáo viên và quản trị viên mới có quyền xem lịch sử phiên bản.'
+        );
+      }
+
+      // Gọi RPC rpc_qb_list_versions
+      const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
+        'rpc_qb_list_versions',
+        {
+          p_caller_id: callerId,
+          p_actor_role: actorRole,
+          p_item_id: itemId,
+        }
+      );
+
+      const rpcPayload = isPlainObject(rpcRes) ? rpcRes : null;
+      if (rpcError || !rpcPayload || rpcPayload.success !== true) {
+        const err = normalizeRpcError(rpcError, rpcPayload);
+        return createErrorResponse(err.status, err.errorCode, err.message);
+      }
+
+      const mapped = mapListVersionsSuccess(rpcPayload);
+      if (!mapped.ok) {
+        return createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          'Phản hồi máy chủ không hợp lệ.'
+        );
+      }
+
+      return createSuccessResponse(mapped.data, 200);
     }
 
     // ------------------------------------------------------------------------

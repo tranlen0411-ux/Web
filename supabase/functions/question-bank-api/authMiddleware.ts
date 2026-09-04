@@ -19,7 +19,8 @@ export type UserFacingQuestionBankRpc =
   | 'rpc_qb_get_authoring_detail'
   | 'rpc_qb_list_questions'
   | 'rpc_qb_fork_question'
-  | 'rpc_qb_update_item_metadata';
+  | 'rpc_qb_update_item_metadata'
+  | 'rpc_qb_list_versions';
 
 export interface CallerAuthClient {
   auth: {

@@ -226,14 +226,114 @@ export const publishQuestion = async (itemId) => {
   return jsonResult.data;
 };
 
+/**
+ * Lấy lịch sử phiên bản của một câu hỏi (Version History V2.1)
+ * @param {string} itemId UUID của câu hỏi
+ * @returns {Promise<{ item_id: string, current_version_id: string, total_versions: number, versions: Array }>}
+ */
+export const listQuestionVersions = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/versions`;
+
+  const response = await fetch(requestUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi tải lịch sử phiên bản (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi tải lịch sử phiên bản (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
+/**
+ * Lấy chi tiết soạn thảo câu hỏi theo phiên bản cụ thể hoặc phiên bản hiện tại (Authoring Safe Detail)
+ * @param {string} itemId UUID của câu hỏi
+ * @param {string} [versionId] UUID của phiên bản cụ thể (tùy chọn)
+ * @returns {Promise<{ projection: string, item: Object, version: Object, answer_key: Object }>}
+ */
+export const getQuestionAuthoringDetail = async (itemId, versionId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const searchParams = new URLSearchParams();
+  if (versionId && typeof versionId === 'string' && versionId.trim() !== '') {
+    searchParams.append('version_id', versionId.trim());
+  }
+
+  const queryString = searchParams.toString();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/authoring/questions/${encodeURIComponent(itemId)}${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(requestUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi lấy chi tiết câu hỏi (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi lấy chi tiết câu hỏi (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
   createQuestion,
   archiveQuestion,
   restoreQuestion,
-  publishQuestion
+  publishQuestion,
+  listQuestionVersions,
+  getQuestionAuthoringDetail
 };
 
 export default questionBankService;
+
 
