@@ -378,6 +378,54 @@ export const updateQuestionVisibility = async (itemId, visibility) => {
   return jsonResult.data;
 };
 
+/**
+ * Sao chép / Fork câu hỏi công khai vào kho cá nhân (Teacher Fork / Clone UI V1)
+ * @param {string} sourceVersionId UUID phiên bản câu hỏi nguồn (item.current_version_id)
+ * @param {Object} [overrides] Tùy biến tiêu đề hoặc visibility (mặc định private)
+ * @returns {Promise<{ item_id: string, version_id: string, code: string, forked_from_version_id: string }>}
+ */
+export const forkQuestion = async (sourceVersionId, overrides = {}) => {
+  if (!sourceVersionId || typeof sourceVersionId !== 'string') {
+    const err = new Error('ID phiên bản nguồn không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/versions/${encodeURIComponent(sourceVersionId)}/fork`;
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(overrides && typeof overrides === 'object' ? overrides : {})
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi sao chép câu hỏi (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi sao chép câu hỏi (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
@@ -387,9 +435,11 @@ export const questionBankService = {
   publishQuestion,
   updateQuestionVisibility,
   listQuestionVersions,
-  getQuestionAuthoringDetail
+  getQuestionAuthoringDetail,
+  forkQuestion
 };
 
 export default questionBankService;
+
 
 
