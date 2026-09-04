@@ -35,7 +35,16 @@ BEGIN
     );
   END IF;
 
-  -- 2. Kiểm tra tồn tại của item câu hỏi
+  -- 2. Fail-closed caller guard
+  IF p_caller_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error_code', 'UNAUTHORIZED_CALLER',
+      'message', 'Caller ID is required'
+    );
+  END IF;
+
+  -- 3. Kiểm tra tồn tại của item câu hỏi
   SELECT *
   INTO v_item
   FROM public.question_bank_items

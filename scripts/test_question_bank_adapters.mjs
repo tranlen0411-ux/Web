@@ -1470,6 +1470,43 @@ import { fileURLToPath } from 'node:url';
   console.log('PASS Test 74: SHARE-12 school_shared still fail-closed when school_id is null & SQL contract verified');
 }
 
+// 75. SHARE-13: p_caller_id = NULL fail-closed caller guard & SQL contract proof
+{
+  const simulateUpdateMetadataCallerGuard = ({ callerId, actorRole }) => {
+    if (!actorRole || !['admin', 'teacher'].includes(actorRole)) {
+      return { success: false, error_code: 'UNAUTHORIZED_ROLE', message: 'Access denied' };
+    }
+    if (!callerId) {
+      return { success: false, error_code: 'UNAUTHORIZED_CALLER', message: 'Caller ID is required' };
+    }
+    return { success: true };
+  };
+
+  const res = simulateUpdateMetadataCallerGuard({
+    callerId: null,
+    actorRole: 'teacher'
+  });
+
+  assert.equal(res.success, false);
+  assert.equal(res.error_code, 'UNAUTHORIZED_CALLER');
+
+  // Verify SQL files contain fail-closed caller guard
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const sqlMigPath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_TEACHER_PUBLISH_SHARING.sql');
+  const sqlRollPath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_TEACHER_PUBLISH_SHARING_ROLLBACK.sql');
+  
+  const migContent = fs.readFileSync(sqlMigPath, 'utf8');
+  const rollContent = fs.readFileSync(sqlRollPath, 'utf8');
+
+  assert.equal(migContent.includes('IF p_caller_id IS NULL THEN'), true);
+  assert.equal(migContent.includes("'UNAUTHORIZED_CALLER'"), true);
+
+  assert.equal(rollContent.includes('IF p_caller_id IS NULL THEN'), true);
+  assert.equal(rollContent.includes("'UNAUTHORIZED_CALLER'"), true);
+
+  console.log('PASS Test 75: SHARE-13 p_caller_id = NULL -> UNAUTHORIZED_CALLER contract & SQL verified');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
 
 
