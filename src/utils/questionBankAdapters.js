@@ -570,19 +570,26 @@ export const transformQuestionBankToAcademicExercise = (item, version, answerKey
     return String(opt).trim();
   });
 
-  // Map answer key
+  // Map answer key - Strict Fail-Closed (No dangerous fallback)
   let correct_answer_key = null;
   const ca = answerKey?.correct_answers;
 
   if (qType === 'single_choice') {
-    let correctText = '';
     const correctOptId = ca?.correct_option_id || (typeof ca === 'string' ? ca : '');
-    const foundOpt = rawOpts.find((o) => (typeof o === 'object' && o?.id === correctOptId) || o === correctOptId);
-    if (foundOpt) {
-      correctText = typeof foundOpt === 'object' ? foundOpt.text.trim() : String(foundOpt).trim();
-    } else if (options_json.length > 0) {
-      correctText = options_json[0];
+    if (!correctOptId) {
+      throw new Error('Không thể xác định đáp án đúng từ phiên bản Question Bank. Không được phép giao bài.');
     }
+
+    const foundOpt = rawOpts.find((o) => (typeof o === 'object' && o?.id === correctOptId) || o === correctOptId);
+    if (!foundOpt) {
+      throw new Error('Không thể xác định đáp án đúng từ phiên bản Question Bank. Không được phép giao bài.');
+    }
+
+    const correctText = (typeof foundOpt === 'object' ? foundOpt.text : String(foundOpt)).trim();
+    if (!correctText || !options_json.includes(correctText)) {
+      throw new Error('Đáp án đúng không hợp lệ hoặc không nằm trong danh sách lựa chọn của câu hỏi.');
+    }
+
     correct_answer_key = {
       correct_answer: correctText,
       accepted_answers: [correctText],
@@ -590,23 +597,51 @@ export const transformQuestionBankToAcademicExercise = (item, version, answerKey
     };
   } else if (qType === 'multiple_choice') {
     const correctOptIds = Array.isArray(ca?.correct_option_ids) ? ca.correct_option_ids : (Array.isArray(ca) ? ca : []);
-    const correctTexts = rawOpts
-      .filter((o) => typeof o === 'object' ? correctOptIds.includes(o.id) : correctOptIds.includes(o))
-      .map((o) => typeof o === 'object' ? o.text.trim() : String(o).trim());
-    const finalAns = correctTexts.length > 0 ? correctTexts : [options_json[0] || ''];
+    if (!correctOptIds || correctOptIds.length === 0) {
+      throw new Error('Không thể xác định danh sách đáp án đúng từ phiên bản Question Bank. Không được phép giao bài.');
+    }
+
+    const resolvedAnswers = [];
+    for (const optId of correctOptIds) {
+      const found = rawOpts.find((o) => (typeof o === 'object' && o?.id === optId) || o === optId);
+      if (!found) {
+        throw new Error('Không thể ánh xạ đầy đủ tất cả đáp án đúng của câu hỏi nhiều lựa chọn từ Question Bank.');
+      }
+      const text = (typeof found === 'object' ? found.text : String(found)).trim();
+      if (!text || !options_json.includes(text)) {
+        throw new Error('Đáp án đúng không hợp lệ hoặc không nằm trong danh sách lựa chọn.');
+      }
+      resolvedAnswers.push(text);
+    }
+
+    if (resolvedAnswers.length === 0) {
+      throw new Error('Không có đáp án đúng hợp lệ cho câu hỏi nhiều lựa chọn.');
+    }
+
     correct_answer_key = {
-      correct_answer: finalAns,
-      accepted_answers: finalAns,
+      correct_answer: resolvedAnswers,
+      accepted_answers: resolvedAnswers,
       case_sensitive: Boolean(answerKey?.case_sensitive)
     };
   } else if (qType === 'fill_blank' || qType === 'short_answer') {
-    const textAns = Array.isArray(ca?.correct_answers)
-      ? ca.correct_answers[0]
-      : (typeof ca === 'string' ? ca : (ca?.correct_answer || ''));
-    const cleanTextAns = String(textAns || '').trim();
+    let candidateList = [];
+    if (Array.isArray(ca?.correct_answers)) {
+      candidateList = ca.correct_answers.map((s) => String(s || '').trim()).filter((s) => s.length > 0);
+    } else if (typeof ca === 'string') {
+      if (ca.trim().length > 0) candidateList = [ca.trim()];
+    } else if (ca?.correct_answer) {
+      const s = String(ca.correct_answer || '').trim();
+      if (s.length > 0) candidateList = [s];
+    }
+
+    if (candidateList.length === 0) {
+      throw new Error('Không thể xác định đáp án đúng cho câu hỏi điền từ / trả lời ngắn từ Question Bank.');
+    }
+
+    const primaryAns = candidateList[0];
     correct_answer_key = {
-      correct_answer: cleanTextAns,
-      accepted_answers: Array.isArray(ca?.correct_answers) ? ca.correct_answers.map(s => String(s).trim()) : [cleanTextAns],
+      correct_answer: primaryAns,
+      accepted_answers: candidateList,
       case_sensitive: Boolean(answerKey?.case_sensitive)
     };
   } else {
@@ -628,21 +663,37 @@ export const transformQuestionBankToAcademicExercise = (item, version, answerKey
   const gradeLevel = parseInt(item.grade_level, 10) || 1;
   const subject = item.subject || 'Toán';
 
+  // Safe nullish / finite handling for reward_stars (0 stays 0, missing/invalid -> 10)
+  let validRewardStars = 10;
+  if (options.reward_stars !== undefined && options.reward_stars !== null && options.reward_stars !== '') {
+    const parsed = parseInt(options.reward_stars, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      validRewardStars = parsed;
+    }
+  }
+
+  const sourceItemId = item.id;
+  const sourceVerId = version.id || item.current_version_id;
+  const defaultDesc = `Bài tập từ Question Bank: ${item.code || item.id} (Version ${version.version_number || 1}) [source_item_id:${sourceItemId}] [source_version_id:${sourceVerId}]`;
+  const exerciseDesc = options.description?.trim()
+    ? `${options.description.trim()} [source_item_id:${sourceItemId}] [source_version_id:${sourceVerId}]`
+    : defaultDesc;
+
   const exercisePayload = {
     title: exerciseTitle,
-    description: options.description?.trim() || `Bài tập từ Question Bank: ${item.code || item.id} (Version ${version.version_number || 1})`,
+    description: exerciseDesc,
     grade_level: gradeLevel,
     subject: subject,
     exercise_type: 'mixed',
     status: 'published',
-    reward_stars: parseInt(options.reward_stars, 10) || 10,
+    reward_stars: validRewardStars,
     due_date: options.due_date ? new Date(options.due_date).toISOString() : null,
     max_attempts: 1,
     show_score_after_submit: true,
     show_correct_answers: true,
     is_global: false,
-    source_question_bank_item_id: item.id,
-    source_question_bank_version_id: version.id || item.current_version_id
+    source_question_bank_item_id: sourceItemId,
+    source_question_bank_version_id: sourceVerId
   };
 
   return {

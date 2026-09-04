@@ -1947,7 +1947,8 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
 {
   const item = { id: 'qb-item-12345', current_version_id: 'qb-ver-67890', subject: 'Toán', grade_level: 2 };
   const version = { id: 'qb-ver-67890', version_number: 1, prompt: '5 + 5 = ?', options: ['10', '20'] };
-  const { exercise } = transformQuestionBankToAcademicExercise(item, version);
+  const answerKey = { correct_answers: { correct_option_id: '10' } };
+  const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
   assert.equal(exercise.source_question_bank_item_id, 'qb-item-12345');
   console.log('PASS Test 100: ASSIGN-QB-10 Created academic exercise preserves source item ID');
 }
@@ -1956,7 +1957,8 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
 {
   const item = { id: 'qb-item-12345', current_version_id: 'qb-ver-exact-v3', subject: 'Toán', grade_level: 2 };
   const version = { id: 'qb-ver-exact-v3', version_number: 3, prompt: '5 + 5 = ?', options: ['10', '20'] };
-  const { exercise } = transformQuestionBankToAcademicExercise(item, version);
+  const answerKey = { correct_answers: { correct_option_id: '10' } };
+  const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
   assert.equal(exercise.source_question_bank_version_id, 'qb-ver-exact-v3');
   console.log('PASS Test 101: ASSIGN-QB-11 Created academic exercise preserves exact source version ID');
 }
@@ -2092,7 +2094,122 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   console.log('PASS Test 108: ASSIGN-QB-18 Existing Version History isolation verified');
 }
 
-console.log('=== ALL 108 TESTS PASSED SUCCESSFULLY! ===');
+// 109. ASSIGN-QB-19: single_choice malformed/unresolvable answer key -> throws, never defaults to option[0]
+{
+  const item = { id: 'qb-sc-1', question_type: 'single_choice' };
+  const version = { id: 'ver-1', prompt: 'Choose A or B', options: ['A', 'B'] };
+
+  // Case 1: missing answerKey entirely
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, null);
+  }, /Không thể xác định đáp án đúng từ phiên bản Question Bank/);
+
+  // Case 2: unresolvable option ID
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_option_id: 'non-existent-opt' } });
+  }, /Không thể xác định đáp án đúng từ phiên bản Question Bank/);
+
+  // Case 3: empty correct_option_id
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_option_id: '' } });
+  }, /Không thể xác định đáp án đúng từ phiên bản Question Bank/);
+  console.log('PASS Test 109: ASSIGN-QB-19 single_choice unresolvable key throws fail-closed without option[0] fallback');
+}
+
+// 110. ASSIGN-QB-20: multiple_choice partial/unresolvable IDs -> throws
+{
+  const item = { id: 'qb-mc-1', question_type: 'multiple_choice' };
+  const version = { id: 'ver-1', prompt: 'Choose 2 correct', options: [{ id: 'opt_1', text: 'Ans 1' }, { id: 'opt_2', text: 'Ans 2' }] };
+
+  // Case 1: one valid ID and one invalid ID (partial resolution)
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_option_ids: ['opt_1', 'opt_999'] } });
+  }, /Không thể ánh xạ đầy đủ tất cả đáp án đúng/);
+
+  // Case 2: empty list of IDs
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_option_ids: [] } });
+  }, /Không thể xác định danh sách đáp án đúng/);
+  console.log('PASS Test 110: ASSIGN-QB-20 multiple_choice partial/unresolvable IDs throws fail-closed');
+}
+
+// 111. ASSIGN-QB-21: fill_blank empty answer -> throws
+{
+  const item = { id: 'qb-fb-1', question_type: 'fill_blank' };
+  const version = { id: 'ver-1', prompt: 'Fill the blank: 1 + 1 = __', options: [] };
+
+  // Case 1: empty string
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_answer: '   ' } });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+
+  // Case 2: empty array
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: { correct_answers: ['', '  '] } });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+  console.log('PASS Test 111: ASSIGN-QB-21 fill_blank empty answer throws fail-closed');
+}
+
+// 112. ASSIGN-QB-22: reward_stars = 0 -> exercise.reward_stars === 0
+{
+  const item = { id: 'qb-rw-0', question_type: 'single_choice' };
+  const version = { id: 'ver-1', prompt: 'Test', options: ['A', 'B'] };
+  const answerKey = { correct_answers: { correct_option_id: 'A' } };
+
+  const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey, { reward_stars: 0 });
+  assert.strictEqual(exercise.reward_stars, 0);
+
+  const { exercise: exStr0 } = transformQuestionBankToAcademicExercise(item, version, answerKey, { reward_stars: '0' });
+  assert.strictEqual(exStr0.reward_stars, 0);
+  console.log('PASS Test 112: ASSIGN-QB-22 reward_stars = 0 preserved as 0');
+}
+
+// 113. ASSIGN-QB-23: missing reward_stars -> defaults to 10
+{
+  const item = { id: 'qb-rw-def', question_type: 'single_choice' };
+  const version = { id: 'ver-1', prompt: 'Test', options: ['A', 'B'] };
+  const answerKey = { correct_answers: { correct_option_id: 'A' } };
+
+  const { exercise: exNull } = transformQuestionBankToAcademicExercise(item, version, answerKey, { reward_stars: null });
+  assert.strictEqual(exNull.reward_stars, 10);
+
+  const { exercise: exUndefined } = transformQuestionBankToAcademicExercise(item, version, answerKey, {});
+  assert.strictEqual(exUndefined.reward_stars, 10);
+
+  const { exercise: exEmpty } = transformQuestionBankToAcademicExercise(item, version, answerKey, { reward_stars: '' });
+  assert.strictEqual(exEmpty.reward_stars, 10);
+  console.log('PASS Test 113: ASSIGN-QB-23 missing/invalid reward_stars safely defaults to 10');
+}
+
+// 114. ASSIGN-QB-24: source_question_bank_item_id persistence proof
+{
+  const item = { id: 'qb-item-persist-123', question_type: 'single_choice' };
+  const version = { id: 'qb-ver-persist-456', version_number: 2, prompt: 'Proof item persistence', options: ['X', 'Y'] };
+  const answerKey = { correct_answers: { correct_option_id: 'X' } };
+
+  const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  // 1. Explicit in returned payload
+  assert.strictEqual(exercise.source_question_bank_item_id, 'qb-item-persist-123');
+  // 2. Embedded in description for database storage via save_exercise_with_questions_and_keys
+  assert.ok(exercise.description.includes('[source_item_id:qb-item-persist-123]'));
+  console.log('PASS Test 114: ASSIGN-QB-24 source_question_bank_item_id persistence proof verified');
+}
+
+// 115. ASSIGN-QB-25: source_question_bank_version_id persistence proof
+{
+  const item = { id: 'qb-item-persist-123', question_type: 'single_choice' };
+  const version = { id: 'qb-ver-persist-exact-789', version_number: 4, prompt: 'Proof version persistence', options: ['X', 'Y'] };
+  const answerKey = { correct_answers: { correct_option_id: 'X' } };
+
+  const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  // 1. Explicit in returned payload
+  assert.strictEqual(exercise.source_question_bank_version_id, 'qb-ver-persist-exact-789');
+  // 2. Embedded in description for database storage via save_exercise_with_questions_and_keys
+  assert.ok(exercise.description.includes('[source_version_id:qb-ver-persist-exact-789]'));
+  console.log('PASS Test 115: ASSIGN-QB-25 source_question_bank_version_id persistence proof verified');
+}
+
+console.log('=== ALL 115 TESTS PASSED SUCCESSFULLY! ===');
 
 
 
