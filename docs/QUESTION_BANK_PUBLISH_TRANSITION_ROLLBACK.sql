@@ -1,0 +1,125 @@
+-- docs/QUESTION_BANK_PUBLISH_TRANSITION_ROLLBACK.sql
+-- QUESTION BANK PUBLISH V1: DB Status Transition Rollback Script
+-- Target Database: szptvqkoiphrhlionfoh (Supabase NEW)
+-- Restores public.rpc_qb_update_item_metadata to exact pre-hardening baseline
+
+CREATE OR REPLACE FUNCTION public.rpc_qb_update_item_metadata(
+  p_caller_id uuid,
+  p_actor_role text,
+  p_item_id uuid,
+  p_payload jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_item public.question_bank_items%ROWTYPE;
+  v_title TEXT;
+  v_difficulty TEXT;
+  v_status TEXT;
+  v_visibility TEXT;
+BEGIN
+  IF p_actor_role IS NULL
+     OR p_actor_role NOT IN ('admin','teacher')
+  THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','UNAUTHORIZED_ROLE',
+      'message','Access denied'
+    );
+  END IF;
+
+  SELECT *
+  INTO v_item
+  FROM public.question_bank_items
+  WHERE id=p_item_id;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','ITEM_NOT_FOUND',
+      'message','Question item not found'
+    );
+  END IF;
+
+  IF p_actor_role<>'admin'
+     AND v_item.author_id<>p_caller_id
+  THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','FORBIDDEN',
+      'message','You can only update your own questions'
+    );
+  END IF;
+
+  v_title:=trim(p_payload->>'title');
+  v_difficulty:=trim(p_payload->>'difficulty');
+  v_status:=trim(p_payload->>'status');
+  v_visibility:=trim(p_payload->>'visibility');
+
+  IF v_visibility='public_template'
+     AND p_actor_role<>'admin'
+  THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','FORBIDDEN_VISIBILITY',
+      'message','Teacher role is not permitted to set visibility to public_template'
+    );
+  END IF;
+
+  IF v_visibility='school_shared'
+     AND v_item.school_id IS NULL
+  THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','INVALID_SCHOOL_ID',
+      'message','Cannot set school_shared on item without an associated school_id'
+    );
+  END IF;
+
+  UPDATE public.question_bank_items
+  SET
+    title=COALESCE(NULLIF(v_title,''),title),
+    difficulty=CASE
+      WHEN v_difficulty IN ('easy','medium','hard','expert')
+      THEN v_difficulty
+      ELSE difficulty
+    END,
+    status=CASE
+      WHEN v_status IN ('draft','published','archived')
+      THEN v_status
+      ELSE status
+    END,
+    visibility=CASE
+      WHEN v_visibility IN ('private','school_shared','public_template')
+      THEN v_visibility
+      ELSE visibility
+    END,
+    tags=CASE
+      WHEN p_payload->'tags' IS NOT NULL
+       AND jsonb_typeof(p_payload->'tags')='array'
+      THEN ARRAY(
+        SELECT jsonb_array_elements_text(p_payload->'tags')
+      )
+      ELSE tags
+    END,
+    updated_at=NOW()
+  WHERE id=p_item_id;
+
+  RETURN jsonb_build_object(
+    'success',true,
+    'item_id',p_item_id,
+    'message','Item metadata updated successfully'
+  );
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'success',false,
+      'error_code','DATABASE_ERROR',
+      'message','An internal database error occurred while updating item metadata'
+    );
+END;
+$function$;

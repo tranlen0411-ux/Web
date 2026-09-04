@@ -14,6 +14,7 @@ import {
   mapUpdateMetadataSuccess,
   mapArchiveQuestionSuccess,
   mapRestoreQuestionSuccess,
+  mapPublishQuestionSuccess,
   normalizeRpcError,
 } from './errors.ts';
 import {
@@ -618,6 +619,57 @@ export async function handleQuestionBankRequest(
       }
 
       const mapped = mapRestoreQuestionSuccess(rpcPayload);
+      if (!mapped.ok) {
+        return createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          'Phản hồi máy chủ không hợp lệ.'
+        );
+      }
+
+      return createSuccessResponse(mapped.data, 200);
+    }
+
+    // ------------------------------------------------------------------------
+    // ROUTE 10: PATCH /qb/questions/:id/publish -> rpc_qb_update_item_metadata (status: 'published')
+    // ------------------------------------------------------------------------
+    const publishMatch = pathname.match(/\/qb\/questions\/([^\/]+)\/publish$/);
+    if (method === 'PATCH' && publishMatch) {
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(
+          403,
+          'FORBIDDEN',
+          'Chỉ giáo viên và quản trị viên mới có quyền xuất bản câu hỏi.'
+        );
+      }
+
+      const itemId = publishMatch[1];
+      if (!isValidUUID(itemId)) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'ID câu hỏi không đúng định dạng UUID.'
+        );
+      }
+
+      // Gọi RPC với payload { status: 'published' }
+      const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
+        'rpc_qb_update_item_metadata',
+        {
+          p_caller_id: callerId,
+          p_actor_role: actorRole,
+          p_item_id: itemId,
+          p_payload: { status: 'published' },
+        }
+      );
+
+      const rpcPayload = isPlainObject(rpcRes) ? rpcRes : null;
+      if (rpcError || !rpcPayload || rpcPayload.success !== true) {
+        const err = normalizeRpcError(rpcError, rpcPayload);
+        return createErrorResponse(err.status, err.errorCode, err.message);
+      }
+
+      const mapped = mapPublishQuestionSuccess(rpcPayload);
       if (!mapped.ok) {
         return createErrorResponse(
           500,

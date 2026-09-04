@@ -181,12 +181,59 @@ export const restoreQuestion = async (itemId) => {
   return jsonResult.data;
 };
 
+/**
+ * Xuất bản câu hỏi (Draft -> Published) trong Ngân hàng câu hỏi
+ * @param {string} itemId UUID của câu hỏi cần xuất bản
+ * @returns {Promise<{ item_id: string, status: string, message: string }>}
+ */
+export const publishQuestion = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/publish`;
+
+  const response = await fetch(requestUrl, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi xuất bản câu hỏi (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi xuất bản câu hỏi (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
   createQuestion,
   archiveQuestion,
-  restoreQuestion
+  restoreQuestion,
+  publishQuestion
 };
 
 export default questionBankService;
+

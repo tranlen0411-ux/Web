@@ -18,12 +18,13 @@ import {
   Upload,
   Archive,
   RotateCcw,
-  User
+  User,
+  Send
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
-import { listQuestions, archiveQuestion, restoreQuestion } from '../../../services/questionBankService';
+import { listQuestions, archiveQuestion, restoreQuestion, publishQuestion } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 
@@ -102,6 +103,8 @@ export const QuestionBankListTab = ({
   const [isArchiving, setIsArchiving] = useState(false);
   const [restoreModalItem, setRestoreModalItem] = useState(null);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [publishModalItem, setPublishModalItem] = useState(null);
+  const [isPublishing, setIsPublishing] = useState(false);
 
   // Sequence ref để chặn stale responses từ các request cũ
   const fetchSeqRef = React.useRef(0);
@@ -364,6 +367,29 @@ export const QuestionBankListTab = ({
       showToast(err?.message || 'Không thể khôi phục câu hỏi. Vui lòng thử lại.');
     } finally {
       setIsRestoring(false);
+    }
+  };
+
+  const handleConfirmPublish = async () => {
+    if (!publishModalItem || isPublishing) return;
+    const targetId = publishModalItem.id || publishModalItem.item_id;
+    if (!targetId) return;
+
+    setIsPublishing(true);
+    try {
+      await publishQuestion(targetId);
+      setPublishModalItem(null);
+      showToast('Đã xuất bản câu hỏi thành công.');
+      fetchQuestions();
+    } catch (err) {
+      console.error('Lỗi khi xuất bản câu hỏi:', err);
+      if (err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
+        showToast('Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.');
+      } else {
+        showToast(err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.');
+      }
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -714,9 +740,11 @@ export const QuestionBankListTab = ({
 
                   const currentUserId = auth?.user?.id;
                   const isAuthor = Boolean(item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
+                  const isDraft = item.status === 'draft';
                   const isArchived = item.status === 'archived';
 
                   // Permissions
+                  const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
 
@@ -789,27 +817,41 @@ export const QuestionBankListTab = ({
                         )}
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
-                        {canArchive ? (
-                          <button
-                            onClick={() => setArchiveModalItem(item)}
-                            className="px-2 py-1 text-slate-500 hover:text-amber-700 hover:bg-amber-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
-                            title="Ẩn câu hỏi"
-                          >
-                            <Archive className="w-3.5 h-3.5 text-amber-600" />
-                            <span>Ẩn</span>
-                          </button>
-                        ) : canRestore ? (
-                          <button
-                            onClick={() => setRestoreModalItem(item)}
-                            className="px-2 py-1 text-slate-500 hover:text-indigo-700 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
-                            title="Khôi phục câu hỏi về bản nháp"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>Khôi phục</span>
-                          </button>
-                        ) : (
-                          <span className="text-slate-300 text-xs">—</span>
-                        )}
+                        <div className="flex items-center justify-center gap-1.5">
+                          {canPublish && (
+                            <button
+                              onClick={() => setPublishModalItem(item)}
+                              className="px-2 py-1 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Xuất bản câu hỏi"
+                            >
+                              <Send className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Xuất bản</span>
+                            </button>
+                          )}
+                          {canArchive && (
+                            <button
+                              onClick={() => setArchiveModalItem(item)}
+                              className="px-2 py-1 text-slate-500 hover:text-amber-700 hover:bg-amber-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Ẩn câu hỏi"
+                            >
+                              <Archive className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Ẩn</span>
+                            </button>
+                          )}
+                          {canRestore && (
+                            <button
+                              onClick={() => setRestoreModalItem(item)}
+                              className="px-2 py-1 text-slate-500 hover:text-indigo-700 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Khôi phục câu hỏi về bản nháp"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Khôi phục</span>
+                            </button>
+                          )}
+                          {!canPublish && !canArchive && !canRestore && (
+                            <span className="text-slate-300 text-xs">—</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -970,6 +1012,58 @@ export const QuestionBankListTab = ({
                   <>
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>Khôi phục</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM PUBLISH MODAL */}
+      {publishModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-emerald-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center shrink-0">
+                <Send className="w-5 h-5 text-emerald-700" />
+              </div>
+              <span>Bạn có chắc muốn xuất bản câu hỏi này?</span>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+              Sau khi xuất bản, câu hỏi sẽ được sử dụng theo phạm vi chia sẻ hiện tại.
+            </p>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {publishModalItem.title || publishModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isPublishing && setPublishModalItem(null)}
+                disabled={isPublishing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPublish}
+                disabled={isPublishing}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isPublishing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Xuất bản</span>
                   </>
                 )}
               </button>
