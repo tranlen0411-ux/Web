@@ -19,7 +19,8 @@ import {
   Archive,
   RotateCcw,
   User,
-  Send
+  Send,
+  History
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
@@ -27,6 +28,8 @@ import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
 import { listQuestions, archiveQuestion, restoreQuestion, publishQuestion } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
+import { QuestionVersionHistoryModal } from './QuestionVersionHistoryModal';
+import { QuestionVersionDetailModal } from './QuestionVersionDetailModal';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -105,6 +108,11 @@ export const QuestionBankListTab = ({
   const [isRestoring, setIsRestoring] = useState(false);
   const [publishModalItem, setPublishModalItem] = useState(null);
   const [isPublishing, setIsPublishing] = useState(false);
+
+  // Version History modals state
+  const [historyModalItem, setHistoryModalItem] = useState(null);
+  const [detailModalItem, setDetailModalItem] = useState(null);
+  const [detailModalVersion, setDetailModalVersion] = useState(null);
 
   // Sequence ref để chặn stale responses từ các request cũ
   const fetchSeqRef = React.useRef(0);
@@ -391,6 +399,19 @@ export const QuestionBankListTab = ({
     } finally {
       setIsPublishing(false);
     }
+  };
+
+  const handleOpenVersionDetail = (item, version) => {
+    setHistoryModalItem(null);
+    setDetailModalItem(item);
+    setDetailModalVersion(version);
+  };
+
+  const handleBackToHistoryFromDetail = () => {
+    const returnItem = detailModalItem;
+    setDetailModalItem(null);
+    setDetailModalVersion(null);
+    setHistoryModalItem(returnItem);
   };
 
   const getAuthorDisplay = (authorId) => {
@@ -747,6 +768,7 @@ export const QuestionBankListTab = ({
                   const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
 
                   const authorInfo = getAuthorDisplay(item.author_id);
 
@@ -818,6 +840,16 @@ export const QuestionBankListTab = ({
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
+                          {canViewHistory && (
+                            <button
+                              onClick={() => setHistoryModalItem(item)}
+                              className="px-2 py-1 text-indigo-700 hover:text-indigo-800 hover:bg-indigo-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Xem lịch sử phiên bản câu hỏi"
+                            >
+                              <History className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Lịch sử</span>
+                            </button>
+                          )}
                           {canPublish && (
                             <button
                               onClick={() => setPublishModalItem(item)}
@@ -848,7 +880,7 @@ export const QuestionBankListTab = ({
                               <span>Khôi phục</span>
                             </button>
                           )}
-                          {!canPublish && !canArchive && !canRestore && (
+                          {!canPublish && !canArchive && !canRestore && !canViewHistory && (
                             <span className="text-slate-300 text-xs">—</span>
                           )}
                         </div>
@@ -1070,6 +1102,31 @@ export const QuestionBankListTab = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* VERSION HISTORY MODAL */}
+      {historyModalItem && (
+        <QuestionVersionHistoryModal
+          isOpen={Boolean(historyModalItem)}
+          onClose={() => setHistoryModalItem(null)}
+          item={historyModalItem}
+          onSelectVersionDetail={handleOpenVersionDetail}
+          authorProfilesById={authorProfilesById}
+        />
+      )}
+
+      {/* VERSION DETAIL MODAL */}
+      {detailModalItem && detailModalVersion && (
+        <QuestionVersionDetailModal
+          isOpen={Boolean(detailModalItem && detailModalVersion)}
+          onClose={() => {
+            setDetailModalItem(null);
+            setDetailModalVersion(null);
+          }}
+          onBackToHistory={handleBackToHistoryFromDetail}
+          item={detailModalItem}
+          version={detailModalVersion}
+        />
       )}
     </div>
   );

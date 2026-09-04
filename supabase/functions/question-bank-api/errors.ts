@@ -364,6 +364,83 @@ export function mapPublishQuestionSuccess(
   };
 }
 
+export interface VersionSummaryItem {
+  id: string;
+  version_number: number;
+  created_by: string | null;
+  created_at: string;
+  change_log: string | null;
+  forked_from_version_id: string | null;
+  is_current: boolean;
+}
+
+export interface ListVersionsSuccessData {
+  item_id: string;
+  current_version_id: string | null;
+  total_versions: number;
+  versions: VersionSummaryItem[];
+}
+
+export function mapListVersionsSuccess(
+  res: unknown
+): SuccessMapResult<ListVersionsSuccessData> {
+  if (!isPlainRecord(res)) return { ok: false };
+  if (
+    !isUuidString(res.item_id) ||
+    (res.current_version_id !== null && !isUuidString(res.current_version_id)) ||
+    !isNonNegativeInteger(res.total_versions) ||
+    !Array.isArray(res.versions)
+  ) {
+    return { ok: false };
+  }
+
+  const sanitizedVersions: VersionSummaryItem[] = [];
+  for (const v of res.versions) {
+    if (!isPlainRecord(v)) return { ok: false };
+    if (!isUuidString(v.id) || !isPositiveInteger(v.version_number)) {
+      return { ok: false };
+    }
+    if (v.created_by !== null && typeof v.created_by !== 'string') {
+      return { ok: false };
+    }
+    if (typeof v.created_at !== 'string' || v.created_at.trim().length === 0) {
+      return { ok: false };
+    }
+    if (v.change_log !== null && typeof v.change_log !== 'string') {
+      return { ok: false };
+    }
+    if (v.forked_from_version_id !== null && !isUuidString(v.forked_from_version_id)) {
+      return { ok: false };
+    }
+    if (typeof v.is_current !== 'boolean') {
+      return { ok: false };
+    }
+
+    sanitizedVersions.push({
+      id: v.id,
+      version_number: v.version_number,
+      created_by: typeof v.created_by === 'string' ? v.created_by : null,
+      created_at: v.created_at,
+      change_log: typeof v.change_log === 'string' ? v.change_log : null,
+      forked_from_version_id:
+        typeof v.forked_from_version_id === 'string' ? v.forked_from_version_id : null,
+      is_current: v.is_current,
+    });
+  }
+
+  return {
+    ok: true,
+    data: {
+      item_id: res.item_id,
+      current_version_id:
+        typeof res.current_version_id === 'string' ? res.current_version_id : null,
+      total_versions: res.total_versions,
+      versions: sanitizedVersions,
+    },
+  };
+}
+
+
 
 // ----------------------------------------------------------------------------
 // Sanitized Error Normalization from Database RPC to Public API
@@ -401,6 +478,12 @@ export function normalizeRpcError(
           status: 403,
           errorCode: 'FORBIDDEN_VISIBILITY',
           message: 'Chỉ quản trị viên mới có quyền thiết lập trạng thái chia sẻ mẫu công khai.',
+        };
+      case 'UNAUTHORIZED_CALLER':
+        return {
+          status: 401,
+          errorCode: 'UNAUTHORIZED',
+          message: 'Yêu cầu xác thực danh tính người gọi.',
         };
       case 'FORBIDDEN':
       case 'UNAUTHORIZED_ROLE':
