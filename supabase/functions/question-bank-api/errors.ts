@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'SCHOOL_CONTEXT_NOT_AVAILABLE'
+  | 'INVALID_STATUS_TRANSITION'
   | 'INTERNAL_ERROR';
 
 export interface ErrorEnvelope {
@@ -340,6 +341,29 @@ export function mapRestoreQuestionSuccess(
   };
 }
 
+export interface PublishQuestionSuccessData {
+  item_id: string;
+  status: 'published';
+  message: string;
+}
+
+export function mapPublishQuestionSuccess(
+  res: unknown
+): SuccessMapResult<PublishQuestionSuccessData> {
+  if (!isPlainRecord(res)) return { ok: false };
+  if (!isUuidString(res.item_id) || !isNonEmptyString(res.message)) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    data: {
+      item_id: res.item_id,
+      status: 'published',
+      message: res.message,
+    },
+  };
+}
+
 
 // ----------------------------------------------------------------------------
 // Sanitized Error Normalization from Database RPC to Public API
@@ -366,6 +390,12 @@ export function normalizeRpcError(
     const rawCode = typeof rpcRes?.error_code === 'string' ? rpcRes.error_code : '';
 
     switch (rawCode) {
+      case 'INVALID_STATUS_TRANSITION':
+        return {
+          status: 409,
+          errorCode: 'INVALID_STATUS_TRANSITION',
+          message: 'Chuyển đổi trạng thái câu hỏi không hợp lệ.',
+        };
       case 'FORBIDDEN_VISIBILITY':
         return {
           status: 403,

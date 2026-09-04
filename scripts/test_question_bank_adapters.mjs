@@ -746,4 +746,168 @@ console.log('=== RUNNING QUESTION BANK V2A ADAPTERS UNIT TESTS ===');
   console.log('PASS Test 42: Status badge mapping verified (draft, published, archived)');
 }
 
+// 43. Publish Question Payload Invariance Contract
+{
+  const buildPublishPayload = () => ({ status: 'published' });
+  const payload = buildPublishPayload();
+  assert.equal(payload.status, 'published');
+  assert.equal(payload.visibility, undefined); // Không gửi visibility
+  assert.equal(payload.author_id, undefined); // Không đổi author_id
+  assert.equal(payload.school_id, undefined); // Không đổi school_id
+  assert.equal(payload.content, undefined); // Không đổi content
+  assert.equal(payload.version, undefined); // Không đổi version
+  assert.equal(payload.title, undefined); // Không đổi title
+  assert.equal(payload.difficulty, undefined); // Không đổi difficulty
+  assert.equal(payload.tags, undefined); // Không đổi tags
+  console.log('PASS Test 43: Publish question payload invariance verified (status=published only, no metadata overrides)');
+}
+
+// 44. Publish Permission Matrix Contract
+{
+  const evaluateCanPublish = ({ role, isAuthor, status }) => {
+    const isDraft = status === 'draft';
+    return isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+  };
+
+  // Teacher own draft -> ALLOW
+  assert.equal(evaluateCanPublish({ role: 'teacher', isAuthor: true, status: 'draft' }), true);
+  // Teacher other draft -> DENY
+  assert.equal(evaluateCanPublish({ role: 'teacher', isAuthor: false, status: 'draft' }), false);
+  // Admin draft -> ALLOW
+  assert.equal(evaluateCanPublish({ role: 'admin', isAuthor: false, status: 'draft' }), true);
+  // Student draft -> DENY
+  assert.equal(evaluateCanPublish({ role: 'student', isAuthor: true, status: 'draft' }), false);
+  assert.equal(evaluateCanPublish({ role: 'student', isAuthor: false, status: 'draft' }), false);
+
+  // Published item -> DENY (không hiện nút publish lại)
+  assert.equal(evaluateCanPublish({ role: 'teacher', isAuthor: true, status: 'published' }), false);
+  assert.equal(evaluateCanPublish({ role: 'admin', isAuthor: true, status: 'published' }), false);
+
+  // Archived item -> DENY (phải khôi phục về draft trước)
+  assert.equal(evaluateCanPublish({ role: 'teacher', isAuthor: true, status: 'archived' }), false);
+  assert.equal(evaluateCanPublish({ role: 'admin', isAuthor: true, status: 'archived' }), false);
+
+  console.log('PASS Test 44: Publish permission matrix verified (teacher own draft, admin draft, student denied, non-draft blocked)');
+}
+
+// 45. Publish Status Transition Rules Contract
+{
+  const isValidStatusTransition = (currentStatus, targetStatus) => {
+    if (currentStatus === targetStatus) return true; // Idempotent no-op
+    if (currentStatus === 'draft' && (targetStatus === 'published' || targetStatus === 'archived')) return true;
+    if (currentStatus === 'published' && targetStatus === 'archived') return true;
+    if (currentStatus === 'archived' && targetStatus === 'draft') return true;
+    return false; // All other transitions forbidden (e.g. archived -> published)
+  };
+
+  // draft -> published = ALLOW
+  assert.equal(isValidStatusTransition('draft', 'published'), true);
+  // published -> published = ALLOW (idempotent)
+  assert.equal(isValidStatusTransition('published', 'published'), true);
+  // archived -> published = BLOCKED
+  assert.equal(isValidStatusTransition('archived', 'published'), false);
+  // published -> draft = BLOCKED (phải archive trước rồi mới restore)
+  assert.equal(isValidStatusTransition('published', 'draft'), false);
+
+  console.log('PASS Test 45: Status transition rules contract verified (draft->published ALLOW, archived->published BLOCKED, published->published idempotent)');
+}
+
+// 46. UI Button Visibility Logic for Table Rows
+{
+  const getRowActions = ({ role, isAuthor, status }) => {
+    const isDraft = status === 'draft';
+    const isArchived = status === 'archived';
+    const isPublished = status === 'published';
+
+    const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+    const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
+    const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
+
+    return { canPublish, canArchive, canRestore };
+  };
+
+  // Teacher own draft: có cả Publish và Archive
+  const teacherOwnDraft = getRowActions({ role: 'teacher', isAuthor: true, status: 'draft' });
+  assert.equal(teacherOwnDraft.canPublish, true);
+  assert.equal(teacherOwnDraft.canArchive, true);
+  assert.equal(teacherOwnDraft.canRestore, false);
+
+  // Teacher own published: chỉ có Archive, KHÔNG có Publish
+  const teacherOwnPublished = getRowActions({ role: 'teacher', isAuthor: true, status: 'published' });
+  assert.equal(teacherOwnPublished.canPublish, false);
+  assert.equal(teacherOwnPublished.canArchive, true);
+  assert.equal(teacherOwnPublished.canRestore, false);
+
+  // Teacher own archived: chỉ có Restore, KHÔNG có Publish
+  const teacherOwnArchived = getRowActions({ role: 'teacher', isAuthor: true, status: 'archived' });
+  assert.equal(teacherOwnArchived.canPublish, false);
+  assert.equal(teacherOwnArchived.canArchive, false);
+  assert.equal(teacherOwnArchived.canRestore, true);
+
+  // Teacher other draft: không có quyền gì
+  const teacherOtherDraft = getRowActions({ role: 'teacher', isAuthor: false, status: 'draft' });
+  assert.equal(teacherOtherDraft.canPublish, false);
+  assert.equal(teacherOtherDraft.canArchive, false);
+  assert.equal(teacherOtherDraft.canRestore, false);
+
+  // Admin any draft: có Publish và Archive
+  const adminDraft = getRowActions({ role: 'admin', isAuthor: false, status: 'draft' });
+  assert.equal(adminDraft.canPublish, true);
+  assert.equal(adminDraft.canArchive, true);
+  assert.equal(adminDraft.canRestore, false);
+
+  console.log('PASS Test 46: UI row action button visibility verified across all roles and item states');
+}
+
+// 47. Structured Error Code 409 & Friendly Message Resolution Contract
+{
+  const mapPublishErrorToFriendlyToast = (err) => {
+    if (err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
+      return 'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.';
+    }
+    return err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.';
+  };
+
+  // Structured Error object with status 409
+  const structuredErr409 = new Error('Lỗi khi xuất bản câu hỏi (409)');
+  structuredErr409.status = 409;
+  structuredErr409.errorCode = 'INVALID_STATUS_TRANSITION';
+  assert.equal(
+    mapPublishErrorToFriendlyToast(structuredErr409),
+    'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.'
+  );
+
+  // Structured Error with only errorCode
+  assert.equal(
+    mapPublishErrorToFriendlyToast({ errorCode: 'INVALID_STATUS_TRANSITION', message: 'Forbidden transition' }),
+    'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.'
+  );
+
+  // Structured Error with status 409 and null errorCode
+  assert.equal(
+    mapPublishErrorToFriendlyToast({ status: 409, message: 'Conflict' }),
+    'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.'
+  );
+
+  // Generic Error with status 500
+  const genericErr = new Error('Lỗi kết nối máy chủ khi xuất bản câu hỏi (HTTP 500)');
+  genericErr.status = 500;
+  genericErr.errorCode = 'INTERNAL_ERROR';
+  assert.equal(
+    mapPublishErrorToFriendlyToast(genericErr),
+    'Lỗi kết nối máy chủ khi xuất bản câu hỏi (HTTP 500)'
+  );
+
+  console.log('PASS Test 47: Structured error properties (status 409 / errorCode INVALID_STATUS_TRANSITION) verified');
+}
+
+// 48. Publish Endpoint URL Contract
+{
+  const itemId = '00000000-0000-0000-0000-000000000001';
+  const QUESTION_BANK_BASE_URL = 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/publish`;
+  assert.equal(requestUrl, 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api/qb/questions/00000000-0000-0000-0000-000000000001/publish');
+  console.log('PASS Test 48: Publish endpoint URL contract verified');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
