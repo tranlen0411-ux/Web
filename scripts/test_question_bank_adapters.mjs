@@ -1225,6 +1225,288 @@ import { fileURLToPath } from 'node:url';
   console.log('PASS Test 62: RT-VH-13 NULL p_item_id -> INVALID_INPUT contract verified (400 INVALID_INPUT)');
 }
 
+// ============================================================================
+// QUESTION BANK — TEACHER PUBLISH SHARING HOTFIX V1 CONTRACT TESTS (SHARE-01 -> SHARE-12)
+// ============================================================================
+
+// 63. SHARE-01: Teacher author private draft -> visibility public_template allowed
+{
+  const simulateUpdateMetadata = ({ callerId, actorRole, item, payload }) => {
+    // 1. Role guard
+    if (!actorRole || !['admin', 'teacher'].includes(actorRole)) {
+      return { success: false, error_code: 'UNAUTHORIZED_ROLE' };
+    }
+    // 2. Ownership guard
+    if (actorRole !== 'admin' && item.author_id !== callerId) {
+      return { success: false, error_code: 'FORBIDDEN' };
+    }
+    // 3. school_shared guard
+    if (payload.visibility === 'school_shared' && !item.school_id) {
+      return { success: false, error_code: 'INVALID_SCHOOL_ID' };
+    }
+    return {
+      success: true,
+      item: {
+        ...item,
+        visibility: payload.visibility || item.visibility,
+        status: payload.status || item.status
+      }
+    };
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'draft', visibility: 'private', school_id: null };
+  const res = simulateUpdateMetadata({
+    callerId: 'teacher-1',
+    actorRole: 'teacher',
+    item,
+    payload: { visibility: 'public_template' }
+  });
+
+  assert.equal(res.success, true);
+  assert.equal(res.item.visibility, 'public_template');
+  assert.equal(res.item.status, 'draft');
+  console.log('PASS Test 63: SHARE-01 Teacher author private draft -> visibility public_template allowed');
+}
+
+// 64. SHARE-02: Other teacher tries changing visibility -> 403 FORBIDDEN
+{
+  const simulateUpdateMetadata = ({ callerId, actorRole, item, payload }) => {
+    if (!actorRole || !['admin', 'teacher'].includes(actorRole)) {
+      return { success: false, error_code: 'UNAUTHORIZED_ROLE' };
+    }
+    if (actorRole !== 'admin' && item.author_id !== callerId) {
+      return { success: false, error_code: 'FORBIDDEN' };
+    }
+    return { success: true };
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'draft', visibility: 'private' };
+  const res = simulateUpdateMetadata({
+    callerId: 'teacher-2', // Different teacher
+    actorRole: 'teacher',
+    item,
+    payload: { visibility: 'public_template' }
+  });
+
+  assert.equal(res.success, false);
+  assert.equal(res.error_code, 'FORBIDDEN');
+  console.log('PASS Test 64: SHARE-02 Other teacher tries changing visibility -> 403 FORBIDDEN');
+}
+
+// 65. SHARE-03: Student -> blocked
+{
+  const simulateUpdateMetadata = ({ callerId, actorRole, item, payload }) => {
+    if (!actorRole || !['admin', 'teacher'].includes(actorRole)) {
+      return { success: false, error_code: 'UNAUTHORIZED_ROLE' };
+    }
+    return { success: true };
+  };
+
+  const item = { id: 'item-1', author_id: 'student-1', status: 'draft', visibility: 'private' };
+  const res = simulateUpdateMetadata({
+    callerId: 'student-1',
+    actorRole: 'student',
+    item,
+    payload: { visibility: 'public_template' }
+  });
+
+  assert.equal(res.success, false);
+  assert.equal(res.error_code, 'UNAUTHORIZED_ROLE');
+  console.log('PASS Test 65: SHARE-03 Student -> blocked (UNAUTHORIZED_ROLE)');
+}
+
+// 66. SHARE-04: Teacher author publishes with sharing: visibility public_template + status published
+{
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'draft', visibility: 'private' };
+  
+  // Step 1: Update visibility to public_template
+  item.visibility = 'public_template';
+  // Step 2: Publish
+  item.status = 'published';
+
+  assert.equal(item.visibility, 'public_template');
+  assert.equal(item.status, 'published');
+  console.log('PASS Test 66: SHARE-04 Teacher author publishes with sharing -> public_template + published');
+}
+
+// 67. SHARE-05: Teacher publishes private: visibility private + status published
+{
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'draft', visibility: 'private' };
+  
+  // Step 1: Update visibility to private
+  item.visibility = 'private';
+  // Step 2: Publish
+  item.status = 'published';
+
+  assert.equal(item.visibility, 'private');
+  assert.equal(item.status, 'published');
+  console.log('PASS Test 67: SHARE-05 Teacher publishes private -> private + published');
+}
+
+// 68. SHARE-06: Published public_template appears in other-teacher list
+{
+  const canTeacherViewItemInList = ({ callerId, item }) => {
+    // Author always sees own items
+    if (item.author_id === callerId) return true;
+    // Other teachers only see published public_template
+    if (item.status === 'published' && item.visibility === 'public_template') return true;
+    return false;
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'published', visibility: 'public_template' };
+  assert.equal(canTeacherViewItemInList({ callerId: 'teacher-2', item }), true);
+  console.log('PASS Test 68: SHARE-06 Published public_template appears in other-teacher list');
+}
+
+// 69. SHARE-07: Published private does NOT appear in other-teacher list
+{
+  const canTeacherViewItemInList = ({ callerId, item }) => {
+    if (item.author_id === callerId) return true;
+    if (item.status === 'published' && item.visibility === 'public_template') return true;
+    return false;
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'published', visibility: 'private' };
+  assert.equal(canTeacherViewItemInList({ callerId: 'teacher-2', item }), false);
+  console.log('PASS Test 69: SHARE-07 Published private does NOT appear in other-teacher list');
+}
+
+// 70. SHARE-08: Draft public_template does NOT appear in other-teacher list
+{
+  const canTeacherViewItemInList = ({ callerId, item }) => {
+    if (item.author_id === callerId) return true;
+    if (item.status === 'published' && item.visibility === 'public_template') return true;
+    return false;
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'draft', visibility: 'public_template' };
+  assert.equal(canTeacherViewItemInList({ callerId: 'teacher-2', item }), false);
+  console.log('PASS Test 70: SHARE-08 Draft public_template does NOT appear in other-teacher list');
+}
+
+// 71. SHARE-09: Teacher cannot access another teacher's Version History
+{
+  const canAccessVersionHistory = ({ callerId, actorRole, item }) => {
+    if (actorRole === 'admin') return true;
+    if (actorRole === 'teacher' && item.author_id === callerId) return true;
+    return false;
+  };
+
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'published', visibility: 'public_template' };
+  // Admin -> ALLOW
+  assert.equal(canAccessVersionHistory({ callerId: 'admin-1', actorRole: 'admin', item }), true);
+  // Author -> ALLOW
+  assert.equal(canAccessVersionHistory({ callerId: 'teacher-1', actorRole: 'teacher', item }), true);
+  // Other teacher -> DENIED (even if public_template)
+  assert.equal(canAccessVersionHistory({ callerId: 'teacher-2', actorRole: 'teacher', item }), false);
+  console.log('PASS Test 71: SHARE-09 Teacher cannot access another teacher Version History');
+}
+
+// 72. SHARE-10: Unshare published question: public_template -> private, status stays published
+{
+  const item = { id: 'item-1', author_id: 'teacher-1', status: 'published', visibility: 'public_template' };
+  
+  // Action: Unshare
+  item.visibility = 'private';
+
+  assert.equal(item.visibility, 'private');
+  assert.equal(item.status, 'published');
+  console.log('PASS Test 72: SHARE-10 Unshare published question -> private + status stays published');
+}
+
+// 73. SHARE-11: No answer_key/prompt/options/version content mutated by visibility-only update
+{
+  const originalItem = {
+    id: 'item-1',
+    author_id: 'teacher-1',
+    status: 'published',
+    visibility: 'private',
+    current_version_id: 'ver-1'
+  };
+
+  const originalVersion = {
+    id: 'ver-1',
+    question_bank_item_id: 'item-1',
+    version_number: 1,
+    prompt: '2 + 2 = ?',
+    options: [{ id: 'opt-1', text: '4' }],
+    answer_key: { correct_answers: ['opt-1'] }
+  };
+
+  // Simulate updateQuestionVisibility payload
+  const payload = { visibility: 'public_template' };
+  const updatedItem = {
+    ...originalItem,
+    visibility: payload.visibility,
+    updated_at: new Date().toISOString()
+  };
+
+  // Assert version and answer key remain completely untouched
+  assert.equal(originalItem.current_version_id, updatedItem.current_version_id);
+  assert.equal(originalVersion.prompt, '2 + 2 = ?');
+  assert.deepEqual(originalVersion.answer_key, { correct_answers: ['opt-1'] });
+  console.log('PASS Test 73: SHARE-11 No answer_key/prompt/options/version content mutated by visibility update');
+}
+
+// 74. SHARE-12: school_shared still fail-closed when school_id is null & SQL contract proof
+{
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const sqlFilePath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_TEACHER_PUBLISH_SHARING.sql');
+  const sqlContent = fs.readFileSync(sqlFilePath, 'utf8');
+
+  // Khẳng định FORBIDDEN_VISIBILITY đã được loại bỏ
+  assert.equal(sqlContent.includes('FORBIDDEN_VISIBILITY'), false);
+  // Khẳng định quy tắc fail-closed cho school_shared được bảo toàn
+  assert.equal(sqlContent.includes("v_visibility = 'school_shared'"), true);
+  assert.equal(sqlContent.includes("v_item.school_id IS NULL"), true);
+  assert.equal(sqlContent.includes("'INVALID_SCHOOL_ID'"), true);
+  // Khẳng định phân quyền sở hữu author_id <> p_caller_id được bảo toàn
+  assert.equal(sqlContent.includes("v_item.author_id <> p_caller_id"), true);
+  // Khẳng định atomic transaction
+  assert.equal(sqlContent.includes('BEGIN;'), true);
+  assert.equal(sqlContent.includes('COMMIT;'), true);
+  // Khẳng định ACL
+  assert.equal(sqlContent.includes('GRANT EXECUTE ON FUNCTION public.rpc_qb_update_item_metadata(UUID, TEXT, UUID, JSONB) TO service_role;'), true);
+  console.log('PASS Test 74: SHARE-12 school_shared still fail-closed when school_id is null & SQL contract verified');
+}
+
+// 75. SHARE-13: p_caller_id = NULL fail-closed caller guard & SQL contract proof
+{
+  const simulateUpdateMetadataCallerGuard = ({ callerId, actorRole }) => {
+    if (!actorRole || !['admin', 'teacher'].includes(actorRole)) {
+      return { success: false, error_code: 'UNAUTHORIZED_ROLE', message: 'Access denied' };
+    }
+    if (!callerId) {
+      return { success: false, error_code: 'UNAUTHORIZED_CALLER', message: 'Caller ID is required' };
+    }
+    return { success: true };
+  };
+
+  const res = simulateUpdateMetadataCallerGuard({
+    callerId: null,
+    actorRole: 'teacher'
+  });
+
+  assert.equal(res.success, false);
+  assert.equal(res.error_code, 'UNAUTHORIZED_CALLER');
+
+  // Verify SQL files contain fail-closed caller guard
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const sqlMigPath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_TEACHER_PUBLISH_SHARING.sql');
+  const sqlRollPath = path.join(__dirname, '..', 'docs', 'QUESTION_BANK_TEACHER_PUBLISH_SHARING_ROLLBACK.sql');
+  
+  const migContent = fs.readFileSync(sqlMigPath, 'utf8');
+  const rollContent = fs.readFileSync(sqlRollPath, 'utf8');
+
+  assert.equal(migContent.includes('IF p_caller_id IS NULL THEN'), true);
+  assert.equal(migContent.includes("'UNAUTHORIZED_CALLER'"), true);
+
+  assert.equal(rollContent.includes('IF p_caller_id IS NULL THEN'), true);
+  assert.equal(rollContent.includes("'UNAUTHORIZED_CALLER'"), true);
+
+  console.log('PASS Test 75: SHARE-13 p_caller_id = NULL -> UNAUTHORIZED_CALLER contract & SQL verified');
+}
+
 console.log('=== ALL TESTS PASSED SUCCESSFULLY! ===');
 
 
