@@ -19,7 +19,7 @@ const RPC_AUTHORING_PATH = path.resolve(__dirname, '../docs/02_exam_builder_v1_r
 const RPC_ASSIGNMENT_ATTEMPT_PATH = path.resolve(__dirname, '../docs/03_exam_builder_v1_rpc_assignment_attempt.sql');
 
 async function runPhase2B1Test() {
-  console.log('--- STARTING EXAM BUILDER V1 PHASE 2B1 DRY RUN (56 TESTS) ---');
+  console.log('--- STARTING EXAM BUILDER V1 PHASE 2B1 DRY RUN (66 TESTS) ---');
 
   if (!fs.existsSync(BASE_SCHEMA_PATH) || !fs.existsSync(PATCH_SCHEMA_PATH) || !fs.existsSync(RPC_AUTHORING_PATH) || !fs.existsSync(RPC_ASSIGNMENT_ATTEMPT_PATH)) {
     throw new Error('Required SQL files not found!');
@@ -1112,7 +1112,231 @@ async function runPhase2B1Test() {
   }
   console.log('✅ Exact replay succeeded even after exam_version status became archived.');
 
-  console.log('\n🎉 ALL 56 PHASE 2B1 ASSIGNMENT & START ATTEMPT TESTS PASSED PERFECTLY!\n');
+  // =========================================================================
+  // HARDENING V4 TESTS (57 - 61)
+  // =========================================================================
+
+  // [57/61] create assignment -> publish v2 so v1 becomes superseded -> exact assignment replay succeeds
+  console.log('\n[57/61] Testing exact assignment replay succeeds after v1 becomes superseded...');
+  const examAssignSupId = '00000000-0000-0000-0000-000000000971';
+  const verAssignSupV1Id = '00000000-0000-0000-0000-000000000972';
+  const verAssignSupV2Id = '00000000-0000-0000-0000-000000000973';
+  await db.query(`SELECT public.rpc_exam_create_test($1, $2, $3, 'Assignment Superseded Test', 'Toán', 5);`, [authorId, examAssignSupId, verAssignSupV1Id]);
+  await db.query(`
+    UPDATE public.exam_versions 
+    SET status = 'published', published_at = NOW(), duration_minutes = 60, total_points = 10.00 
+    WHERE id = $1;
+  `, [verAssignSupV1Id]);
+  await db.query(`
+    INSERT INTO public.exam_questions (id, exam_version_id, question_number, question_type, prompt, points)
+    VALUES ('00000000-0000-0000-0000-000000000974', $1, 1, 'essay', 'Prompt', 10.00);
+  `, [verAssignSupV1Id]);
+
+  const assignSupId = 'aaaaaaaa-0000-0000-0000-000000000971';
+  const createAssignSupRes = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignSupId, verAssignSupV1Id, class1Id]);
+  if (createAssignSupRes.rows[0].result.idempotent_replay !== false) throw new Error('Expected new assignment');
+
+  // Now create v2 and publish it so v1 becomes superseded
+  await db.query(`
+    INSERT INTO public.exam_versions (id, exam_id, version_number, title, subject, grade_level, status, published_at, duration_minutes, total_points)
+    VALUES ($1, $2, 2, 'Assignment Superseded Test v2', 'Toán', 5, 'draft', NULL, 60, 10.00);
+  `, [verAssignSupV2Id, examAssignSupId]);
+  await db.query(`
+    INSERT INTO public.exam_questions (id, exam_version_id, question_number, question_type, prompt, points)
+    VALUES ('00000000-0000-0000-0000-000000000975', $1, 1, 'essay', 'Prompt v2', 10.00);
+  `, [verAssignSupV2Id]);
+  await db.query(`SELECT public.rpc_exam_publish_version($1, $2);`, [authorId, verAssignSupV2Id]);
+
+  // Verify v1 is now superseded
+  const v1Check = await db.query(`SELECT status FROM public.exam_versions WHERE id = $1;`, [verAssignSupV1Id]);
+  if (v1Check.rows[0].status !== 'superseded') throw new Error(`Expected v1 to be superseded, got: ${v1Check.rows[0].status}`);
+
+  // Exact replay of assignSupId with same payload must succeed
+  const replayAssignSupRes = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignSupId, verAssignSupV1Id, class1Id]);
+  const replayAssignSupData = replayAssignSupRes.rows[0].result;
+  if (replayAssignSupData.idempotent_replay !== true || replayAssignSupData.assignment_id !== assignSupId) {
+    throw new Error(`Expected idempotent_replay: true for exact assignment replay on superseded version, got: ${JSON.stringify(replayAssignSupData)}`);
+  }
+  console.log('✅ Exact assignment replay succeeded after version became superseded.');
+
+  // [58/61] create assignment -> archive exam_tests -> exact same create_assignment retry succeeds
+  console.log('\n[58/61] Testing exact assignment retry succeeds after exam_tests container is archived...');
+  await db.query(`UPDATE public.exam_tests SET status = 'archived' WHERE id = $1;`, [examAssignSupId]);
+  const replayAssignArchExamRes = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignSupId, verAssignSupV1Id, class1Id]);
+  const replayAssignArchExamData = replayAssignArchExamRes.rows[0].result;
+  if (replayAssignArchExamData.idempotent_replay !== true || replayAssignArchExamData.assignment_id !== assignSupId) {
+    throw new Error(`Expected idempotent_replay: true for assignment replay on archived exam, got: ${JSON.stringify(replayAssignArchExamData)}`);
+  }
+  console.log('✅ Exact assignment retry succeeded after exam_tests was archived.');
+
+  // [59/61] new assignment ID against superseded version => ERR_VERSION_NOT_PUBLISHED
+  console.log('\n[59/61] Testing new assignment ID against superseded version is REJECTED with ERR_VERSION_NOT_PUBLISHED...');
+  let newSupRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_create_assignment(
+        $1, 'aaaaaaaa-0000-0000-0000-000000000981', $2, $3, NULL, true, false
+      );
+    `, [authorId, verAssignSupV1Id, class2Id]);
+  } catch (e) {
+    newSupRejected = true;
+    if (!e.message.includes('ERR_VERSION_NOT_PUBLISHED')) {
+      throw new Error(`Expected ERR_VERSION_NOT_PUBLISHED, got: ${e.message}`);
+    }
+    console.log('✅ New assignment on superseded version rejected with ERR_VERSION_NOT_PUBLISHED.');
+  }
+  if (!newSupRejected) throw new Error('Expected new assignment on superseded version to be rejected!');
+
+  // [60/61] new assignment ID against archived exam => ERR_EXAM_ARCHIVED
+  console.log('\n[60/61] Testing new assignment ID against archived exam is REJECTED with ERR_EXAM_ARCHIVED...');
+  let newArchExamRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_create_assignment(
+        $1, 'aaaaaaaa-0000-0000-0000-000000000982', $2, $3, NULL, true, false
+      );
+    `, [authorId, verAssignSupV2Id, class2Id]);
+  } catch (e) {
+    newArchExamRejected = true;
+    if (!e.message.includes('ERR_EXAM_ARCHIVED')) {
+      throw new Error(`Expected ERR_EXAM_ARCHIVED, got: ${e.message}`);
+    }
+    console.log('✅ New assignment on archived exam container rejected with ERR_EXAM_ARCHIVED.');
+  }
+  if (!newArchExamRejected) throw new Error('Expected new assignment on archived exam to be rejected!');
+
+  // [61/66] same p_assignment_id after superseded/archived but changed payload => ERR_IDEMPOTENCY_CONFLICT
+  console.log('\n[61/66] Testing same p_assignment_id after superseded/archived with changed payload is REJECTED with ERR_IDEMPOTENCY_CONFLICT...');
+  let conflictAfterLifecycleRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_create_assignment(
+        $1, $2, $3, $4, '2027-12-31T00:00:00Z'::timestamptz, true, false
+      );
+    `, [authorId, assignSupId, verAssignSupV1Id, class1Id]);
+  } catch (e) {
+    conflictAfterLifecycleRejected = true;
+    if (!e.message.includes('ERR_IDEMPOTENCY_CONFLICT')) {
+      throw new Error(`Expected ERR_IDEMPOTENCY_CONFLICT, got: ${e.message}`);
+    }
+    console.log('✅ Conflicting assignment payload on replay rejected with ERR_IDEMPOTENCY_CONFLICT.');
+  }
+  if (!conflictAfterLifecycleRejected) throw new Error('Expected conflicting assignment replay to be rejected!');
+
+  // =========================================================================
+  // HARDENING V5 TESTS (62 - 66: CONCURRENCY / TOCTOU SIMULATION)
+  // =========================================================================
+
+  // Setup fixtures for Hardening V5 concurrency tests
+  const examRaceId = '00000000-0000-0000-0000-000000000991';
+  const verRaceId = '00000000-0000-0000-0000-000000000992';
+  const classRaceId = '44444444-4444-4444-4444-444444444499';
+  const assignRace1Id = 'aaaaaaaa-0000-0000-0000-000000000991';
+  const assignRace2Id = 'aaaaaaaa-0000-0000-0000-000000000992';
+
+  await db.query(`SELECT public.rpc_exam_create_test($1, $2, $3, 'Race Test Exam', 'Toán', 5);`, [authorId, examRaceId, verRaceId]);
+  await db.query(`
+    UPDATE public.exam_versions 
+    SET status = 'published', published_at = NOW(), duration_minutes = 60, total_points = 10.00 
+    WHERE id = $1;
+  `, [verRaceId]);
+  await db.query(`
+    INSERT INTO public.exam_questions (id, exam_version_id, question_number, question_type, prompt, points)
+    VALUES ('00000000-0000-0000-0000-000000000993', $1, 1, 'essay', 'Prompt Race', 10.00);
+  `, [verRaceId]);
+
+  // Initial creation of assignRace1Id
+  const createRace1Res = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignRace1Id, verRaceId, classRaceId]);
+  if (createRace1Res.rows[0].result.idempotent_replay !== false) throw new Error('Expected new assignment for race test');
+
+  // [62/66] second same-ID/same-payload call after simulated race path returns idempotent replay
+  console.log('\n[62/66] Testing second same-ID/same-payload call returns idempotent replay...');
+  const replayRace1Res = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignRace1Id, verRaceId, classRaceId]);
+  const replayRace1Data = replayRace1Res.rows[0].result;
+  if (replayRace1Data.idempotent_replay !== true || replayRace1Data.assignment_id !== assignRace1Id) {
+    throw new Error(`Expected idempotent_replay: true for exact same-ID retry, got: ${JSON.stringify(replayRace1Data)}`);
+  }
+  console.log('✅ Exact same-ID/same-payload call returned stored values with idempotent_replay: true.');
+
+  // [63/66] same-ID/different-payload race path => ERR_IDEMPOTENCY_CONFLICT
+  console.log('\n[63/66] Testing same-ID with different ranking payload rejects with ERR_IDEMPOTENCY_CONFLICT...');
+  let sameIdDiffPayloadRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_create_assignment(
+        $1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, false, false
+      );
+    `, [authorId, assignRace1Id, verRaceId, classRaceId]); // changed counts_toward_ranking to false
+  } catch (e) {
+    sameIdDiffPayloadRejected = true;
+    if (!e.message.includes('ERR_IDEMPOTENCY_CONFLICT')) {
+      throw new Error(`Expected ERR_IDEMPOTENCY_CONFLICT, got: ${e.message}`);
+    }
+    console.log('✅ Same-ID with different ranking flag rejected with ERR_IDEMPOTENCY_CONFLICT.');
+  }
+  if (!sameIdDiffPayloadRejected) throw new Error('Expected same-ID different-payload to be rejected!');
+
+  // [64/66] different IDs / same version+class conflict => ERR_ASSIGNMENT_ALREADY_EXISTS
+  console.log('\n[64/66] Testing different ID racing on same version+class rejects with ERR_ASSIGNMENT_ALREADY_EXISTS...');
+  let diffIdSameClassRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_create_assignment(
+        $1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false
+      );
+    `, [authorId, assignRace2Id, verRaceId, classRaceId]);
+  } catch (e) {
+    diffIdSameClassRejected = true;
+    if (!e.message.includes('ERR_ASSIGNMENT_ALREADY_EXISTS')) {
+      throw new Error(`Expected ERR_ASSIGNMENT_ALREADY_EXISTS, got: ${e.message}`);
+    }
+    console.log('✅ Different ID on same version+class rejected with ERR_ASSIGNMENT_ALREADY_EXISTS.');
+  }
+  if (!diffIdSameClassRejected) throw new Error('Expected different ID on same class to be rejected!');
+
+  // [65/66] exact replay after superseded still works with post-insert conflict branch preserved
+  console.log('\n[65/66] Testing exact replay after version becomes superseded preserves post-insert branch...');
+  const verRaceV2Id = '00000000-0000-0000-0000-000000000994';
+  await db.query(`
+    INSERT INTO public.exam_versions (id, exam_id, version_number, title, subject, grade_level, status, published_at, duration_minutes, total_points)
+    VALUES ($1, $2, 2, 'Race Test Exam v2', 'Toán', 5, 'draft', NULL, 60, 10.00);
+  `, [verRaceV2Id, examRaceId]);
+  await db.query(`
+    INSERT INTO public.exam_questions (id, exam_version_id, question_number, question_type, prompt, points)
+    VALUES ('00000000-0000-0000-0000-000000000995', $1, 1, 'essay', 'Prompt Race v2', 10.00);
+  `, [verRaceV2Id]);
+  await db.query(`SELECT public.rpc_exam_publish_version($1, $2);`, [authorId, verRaceV2Id]);
+
+  const replaySupRaceRes = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignRace1Id, verRaceId, classRaceId]);
+  if (replaySupRaceRes.rows[0].result.idempotent_replay !== true || replaySupRaceRes.rows[0].result.assignment_id !== assignRace1Id) {
+    throw new Error('Expected idempotent_replay: true for exact assignment replay on superseded version');
+  }
+  console.log('✅ Exact replay on superseded version succeeded seamlessly.');
+
+  // [66/66] exact replay after archived exam still works with post-insert conflict branch preserved
+  console.log('\n[66/66] Testing exact replay after exam_tests is archived preserves post-insert branch...');
+  await db.query(`UPDATE public.exam_tests SET status = 'archived' WHERE id = $1;`, [examRaceId]);
+  const replayArchRaceRes = await db.query(`
+    SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, '2026-12-31T00:00:00Z'::timestamptz, true, false) AS result;
+  `, [authorId, assignRace1Id, verRaceId, classRaceId]);
+  if (replayArchRaceRes.rows[0].result.idempotent_replay !== true || replayArchRaceRes.rows[0].result.assignment_id !== assignRace1Id) {
+    throw new Error('Expected idempotent_replay: true for exact assignment replay on archived exam');
+  }
+  console.log('✅ Exact replay on archived exam succeeded seamlessly.');
+
+  console.log('\n🎉 ALL 66 PHASE 2B1 ASSIGNMENT & START ATTEMPT TESTS PASSED PERFECTLY!\n');
 }
 
 runPhase2B1Test().catch((err) => {
