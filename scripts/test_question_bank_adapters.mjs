@@ -2316,7 +2316,39 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   console.log('PASS Test 121: ASSIGN-QB-31 prove no guessed fallback on malformed objects throws verified');
 }
 
-console.log('=== ALL 121 TESTS PASSED SUCCESSFULLY! ===');
+// 122. ASSIGN-QB-32: short_answer exact proven runtime contract -> PASS
+{
+  const item = { id: 'qb-sa-hanoi', question_type: 'short_answer' };
+  const version = { id: 'ver-sa-1', prompt: 'Thủ đô của Việt Nam là gì?', options: [] };
+  const answerKey = { correct_answers: ['Ha Noi'] };
+
+  const { questions } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  assert.strictEqual(questions.length, 1);
+  assert.strictEqual(questions[0].question_type, 'short_answer');
+  assert.deepStrictEqual(questions[0].correct_answer_key, {
+    correct_answer: 'Ha Noi',
+    accepted_answers: ['Ha Noi'],
+    case_sensitive: false
+  });
+  console.log('PASS Test 122: ASSIGN-QB-32 short_answer single accepted answer verified');
+}
+
+// 123. ASSIGN-QB-33: short_answer malformed / empty -> THROW fail-closed
+{
+  const item = { id: 'qb-sa-malformed', question_type: 'short_answer' };
+  const version = { id: 'ver-sa-2', prompt: 'Thủ đô của Việt Nam là gì?', options: [] };
+
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: [] });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answer: 'Ha Noi' });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+  console.log('PASS Test 123: ASSIGN-QB-33 short_answer malformed/empty throws fail-closed');
+}
+
+console.log('=== ALL 123 TESTS PASSED SUCCESSFULLY! ===');
 
 
 
