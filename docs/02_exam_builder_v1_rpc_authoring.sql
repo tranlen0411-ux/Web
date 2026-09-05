@@ -1,6 +1,6 @@
 -- ============================================================
 -- TEST / EXAM BUILDER V1
--- PHASE 2A: AUTHORING RPC PROCEDURES DRAFT (HARDENING V3)
+-- PHASE 2A: AUTHORING RPC PROCEDURES DRAFT (HARDENING V4)
 -- TARGET_PROJECT_REF: szptvqkoiphrhlionfoh
 -- FORBIDDEN_CORE_REF: nddimmxpymipalpxlops
 -- ============================================================
@@ -8,7 +8,7 @@
 --
 -- INCLUDED PROCEDURES:
 -- 1. public.rpc_exam_create_test (DB-Enforced Idempotency & Full Conflict Invariant Validation)
--- 2. public.rpc_exam_save_draft_version (Mandatory Stable Question IDs + 2-Pass Atomic Replace)
+-- 2. public.rpc_exam_save_draft_version (Strict JSON Array Shape + Complete Pre-Mutation Pass-1 Validation)
 -- 3. public.rpc_exam_publish_version (Safe Idempotent Replay on Current Version Only)
 --
 -- SECURITY ARCHITECTURE:
@@ -177,10 +177,10 @@ GRANT EXECUTE ON FUNCTION public.rpc_exam_create_test(UUID, UUID, UUID, VARCHAR,
 
 
 -- ------------------------------------------------------------
--- 2. rpc_exam_save_draft_version (2-Pass Atomic Validation & Replacement)
+-- 2. rpc_exam_save_draft_version (2-Pass Complete Pre-Mutation Validation)
 -- ------------------------------------------------------------
--- Pass 1: Validates version attributes and all question payloads (requires non-null, unique question UUIDs).
--- Pass 2: Performs UPDATE on version, cleanly deletes old questions, and inserts new questions & answer keys.
+-- Pass 1: Strict JSON array shape check, version param null checks, and full question payload validation.
+-- Pass 2: Mutation pass (UPDATE version, DELETE old questions, INSERT validated questions & answer keys).
 CREATE OR REPLACE FUNCTION public.rpc_exam_save_draft_version(
     p_caller_id UUID,
     p_version_id UUID,
@@ -266,7 +266,23 @@ BEGIN
         RAISE EXCEPTION 'ERR_UNAUTHORIZED: Caller is not the author of this exam' USING ERRCODE = '42501';
     END IF;
 
-    -- 4. PASS 1: Validate Version Attributes
+    -- 4. PASS 1: Validate Version Attributes (Explicit NULL-checking for NOT NULL backed fields)
+    IF p_shuffle_questions IS NULL THEN
+        RAISE EXCEPTION 'ERR_REQUIRED_PARAMS: shuffle_questions cannot be null' USING ERRCODE = '22000';
+    END IF;
+
+    IF p_shuffle_options IS NULL THEN
+        RAISE EXCEPTION 'ERR_REQUIRED_PARAMS: shuffle_options cannot be null' USING ERRCODE = '22000';
+    END IF;
+
+    IF p_show_score_after_submit IS NULL THEN
+        RAISE EXCEPTION 'ERR_REQUIRED_PARAMS: show_score_after_submit cannot be null' USING ERRCODE = '22000';
+    END IF;
+
+    IF p_show_correct_answers IS NULL THEN
+        RAISE EXCEPTION 'ERR_REQUIRED_PARAMS: show_correct_answers cannot be null' USING ERRCODE = '22000';
+    END IF;
+
     v_title_clean := BTRIM(p_title);
     v_subject_clean := BTRIM(p_subject);
 
@@ -294,74 +310,94 @@ BEGIN
         RAISE EXCEPTION 'ERR_INVALID_REWARD_STARS: Reward stars must be between 0 and 1000' USING ERRCODE = '22003';
     END IF;
 
-    IF p_tab_switch_policy NOT IN ('OFF', 'WARN_ONLY', 'WARN_AND_LOG') THEN
+    IF p_tab_switch_policy IS NULL OR p_tab_switch_policy NOT IN ('OFF', 'WARN_ONLY', 'WARN_AND_LOG') THEN
         RAISE EXCEPTION 'ERR_INVALID_TAB_POLICY: Invalid tab switch policy %', p_tab_switch_policy USING ERRCODE = '22000';
     END IF;
 
-    -- 5. PASS 1 (Continued): Full Question Payload Validation BEFORE any mutation
-    IF p_questions IS NOT NULL AND jsonb_typeof(p_questions) = 'array' THEN
-        FOR v_q IN SELECT * FROM jsonb_array_elements(p_questions)
-        LOOP
-            -- Check question ID
-            IF v_q.value->>'id' IS NULL OR LENGTH(BTRIM(v_q.value->>'id')) = 0 THEN
-                RAISE EXCEPTION 'ERR_QUESTION_ID_REQUIRED: Every draft question must have a non-null id' USING ERRCODE = '22000';
-            END IF;
-
-            BEGIN
-                v_question_id := (v_q.value->>'id')::UUID;
-            EXCEPTION WHEN OTHERS THEN
-                RAISE EXCEPTION 'ERR_QUESTION_ID_REQUIRED: Question id % is not a valid UUID', v_q.value->>'id' USING ERRCODE = '22000';
-            END;
-
-            IF v_question_id = ANY(v_seen_ids) THEN
-                RAISE EXCEPTION 'ERR_DUPLICATE_QUESTION_ID: Duplicate question id % in payload', v_question_id USING ERRCODE = '23505';
-            END IF;
-            v_seen_ids := array_append(v_seen_ids, v_question_id);
-
-            -- Check question_number
-            v_q_num := (v_q.value->>'question_number')::INT;
-            IF v_q_num IS NULL OR v_q_num < 1 THEN
-                RAISE EXCEPTION 'ERR_INVALID_QUESTION_NUMBER: question_number must be >= 1' USING ERRCODE = '22003';
-            END IF;
-
-            IF v_q_num = ANY(v_seen_numbers) THEN
-                RAISE EXCEPTION 'ERR_DUPLICATE_QUESTION_NUMBER: Duplicate question_number % in payload', v_q_num USING ERRCODE = '23505';
-            END IF;
-            v_seen_numbers := array_append(v_seen_numbers, v_q_num);
-
-            -- Check question_type
-            v_q_type := v_q.value->>'question_type';
-            IF v_q_type NOT IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload') THEN
-                RAISE EXCEPTION 'ERR_INVALID_QUESTION_TYPE: Unknown question_type %', v_q_type USING ERRCODE = '22000';
-            END IF;
-
-            -- Check prompt
-            v_prompt := BTRIM(v_q.value->>'prompt');
-            IF v_prompt IS NULL OR LENGTH(v_prompt) = 0 THEN
-                RAISE EXCEPTION 'ERR_INVALID_PROMPT: Question % prompt cannot be empty', v_q_num USING ERRCODE = '22000';
-            END IF;
-
-            -- Check points
-            v_points := (v_q.value->>'points')::NUMERIC(6, 2);
-            IF v_points IS NULL OR v_points <= 0.00 THEN
-                RAISE EXCEPTION 'ERR_INVALID_POINTS: Question % points must be > 0', v_q_num USING ERRCODE = '22003';
-            END IF;
-
-            -- Check answer key rules
-            v_answer_key := v_q.value->'answer_key';
-            IF v_q_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer') THEN
-                IF v_answer_key IS NULL OR v_answer_key->'correct_answer' IS NULL OR jsonb_typeof(v_answer_key->'correct_answer') = 'null' THEN
-                    RAISE EXCEPTION 'ERR_MISSING_ANSWER_KEY: Question % (%) requires a correct_answer', v_q_num, v_q_type USING ERRCODE = '22000';
-                END IF;
-            ELSE
-                IF v_answer_key IS NOT NULL AND v_answer_key->'correct_answer' IS NOT NULL AND jsonb_typeof(v_answer_key->'correct_answer') <> 'null' THEN
-                    RAISE EXCEPTION 'ERR_MANUAL_ANSWER_KEY_FORBIDDEN: Question % (%) cannot have an answer key', v_q_num, v_q_type USING ERRCODE = '22000';
-                END IF;
-            END IF;
-        END LOOP;
+    -- 5. PASS 1 (Continued): Validate p_questions JSON Shape (Array Required)
+    IF p_questions IS NULL OR jsonb_typeof(p_questions) <> 'array' THEN
+        RAISE EXCEPTION 'ERR_INVALID_QUESTIONS_PAYLOAD: p_questions must be a JSON array' USING ERRCODE = '22000';
     END IF;
 
-    -- 6. PASS 2: Mutation Pass (Executed only after 100% of validation passed)
+    -- 6. PASS 1 (Continued): Complete Question Item & Provenance Validation BEFORE any mutation
+    FOR v_q IN SELECT * FROM jsonb_array_elements(p_questions)
+    LOOP
+        -- Check question ID
+        IF v_q.value->>'id' IS NULL OR LENGTH(BTRIM(v_q.value->>'id')) = 0 THEN
+            RAISE EXCEPTION 'ERR_QUESTION_ID_REQUIRED: Every draft question must have a non-null id' USING ERRCODE = '22000';
+        END IF;
+
+        BEGIN
+            v_question_id := (v_q.value->>'id')::UUID;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'ERR_QUESTION_ID_REQUIRED: Question id % is not a valid UUID', v_q.value->>'id' USING ERRCODE = '22000';
+        END;
+
+        IF v_question_id = ANY(v_seen_ids) THEN
+            RAISE EXCEPTION 'ERR_DUPLICATE_QUESTION_ID: Duplicate question id % in payload', v_question_id USING ERRCODE = '23505';
+        END IF;
+        v_seen_ids := array_append(v_seen_ids, v_question_id);
+
+        -- Check question_number
+        v_q_num := (v_q.value->>'question_number')::INT;
+        IF v_q_num IS NULL OR v_q_num < 1 THEN
+            RAISE EXCEPTION 'ERR_INVALID_QUESTION_NUMBER: question_number must be >= 1' USING ERRCODE = '22003';
+        END IF;
+
+        IF v_q_num = ANY(v_seen_numbers) THEN
+            RAISE EXCEPTION 'ERR_DUPLICATE_QUESTION_NUMBER: Duplicate question_number % in payload', v_q_num USING ERRCODE = '23505';
+        END IF;
+        v_seen_numbers := array_append(v_seen_numbers, v_q_num);
+
+        -- Check question_type
+        v_q_type := v_q.value->>'question_type';
+        IF v_q_type NOT IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload') THEN
+            RAISE EXCEPTION 'ERR_INVALID_QUESTION_TYPE: Unknown question_type %', v_q_type USING ERRCODE = '22000';
+        END IF;
+
+        -- Check prompt
+        v_prompt := BTRIM(v_q.value->>'prompt');
+        IF v_prompt IS NULL OR LENGTH(v_prompt) = 0 THEN
+            RAISE EXCEPTION 'ERR_INVALID_PROMPT: Question % prompt cannot be empty', v_q_num USING ERRCODE = '22000';
+        END IF;
+
+        -- Check points
+        v_points := (v_q.value->>'points')::NUMERIC(6, 2);
+        IF v_points IS NULL OR v_points <= 0.00 THEN
+            RAISE EXCEPTION 'ERR_INVALID_POINTS: Question % points must be > 0', v_q_num USING ERRCODE = '22003';
+        END IF;
+
+        -- Check optional provenance UUIDs (Pass 1 validation before mutation)
+        IF v_q.value->>'source_question_bank_item_id' IS NOT NULL AND LENGTH(BTRIM(v_q.value->>'source_question_bank_item_id')) > 0 THEN
+            BEGIN
+                v_source_item_id := (v_q.value->>'source_question_bank_item_id')::UUID;
+            EXCEPTION WHEN OTHERS THEN
+                RAISE EXCEPTION 'ERR_INVALID_SOURCE_UUID: source_question_bank_item_id % is not a valid UUID', v_q.value->>'source_question_bank_item_id' USING ERRCODE = '22000';
+            END;
+        END IF;
+
+        IF v_q.value->>'source_question_bank_version_id' IS NOT NULL AND LENGTH(BTRIM(v_q.value->>'source_question_bank_version_id')) > 0 THEN
+            BEGIN
+                v_source_ver_id := (v_q.value->>'source_question_bank_version_id')::UUID;
+            EXCEPTION WHEN OTHERS THEN
+                RAISE EXCEPTION 'ERR_INVALID_SOURCE_UUID: source_question_bank_version_id % is not a valid UUID', v_q.value->>'source_question_bank_version_id' USING ERRCODE = '22000';
+            END;
+        END IF;
+
+        -- Check answer key rules
+        v_answer_key := v_q.value->'answer_key';
+        IF v_q_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer') THEN
+            IF v_answer_key IS NULL OR v_answer_key->'correct_answer' IS NULL OR jsonb_typeof(v_answer_key->'correct_answer') = 'null' THEN
+                RAISE EXCEPTION 'ERR_MISSING_ANSWER_KEY: Question % (%) requires a correct_answer', v_q_num, v_q_type USING ERRCODE = '22000';
+            END IF;
+        ELSE
+            IF v_answer_key IS NOT NULL AND v_answer_key->'correct_answer' IS NOT NULL AND jsonb_typeof(v_answer_key->'correct_answer') <> 'null' THEN
+                RAISE EXCEPTION 'ERR_MANUAL_ANSWER_KEY_FORBIDDEN: Question % (%) cannot have an answer key', v_q_num, v_q_type USING ERRCODE = '22000';
+            END IF;
+        END IF;
+    END LOOP;
+
+    -- 7. PASS 2: Mutation Pass (Executed ONLY after 100% of Pass 1 validation succeeded)
     UPDATE public.exam_versions
     SET
         title = v_title_clean,
@@ -384,65 +420,63 @@ BEGIN
     DELETE FROM public.exam_questions WHERE exam_version_id = p_version_id;
 
     -- Insert validated questions and keys
-    IF p_questions IS NOT NULL AND jsonb_typeof(p_questions) = 'array' THEN
-        FOR v_q IN SELECT * FROM jsonb_array_elements(p_questions)
-        LOOP
-            v_question_id := (v_q.value->>'id')::UUID;
-            v_q_num := (v_q.value->>'question_number')::INT;
-            v_q_type := v_q.value->>'question_type';
-            v_prompt := BTRIM(v_q.value->>'prompt');
-            v_points := COALESCE((v_q.value->>'points')::NUMERIC(6, 2), 1.00);
-            v_options := COALESCE(v_q.value->'options_json', '[]'::jsonb);
-            v_source_item_id := (v_q.value->>'source_question_bank_item_id')::UUID;
-            v_source_ver_id := (v_q.value->>'source_question_bank_version_id')::UUID;
-            v_answer_key := v_q.value->'answer_key';
+    FOR v_q IN SELECT * FROM jsonb_array_elements(p_questions)
+    LOOP
+        v_question_id := (v_q.value->>'id')::UUID;
+        v_q_num := (v_q.value->>'question_number')::INT;
+        v_q_type := v_q.value->>'question_type';
+        v_prompt := BTRIM(v_q.value->>'prompt');
+        v_points := COALESCE((v_q.value->>'points')::NUMERIC(6, 2), 1.00);
+        v_options := COALESCE(v_q.value->'options_json', '[]'::jsonb);
+        v_source_item_id := CASE WHEN v_q.value->>'source_question_bank_item_id' IS NOT NULL AND LENGTH(BTRIM(v_q.value->>'source_question_bank_item_id')) > 0 THEN (v_q.value->>'source_question_bank_item_id')::UUID ELSE NULL END;
+        v_source_ver_id := CASE WHEN v_q.value->>'source_question_bank_version_id' IS NOT NULL AND LENGTH(BTRIM(v_q.value->>'source_question_bank_version_id')) > 0 THEN (v_q.value->>'source_question_bank_version_id')::UUID ELSE NULL END;
+        v_answer_key := v_q.value->'answer_key';
 
-            INSERT INTO public.exam_questions (
-                id,
-                exam_version_id,
-                question_number,
-                question_type,
-                prompt,
-                options_json,
-                points,
-                source_question_bank_item_id,
-                source_question_bank_version_id
+        INSERT INTO public.exam_questions (
+            id,
+            exam_version_id,
+            question_number,
+            question_type,
+            prompt,
+            options_json,
+            points,
+            source_question_bank_item_id,
+            source_question_bank_version_id
+        ) VALUES (
+            v_question_id,
+            p_version_id,
+            v_q_num,
+            v_q_type,
+            v_prompt,
+            v_options,
+            v_points,
+            v_source_item_id,
+            v_source_ver_id
+        );
+
+        v_question_count := v_question_count + 1;
+
+        IF v_q_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer') THEN
+            v_correct_answer := v_answer_key->'correct_answer';
+            v_accepted_answers := v_answer_key->'accepted_answers';
+            v_case_sensitive := COALESCE((v_answer_key->>'case_sensitive')::BOOLEAN, FALSE);
+            v_grading_config := COALESCE(v_answer_key->'grading_config', '{}'::jsonb);
+
+            INSERT INTO app_private.exam_answer_keys (
+                question_id,
+                correct_answer,
+                accepted_answers,
+                case_sensitive,
+                grading_config
             ) VALUES (
                 v_question_id,
-                p_version_id,
-                v_q_num,
-                v_q_type,
-                v_prompt,
-                v_options,
-                v_points,
-                v_source_item_id,
-                v_source_ver_id
+                v_correct_answer,
+                v_accepted_answers,
+                v_case_sensitive,
+                v_grading_config
             );
-
-            v_question_count := v_question_count + 1;
-
-            IF v_q_type IN ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer') THEN
-                v_correct_answer := v_answer_key->'correct_answer';
-                v_accepted_answers := v_answer_key->'accepted_answers';
-                v_case_sensitive := COALESCE((v_answer_key->>'case_sensitive')::BOOLEAN, FALSE);
-                v_grading_config := COALESCE(v_answer_key->'grading_config', '{}'::jsonb);
-
-                INSERT INTO app_private.exam_answer_keys (
-                    question_id,
-                    correct_answer,
-                    accepted_answers,
-                    case_sensitive,
-                    grading_config
-                ) VALUES (
-                    v_question_id,
-                    v_correct_answer,
-                    v_accepted_answers,
-                    v_case_sensitive,
-                    v_grading_config
-                );
-            END IF;
-        END LOOP;
-    END IF;
+        END IF;
+    END LOOP;
 
     RETURN jsonb_build_object(
         'version_id', p_version_id,

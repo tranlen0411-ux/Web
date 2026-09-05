@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * EXAM BUILDER V1 — PHASE 2A AUTHORING RPCs LOCAL PGLITE DRY-RUN TEST (V3)
+ * EXAM BUILDER V1 — PHASE 2A AUTHORING RPCs LOCAL PGLITE DRY-RUN TEST (V4)
  * (IN-MEMORY ONLY — ZERO NETWORK — ZERO PRODUCTION SECRETS)
  * ============================================================================
  */
@@ -18,7 +18,7 @@ const PATCH_SCHEMA_PATH = path.resolve(__dirname, '../docs/01_exam_builder_v1_sc
 const RPC_PATH = path.resolve(__dirname, '../docs/02_exam_builder_v1_rpc_authoring.sql');
 
 async function runPhase2ATest() {
-  console.log('--- STARTING EXAM BUILDER V1 PHASE 2A AUTHORING RPCs DRY RUN (30 TESTS) ---');
+  console.log('--- STARTING EXAM BUILDER V1 PHASE 2A AUTHORING RPCs DRY RUN (38 TESTS) ---');
 
   if (!fs.existsSync(BASE_SCHEMA_PATH) || !fs.existsSync(PATCH_SCHEMA_PATH) || !fs.existsSync(RPC_PATH)) {
     throw new Error('Required SQL files not found!');
@@ -745,8 +745,8 @@ async function runPhase2ATest() {
   }
   console.log('✅ Existing draft questions remained completely untouched and protected by 2-Pass validation.');
 
-  // [30/30] publish retry on superseded version => rejected
-  console.log('\n[30/30] Testing publish retry on superseded version is REJECTED...');
+  // [30/38] publish retry on superseded version => rejected
+  console.log('\n[30/38] Testing publish retry on superseded version is REJECTED...');
   let supersededPubRejected = false;
   try {
     // versionId1 was superseded in test 9
@@ -760,7 +760,291 @@ async function runPhase2ATest() {
   }
   if (!supersededPubRejected) throw new Error('Expected superseded version publish rejection!');
 
-  console.log('\n🎉 ALL 30 PHASE 2A AUTHORING RPC TESTS PASSED PERFECTLY!\n');
+  // [31/38] p_questions object => ERR_INVALID_QUESTIONS_PAYLOAD
+  console.log('\n[31/38] Testing p_questions as JSON object is REJECTED with ERR_INVALID_QUESTIONS_PAYLOAD...');
+  const exam6Id = '00000000-0000-0000-0000-000000000091';
+  const ver6Id = '00000000-0000-0000-0000-000000000092';
+  await db.query(`
+    SELECT public.rpc_exam_create_test($1, $2, $3, 'V4 Hardening Test', 'Sinh', 9);
+  `, [authorId, exam6Id, ver6Id]);
+
+  let objectPayloadRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, false, false, 'WARN_AND_LOG', true, false,
+        '{"invalid": "object"}'::jsonb
+      );
+    `, [authorId, ver6Id]);
+  } catch (e) {
+    objectPayloadRejected = true;
+    if (!e.message.includes('ERR_INVALID_QUESTIONS_PAYLOAD')) {
+      throw new Error(`Expected ERR_INVALID_QUESTIONS_PAYLOAD, got: ${e.message}`);
+    }
+    console.log('✅ JSON object payload cleanly rejected with ERR_INVALID_QUESTIONS_PAYLOAD.');
+  }
+  if (!objectPayloadRejected) throw new Error('Expected object payload rejection!');
+
+  // [32/38] p_questions string => ERR_INVALID_QUESTIONS_PAYLOAD
+  console.log('\n[32/38] Testing p_questions as JSON string is REJECTED with ERR_INVALID_QUESTIONS_PAYLOAD...');
+  let stringPayloadRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, false, false, 'WARN_AND_LOG', true, false,
+        '"just a string"'::jsonb
+      );
+    `, [authorId, ver6Id]);
+  } catch (e) {
+    stringPayloadRejected = true;
+    if (!e.message.includes('ERR_INVALID_QUESTIONS_PAYLOAD')) {
+      throw new Error(`Expected ERR_INVALID_QUESTIONS_PAYLOAD, got: ${e.message}`);
+    }
+    console.log('✅ JSON string payload cleanly rejected with ERR_INVALID_QUESTIONS_PAYLOAD.');
+  }
+  if (!stringPayloadRejected) throw new Error('Expected string payload rejection!');
+
+  // [33/38] malformed source_question_bank_item_id => rejected before mutation
+  console.log('\n[33/38] Testing malformed source_question_bank_item_id is REJECTED with ERR_INVALID_SOURCE_UUID before mutation...');
+  const malformedSourceItemQ = [
+    {
+      id: '00000000-0000-0000-0000-000000000095',
+      question_number: 1,
+      question_type: 'single_choice',
+      prompt: 'Sinh học câu 1',
+      points: 2.00,
+      source_question_bank_item_id: 'not-a-valid-uuid-format',
+      answer_key: { correct_answer: {"key": "A"} }
+    }
+  ];
+
+  let malformedSourceItemRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, false, false, 'WARN_AND_LOG', true, false,
+        $3::jsonb
+      );
+    `, [authorId, ver6Id, JSON.stringify(malformedSourceItemQ)]);
+  } catch (e) {
+    malformedSourceItemRejected = true;
+    if (!e.message.includes('ERR_INVALID_SOURCE_UUID')) {
+      throw new Error(`Expected ERR_INVALID_SOURCE_UUID, got: ${e.message}`);
+    }
+    console.log('✅ Malformed source_question_bank_item_id rejected in Pass 1 with ERR_INVALID_SOURCE_UUID.');
+  }
+  if (!malformedSourceItemRejected) throw new Error('Expected malformed source_question_bank_item_id rejection!');
+
+  // [34/38] malformed source_question_bank_version_id => rejected before mutation
+  console.log('\n[34/38] Testing malformed source_question_bank_version_id is REJECTED with ERR_INVALID_SOURCE_UUID before mutation...');
+  const malformedSourceVerQ = [
+    {
+      id: '00000000-0000-0000-0000-000000000096',
+      question_number: 1,
+      question_type: 'single_choice',
+      prompt: 'Sinh học câu 1',
+      points: 2.00,
+      source_question_bank_version_id: '123-bad-version-uuid',
+      answer_key: { correct_answer: {"key": "A"} }
+    }
+  ];
+
+  let malformedSourceVerRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, false, false, 'WARN_AND_LOG', true, false,
+        $3::jsonb
+      );
+    `, [authorId, ver6Id, JSON.stringify(malformedSourceVerQ)]);
+  } catch (e) {
+    malformedSourceVerRejected = true;
+    if (!e.message.includes('ERR_INVALID_SOURCE_UUID')) {
+      throw new Error(`Expected ERR_INVALID_SOURCE_UUID, got: ${e.message}`);
+    }
+    console.log('✅ Malformed source_question_bank_version_id rejected in Pass 1 with ERR_INVALID_SOURCE_UUID.');
+  }
+  if (!malformedSourceVerRejected) throw new Error('Expected malformed source_question_bank_version_id rejection!');
+
+  // [35/38] explicit NULL required boolean/policy parameter => rejected cleanly
+  console.log('\n[35/38] Testing explicit NULL required boolean/policy parameters are REJECTED cleanly...');
+  let nullShuffleQuestionsRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, NULL, false, 'WARN_AND_LOG', true, false,
+        '[]'::jsonb
+      );
+    `, [authorId, ver6Id]);
+  } catch (e) {
+    nullShuffleQuestionsRejected = true;
+    if (!e.message.includes('ERR_REQUIRED_PARAMS')) {
+      throw new Error(`Expected ERR_REQUIRED_PARAMS, got: ${e.message}`);
+    }
+    console.log('✅ NULL shuffle_questions parameter rejected with ERR_REQUIRED_PARAMS.');
+  }
+  if (!nullShuffleQuestionsRejected) throw new Error('Expected NULL shuffle_questions rejection!');
+
+  let nullTabPolicyRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'V4 Hardening Test', 'Sinh', 9, NULL,
+        NULL, NULL, NULL, 1, 0, false, false, NULL, true, false,
+        '[]'::jsonb
+      );
+    `, [authorId, ver6Id]);
+  } catch (e) {
+    nullTabPolicyRejected = true;
+    if (!e.message.includes('ERR_INVALID_TAB_POLICY')) {
+      throw new Error(`Expected ERR_INVALID_TAB_POLICY, got: ${e.message}`);
+    }
+    console.log('✅ NULL tab_switch_policy parameter rejected with ERR_INVALID_TAB_POLICY.');
+  }
+  if (!nullTabPolicyRejected) throw new Error('Expected NULL tab_switch_policy rejection!');
+
+  // [36/38] valid empty [] draft save => succeeds with 0 questions
+  console.log('\n[36/38] Testing valid empty [] draft save succeeds with 0 questions...');
+  const emptyDraftSaveRes = await db.query(`
+    SELECT public.rpc_exam_save_draft_version(
+      $1, $2, 'V4 Hardening Empty Test', 'Sinh', 9, 'Empty draft test',
+      60, NULL, NULL, 2, 5, true, true, 'WARN_AND_LOG', true, true,
+      '[]'::jsonb
+    ) AS result;
+  `, [authorId, ver6Id]);
+
+  const emptyDraftResult = emptyDraftSaveRes.rows[0].result;
+  if (emptyDraftResult.question_count !== 0 || emptyDraftResult.status !== 'draft' || emptyDraftResult.version_id !== ver6Id) {
+    throw new Error(`Expected empty draft save with 0 questions, got: ${JSON.stringify(emptyDraftResult)}`);
+  }
+
+  const emptyQCount = await db.query(`SELECT COUNT(*) FROM public.exam_questions WHERE exam_version_id = $1;`, [ver6Id]);
+  if (parseInt(emptyQCount.rows[0].count, 10) !== 0) {
+    throw new Error(`Expected 0 questions in DB for empty draft, found: ${emptyQCount.rows[0].count}`);
+  }
+  console.log('✅ Valid empty [] draft save succeeded with question_count = 0.');
+
+  // [37/38] publish empty draft => ERR_NO_QUESTIONS
+  console.log('\n[37/38] Testing publish empty draft is REJECTED with ERR_NO_QUESTIONS...');
+  let publishEmptyRejected = false;
+  try {
+    await db.query(`SELECT public.rpc_exam_publish_version($1, $2);`, [authorId, ver6Id]);
+  } catch (e) {
+    publishEmptyRejected = true;
+    if (!e.message.includes('ERR_NO_QUESTIONS')) {
+      throw new Error(`Expected ERR_NO_QUESTIONS, got: ${e.message}`);
+    }
+    console.log('✅ Publish empty draft rejected cleanly with ERR_NO_QUESTIONS.');
+  }
+  if (!publishEmptyRejected) throw new Error('Expected empty draft publish rejection!');
+
+  // [38/38] invalid payload leaves previous draft content unchanged
+  console.log('\n[38/38] Testing invalid payload leaves previous draft content unchanged...');
+  // First, save a valid 2-question draft to ver6Id
+  const validDraftQuestions = [
+    {
+      id: '00000000-0000-0000-0000-000000000097',
+      question_number: 1,
+      question_type: 'single_choice',
+      prompt: 'Sinh học tế bào',
+      points: 3.00,
+      answer_key: { correct_answer: {"key": "B"} }
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000098',
+      question_number: 2,
+      question_type: 'essay',
+      prompt: 'Trình bày quá trình quang hợp',
+      points: 7.00
+    }
+  ];
+
+  await db.query(`
+    SELECT public.rpc_exam_save_draft_version(
+      $1, $2, 'Sinh học 9 - Đề 1', 'Sinh', 9, 'Đề chính thức trước khi bị phá',
+      45, NULL, NULL, 1, 0, false, false, 'WARN_AND_LOG', true, false,
+      $3::jsonb
+    );
+  `, [authorId, ver6Id, JSON.stringify(validDraftQuestions)]);
+
+  // Verify initial state
+  const questionsBefore = (await db.query(`
+    SELECT id, question_number, prompt, points FROM public.exam_questions WHERE exam_version_id = $1 ORDER BY question_number;
+  `, [ver6Id])).rows;
+  if (questionsBefore.length !== 2 || questionsBefore[0].prompt !== 'Sinh học tế bào') {
+    throw new Error('Setup failed: questions before invalid attempt not matching expected state');
+  }
+
+  // Now attempt to overwrite with an invalid payload (Pass 1 rejection due to malformed source_question_bank_item_id on question 2)
+  const corruptingPayload = [
+    {
+      id: '00000000-0000-0000-0000-000000000097',
+      question_number: 1,
+      question_type: 'single_choice',
+      prompt: 'CÂU ĐÃ BỊ SỬA TRÁI PHÉP',
+      points: 5.00,
+      answer_key: { correct_answer: {"key": "A"} }
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000099',
+      question_number: 2,
+      question_type: 'essay',
+      prompt: 'Câu hỏi có source UUID sai',
+      points: 5.00,
+      source_question_bank_item_id: 'bad-uuid-value'
+    }
+  ];
+
+  let corruptAttemptRejected = false;
+  try {
+    await db.query(`
+      SELECT public.rpc_exam_save_draft_version(
+        $1, $2, 'TIÊU ĐỀ BỊ SỬA TRÁI PHÉP', 'Sinh', 9, 'Mô tả bị sửa',
+        90, NULL, NULL, 5, 50, true, true, 'OFF', false, true,
+        $3::jsonb
+      );
+    `, [authorId, ver6Id, JSON.stringify(corruptingPayload)]);
+  } catch (e) {
+    corruptAttemptRejected = true;
+    console.log('✅ Corrupting save attempt rejected at Pass 1 validation.');
+  }
+  if (!corruptAttemptRejected) throw new Error('Expected corrupting attempt to be rejected!');
+
+  // Verify that questions and version fields remain 100% UNCHANGED
+  const questionsAfter = (await db.query(`
+    SELECT id, question_number, prompt, points FROM public.exam_questions WHERE exam_version_id = $1 ORDER BY question_number;
+  `, [ver6Id])).rows;
+
+  const versionAfter = (await db.query(`
+    SELECT title, description, duration_minutes, max_attempts, reward_stars, tab_switch_policy
+    FROM public.exam_versions WHERE id = $1;
+  `, [ver6Id])).rows[0];
+
+  if (questionsAfter.length !== 2 ||
+      questionsAfter[0].prompt !== 'Sinh học tế bào' ||
+      questionsAfter[0].points !== '3.00' ||
+      questionsAfter[1].prompt !== 'Trình bày quá trình quang hợp' ||
+      questionsAfter[1].points !== '7.00') {
+    throw new Error(`Data corruption detected after failed save! Questions after: ${JSON.stringify(questionsAfter)}`);
+  }
+
+  if (versionAfter.title !== 'Sinh học 9 - Đề 1' ||
+      versionAfter.description !== 'Đề chính thức trước khi bị phá' ||
+      versionAfter.duration_minutes !== 45 ||
+      versionAfter.max_attempts !== 1 ||
+      versionAfter.reward_stars !== 0 ||
+      versionAfter.tab_switch_policy !== 'WARN_AND_LOG') {
+    throw new Error(`Version attributes corrupted after failed save! Version after: ${JSON.stringify(versionAfter)}`);
+  }
+
+  console.log('✅ Existing draft questions and version metadata completely preserved after rejected save (100% Atomic & Pre-Mutation Validated).');
+
+  console.log('\n🎉 ALL 38 PHASE 2A AUTHORING RPC TESTS PASSED PERFECTLY!\n');
 }
 
 runPhase2ATest().catch((err) => {
