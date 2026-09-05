@@ -153,6 +153,7 @@ export const AssignQuestionBankToClassModal = ({
 
     try {
       // 1. Chuyển đổi Snapshot Question Bank sang Academic Exercise & Question Payload
+      // V1 lineage persistence is stored in description metadata tags.
       const { exercise: exercisePayload, questions: questionsPayload } = transformQuestionBankToAcademicExercise(
         authoringDetail.item || item,
         authoringDetail.version,

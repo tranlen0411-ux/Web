@@ -2188,9 +2188,9 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   const answerKey = { correct_answers: { correct_option_id: 'X' } };
 
   const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
-  // 1. Explicit in returned payload
+  // 1. Explicit in returned payload for frontend compatibility/future use
   assert.strictEqual(exercise.source_question_bank_item_id, 'qb-item-persist-123');
-  // 2. Embedded in description for database storage via save_exercise_with_questions_and_keys
+  // 2. V1 lineage persistence is stored in description metadata tags.
   assert.ok(exercise.description.includes('[source_item_id:qb-item-persist-123]'));
   console.log('PASS Test 114: ASSIGN-QB-24 source_question_bank_item_id persistence proof verified');
 }
@@ -2202,14 +2202,42 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   const answerKey = { correct_answers: { correct_option_id: 'X' } };
 
   const { exercise } = transformQuestionBankToAcademicExercise(item, version, answerKey);
-  // 1. Explicit in returned payload
+  // 1. Explicit in returned payload for frontend compatibility/future use
   assert.strictEqual(exercise.source_question_bank_version_id, 'qb-ver-persist-exact-789');
-  // 2. Embedded in description for database storage via save_exercise_with_questions_and_keys
+  // 2. V1 lineage persistence is stored in description metadata tags.
   assert.ok(exercise.description.includes('[source_version_id:qb-ver-persist-exact-789]'));
   console.log('PASS Test 115: ASSIGN-QB-25 source_question_bank_version_id persistence proof verified');
 }
 
-console.log('=== ALL 115 TESTS PASSED SUCCESSFULLY! ===');
+// 116. ASSIGN-QB-26: V1 lineage persistence is stored in description metadata tags (BOTH tags verified)
+{
+  const item = { id: 'qb-item-lineage-101', current_version_id: 'ver-fallback-202', question_type: 'single_choice' };
+  const version = { id: 'qb-ver-lineage-303', version_number: 2, prompt: 'Lineage tag contract test', options: ['Alpha', 'Beta'] };
+  const answerKey = { correct_answers: { correct_option_id: 'Alpha' } };
+
+  // Case 1: Default description generated from item and version contains both exact tags
+  const { exercise: ex1 } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  assert.ok(ex1.description.includes('[source_item_id:qb-item-lineage-101]'));
+  assert.ok(ex1.description.includes('[source_version_id:qb-ver-lineage-303]'));
+
+  // Case 2: Custom description preserved with exact tags appended
+  const { exercise: ex2 } = transformQuestionBankToAcademicExercise(item, version, answerKey, {
+    description: 'Custom teacher note'
+  });
+  assert.ok(ex2.description.includes('[source_item_id:qb-item-lineage-101]'));
+  assert.ok(ex2.description.includes('[source_version_id:qb-ver-lineage-303]'));
+  assert.strictEqual(ex2.description, 'Custom teacher note [source_item_id:qb-item-lineage-101] [source_version_id:qb-ver-lineage-303]');
+
+  // Case 3: Version id missing -> uses item.current_version_id
+  const versionNoId = { version_number: 1, prompt: 'Lineage fallback test', options: ['Alpha', 'Beta'] };
+  const { exercise: ex3 } = transformQuestionBankToAcademicExercise(item, versionNoId, answerKey);
+  assert.ok(ex3.description.includes('[source_item_id:qb-item-lineage-101]'));
+  assert.ok(ex3.description.includes('[source_version_id:ver-fallback-202]'));
+
+  console.log('PASS Test 116: ASSIGN-QB-26 V1 lineage persistence is stored in description metadata tags verified');
+}
+
+console.log('=== ALL 116 TESTS PASSED SUCCESSFULLY! ===');
 
 
 

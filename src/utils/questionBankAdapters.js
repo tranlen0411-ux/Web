@@ -679,6 +679,9 @@ export const transformQuestionBankToAcademicExercise = (item, version, answerKey
     ? `${options.description.trim()} [source_item_id:${sourceItemId}] [source_version_id:${sourceVerId}]`
     : defaultDesc;
 
+  // V1 lineage persistence is stored in description metadata tags.
+  // source_question_bank_item_id and source_question_bank_version_id are NOT dedicated DB columns in V1.
+  // They are included in the frontend exercise payload for compatibility/future use.
   const exercisePayload = {
     title: exerciseTitle,
     description: exerciseDesc,
