@@ -625,22 +625,18 @@ export const transformQuestionBankToAcademicExercise = (item, version, answerKey
     };
   } else if (qType === 'fill_blank' || qType === 'short_answer') {
     let candidateList = [];
-    if (Array.isArray(ca?.correct_answers)) {
-      candidateList = ca.correct_answers.map((s) => String(s || '').trim()).filter((s) => s.length > 0);
-    } else if (typeof ca === 'string') {
-      if (ca.trim().length > 0) candidateList = [ca.trim()];
-    } else if (ca?.correct_answer) {
-      const s = String(ca.correct_answer || '').trim();
-      if (s.length > 0) candidateList = [s];
+    if (Array.isArray(ca)) {
+      candidateList = ca
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
     }
 
     if (candidateList.length === 0) {
       throw new Error('Không thể xác định đáp án đúng cho câu hỏi điền từ / trả lời ngắn từ Question Bank.');
     }
 
-    const primaryAns = candidateList[0];
     correct_answer_key = {
-      correct_answer: primaryAns,
+      correct_answer: candidateList[0],
       accepted_answers: candidateList,
       case_sensitive: Boolean(answerKey?.case_sensitive)
     };
