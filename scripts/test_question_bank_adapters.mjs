@@ -2237,7 +2237,86 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   console.log('PASS Test 116: ASSIGN-QB-26 V1 lineage persistence is stored in description metadata tags verified');
 }
 
-console.log('=== ALL 116 TESTS PASSED SUCCESSFULLY! ===');
+// 117. ASSIGN-QB-27: fill_blank exact proven runtime contract -> PASS
+{
+  const item = { id: 'qb-fb-10-minus-4', question_type: 'fill_blank' };
+  const version = { id: 'ver-fb-1', prompt: '10 - 4 = _____', options: [] };
+  const answerKey = { correct_answers: ['6'] };
+
+  const { questions } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  assert.strictEqual(questions.length, 1);
+  assert.strictEqual(questions[0].question_type, 'fill_blank');
+  assert.deepStrictEqual(questions[0].correct_answer_key, {
+    correct_answer: '6',
+    accepted_answers: ['6'],
+    case_sensitive: false
+  });
+  console.log('PASS Test 117: ASSIGN-QB-27 fill_blank single accepted answer verified');
+}
+
+// 118. ASSIGN-QB-28: fill_blank multiple accepted answers -> preserves all normalized answers
+{
+  const item = { id: 'qb-fb-multi', question_type: 'fill_blank' };
+  const version = { id: 'ver-fb-2', prompt: '10 - 4 = _____', options: [] };
+  const answerKey = { correct_answers: ['  6  ', '06'], case_sensitive: true };
+
+  const { questions } = transformQuestionBankToAcademicExercise(item, version, answerKey);
+  assert.deepStrictEqual(questions[0].correct_answer_key, {
+    correct_answer: '6',
+    accepted_answers: ['6', '06'],
+    case_sensitive: true
+  });
+  console.log('PASS Test 118: ASSIGN-QB-28 fill_blank multiple accepted answers verified');
+}
+
+// 119. ASSIGN-QB-29: fill_blank empty array -> THROW fail-closed
+{
+  const item = { id: 'qb-fb-empty', question_type: 'fill_blank' };
+  const version = { id: 'ver-fb-3', prompt: '10 - 4 = _____', options: [] };
+  const answerKey = { correct_answers: [] };
+
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, answerKey);
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+  console.log('PASS Test 119: ASSIGN-QB-29 fill_blank empty array throws fail-closed');
+}
+
+// 120. ASSIGN-QB-30: fill_blank whitespace only -> THROW fail-closed
+{
+  const item = { id: 'qb-fb-ws', question_type: 'fill_blank' };
+  const version = { id: 'ver-fb-4', prompt: '10 - 4 = _____', options: [] };
+  const answerKey = { correct_answers: ['   ', ''] };
+
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, answerKey);
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+  console.log('PASS Test 120: ASSIGN-QB-30 fill_blank whitespace only throws fail-closed');
+}
+
+// 121. ASSIGN-QB-31: prove no guessed fallback: malformed object without correct_answers Array -> THROW
+{
+  const item = { id: 'qb-fb-malformed', question_type: 'fill_blank' };
+  const version = { id: 'ver-fb-5', prompt: '10 - 4 = _____', options: [] };
+
+  // Case A: string instead of array
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answers: '6' });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+
+  // Case B: speculative key correct_answer without correct_answers Array
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, { correct_answer: '6' });
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+
+  // Case C: null/empty answer key
+  assert.throws(() => {
+    transformQuestionBankToAcademicExercise(item, version, null);
+  }, /Không thể xác định đáp án đúng cho câu hỏi điền từ/);
+
+  console.log('PASS Test 121: ASSIGN-QB-31 prove no guessed fallback on malformed objects throws verified');
+}
+
+console.log('=== ALL 121 TESTS PASSED SUCCESSFULLY! ===');
 
 
 
