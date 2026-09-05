@@ -1,6 +1,6 @@
 -- ============================================================
 -- TEST / EXAM BUILDER V1
--- PHASE 2C: TEACHER MANUAL GRADING RPC (HARDENING V3)
+-- PHASE 2C: TEACHER MANUAL GRADING RPC (HARDENING V4)
 -- TARGET_PROJECT_REF: szptvqkoiphrhlionfoh
 -- FORBIDDEN_CORE_REF: nddimmxpymipalpxlops
 -- ============================================================
@@ -9,12 +9,12 @@
 -- 1. public.rpc_exam_grade_manual_attempt: Atomic teacher grading of manual questions
 --    (essay, image_upload, file_upload) for pending_manual_grade attempts.
 --
--- HARDENING V3 INVARIANTS:
+-- HARDENING V4 INVARIANTS:
 -- - Manual answer rows MUST already exist in exam_attempt_answers (created at Phase 2B2 submit).
 -- - Zero INSERT during manual grading — uses UPDATE only.
 -- - Pre-mutation validation checks all snapshot manual rows are in 'pending_manual' state with NULL points.
 -- - Authoritative snapshot manual set derived strictly from attempt.exam_version_id and attempt.question_order.
--- - Replay verifies all snapshot manual rows exist and are in 'manual_graded' state.
+-- - Finalized replay verifies all snapshot manual rows exist, are in 'manual_graded' state, and validates exact set completeness without duplicates.
 --
 -- SECURITY & ISOLATION:
 -- - SECURITY DEFINER function owned by postgres.
@@ -40,7 +40,7 @@ SET LOCAL statement_timeout = '30s';
 -- Transitions attempt status from 'pending_manual_grade' to 'graded'.
 -- Stores teacher_comment on individual answers and overall teacher_feedback on attempt.
 -- Preserves original student_answer_json and file_url.
--- Idempotent finalized replay is supported if the payload logically matches stored manual grades.
+-- Idempotent finalized replay is supported if the payload logically matches stored manual grades and covers the exact question set without duplicates.
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.rpc_exam_grade_manual_attempt(
     p_caller_id UUID,
@@ -61,6 +61,7 @@ DECLARE
     v_manual_count INT;
     v_manual_grades_count INT;
     v_processed_q_ids UUID[] := ARRAY[]::UUID[];
+    v_replay_processed_q_ids UUID[] := ARRAY[]::UUID[];
     v_elem RECORD;
     v_q_id_text TEXT;
     v_q_id UUID;
@@ -159,7 +160,7 @@ BEGIN
             END IF;
         END LOOP;
 
-        -- Check every entry in p_manual_grades matches stored answer
+        -- Check every entry in p_manual_grades matches stored answer and covers exact distinct set
         FOR v_elem IN SELECT * FROM jsonb_array_elements(p_manual_grades)
         LOOP
             IF jsonb_typeof(v_elem.value) <> 'object' THEN
@@ -185,6 +186,13 @@ BEGIN
             IF NOT (v_q_id = ANY(v_snapshot_manual_q_ids)) THEN
                 RAISE EXCEPTION 'ERR_ATTEMPT_ALREADY_GRADED: Question % is not a manual question in attempt snapshot', v_q_id USING ERRCODE = '22000';
             END IF;
+
+            -- Reject duplicate question in replay payload
+            IF v_q_id = ANY(v_replay_processed_q_ids) THEN
+                RAISE EXCEPTION 'ERR_DUPLICATE_MANUAL_GRADE: Duplicate grade entry for question % in replay payload', v_q_id USING ERRCODE = '22000';
+            END IF;
+
+            v_replay_processed_q_ids := array_append(v_replay_processed_q_ids, v_q_id);
 
             IF jsonb_typeof(v_elem.value->'points_earned') <> 'number' THEN
                 RAISE EXCEPTION 'ERR_INVALID_MANUAL_POINTS: points_earned must be a JSON number' USING ERRCODE = '22000';
@@ -222,6 +230,18 @@ BEGIN
             -- Check points equality numerically (e.g. 2.5 == 2.50) and comment equality NULL-safely
             IF v_stored_ans.points_earned <> v_points OR v_stored_ans.teacher_comment IS DISTINCT FROM v_comment THEN
                 RAISE EXCEPTION 'ERR_ATTEMPT_ALREADY_GRADED: Attempt % has already been graded with different grades or comments', p_attempt_id USING ERRCODE = '22000';
+            END IF;
+        END LOOP;
+
+        -- Ensure all snapshot manual questions were covered in replay payload
+        IF array_length(v_replay_processed_q_ids, 1) <> v_manual_count THEN
+            RAISE EXCEPTION 'ERR_ATTEMPT_ALREADY_GRADED: Replay payload does not cover all manual questions in attempt snapshot for attempt %', p_attempt_id USING ERRCODE = '22000';
+        END IF;
+
+        FOREACH v_q_id IN ARRAY v_snapshot_manual_q_ids
+        LOOP
+            IF NOT (v_q_id = ANY(v_replay_processed_q_ids)) THEN
+                RAISE EXCEPTION 'ERR_ATTEMPT_ALREADY_GRADED: Replay payload is missing manual question % from attempt snapshot', v_q_id USING ERRCODE = '22000';
             END IF;
         END LOOP;
 

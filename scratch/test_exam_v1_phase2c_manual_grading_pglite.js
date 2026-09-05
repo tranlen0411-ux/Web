@@ -8,7 +8,7 @@ const rootDir = path.join(__dirname, '..');
 
 async function main() {
   console.log('====================================================');
-  console.log('EXAM BUILDER V1 - PHASE 2C PGLITE LOCAL TEST SUITE (90 TESTS)');
+  console.log('EXAM BUILDER V1 - PHASE 2C PGLITE LOCAL TEST SUITE (96 TESTS)');
   console.log('====================================================\n');
 
   const db = new PGlite();
@@ -201,14 +201,14 @@ async function main() {
     try {
       await fn();
       passCount++;
-      console.log(`✅ [${passCount + failCount}/90] PASS: ${name}`);
+      console.log(`✅ [${passCount + failCount}/96] PASS: ${name}`);
     } catch (err) {
       failCount++;
-      console.error(`❌ [${passCount + failCount}/90] FAIL: ${name} -> ${err.message}`);
+      console.error(`❌ [${passCount + failCount}/96] FAIL: ${name} -> ${err.message}`);
     }
   }
 
-  console.log('\n--- EXECUTING 90 TEST CASES ---\n');
+  console.log('\n--- EXECUTING 96 TEST CASES ---\n');
 
   // [1..4] Grade manual questions
   let gradeResult;
@@ -1397,8 +1397,131 @@ async function main() {
     }
   });
 
+  // ------------------------------------------------------------------
+  // Setup Exam 4: Replay Set Completeness Fixture (2 Manual Questions Q1, Q2)
+  // ------------------------------------------------------------------
+  const examReplaySetId = '44444444-4444-4444-8444-444444444404';
+  const verReplaySetId = '55555555-5555-4555-8555-555555555504';
+  const assignReplaySetId = '66666666-6666-4666-8666-666666666604';
+  const student9Id = '22222222-2222-4222-8222-222222222209';
+  const attReplaySetId = '77777777-7777-4777-8777-777777777710';
+  const qR1Id = '88888888-8888-4888-8888-888888888831';
+  const qR2Id = '88888888-8888-4888-8888-888888888832';
+
+  await db.query(`SELECT public.rpc_exam_create_test($1, $2, $3, 'Replay Set Exam', 'LIT', 10);`, [teacherId, examReplaySetId, verReplaySetId]);
+  await db.query(`
+    SELECT public.rpc_exam_save_draft_version(
+      $1, $2, 'Replay Set Exam', 'LIT', 10, 'Desc',
+      60, NOW() - interval '1 hour', NOW() + interval '14 days', 1, 10, true, true, 'WARN_AND_LOG', true, false,
+      $3::jsonb, true
+    );
+  `, [
+    teacherId,
+    verReplaySetId,
+    JSON.stringify([
+      { id: qR1Id, question_number: 1, question_type: 'essay', prompt: 'Question 1 Essay', points: 4.00, options_json: [] },
+      { id: qR2Id, question_number: 2, question_type: 'image_upload', prompt: 'Question 2 Upload', points: 6.00, options_json: [] }
+    ])
+  ]);
+  await db.query(`SELECT public.rpc_exam_publish_version($1, $2, true);`, [teacherId, verReplaySetId]);
+  await db.query(`SELECT public.rpc_exam_create_assignment($1, $2, $3, $4, NOW() + interval '7 days', true, true);`, [teacherId, assignReplaySetId, verReplaySetId, class1Id]);
+
+  await db.query(`SELECT public.rpc_exam_start_attempt($1, $2, $3, $4);`, [student9Id, attReplaySetId, assignReplaySetId, student9Id]);
+  await db.query(`SELECT public.rpc_exam_submit_attempt($1, $2, 1);`, [student9Id, attReplaySetId]);
+
+  // Initial grading: grade attempt to 'graded' status
+  const initialGrades = [
+    { exam_question_id: qR1Id, points_earned: 3.50, teacher_comment: 'Good Q1' },
+    { exam_question_id: qR2Id, points_earned: 5.00, teacher_comment: 'Good Q2' }
+  ];
+  const gradeRes = await db.query(`
+    SELECT public.rpc_exam_grade_manual_attempt($1, $2, $3::jsonb, 'Replay set feedback', 2) AS result;
+  `, [teacherId, attReplaySetId, JSON.stringify(initialGrades)]);
+  const initialGradedResult = gradeRes.rows[0].result;
+  const initialGradedAt = initialGradedResult.graded_at;
+  const initialVersion = initialGradedResult.version;
+
+  // [91] replay duplicate Q1,Q1 with expected Q1,Q2 rejected
+  await test('91: replay duplicate Q1,Q1 with expected Q1,Q2 rejected', async () => {
+    const dupReplayGrades = [
+      { exam_question_id: qR1Id, points_earned: 3.50, teacher_comment: 'Good Q1' },
+      { exam_question_id: qR1Id, points_earned: 3.50, teacher_comment: 'Good Q1' }
+    ];
+    try {
+      await db.query(`SELECT public.rpc_exam_grade_manual_attempt($1, $2, $3::jsonb, 'Replay set feedback', 3);`, [teacherId, attReplaySetId, JSON.stringify(dupReplayGrades)]);
+      throw new Error('Should have failed');
+    } catch (err) {
+      if (!err.message.includes('ERR_DUPLICATE_MANUAL_GRADE')) throw err;
+    }
+  });
+
+  // [92] replay duplicate does not mutate attempt
+  await test('92: replay duplicate does not mutate attempt', async () => {
+    const attRec = await db.query(`SELECT status, manual_score, total_score, teacher_feedback FROM public.exam_attempts WHERE id = $1;`, [attReplaySetId]);
+    const row = attRec.rows[0];
+    if (row.status !== 'graded') throw new Error(`Status mutated: ${row.status}`);
+    if (Number(row.manual_score) !== 8.50) throw new Error(`manual_score mutated: ${row.manual_score}`);
+    if (Number(row.total_score) !== 8.50) throw new Error(`total_score mutated: ${row.total_score}`);
+    if (row.teacher_feedback !== 'Replay set feedback') throw new Error(`teacher_feedback mutated: ${row.teacher_feedback}`);
+  });
+
+  // [93] replay duplicate does not change version
+  await test('93: replay duplicate does not change version', async () => {
+    const attRec = await db.query(`SELECT version FROM public.exam_attempts WHERE id = $1;`, [attReplaySetId]);
+    if (attRec.rows[0].version !== initialVersion) {
+      throw new Error(`Version mutated from ${initialVersion} to ${attRec.rows[0].version}`);
+    }
+  });
+
+  // [94] replay duplicate does not rewrite graded_at
+  await test('94: replay duplicate does not rewrite graded_at', async () => {
+    const attRec = await db.query(`SELECT graded_at FROM public.exam_attempts WHERE id = $1;`, [attReplaySetId]);
+    const currentGradedAt = new Date(attRec.rows[0].graded_at).toISOString();
+    const expectedGradedAt = new Date(initialGradedAt).toISOString();
+    if (currentGradedAt !== expectedGradedAt) {
+      throw new Error(`graded_at rewritten: expected ${expectedGradedAt}, got ${currentGradedAt}`);
+    }
+  });
+
+  // [95] exact replay Q2,Q1 still succeeds order-insensitively
+  let replayOrderResult = null;
+  await test('95: exact replay Q2,Q1 still succeeds order-insensitively', async () => {
+    const reorderedGrades = [
+      { exam_question_id: qR2Id, points_earned: 5.00, teacher_comment: 'Good Q2' },
+      { exam_question_id: qR1Id, points_earned: 3.50, teacher_comment: 'Good Q1' }
+    ];
+    const res = await db.query(`
+      SELECT public.rpc_exam_grade_manual_attempt($1, $2, $3::jsonb, 'Replay set feedback', 3) AS result;
+    `, [teacherId, attReplaySetId, JSON.stringify(reorderedGrades)]);
+    replayOrderResult = res.rows[0].result;
+    if (replayOrderResult.status !== 'graded') {
+      throw new Error(`Replay order-insensitive failed: ${JSON.stringify(replayOrderResult)}`);
+    }
+  });
+
+  // [96] exact replay complete distinct set returns idempotent_replay=true
+  await test('96: exact replay complete distinct set returns idempotent_replay=true', async () => {
+    if (replayOrderResult.idempotent_replay !== true) {
+      throw new Error(`Expected idempotent_replay=true, got ${replayOrderResult.idempotent_replay}`);
+    }
+    if (replayOrderResult.version !== initialVersion) {
+      throw new Error(`Version mismatch on replay: expected ${initialVersion}, got ${replayOrderResult.version}`);
+    }
+    const replayGradedAt = new Date(replayOrderResult.graded_at).toISOString();
+    const expectedGradedAt = new Date(initialGradedAt).toISOString();
+    if (replayGradedAt !== expectedGradedAt) {
+      throw new Error(`graded_at mismatch on replay: expected ${expectedGradedAt}, got ${replayGradedAt}`);
+    }
+    if (Number(replayOrderResult.manual_score) !== 8.50) {
+      throw new Error(`manual_score mismatch: ${replayOrderResult.manual_score}`);
+    }
+    if (Number(replayOrderResult.total_score) !== 8.50) {
+      throw new Error(`total_score mismatch: ${replayOrderResult.total_score}`);
+    }
+  });
+
   console.log('\n====================================================');
-  console.log(`FINAL TEST RESULTS: ${passCount}/90 PASSED, ${failCount} FAILED`);
+  console.log(`FINAL TEST RESULTS: ${passCount}/96 PASSED, ${failCount} FAILED`);
   console.log('====================================================\n');
 
   if (failCount > 0) {
