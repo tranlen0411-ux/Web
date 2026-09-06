@@ -5,6 +5,20 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createExamIntegrityCoordinator } from '../services/examIntegrityCoordinator.js';
+import { isValidAttemptId } from '../services/examIntegritySession.js';
+
+export function canonicalizeAttemptId(id) {
+  if (typeof id === 'string' && isValidAttemptId(id.trim())) {
+    return id.trim().toLowerCase();
+  }
+  return null;
+}
+
+export function shouldResetIntegrityState(previousAttemptId, currentAttemptId) {
+  const prevCanonical = canonicalizeAttemptId(previousAttemptId);
+  const currCanonical = canonicalizeAttemptId(currentAttemptId);
+  return prevCanonical !== currCanonical;
+}
 
 const ALLOWED_POLICIES = new Set(['OFF', 'WARN_ONLY', 'WARN_AND_LOG']);
 
@@ -84,6 +98,8 @@ export function useExamIntegrity({
     coordinatorRef.current = coordinatorFactory();
   }
 
+  const lastCanonicalAttemptIdRef = useRef(canonicalizeAttemptId(attemptId));
+
   const [isIntegrityActive, setIsIntegrityActive] = useState(false);
   const [lastIntegrityResult, setLastIntegrityResult] = useState(null);
   const [lastIntegrityError, setLastIntegrityError] = useState(null);
@@ -131,6 +147,13 @@ export function useExamIntegrity({
     const coordinator = coordinatorRef.current;
     if (!coordinator) {
       return;
+    }
+
+    const canonicalAttemptId = canonicalizeAttemptId(attemptId);
+    if (canonicalAttemptId !== lastCanonicalAttemptIdRef.current) {
+      setLastIntegrityResult(null);
+      setLastIntegrityError(null);
+      lastCanonicalAttemptIdRef.current = canonicalAttemptId;
     }
 
     const { active } = coordinator.sync({
