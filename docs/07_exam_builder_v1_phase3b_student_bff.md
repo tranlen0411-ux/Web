@@ -36,7 +36,7 @@ Hệ thống bảo vệ toàn diện dữ liệu đề thi, ngăn chặn tuyệt
 | `caller_id` / `p_caller_id` trong Body | **KHÔNG TIN CẬY (UNTRUSTED)** | Bị cấm hoàn toàn | Bị từ chối ngay lập tức (`400 INVALID_REQUEST_FIELD`) |
 | `role` / `is_admin` trong Body | **KHÔNG TIN CẬY (UNTRUSTED)** | Bị cấm hoàn toàn | Bị từ chối ngay lập tức (`400 INVALID_REQUEST_FIELD`) |
 | `class_id` trong Body | **KHÔNG TIN CẬY (UNTRUSTED)** | Bị cấm hoàn toàn | Bị từ chối ngay lập tức (`400 INVALID_REQUEST_FIELD`) |
-| `file_url` tải lên (Upload) | **PHẢI KIỂM DUYỆT CHẶT CHẼ** | BFF Validate & Path Check | Chặn URL ngoài, chặn `javascript:`, `data:`, `blob:`, kiểm tra quyền sở hữu `callerId` |
+| `file_url` đính kèm (Upload) | **KHÓA AN TOÀN TẠM THỜI** | Temporary Upload Feature Gate | Cho phép null/omitted cho câu hỏi text; chặn toàn bộ file_url != null với 422 ERR_EXAM_UPLOAD_NOT_READY |
 | `service_role_key` trong Body | **KHÔNG TIN CẬY (UNTRUSTED)** | Bị cấm hoàn toàn | Bị từ chối ngay lập tức (`400 INVALID_REQUEST_FIELD`) |
 | Danh tính Caller (`callerId`) | **TIN CẬY SAU XÁC THỰC** | CORE `auth.getUser()` | Trích xuất trực tiếp từ JWT sau khi kiểm tra chữ ký số |
 | Vai trò người dùng (`actorRole`) | **TIN CẬY SAU XÁC THỰC** | CORE `public.profiles` | Đọc bằng CORE Service Role Key (Read-Only) - Chỉ cho phép `role = student` |
@@ -99,20 +99,20 @@ Hệ thống bảo vệ toàn diện dữ liệu đề thi, ngăn chặn tuyệt
     "attempt_id": "77777777-7777-4777-8777-777777777701",
     "exam_question_id": "88888888-8888-4888-8888-888888888801",
     "student_answer_json": "opt_a",
-    "file_url": "exercise-submissions/11111111-1111-4111-8111-111111111101/77777777-7777-4777-8777-777777777701/q1_essay.png",
+    "file_url": null,
     "expected_version": 1
   }
   ```
+  *(Lưu ý: Đối với câu hỏi văn bản/lựa chọn, `file_url` phải là `null` hoặc bỏ qua không truyền).*
 - **Xác thực & Phân quyền**:
   1. CORE `auth.getUser()` -> xác thực `callerId`.
   2. CORE `profiles` -> kiểm tra `role === 'student'` và `!is_disabled`.
-  3. **File Reference Hardening (BFF Validation)**:
-     - Kiểm tra chuỗi hợp lệ, giới hạn tối đa 1024 ký tự, không rỗng sau khi trim.
-     - Chặn các scheme độc hại: `javascript:`, `vbscript:`, `data:`, `blob:`, `file:`, `ftp:`.
-     - Chặn đường dẫn URL bên ngoài (`http://`, `https://`).
-     - Chặn ký tự điều hướng thư mục (`..`).
-     - Kiểm tra cấu trúc bucket và kiểm tra quyền sở hữu: Nếu đường dẫn chứa UUID người dùng, bắt buộc phải trùng khớp với `callerId` đã xác thực.
-  4. Thực thi `rpc_exam_save_answer(...)`.
+  3. **Temporary Upload Feature Gate (Cổng kiểm soát tệp tải lên)**:
+     - Nếu `file_url` là `null` hoặc không truyền (`undefined`) -> cho phép tiếp tục luồng lưu bài làm phi đính kèm tệp thông thường.
+     - Nếu `file_url` không phải `null` (`file_url != null`) -> từ chối an toàn ngay lập tức với mã lỗi `422 ERR_EXAM_UPLOAD_NOT_READY` ("*Chức năng nộp tệp cho bài thi chưa được kích hoạt.*").
+     - Không truy vấn Storage metadata, không sử dụng bucket `exercise-submissions` ở runtime, không lưu tham chiếu tệp rác vào database.
+     - Các loại câu hỏi `image_upload` và `file_upload` được hoãn lại cho Phase 3B-Upload.
+  4. Thực thi `rpc_exam_save_answer(...)` với `p_file_url = null`.
   5. RPC khóa hàng bản ghi `exam_attempts` `FOR UPDATE` và kiểm tra quyền sở hữu `v_attempt_rec.student_id = p_caller_id`.
 - **Response Allowlist**:
   ```json
