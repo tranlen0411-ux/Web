@@ -416,6 +416,7 @@ function mapStartAttemptSuccess(rpcData) {
   if (typeof rec.status !== 'string' || !rec.status) return { ok: false };
   if (typeof rec.attempt_started_at !== 'string' || !rec.attempt_started_at) return { ok: false };
   if (typeof rec.max_score !== 'number' || Number.isNaN(rec.max_score)) return { ok: false };
+  if (typeof rec.attempt_version !== 'number' || !Number.isInteger(rec.attempt_version) || rec.attempt_version < 1) return { ok: false };
   if (typeof rec.resumed_existing !== 'boolean') return { ok: false };
   if (typeof rec.idempotent_replay !== 'boolean') return { ok: false };
   if (typeof rec.expired !== 'boolean') return { ok: false };
@@ -435,6 +436,7 @@ function mapStartAttemptSuccess(rpcData) {
     max_score: rec.max_score,
     question_order: rec.question_order,
     option_orders: rec.option_orders,
+    attempt_version: rec.attempt_version,
     resumed_existing: rec.resumed_existing,
     idempotent_replay: rec.idempotent_replay,
     expired: rec.expired,
@@ -1298,6 +1300,7 @@ await test('8. Student role is allowed to proceed to handler logic', async () =>
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -1335,6 +1338,7 @@ await test('9. Caller identity is derived strictly from CORE auth.getUser', asyn
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -1498,6 +1502,7 @@ await test('18. Class resolved from assignment (class_id correctly passed to mem
         idempotent_replay: false,
         expired: false,
         already_finalized: false,
+        attempt_version: 1,
       },
       error: null,
     }),
@@ -1539,6 +1544,7 @@ await test('19. CORE class membership checked via class_members table', async ()
         idempotent_replay: false,
         expired: false,
         already_finalized: false,
+        attempt_version: 1,
       },
       error: null,
     }),
@@ -1584,6 +1590,7 @@ await test('21. Student in class is allowed to proceed to RPC', async () => {
         idempotent_replay: false,
         expired: false,
         already_finalized: false,
+        attempt_version: 1,
       },
       error: null,
     }),
@@ -1627,6 +1634,7 @@ await test('23. Exact start RPC rpc_exam_start_attempt called', async () => {
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -1663,6 +1671,7 @@ await test('24. p_caller_id = callerId is passed to RPC', async () => {
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -1699,6 +1708,7 @@ await test('25. p_student_id = callerId is passed to RPC', async () => {
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -1738,6 +1748,7 @@ await test('27. Start response allowlist strictly projects approved fields and s
     idempotent_replay: false,
     expired: false,
     already_finalized: false,
+        attempt_version: 1,
     secret_internal_db_row: 'leak',
     answer_keys: ['correct_answer_leak'],
   };
@@ -1766,6 +1777,7 @@ await test('28. No answer key leakage in start response mapping', async () => {
     idempotent_replay: false,
     expired: false,
     already_finalized: false,
+        attempt_version: 1,
     correct_answers: { q1: 'A' },
   });
   assert.equal(mapped.ok, true);
@@ -1796,6 +1808,7 @@ await test('30. Idempotent replay response is preserved correctly on start attem
     idempotent_replay: true,
     expired: false,
     already_finalized: false,
+        attempt_version: 1,
   };
   const mapped = mapStartAttemptSuccess(rawRpc);
   assert.equal(mapped.ok, true);
@@ -2463,7 +2476,7 @@ await test('83. Response does not spread raw RPC object across all mappers', asy
 
 await test('84. Unexpected fields are stripped cleanly from all 3 response projections', async () => {
   const startMapped = mapStartAttemptSuccess({
-    attempt_id: TEST_ATTEMPT_ID, assignment_id: TEST_ASSIGNMENT_ID, exam_version_id: TEST_EXAM_VERSION_ID, student_id: TEST_STUDENT_ID, attempt_number: 1, status: 'draft', attempt_started_at: '2026-09-06T01:00:00Z', expires_at: null, max_score: 10.0, question_order: [], option_orders: {}, resumed_existing: false, idempotent_replay: false, expired: false, already_finalized: false, unapproved_junk: 123,
+    attempt_id: TEST_ATTEMPT_ID, assignment_id: TEST_ASSIGNMENT_ID, exam_version_id: TEST_EXAM_VERSION_ID, student_id: TEST_STUDENT_ID, attempt_number: 1, status: 'draft', attempt_started_at: '2026-09-06T01:00:00Z', expires_at: null, max_score: 10.0, question_order: [], option_orders: {}, resumed_existing: false, idempotent_replay: false, expired: false, already_finalized: false, attempt_version: 1, unapproved_junk: 123,
   });
   assert.equal('unapproved_junk' in startMapped.data, false);
 
@@ -2593,6 +2606,7 @@ await test('93. start p_caller_id === verified callerId (strictly verified)', as
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -2629,6 +2643,7 @@ await test('94. start p_student_id === verified callerId (strictly verified)', a
           idempotent_replay: false,
           expired: false,
           already_finalized: false,
+        attempt_version: 1,
         },
         error: null,
       };
@@ -2690,6 +2705,7 @@ await test('95. membership must match BOTH class_id and student_id', async () =>
         idempotent_replay: false,
         expired: false,
         already_finalized: false,
+        attempt_version: 1,
       },
       error: null,
     }),
@@ -3512,6 +3528,7 @@ await test('135. Start endpoint unaffected', async () => {
         idempotent_replay: false,
         expired: false,
         already_finalized: false,
+        attempt_version: 1,
       },
       error: null,
     }),
@@ -3574,6 +3591,424 @@ await test('136. Submit endpoint unaffected', async () => {
   const json = await res.json();
   assert.equal(json.success, true);
   assert.equal(json.data.attempt_id, TEST_ATTEMPT_ID);
+});
+
+// ----------------------------------------------------------------------------
+// SECTION 9: START ATTEMPT VERSION CONTRACT HOTFIX TESTS (137..147)
+// ----------------------------------------------------------------------------
+console.log('\n--- SECTION 9: START ATTEMPT VERSION CONTRACT HOTFIX TESTS ---');
+
+await test('137. new_attempt_returns_attempt_version_1', async () => {
+  const callerAuth = createMockCallerClient(TEST_STUDENT_ID);
+  const coreClient = createMockCoreClient();
+  const examClient = createMockExamClient({
+    rpcHandler: async () => ({
+      data: {
+        attempt_id: TEST_ATTEMPT_ID,
+        assignment_id: TEST_ASSIGNMENT_ID,
+        exam_version_id: TEST_EXAM_VERSION_ID,
+        student_id: TEST_STUDENT_ID,
+        attempt_number: 1,
+        status: 'draft',
+        attempt_started_at: '2026-09-06T01:00:00Z',
+        expires_at: null,
+        max_score: 10.0,
+        question_order: [],
+        option_orders: {},
+        attempt_version: 1,
+        resumed_existing: false,
+        idempotent_replay: false,
+        expired: false,
+        already_finalized: false,
+      },
+      error: null,
+    }),
+  });
+
+  const req = createJsonRequest('http://localhost/exam/start-attempt', {
+    assignment_id: TEST_ASSIGNMENT_ID,
+    attempt_id: TEST_ATTEMPT_ID,
+  });
+
+  const res = await handleStartAttemptRequest(req, {
+    authDeps: { mode: 'injected', callerAuthClient: callerAuth, coreQueryClient: coreClient, examQueryClient: examClient },
+  });
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.success, true);
+  assert.equal(json.data.attempt_version, 1);
+});
+
+await test('138. resumed_draft_returns_actual_version_gt_1', async () => {
+  const callerAuth = createMockCallerClient(TEST_STUDENT_ID);
+  const coreClient = createMockCoreClient();
+  const examClient = createMockExamClient({
+    rpcHandler: async () => ({
+      data: {
+        attempt_id: TEST_ATTEMPT_ID,
+        assignment_id: TEST_ASSIGNMENT_ID,
+        exam_version_id: TEST_EXAM_VERSION_ID,
+        student_id: TEST_STUDENT_ID,
+        attempt_number: 1,
+        status: 'draft',
+        attempt_started_at: '2026-09-06T01:00:00Z',
+        expires_at: null,
+        max_score: 10.0,
+        question_order: [],
+        option_orders: {},
+        attempt_version: 4,
+        resumed_existing: true,
+        idempotent_replay: false,
+        expired: false,
+        already_finalized: false,
+      },
+      error: null,
+    }),
+  });
+
+  const req = createJsonRequest('http://localhost/exam/start-attempt', {
+    assignment_id: TEST_ASSIGNMENT_ID,
+    attempt_id: TEST_ATTEMPT_ID,
+  });
+
+  const res = await handleStartAttemptRequest(req, {
+    authDeps: { mode: 'injected', callerAuthClient: callerAuth, coreQueryClient: coreClient, examQueryClient: examClient },
+  });
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.success, true);
+  assert.equal(json.data.resumed_existing, true);
+  assert.equal(json.data.attempt_version, 4);
+});
+
+await test('139. idempotent_draft_replay_returns_actual_version', async () => {
+  const callerAuth = createMockCallerClient(TEST_STUDENT_ID);
+  const coreClient = createMockCoreClient();
+  const examClient = createMockExamClient({
+    rpcHandler: async () => ({
+      data: {
+        attempt_id: TEST_ATTEMPT_ID,
+        assignment_id: TEST_ASSIGNMENT_ID,
+        exam_version_id: TEST_EXAM_VERSION_ID,
+        student_id: TEST_STUDENT_ID,
+        attempt_number: 1,
+        status: 'draft',
+        attempt_started_at: '2026-09-06T01:00:00Z',
+        expires_at: '2026-09-06T02:00:00Z',
+        max_score: 10.0,
+        question_order: [],
+        option_orders: {},
+        attempt_version: 3,
+        resumed_existing: false,
+        idempotent_replay: true,
+        expired: false,
+        already_finalized: false,
+      },
+      error: null,
+    }),
+  });
+
+  const req = createJsonRequest('http://localhost/exam/start-attempt', {
+    assignment_id: TEST_ASSIGNMENT_ID,
+    attempt_id: TEST_ATTEMPT_ID,
+  });
+
+  const res = await handleStartAttemptRequest(req, {
+    authDeps: { mode: 'injected', callerAuthClient: callerAuth, coreQueryClient: coreClient, examQueryClient: examClient },
+  });
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.success, true);
+  assert.equal(json.data.idempotent_replay, true);
+  assert.equal(json.data.attempt_version, 3);
+});
+
+await test('140. finalized_replay_returns_actual_version', async () => {
+  const callerAuth = createMockCallerClient(TEST_STUDENT_ID);
+  const coreClient = createMockCoreClient();
+  const examClient = createMockExamClient({
+    rpcHandler: async () => ({
+      data: {
+        attempt_id: TEST_ATTEMPT_ID,
+        assignment_id: TEST_ASSIGNMENT_ID,
+        exam_version_id: TEST_EXAM_VERSION_ID,
+        student_id: TEST_STUDENT_ID,
+        attempt_number: 1,
+        status: 'graded',
+        attempt_started_at: '2026-09-06T01:00:00Z',
+        expires_at: null,
+        max_score: 10.0,
+        question_order: [],
+        option_orders: {},
+        attempt_version: 7,
+        resumed_existing: false,
+        idempotent_replay: true,
+        expired: false,
+        already_finalized: true,
+      },
+      error: null,
+    }),
+  });
+
+  const req = createJsonRequest('http://localhost/exam/start-attempt', {
+    assignment_id: TEST_ASSIGNMENT_ID,
+    attempt_id: TEST_ATTEMPT_ID,
+  });
+
+  const res = await handleStartAttemptRequest(req, {
+    authDeps: { mode: 'injected', callerAuthClient: callerAuth, coreQueryClient: coreClient, examQueryClient: examClient },
+  });
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.success, true);
+  assert.equal(json.data.already_finalized, true);
+  assert.equal(json.data.attempt_version, 7);
+});
+
+await test('141. start_mapper_requires_attempt_version', async () => {
+  const baseValid = {
+    attempt_id: TEST_ATTEMPT_ID,
+    assignment_id: TEST_ASSIGNMENT_ID,
+    exam_version_id: TEST_EXAM_VERSION_ID,
+    student_id: TEST_STUDENT_ID,
+    attempt_number: 1,
+    status: 'draft',
+    attempt_started_at: '2026-09-06T01:00:00Z',
+    expires_at: null,
+    max_score: 10.0,
+    question_order: [],
+    option_orders: {},
+    attempt_version: 1,
+    resumed_existing: false,
+    idempotent_replay: false,
+    expired: false,
+    already_finalized: false,
+  };
+
+  const valid1 = mapStartAttemptSuccess({ ...baseValid, attempt_version: 1 });
+  assert.equal(valid1.ok, true);
+  assert.equal(valid1.data.attempt_version, 1);
+  assert.equal(Object.keys(valid1.data).length, 16);
+
+  const valid2 = mapStartAttemptSuccess({ ...baseValid, attempt_version: 2 });
+  assert.equal(valid2.ok, true);
+  assert.equal(valid2.data.attempt_version, 2);
+
+  const valid99 = mapStartAttemptSuccess({ ...baseValid, attempt_version: 99 });
+  assert.equal(valid99.ok, true);
+  assert.equal(valid99.data.attempt_version, 99);
+});
+
+await test('142. start_mapper_missing_attempt_version_rejected', async () => {
+  const baseNoVersion = {
+    attempt_id: TEST_ATTEMPT_ID,
+    assignment_id: TEST_ASSIGNMENT_ID,
+    exam_version_id: TEST_EXAM_VERSION_ID,
+    student_id: TEST_STUDENT_ID,
+    attempt_number: 1,
+    status: 'draft',
+    attempt_started_at: '2026-09-06T01:00:00Z',
+    expires_at: null,
+    max_score: 10.0,
+    question_order: [],
+    option_orders: {},
+    resumed_existing: false,
+    idempotent_replay: false,
+    expired: false,
+    already_finalized: false,
+  };
+
+  assert.equal(mapStartAttemptSuccess(baseNoVersion).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseNoVersion, attempt_version: null }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseNoVersion, attempt_version: undefined }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseNoVersion, attempt_version: '3' }).ok, false);
+});
+
+await test('143. start_mapper_zero_attempt_version_rejected', async () => {
+  const baseValid = {
+    attempt_id: TEST_ATTEMPT_ID,
+    assignment_id: TEST_ASSIGNMENT_ID,
+    exam_version_id: TEST_EXAM_VERSION_ID,
+    student_id: TEST_STUDENT_ID,
+    attempt_number: 1,
+    status: 'draft',
+    attempt_started_at: '2026-09-06T01:00:00Z',
+    expires_at: null,
+    max_score: 10.0,
+    question_order: [],
+    option_orders: {},
+    resumed_existing: false,
+    idempotent_replay: false,
+    expired: false,
+    already_finalized: false,
+  };
+
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: 0 }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: -1 }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: -99 }).ok, false);
+});
+
+await test('144. start_mapper_fractional_attempt_version_rejected', async () => {
+  const baseValid = {
+    attempt_id: TEST_ATTEMPT_ID,
+    assignment_id: TEST_ASSIGNMENT_ID,
+    exam_version_id: TEST_EXAM_VERSION_ID,
+    student_id: TEST_STUDENT_ID,
+    attempt_number: 1,
+    status: 'draft',
+    attempt_started_at: '2026-09-06T01:00:00Z',
+    expires_at: null,
+    max_score: 10.0,
+    question_order: [],
+    option_orders: {},
+    resumed_existing: false,
+    idempotent_replay: false,
+    expired: false,
+    already_finalized: false,
+  };
+
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: 1.5 }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: 2.0001 }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: NaN }).ok, false);
+  assert.equal(mapStartAttemptSuccess({ ...baseValid, attempt_version: Infinity }).ok, false);
+});
+
+await test('145. save_expected_version_can_use_start_attempt_version', async () => {
+  const startResultData = {
+    attempt_id: TEST_ATTEMPT_ID,
+    attempt_version: 5,
+  };
+
+  const savePayload = {
+    attempt_id: startResultData.attempt_id,
+    exam_question_id: TEST_QUESTION_ID,
+    student_answer_json: 'opt_A',
+    expected_version: startResultData.attempt_version,
+  };
+
+  const validation = validateSaveAnswerPayload(savePayload);
+  assert.equal(validation.valid, true);
+  assert.equal(validation.sanitizedData.expected_version, 5);
+});
+
+await test('146. submit_expected_version_can_use_start_attempt_version', async () => {
+  const startResultData = {
+    attempt_id: TEST_ATTEMPT_ID,
+    attempt_version: 8,
+  };
+
+  const submitPayload = {
+    attempt_id: startResultData.attempt_id,
+    expected_version: startResultData.attempt_version,
+  };
+
+  const validation = validateSubmitAttemptPayload(submitPayload);
+  assert.equal(validation.valid, true);
+  assert.equal(validation.sanitizedData.expected_version, 8);
+});
+
+await test('147. no_client_version_fallback_contract', async () => {
+  const migrationPath = 'supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
+  assert.equal(fs.existsSync(migrationPath), true, 'Hotfix migration file must exist');
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+
+  assert.equal(migrationSql.includes("'attempt_version', v_existing_attempt.version"), true);
+  assert.equal(migrationSql.includes("'attempt_version', v_active_draft.version"), true);
+  assert.equal(migrationSql.includes("'attempt_version', 1"), true);
+});
+
+await test('148. migration_exact_five_success_paths_contract', async () => {
+  const migrationPath = 'supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
+  assert.equal(fs.existsSync(migrationPath), true, 'Hotfix migration file must exist');
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+
+  // Extract all RETURN jsonb_build_object blocks inside the start attempt function
+  const returnBlocks = [];
+  const regex = /RETURN\s+jsonb_build_object\s*\(([\s\S]*?)\);/g;
+  let match;
+  while ((match = regex.exec(migrationSql)) !== null) {
+    returnBlocks.push(match[1]);
+  }
+
+  // Exact 5 success return paths
+  assert.equal(returnBlocks.length, 5, 'Must have exactly 5 RETURN jsonb_build_object paths in rpc_exam_start_attempt');
+
+  // Path A: Finalized replay
+  const pathA = returnBlocks[0];
+  assert.equal(pathA.includes("'status', v_existing_attempt.status"), true, 'Path A must return existing attempt status');
+  assert.equal(pathA.includes("'already_finalized', true"), true, 'Path A must be already_finalized: true');
+  assert.equal(pathA.includes("'attempt_version', v_existing_attempt.version"), true, 'Path A must return existing attempt version');
+
+  // Path B: Draft replay
+  const pathB = returnBlocks[1];
+  assert.equal(pathB.includes("'status', v_existing_attempt.status"), true, 'Path B must return existing attempt status');
+  assert.equal(pathB.includes("'already_finalized', false"), true, 'Path B must be already_finalized: false');
+  assert.equal(pathB.includes("'attempt_version', v_existing_attempt.version"), true, 'Path B must return existing attempt version');
+
+  // Path C: Other valid replay
+  const pathC = returnBlocks[2];
+  assert.equal(pathC.includes("'status', v_existing_attempt.status"), true, 'Path C must return existing attempt status');
+  assert.equal(pathC.includes("'already_finalized', true"), true, 'Path C must be already_finalized: true');
+  assert.equal(pathC.includes("'attempt_version', v_existing_attempt.version"), true, 'Path C must return existing attempt version');
+
+  // Path D: Resumed active draft
+  const pathD = returnBlocks[3];
+  assert.equal(pathD.includes("'status', v_active_draft.status"), true, 'Path D must return active draft status');
+  assert.equal(pathD.includes("'resumed_existing', true"), true, 'Path D must be resumed_existing: true');
+  assert.equal(pathD.includes("'attempt_version', v_active_draft.version"), true, 'Path D must return active draft version');
+
+  // Path E: New draft attempt
+  const pathE = returnBlocks[4];
+  assert.equal(pathE.includes("'status', 'draft'"), true, 'Path E must return draft status');
+  assert.equal(pathE.includes("'resumed_existing', false"), true, 'Path E must be resumed_existing: false');
+  assert.equal(pathE.includes("'attempt_version', 1"), true, 'Path E must return initial attempt_version: 1');
+});
+
+await test('149. production_mapper_attempt_version_static_contract', async () => {
+  const prodErrorsPath = 'supabase/functions/_shared/examErrors.ts';
+  assert.equal(fs.existsSync(prodErrorsPath), true, 'Production examErrors.ts must exist');
+  const prodSource = fs.readFileSync(prodErrorsPath, 'utf8');
+
+  // 1. Interface ApprovedStartAttemptResult has attempt_version: number
+  assert.equal(
+    prodSource.includes('attempt_version: number;'),
+    true,
+    'ApprovedStartAttemptResult interface must declare attempt_version: number'
+  );
+
+  // 2. mapStartAttemptSuccess validation assertions
+  assert.equal(
+    prodSource.includes("typeof rec.attempt_version !== 'number'"),
+    true,
+    'Production mapStartAttemptSuccess must check typeof !== number'
+  );
+  assert.equal(
+    prodSource.includes('!Number.isInteger(rec.attempt_version)'),
+    true,
+    'Production mapStartAttemptSuccess must check !Number.isInteger'
+  );
+  assert.equal(
+    prodSource.includes('rec.attempt_version < 1'),
+    true,
+    'Production mapStartAttemptSuccess must check attempt_version < 1'
+  );
+
+  // 3. Projection assignment
+  assert.equal(
+    prodSource.includes('attempt_version: rec.attempt_version,'),
+    true,
+    'Production mapStartAttemptSuccess must project rec.attempt_version directly'
+  );
+
+  // 4. Assert NO production fallbacks
+  assert.equal(prodSource.includes('attempt_version: 1,'), false, 'Must not default to 1 in projection');
+  assert.equal(prodSource.includes('attempt_version || 1'), false, 'Must not fallback with || 1');
+  assert.equal(prodSource.includes('attempt_version ?? 1'), false, 'Must not fallback with ?? 1');
+  assert.equal(prodSource.includes('Number(rec.attempt_version)'), false, 'Must not coerce with Number()');
 });
 
 // ----------------------------------------------------------------------------

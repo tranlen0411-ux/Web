@@ -270,6 +270,7 @@ export interface ApprovedStartAttemptResult {
   max_score: number;
   question_order: unknown;
   option_orders: unknown;
+  attempt_version: number;
   resumed_existing: boolean;
   idempotent_replay: boolean;
   expired: boolean;
@@ -293,6 +294,7 @@ export function mapStartAttemptSuccess(
   if (typeof rec.status !== 'string' || !rec.status) return { ok: false };
   if (typeof rec.attempt_started_at !== 'string' || !rec.attempt_started_at) return { ok: false };
   if (typeof rec.max_score !== 'number' || Number.isNaN(rec.max_score)) return { ok: false };
+  if (typeof rec.attempt_version !== 'number' || !Number.isInteger(rec.attempt_version) || rec.attempt_version < 1) return { ok: false };
   if (typeof rec.resumed_existing !== 'boolean') return { ok: false };
   if (typeof rec.idempotent_replay !== 'boolean') return { ok: false };
   if (typeof rec.expired !== 'boolean') return { ok: false };
@@ -312,6 +314,7 @@ export function mapStartAttemptSuccess(
     max_score: rec.max_score,
     question_order: rec.question_order,
     option_orders: rec.option_orders,
+    attempt_version: rec.attempt_version,
     resumed_existing: rec.resumed_existing,
     idempotent_replay: rec.idempotent_replay,
     expired: rec.expired,
