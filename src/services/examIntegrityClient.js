@@ -12,7 +12,10 @@ export const DEFAULT_INTEGRITY_ENDPOINT =
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const SAFE_SUCCESS_FIELDS = Object.freeze([
+const ALLOWED_POLICIES = new Set(['WARN_AND_LOG', 'WARN_ONLY', 'OFF']);
+const ALLOWED_EVENT_TYPES = new Set(['episode_opened', 'episode_closed', 'focus_loss_auxiliary']);
+
+export const SAFE_SUCCESS_FIELDS = Object.freeze([
   'attempt_id',
   'tab_switch_policy',
   'tab_switch_count',
@@ -24,22 +27,62 @@ const SAFE_SUCCESS_FIELDS = Object.freeze([
 
 /**
  * Sanitizes server response to strictly 7 allowed safe projection fields.
+ * Validates strict { success: true, data: { ...7 fields } } envelope (Fail-Closed).
  */
 export function sanitizeSuccessResponse(raw) {
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
   }
-  const payload = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+  if (raw.success !== true) {
+    return null;
+  }
+  if (!raw.data || typeof raw.data !== 'object' || Array.isArray(raw.data)) {
+    return null;
+  }
+
+  const payload = raw.data;
+
+  if (typeof payload.attempt_id !== 'string' || !UUID_REGEX.test(payload.attempt_id.trim())) {
+    return null;
+  }
+  if (typeof payload.tab_switch_policy !== 'string' || !ALLOWED_POLICIES.has(payload.tab_switch_policy)) {
+    return null;
+  }
+  if (
+    typeof payload.tab_switch_count !== 'number' ||
+    !Number.isInteger(payload.tab_switch_count) ||
+    payload.tab_switch_count < 0 ||
+    !Number.isFinite(payload.tab_switch_count)
+  ) {
+    return null;
+  }
+  if (
+    payload.active_leave_episode_id !== null &&
+    typeof payload.active_leave_episode_id !== 'string'
+  ) {
+    return null;
+  }
+  if (typeof payload.event_recorded !== 'boolean') {
+    return null;
+  }
+  if (
+    payload.event_type !== null &&
+    (typeof payload.event_type !== 'string' || !ALLOWED_EVENT_TYPES.has(payload.event_type))
+  ) {
+    return null;
+  }
+  if (typeof payload.idempotent_replay !== 'boolean') {
+    return null;
+  }
 
   return {
-    attempt_id: typeof payload.attempt_id === 'string' ? payload.attempt_id : '',
-    tab_switch_policy: typeof payload.tab_switch_policy === 'string' ? payload.tab_switch_policy : '',
-    tab_switch_count: typeof payload.tab_switch_count === 'number' ? payload.tab_switch_count : 0,
-    active_leave_episode_id:
-      typeof payload.active_leave_episode_id === 'string' ? payload.active_leave_episode_id : null,
-    event_recorded: Boolean(payload.event_recorded),
-    event_type: typeof payload.event_type === 'string' ? payload.event_type : null,
-    idempotent_replay: Boolean(payload.idempotent_replay),
+    attempt_id: payload.attempt_id.trim(),
+    tab_switch_policy: payload.tab_switch_policy,
+    tab_switch_count: payload.tab_switch_count,
+    active_leave_episode_id: payload.active_leave_episode_id,
+    event_recorded: payload.event_recorded,
+    event_type: payload.event_type,
+    idempotent_replay: payload.idempotent_replay,
   };
 }
 
@@ -82,8 +125,8 @@ export async function extractSafeHttpError(response) {
  * @param {string} [options.endpoint] - Optional custom endpoint URL
  * @returns {Promise<Object>} Result object with status classification:
  *   - succeeded: { ok: true, type: 'succeeded', safeHttpStatus: 200, data }
- *   - failed_pre_dispatch: { ok: false, type: 'failed_pre_dispatch', error: { code, message } }
- *   - failed_ambiguous: { ok: false, type: 'failed_ambiguous', error: { code, message } }
+ *   - failed_pre_dispatch: { ok: false, type: 'failed_pre_dispatch', safeErrorCode }
+ *   - failed_ambiguous: { ok: false, type: 'failed_ambiguous', safeErrorCode }
  *   - failed_http: { ok: false, type: 'failed_http', safeHttpStatus, safeErrorCode }
  */
 export async function sendIntegrityEvent({
@@ -99,9 +142,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'INVALID_ATTEMPT_ID',
       error: {
         code: 'INVALID_ATTEMPT_ID',
-        message: 'Mã lượt thi attemptId không hợp lệ (phải là UUID chuẩn).',
       },
     };
   }
@@ -110,9 +153,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'INVALID_EVENT_SOURCE',
       error: {
         code: 'INVALID_EVENT_SOURCE',
-        message: `Nguồn sự kiện '${source}' không hợp lệ.`,
       },
     };
   }
@@ -121,9 +164,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'INVALID_TIMESTAMP',
       error: {
         code: 'INVALID_TIMESTAMP',
-        message: 'Thời gian clientTimestamp không hợp lệ (phải là chuẩn ISO-8601).',
       },
     };
   }
@@ -132,9 +175,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'MISSING_TOKEN_RESOLVER',
       error: {
         code: 'MISSING_TOKEN_RESOLVER',
-        message: 'Hàm lấy token xác thực getAccessToken không được cung cấp.',
       },
     };
   }
@@ -143,13 +186,13 @@ export async function sendIntegrityEvent({
   let token = null;
   try {
     token = await getAccessToken();
-  } catch (err) {
+  } catch (_) {
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'TOKEN_RESOLUTION_ERROR',
       error: {
         code: 'TOKEN_RESOLUTION_ERROR',
-        message: err?.message || 'Không thể lấy token xác thực phiên đăng nhập.',
       },
     };
   }
@@ -158,9 +201,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'AUTH_REQUIRED',
       error: {
         code: 'AUTH_REQUIRED',
-        message: 'Không tìm thấy token xác thực hợp lệ.',
       },
     };
   }
@@ -182,9 +225,9 @@ export async function sendIntegrityEvent({
     return {
       ok: false,
       type: 'failed_pre_dispatch',
+      safeErrorCode: 'FETCH_UNAVAILABLE',
       error: {
         code: 'FETCH_UNAVAILABLE',
-        message: 'Trình duyệt không hỗ trợ Fetch API.',
       },
     };
   }
@@ -197,14 +240,14 @@ export async function sendIntegrityEvent({
       headers,
       body: JSON.stringify(payload),
     });
-  } catch (err) {
+  } catch (_) {
     // Network error, TypeError, AbortError, or socket reset after dispatch
     return {
       ok: false,
       type: 'failed_ambiguous',
+      safeErrorCode: 'NETWORK_ERROR',
       error: {
         code: 'NETWORK_ERROR',
-        message: err?.message || 'Lỗi mạng không xác định khi gửi sự kiện giám thị.',
       },
     };
   }

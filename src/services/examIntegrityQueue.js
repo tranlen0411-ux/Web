@@ -17,6 +17,161 @@ export const QueueItemState = Object.freeze({
 
 const DEFAULT_MAX_DIAGNOSTICS = 50;
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const ALLOWED_POLICIES = new Set(['WARN_AND_LOG', 'WARN_ONLY', 'OFF']);
+const ALLOWED_EVENT_TYPES = new Set(['episode_opened', 'episode_closed', 'focus_loss_auxiliary']);
+const HTTP_FALLBACK_REGEX = /^HTTP_[1-5][0-9]{2}$/;
+
+// Module-private unexported const Set containing exactly 24 approved reachable/local error codes.
+const APPROVED_SAFE_ERROR_CODES = new Set([
+  'INVALID_ATTEMPT_ID',
+  'INVALID_EVENT_SOURCE',
+  'INVALID_TIMESTAMP',
+  'MISSING_TOKEN_RESOLVER',
+  'TOKEN_RESOLUTION_ERROR',
+  'AUTH_REQUIRED',
+  'FETCH_UNAVAILABLE',
+  'NETWORK_ERROR',
+  'UNEXPECTED_DISPATCH_ERROR',
+  'INVALID_JSON_RESPONSE',
+  'INVALID_RESPONSE_PAYLOAD',
+  'INVALID_TOKEN',
+  'FORBIDDEN_ROLE',
+  'ACCOUNT_DISABLED',
+  'METHOD_NOT_ALLOWED',
+  'UNSUPPORTED_MEDIA_TYPE',
+  'INVALID_INPUT',
+  'INVALID_REQUEST_FIELD',
+  'ERR_INVALID_EVENT_SOURCE',
+  'ATTEMPT_NOT_FOUND',
+  'ERR_ATTEMPT_ALREADY_FINALIZED',
+  'ERR_ATTEMPT_EXPIRED',
+  'ERR_INVALID_TAB_SWITCH_POLICY',
+  'INTERNAL_ERROR',
+]);
+
+/**
+ * Strictly revalidates success data payload against the 7-field contract.
+ */
+function validateSuccessData(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  if (typeof payload.attempt_id !== 'string' || !UUID_REGEX.test(payload.attempt_id.trim())) {
+    return null;
+  }
+  if (typeof payload.tab_switch_policy !== 'string' || !ALLOWED_POLICIES.has(payload.tab_switch_policy)) {
+    return null;
+  }
+  if (
+    typeof payload.tab_switch_count !== 'number' ||
+    !Number.isInteger(payload.tab_switch_count) ||
+    payload.tab_switch_count < 0 ||
+    !Number.isFinite(payload.tab_switch_count)
+  ) {
+    return null;
+  }
+  if (
+    payload.active_leave_episode_id !== null &&
+    typeof payload.active_leave_episode_id !== 'string'
+  ) {
+    return null;
+  }
+  if (typeof payload.event_recorded !== 'boolean') {
+    return null;
+  }
+  if (
+    payload.event_type !== null &&
+    (typeof payload.event_type !== 'string' || !ALLOWED_EVENT_TYPES.has(payload.event_type))
+  ) {
+    return null;
+  }
+  if (typeof payload.idempotent_replay !== 'boolean') {
+    return null;
+  }
+
+  return {
+    attempt_id: payload.attempt_id.trim(),
+    tab_switch_policy: payload.tab_switch_policy,
+    tab_switch_count: payload.tab_switch_count,
+    active_leave_episode_id: payload.active_leave_episode_id,
+    event_recorded: payload.event_recorded,
+    event_type: payload.event_type,
+    idempotent_replay: payload.idempotent_replay,
+  };
+}
+
+/**
+ * Sanitizes dispatcher error response into minimal flat error shape.
+ * Never leaks raw messages, stacks, headers, or tokens.
+ */
+function sanitizeQueueError(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      ok: false,
+      type: QueueItemState.FAILED_AMBIGUOUS,
+      safeErrorCode: 'UNEXPECTED_DISPATCH_ERROR',
+    };
+  }
+
+  if (raw.type === QueueItemState.FAILED_HTTP) {
+    let status = raw.safeHttpStatus;
+    if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) {
+      status = 500;
+    }
+
+    let codeCandidate = '';
+    if (typeof raw.safeErrorCode === 'string' && raw.safeErrorCode.trim()) {
+      codeCandidate = raw.safeErrorCode.trim();
+    } else if (typeof raw.error?.code === 'string' && raw.error.code.trim()) {
+      codeCandidate = raw.error.code.trim();
+    }
+
+    let safeErrorCode = '';
+    if (APPROVED_SAFE_ERROR_CODES.has(codeCandidate)) {
+      safeErrorCode = codeCandidate;
+    } else if (HTTP_FALLBACK_REGEX.test(codeCandidate) && parseInt(codeCandidate.slice(5), 10) === status) {
+      safeErrorCode = codeCandidate;
+    } else {
+      safeErrorCode = `HTTP_${status}`;
+    }
+
+    return {
+      ok: false,
+      type: QueueItemState.FAILED_HTTP,
+      safeHttpStatus: status,
+      safeErrorCode,
+    };
+  }
+
+  if (raw.type === QueueItemState.FAILED_PRE_DISPATCH || raw.type === QueueItemState.FAILED_AMBIGUOUS) {
+    let codeCandidate = '';
+    if (typeof raw.safeErrorCode === 'string' && raw.safeErrorCode.trim()) {
+      codeCandidate = raw.safeErrorCode.trim();
+    } else if (typeof raw.error?.code === 'string' && raw.error.code.trim()) {
+      codeCandidate = raw.error.code.trim();
+    }
+
+    const safeErrorCode = APPROVED_SAFE_ERROR_CODES.has(codeCandidate)
+      ? codeCandidate
+      : 'UNEXPECTED_DISPATCH_ERROR';
+
+    return {
+      ok: false,
+      type: raw.type,
+      safeErrorCode,
+    };
+  }
+
+  return {
+    ok: false,
+    type: QueueItemState.FAILED_AMBIGUOUS,
+    safeErrorCode: 'UNEXPECTED_DISPATCH_ERROR',
+  };
+}
+
 export class ExamIntegrityQueue {
   #attemptId;
   #sendIntegrityEvent;
@@ -188,9 +343,9 @@ export class ExamIntegrityQueue {
     const currentItem = this.#queue.shift();
     currentItem.state = QueueItemState.SENDING;
 
-    let result;
+    let rawResult;
     try {
-      result = await this.#sendIntegrityEvent({
+      rawResult = await this.#sendIntegrityEvent({
         attemptId: currentItem.attemptId,
         source: currentItem.source,
         clientTimestamp: currentItem.clientTimestamp,
@@ -198,19 +353,39 @@ export class ExamIntegrityQueue {
         fetchImpl: this.#fetchImpl,
         endpoint: this.#endpoint,
       });
-    } catch (unexpectedError) {
+    } catch (_) {
       // Fallback in case custom sendIntegrityEvent throws unexpectedly
-      result = {
+      rawResult = {
         ok: false,
         type: QueueItemState.FAILED_AMBIGUOUS,
-        error: {
-          code: 'UNEXPECTED_DISPATCH_ERROR',
-          message: unexpectedError?.message || 'Lỗi xử lý ngoài dự kiến.',
-        },
+        safeErrorCode: 'UNEXPECTED_DISPATCH_ERROR',
       };
     }
 
-    const terminalState = result?.type || (result?.ok ? QueueItemState.SUCCEEDED : QueueItemState.FAILED_AMBIGUOUS);
+    let finalResult;
+    if (rawResult && rawResult.ok === true && rawResult.type === QueueItemState.SUCCEEDED) {
+      // Queue independently revalidates success data payload (Fail-Closed)
+      const validatedData = validateSuccessData(rawResult.data);
+      if (validatedData) {
+        finalResult = {
+          ok: true,
+          type: QueueItemState.SUCCEEDED,
+          safeHttpStatus: 200,
+          data: validatedData,
+        };
+      } else {
+        finalResult = {
+          ok: false,
+          type: QueueItemState.FAILED_HTTP,
+          safeHttpStatus: 200,
+          safeErrorCode: 'INVALID_RESPONSE_PAYLOAD',
+        };
+      }
+    } else {
+      finalResult = sanitizeQueueError(rawResult);
+    }
+
+    const terminalState = finalResult.type;
     currentItem.state = terminalState;
 
     this.#recordDiagnostic({
@@ -218,8 +393,8 @@ export class ExamIntegrityQueue {
       source: currentItem.source,
       capturedAt: currentItem.clientTimestamp,
       terminalState,
-      safeHttpStatus: result?.safeHttpStatus,
-      safeErrorCode: result?.safeErrorCode || result?.error?.code,
+      safeHttpStatus: finalResult.safeHttpStatus,
+      safeErrorCode: finalResult.safeErrorCode,
     });
 
     // If queue was stopped during in-flight network dispatch:
@@ -230,10 +405,10 @@ export class ExamIntegrityQueue {
     }
 
     // Invoke user callbacks
-    if (result?.ok) {
+    if (finalResult.ok) {
       if (this.#onResult) {
         try {
-          this.#onResult(result.data, {
+          this.#onResult(finalResult.data, {
             seq: currentItem.seq,
             source: currentItem.source,
           });
@@ -244,7 +419,7 @@ export class ExamIntegrityQueue {
     } else {
       if (this.#onError) {
         try {
-          this.#onError(result, {
+          this.#onError(finalResult, {
             seq: currentItem.seq,
             source: currentItem.source,
           });
@@ -260,3 +435,4 @@ export class ExamIntegrityQueue {
     this.#processQueue();
   }
 }
+

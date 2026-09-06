@@ -693,6 +693,7 @@ async function main() {
   // ---------------------------------------------------------------
   await it('27 test_safe_projection_consumed: consumes strictly 7 projection fields', () => {
     const sanitized = sanitizeSuccessResponse({
+      success: true,
       data: {
         attempt_id: TEST_ATTEMPT_ID,
         tab_switch_policy: 'WARN_AND_LOG',
@@ -1310,6 +1311,851 @@ async function main() {
     const diags = queue.getDiagnostics();
     assert.ok(diags.length <= 50, `Expected <= 50, got ${diags.length}`);
     assert.equal(diags.length, 50);
+  });
+
+  // ---------------------------------------------------------------
+  // 15. Transport Hardening V2 Tests (62..91)
+  // ---------------------------------------------------------------
+  await it('62 test_malformed_200_empty_object_rejected: HTTP 200 {} is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('63 test_malformed_200_missing_data_rejected: HTTP 200 { success: true } is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('64 test_malformed_200_bare_data_rejected: HTTP 200 bare 7 fields without envelope is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          attempt_id: TEST_ATTEMPT_ID,
+          tab_switch_policy: 'WARN_AND_LOG',
+          tab_switch_count: 1,
+          active_leave_episode_id: null,
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        }),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('65 test_malformed_200_success_false_rejected: HTTP 200 { success: false, data: {...} } is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: false,
+          data: {
+            attempt_id: TEST_ATTEMPT_ID,
+            tab_switch_policy: 'WARN_AND_LOG',
+            tab_switch_count: 1,
+            active_leave_episode_id: null,
+            event_recorded: true,
+            event_type: 'episode_opened',
+            idempotent_replay: false,
+          },
+        }),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('66 test_malformed_200_string_success_rejected: HTTP 200 { success: "true", data: {...} } is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: 'true',
+          data: {
+            attempt_id: TEST_ATTEMPT_ID,
+            tab_switch_policy: 'WARN_AND_LOG',
+            tab_switch_count: 1,
+            active_leave_episode_id: null,
+            event_recorded: true,
+            event_type: 'episode_opened',
+            idempotent_replay: false,
+          },
+        }),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('67 test_malformed_200_array_data_rejected: HTTP 200 { success: true, data: [] } is rejected', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: [],
+        }),
+      }),
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_HTTP);
+    assert.equal(res.safeHttpStatus, 200);
+    assert.equal(res.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('68 test_field_validation_attempt_id: non-UUID attempt_id is rejected', () => {
+    assert.equal(
+      sanitizeSuccessResponse({
+        success: true,
+        data: {
+          attempt_id: 'not-a-uuid',
+          tab_switch_policy: 'WARN_AND_LOG',
+          tab_switch_count: 1,
+          active_leave_episode_id: null,
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        },
+      }),
+      null
+    );
+  });
+
+  await it('69 test_field_validation_tab_switch_policy: invalid policy string is rejected', () => {
+    assert.equal(
+      sanitizeSuccessResponse({
+        success: true,
+        data: {
+          attempt_id: TEST_ATTEMPT_ID,
+          tab_switch_policy: 'INVALID_POLICY',
+          tab_switch_count: 1,
+          active_leave_episode_id: null,
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        },
+      }),
+      null
+    );
+  });
+
+  await it('70 test_field_validation_tab_switch_count: fraction, NaN, negative, string count rejected', () => {
+    const base = {
+      attempt_id: TEST_ATTEMPT_ID,
+      tab_switch_policy: 'WARN_AND_LOG',
+      active_leave_episode_id: null,
+      event_recorded: true,
+      event_type: 'episode_opened',
+      idempotent_replay: false,
+    };
+
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, tab_switch_count: 1.5 } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, tab_switch_count: NaN } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, tab_switch_count: -1 } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, tab_switch_count: '2' } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, tab_switch_count: Infinity } }), null);
+  });
+
+  await it('71 test_field_validation_active_leave_episode_id: null, empty string, whitespace, normal string allowed; non-string rejected', () => {
+    const base = {
+      attempt_id: TEST_ATTEMPT_ID,
+      tab_switch_policy: 'WARN_AND_LOG',
+      tab_switch_count: 1,
+      event_recorded: true,
+      event_type: 'episode_opened',
+      idempotent_replay: false,
+    };
+
+    // Valid cases & exact preservation
+    const resNull = sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: null } });
+    assert.ok(resNull);
+    assert.strictEqual(resNull.active_leave_episode_id, null);
+
+    const resEmpty = sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: '' } });
+    assert.ok(resEmpty);
+    assert.strictEqual(resEmpty.active_leave_episode_id, '');
+
+    const resWhitespace = sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: '   ' } });
+    assert.ok(resWhitespace);
+    assert.strictEqual(resWhitespace.active_leave_episode_id, '   ');
+
+    const resNormal = sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: 'episode-test' } });
+    assert.ok(resNormal);
+    assert.strictEqual(resNormal.active_leave_episode_id, 'episode-test');
+
+    // Invalid cases (non-string, non-null) rejected
+    assert.strictEqual(sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: 123 } }), null);
+    assert.strictEqual(sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: {} } }), null);
+    assert.strictEqual(sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: [] } }), null);
+    assert.strictEqual(sanitizeSuccessResponse({ success: true, data: { ...base, active_leave_episode_id: true } }), null);
+  });
+
+  await it('72 test_field_validation_event_recorded: non-boolean values rejected', () => {
+    const base = {
+      attempt_id: TEST_ATTEMPT_ID,
+      tab_switch_policy: 'WARN_AND_LOG',
+      tab_switch_count: 1,
+      active_leave_episode_id: null,
+      event_type: 'episode_opened',
+      idempotent_replay: false,
+    };
+
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, event_recorded: 'true' } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, event_recorded: 1 } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, event_recorded: null } }), null);
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_recorded: true } }));
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_recorded: false } }));
+  });
+
+  await it('73 test_field_validation_event_type: invalid string rejected; valid enums and null allowed', () => {
+    const base = {
+      attempt_id: TEST_ATTEMPT_ID,
+      tab_switch_policy: 'WARN_AND_LOG',
+      tab_switch_count: 1,
+      active_leave_episode_id: null,
+      event_recorded: true,
+      idempotent_replay: false,
+    };
+
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: 'unknown_type' } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: 123 } }), null);
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: 'episode_opened' } }));
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: 'episode_closed' } }));
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: 'focus_loss_auxiliary' } }));
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, event_type: null } }));
+  });
+
+  await it('74 test_field_validation_idempotent_replay: non-boolean values rejected', () => {
+    const base = {
+      attempt_id: TEST_ATTEMPT_ID,
+      tab_switch_policy: 'WARN_AND_LOG',
+      tab_switch_count: 1,
+      active_leave_episode_id: null,
+      event_recorded: true,
+      event_type: 'episode_opened',
+    };
+
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, idempotent_replay: 'false' } }), null);
+    assert.equal(sanitizeSuccessResponse({ success: true, data: { ...base, idempotent_replay: 0 } }), null);
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, idempotent_replay: true } }));
+    assert.ok(sanitizeSuccessResponse({ success: true, data: { ...base, idempotent_replay: false } }));
+  });
+
+  await it('75 test_raw_token_resolver_secret_not_exposed: token error does not leak provider secrets', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => {
+        throw new Error('SECRET_INTERNAL_AUTH_PROVIDER_LEAK');
+      },
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_PRE_DISPATCH);
+    assert.equal(res.safeErrorCode, 'TOKEN_RESOLUTION_ERROR');
+    assert.equal(JSON.stringify(res).includes('SECRET_INTERNAL_AUTH_PROVIDER_LEAK'), false);
+  });
+
+  await it('76 test_raw_fetch_network_secret_not_exposed: fetch exception does not leak network URL secrets', async () => {
+    const res = await sendIntegrityEvent({
+      attemptId: TEST_ATTEMPT_ID,
+      source: 'page_hidden',
+      clientTimestamp: new Date().toISOString(),
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: async () => {
+        throw new Error('Failed to connect to internal.corp.secret.host:8080');
+      },
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.type, QueueItemState.FAILED_AMBIGUOUS);
+    assert.equal(res.safeErrorCode, 'NETWORK_ERROR');
+    assert.equal(JSON.stringify(res).includes('internal.corp.secret'), false);
+  });
+
+  await it('77 test_custom_dispatcher_throw_handled_safely: thrown Error does not leak into queue onError', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => {
+        throw new Error('SECRET_DISPATCH_EXCEPTION_MSG');
+      },
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(capturedError);
+    assert.equal(capturedError.ok, false);
+    assert.equal(capturedError.type, QueueItemState.FAILED_AMBIGUOUS);
+    assert.equal(capturedError.safeErrorCode, 'UNEXPECTED_DISPATCH_ERROR');
+    assert.equal(JSON.stringify(capturedError).includes('SECRET_DISPATCH_EXCEPTION_MSG'), false);
+  });
+
+  await it('78 test_custom_dispatcher_raw_message_stripped: error.message in dispatcher return is stripped', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_ambiguous',
+        error: {
+          code: 'NETWORK_ERROR',
+          message: 'SECRET_RAW_MESSAGE_LEAK',
+        },
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(capturedError);
+    assert.equal(capturedError.safeErrorCode, 'NETWORK_ERROR');
+    assert.equal('error' in capturedError, false);
+    assert.equal('message' in capturedError, false);
+    assert.equal(JSON.stringify(capturedError).includes('SECRET_RAW_MESSAGE_LEAK'), false);
+  });
+
+  await it('79 test_custom_dispatcher_extra_fields_stripped: rawBody and stack stripped from onError and diags', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 500,
+        safeErrorCode: 'HTTP_500',
+        rawBody: 'SECRET_RESPONSE_BODY_SQL_DUMP',
+        stack: 'SECRET_INTERNAL_FILE_STACK_TRACE',
+        headers: { 'x-secret': '123' },
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(capturedError);
+    assert.equal('rawBody' in capturedError, false);
+    assert.equal('stack' in capturedError, false);
+    assert.equal('headers' in capturedError, false);
+    assert.equal(JSON.stringify(capturedError).includes('SECRET_RESPONSE_BODY'), false);
+
+    const diags = queue.getDiagnostics();
+    assert.equal(JSON.stringify(diags).includes('SECRET_RESPONSE_BODY'), false);
+  });
+
+  await it('80 test_auth_error_codes_preserved: INVALID_TOKEN, FORBIDDEN_ROLE, ACCOUNT_DISABLED preserved', async () => {
+    const authCodes = ['INVALID_TOKEN', 'FORBIDDEN_ROLE', 'ACCOUNT_DISABLED'];
+    for (const code of authCodes) {
+      let capturedError = null;
+      const queue = new ExamIntegrityQueue({
+        attemptId: TEST_ATTEMPT_ID,
+        sendIntegrityEvent: async () => ({
+          ok: false,
+          type: 'failed_http',
+          safeHttpStatus: 401,
+          safeErrorCode: code,
+        }),
+        onError: (err) => {
+          capturedError = err;
+        },
+      });
+
+      queue.enqueue('page_hidden');
+      while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+        await sleep(10);
+      }
+
+      assert.equal(capturedError.safeErrorCode, code, `Expected ${code} to be preserved`);
+    }
+  });
+
+  await it('81 test_validation_error_code_preserved: INVALID_REQUEST_FIELD preserved', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 400,
+        safeErrorCode: 'INVALID_REQUEST_FIELD',
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedError.safeErrorCode, 'INVALID_REQUEST_FIELD');
+  });
+
+  await it('82 test_custom_unknown_safeErrorCode_blocked: unknown secret code maps to safe fallback', async () => {
+    let capturedHttpErr = null;
+    let capturedAmbiguousErr = null;
+
+    const queueHttp = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 500,
+        safeErrorCode: 'SECRET_DB_PASSWORD_XYZ',
+      }),
+      onError: (err) => {
+        capturedHttpErr = err;
+      },
+    });
+    queueHttp.enqueue('page_hidden');
+    while (queueHttp.getStatus().inFlight || queueHttp.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedHttpErr.safeErrorCode, 'HTTP_500');
+    assert.equal(JSON.stringify(capturedHttpErr).includes('SECRET_DB_PASSWORD'), false);
+
+    const queueAmbiguous = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_ambiguous',
+        safeErrorCode: 'SECRET_INTERNAL_NETWORK_LEAK',
+      }),
+      onError: (err) => {
+        capturedAmbiguousErr = err;
+      },
+    });
+    queueAmbiguous.enqueue('page_hidden');
+    while (queueAmbiguous.getStatus().inFlight || queueAmbiguous.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedAmbiguousErr.safeErrorCode, 'UNEXPECTED_DISPATCH_ERROR');
+    assert.equal(JSON.stringify(capturedAmbiguousErr).includes('SECRET_INTERNAL_NETWORK'), false);
+  });
+
+  await it('83 test_matching_http_status_code_preserved: HTTP_503 with status 503 is preserved', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 503,
+        safeErrorCode: 'HTTP_503',
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedError.safeHttpStatus, 503);
+    assert.equal(capturedError.safeErrorCode, 'HTTP_503');
+  });
+
+  await it('84 test_mismatched_http_status_code_normalized: HTTP_401 with status 500 normalized to HTTP_500', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 500,
+        safeErrorCode: 'HTTP_401', // Mismatched suffix 401 !== status 500
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedError.safeHttpStatus, 500);
+    assert.equal(capturedError.safeErrorCode, 'HTTP_500');
+  });
+
+  await it('85 test_safeHttpStatus_normalized: non-integer / out-of-range status normalized to 500', async () => {
+    const invalidStatuses = ['500', 500.5, 999, -1, NaN, Infinity];
+    for (const status of invalidStatuses) {
+      let capturedError = null;
+      const queue = new ExamIntegrityQueue({
+        attemptId: TEST_ATTEMPT_ID,
+        sendIntegrityEvent: async () => ({
+          ok: false,
+          type: 'failed_http',
+          safeHttpStatus: status,
+          safeErrorCode: 'INTERNAL_ERROR',
+        }),
+        onError: (err) => {
+          capturedError = err;
+        },
+      });
+
+      queue.enqueue('page_hidden');
+      while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+        await sleep(10);
+      }
+
+      assert.equal(capturedError.safeHttpStatus, 500, `Expected status normalized to 500 for input ${status}`);
+      assert.equal(capturedError.safeErrorCode, 'INTERNAL_ERROR');
+    }
+  });
+
+  await it('86 test_non_http_omits_safeHttpStatus: failed_pre_dispatch / failed_ambiguous omit safeHttpStatus', async () => {
+    let capturedPreErr = null;
+    let capturedAmbErr = null;
+
+    const queuePre = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_pre_dispatch',
+        safeHttpStatus: 400, // Should be discarded
+        safeErrorCode: 'INVALID_ATTEMPT_ID',
+      }),
+      onError: (err) => {
+        capturedPreErr = err;
+      },
+    });
+    queuePre.enqueue('page_hidden');
+    while (queuePre.getStatus().inFlight || queuePre.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal('safeHttpStatus' in capturedPreErr, false);
+
+    const queueAmb = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_ambiguous',
+        safeHttpStatus: 500, // Should be discarded
+        safeErrorCode: 'NETWORK_ERROR',
+      }),
+      onError: (err) => {
+        capturedAmbErr = err;
+      },
+    });
+    queueAmb.enqueue('page_hidden');
+    while (queueAmb.getStatus().inFlight || queueAmb.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal('safeHttpStatus' in capturedAmbErr, false);
+  });
+
+  await it('87 test_unknown_type_fails_closed: custom type evil_state becomes failed_ambiguous', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'evil_state',
+        safeErrorCode: 'NETWORK_ERROR',
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(capturedError.type, QueueItemState.FAILED_AMBIGUOUS);
+    assert.equal(capturedError.safeErrorCode, 'UNEXPECTED_DISPATCH_ERROR');
+  });
+
+  await it('88 test_queue_revalidates_success: custom dispatcher ok:true malformed data triggers onError not onResult', async () => {
+    let onResultCalled = false;
+    let capturedError = null;
+
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: true,
+        type: 'succeeded',
+        data: {
+          attempt_id: 'corrupted-data', // Fails 7-field check
+        },
+      }),
+      onResult: () => {
+        onResultCalled = true;
+      },
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.equal(onResultCalled, false, 'onResult must not be called with malformed data');
+    assert.ok(capturedError);
+    assert.equal(capturedError.ok, false);
+    assert.equal(capturedError.type, QueueItemState.FAILED_HTTP);
+    assert.equal(capturedError.safeHttpStatus, 200);
+    assert.equal(capturedError.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
+  });
+
+  await it('89 test_onError_keys_strict_allowlist: onError receives strictly approved keys only', async () => {
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: false,
+        type: 'failed_http',
+        safeHttpStatus: 404,
+        safeErrorCode: 'ATTEMPT_NOT_FOUND',
+        extraSecret: 'should_be_stripped',
+      }),
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.deepEqual(Object.keys(capturedError).sort(), ['ok', 'safeErrorCode', 'safeHttpStatus', 'type']);
+  });
+
+  await it('90 test_diagnostics_keys_strict_allowlist: diagnostics history entries contain only allowlist keys', async () => {
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: createMockFetch(async () => createErrorResponse(404, 'ATTEMPT_NOT_FOUND')),
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    const diags = queue.getDiagnostics();
+    assert.equal(diags.length, 1);
+    const keys = Object.keys(diags[0]).sort();
+    assert.deepEqual(keys, ['capturedAt', 'safeErrorCode', 'safeHttpStatus', 'seq', 'source', 'terminalState']);
+  });
+
+  await it('91 test_valid_7_field_success_passes_cleanly: valid success payload calls onResult with 7 fields', async () => {
+    let receivedData = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      getAccessToken: async () => TEST_TOKEN,
+      fetchImpl: createMockFetch(async () => createSuccessResponse()),
+      onResult: (data) => {
+        receivedData = data;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(receivedData);
+    assert.equal(receivedData.attempt_id, TEST_ATTEMPT_ID);
+    assert.equal(receivedData.tab_switch_policy, 'WARN_AND_LOG');
+    assert.equal(receivedData.tab_switch_count, 1);
+    assert.equal(receivedData.active_leave_episode_id, '89999999-9999-4999-8999-999999999999');
+    assert.equal(receivedData.event_recorded, true);
+    assert.equal(receivedData.event_type, 'episode_opened');
+    assert.equal(receivedData.idempotent_replay, false);
+    assert.equal(Object.keys(receivedData).length, 7);
+  });
+
+  await it('92 test_queue_active_leave_episode_id_empty_preserved: empty string preserved exactly in onResult', async () => {
+    let receivedData = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: true,
+        type: 'succeeded',
+        data: {
+          attempt_id: TEST_ATTEMPT_ID,
+          tab_switch_policy: 'WARN_AND_LOG',
+          tab_switch_count: 1,
+          active_leave_episode_id: '',
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        },
+      }),
+      onResult: (data) => {
+        receivedData = data;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(receivedData);
+    assert.strictEqual(receivedData.active_leave_episode_id, '');
+  });
+
+  await it('93 test_queue_active_leave_episode_id_whitespace_preserved: whitespace string preserved exactly in onResult', async () => {
+    let receivedData = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: true,
+        type: 'succeeded',
+        data: {
+          attempt_id: TEST_ATTEMPT_ID,
+          tab_switch_policy: 'WARN_AND_LOG',
+          tab_switch_count: 1,
+          active_leave_episode_id: '   ',
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        },
+      }),
+      onResult: (data) => {
+        receivedData = data;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.ok(receivedData);
+    assert.strictEqual(receivedData.active_leave_episode_id, '   ');
+  });
+
+  await it('94 test_queue_active_leave_episode_id_non_string_fails: non-string active_leave_episode_id triggers onError', async () => {
+    let onResultCalled = false;
+    let capturedError = null;
+    const queue = new ExamIntegrityQueue({
+      attemptId: TEST_ATTEMPT_ID,
+      sendIntegrityEvent: async () => ({
+        ok: true,
+        type: 'succeeded',
+        data: {
+          attempt_id: TEST_ATTEMPT_ID,
+          tab_switch_policy: 'WARN_AND_LOG',
+          tab_switch_count: 1,
+          active_leave_episode_id: 123, // Invalid non-string
+          event_recorded: true,
+          event_type: 'episode_opened',
+          idempotent_replay: false,
+        },
+      }),
+      onResult: () => {
+        onResultCalled = true;
+      },
+      onError: (err) => {
+        capturedError = err;
+      },
+    });
+
+    queue.enqueue('page_hidden');
+    while (queue.getStatus().inFlight || queue.getStatus().queuedCount > 0) {
+      await sleep(10);
+    }
+
+    assert.strictEqual(onResultCalled, false);
+    assert.ok(capturedError);
+    assert.strictEqual(capturedError.ok, false);
+    assert.strictEqual(capturedError.type, QueueItemState.FAILED_HTTP);
+    assert.strictEqual(capturedError.safeHttpStatus, 200);
+    assert.strictEqual(capturedError.safeErrorCode, 'INVALID_RESPONSE_PAYLOAD');
   });
 
   console.log('\n====================================================');
