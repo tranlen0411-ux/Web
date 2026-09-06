@@ -33,3 +33,7 @@ verify_jwt = false
 
 [functions.student-qr-login]
 verify_jwt = false
+
+[functions.exam-grade-manual-attempt]
+verify_jwt = false
+
