@@ -159,9 +159,6 @@ export function normalizeRpcError(err: unknown): { status: number; errorCode: Er
   }
 
   // 422 Unprocessable Entity Domain Errors
-  if (rawMsg.includes('ERR_INVALID_TAB_SWITCH_POLICY')) {
-    return { status: 422, errorCode: 'ERR_INVALID_TAB_SWITCH_POLICY', message: 'Cấu hình kiểm soát chuyển tab của đề thi không hợp lệ.' };
-  }
   if (rawMsg.includes('ERR_VERSION_NOT_PUBLISHED')) {
     return { status: 422, errorCode: 'ERR_VERSION_NOT_PUBLISHED', message: 'Đề thi chưa được xuất bản để làm bài.' };
   }
@@ -197,6 +194,9 @@ export function normalizeRpcError(err: unknown): { status: number; errorCode: Er
   }
   if (rawMsg.includes('ERR_QUESTION_VERSION_MISMATCH')) {
     return { status: 422, errorCode: 'ERR_QUESTION_VERSION_MISMATCH', message: 'Câu hỏi không thuộc phiên bản đề thi này.' };
+  }
+  if (rawMsg.includes('ERR_REQUIRED_PARAMS')) {
+    return { status: 422, errorCode: 'ERR_REQUIRED_PARAMS', message: 'Thiếu tham số bắt buộc trong yêu cầu.' };
   }
   if (rawMsg.includes('ERR_EXAM_UPLOAD_NOT_READY')) {
     return { status: 422, errorCode: 'ERR_EXAM_UPLOAD_NOT_READY', message: 'Chức năng nộp tệp cho bài thi chưa được kích hoạt.' };

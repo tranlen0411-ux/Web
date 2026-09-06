@@ -1,7 +1,7 @@
 // supabase/functions/exam-record-integrity-event/validation.ts
 // Strict Request Validation & Forbidden Field Injection Shield for Integrity Event BFF
 
-import { ErrorCode } from '../_shared/examErrors.ts';
+import type { ErrorCode } from '../_shared/examErrors.ts';
 
 // Standard RFC 4122 UUID Regex (case-insensitive)
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
