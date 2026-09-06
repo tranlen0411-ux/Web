@@ -14,8 +14,11 @@ export type ErrorCode =
   | 'ACCOUNT_DISABLED'
   | 'CLASS_ACCESS_DENIED'
   | 'ATTEMPT_ACCESS_DENIED'
+  | 'UNSUPPORTED_MEDIA_TYPE'
+  | 'METHOD_NOT_ALLOWED'
   | 'INVALID_INPUT'
   | 'INVALID_REQUEST_FIELD'
+  | 'ATTEMPT_NOT_FOUND'
   | 'ERR_ASSIGNMENT_NOT_FOUND'
   | 'ERR_ATTEMPT_NOT_FOUND'
   | 'ERR_QUESTION_NOT_FOUND'
@@ -42,6 +45,8 @@ export type ErrorCode =
   | 'ERR_UNKNOWN_QUESTION_TYPE'
   | 'ERR_QUESTION_VERSION_MISMATCH'
   | 'ERR_REQUIRED_PARAMS'
+  | 'ERR_INVALID_EVENT_SOURCE'
+  | 'ERR_INVALID_TAB_SWITCH_POLICY'
   | 'FILE_REFERENCE_NOT_FOUND'
   | 'ERR_EXAM_UPLOAD_NOT_READY'
   | 'INTERNAL_ERROR';
@@ -60,7 +65,8 @@ export interface SuccessEnvelope<T = unknown> {
 export function createErrorResponse(
   status: number,
   errorCode: ErrorCode,
-  message: string
+  message: string,
+  extraHeaders?: Record<string, string>
 ): Response {
   const body: ErrorEnvelope = {
     success: false,
@@ -73,13 +79,16 @@ export function createErrorResponse(
     headers: {
       ...corsHeaders,
       'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      ...(extraHeaders || {}),
     },
   });
 }
 
 export function createSuccessResponse<T>(
   data: T,
-  status = 200
+  status = 200,
+  extraHeaders?: Record<string, string>
 ): Response {
   const body: SuccessEnvelope<T> = {
     success: true,
@@ -91,12 +100,14 @@ export function createSuccessResponse<T>(
     headers: {
       ...corsHeaders,
       'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      ...(extraHeaders || {}),
     },
   });
 }
 
 // ----------------------------------------------------------------------------
-// Deterministic RPC Error Normalizer (Fail-Closed & Sanitized)
+// Deterministic RPC Error Normalizer (Fail-Closed & Sanitized for General Exam BFFs)
 // ----------------------------------------------------------------------------
 export function normalizeRpcError(err: unknown): { status: number; errorCode: ErrorCode; message: string } {
   const rawMsg = typeof err === 'string'
@@ -148,6 +159,9 @@ export function normalizeRpcError(err: unknown): { status: number; errorCode: Er
   }
 
   // 422 Unprocessable Entity Domain Errors
+  if (rawMsg.includes('ERR_INVALID_TAB_SWITCH_POLICY')) {
+    return { status: 422, errorCode: 'ERR_INVALID_TAB_SWITCH_POLICY', message: 'Cấu hình kiểm soát chuyển tab của đề thi không hợp lệ.' };
+  }
   if (rawMsg.includes('ERR_VERSION_NOT_PUBLISHED')) {
     return { status: 422, errorCode: 'ERR_VERSION_NOT_PUBLISHED', message: 'Đề thi chưa được xuất bản để làm bài.' };
   }
@@ -184,9 +198,6 @@ export function normalizeRpcError(err: unknown): { status: number; errorCode: Er
   if (rawMsg.includes('ERR_QUESTION_VERSION_MISMATCH')) {
     return { status: 422, errorCode: 'ERR_QUESTION_VERSION_MISMATCH', message: 'Câu hỏi không thuộc phiên bản đề thi này.' };
   }
-  if (rawMsg.includes('ERR_REQUIRED_PARAMS')) {
-    return { status: 422, errorCode: 'ERR_REQUIRED_PARAMS', message: 'Thiếu tham số bắt buộc trong yêu cầu.' };
-  }
   if (rawMsg.includes('ERR_EXAM_UPLOAD_NOT_READY')) {
     return { status: 422, errorCode: 'ERR_EXAM_UPLOAD_NOT_READY', message: 'Chức năng nộp tệp cho bài thi chưa được kích hoạt.' };
   }
@@ -196,6 +207,50 @@ export function normalizeRpcError(err: unknown): { status: number; errorCode: Er
     status: 500,
     errorCode: 'INTERNAL_ERROR',
     message: 'Đã xảy ra lỗi nội bộ trong quá trình xử lý bài thi.',
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Scoped Anti-Oracle Error Normalizer for Integrity Event BFF
+// ----------------------------------------------------------------------------
+export function normalizeIntegrityRpcError(err: unknown): { status: number; errorCode: ErrorCode; message: string } {
+  const rawMsg = typeof err === 'string'
+    ? err
+    : (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string')
+      ? (err as { message: string }).message
+      : '';
+
+  // 400 Bad Request Domain Errors
+  if (rawMsg.includes('ERR_REQUIRED_PARAMS')) {
+    return { status: 400, errorCode: 'INVALID_INPUT', message: 'Thiếu tham số bắt buộc trong yêu cầu.' };
+  }
+  if (rawMsg.includes('ERR_INVALID_EVENT_SOURCE')) {
+    return { status: 400, errorCode: 'ERR_INVALID_EVENT_SOURCE', message: 'Nguồn sự kiện không hợp lệ.' };
+  }
+
+  // 404 Not Found & Anti-Oracle Protection (Unified 404 for nonexistent attempt or student mismatch)
+  if (rawMsg.includes('ERR_STUDENT_IDENTITY_MISMATCH') || rawMsg.includes('ERR_ATTEMPT_NOT_FOUND')) {
+    return { status: 404, errorCode: 'ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt làm bài thi.' };
+  }
+
+  // 409 Conflict Domain Errors
+  if (rawMsg.includes('ERR_ATTEMPT_FINALIZED') || rawMsg.includes('ERR_ATTEMPT_NOT_DRAFT')) {
+    return { status: 409, errorCode: 'ERR_ATTEMPT_ALREADY_FINALIZED', message: 'Lượt làm bài đã được nộp hoặc hoàn thành trước đó.' };
+  }
+  if (rawMsg.includes('ERR_ATTEMPT_EXPIRED')) {
+    return { status: 409, errorCode: 'ERR_ATTEMPT_EXPIRED', message: 'Thời gian làm bài thi đã kết thúc.' };
+  }
+
+  // 422 Unprocessable Entity Domain Errors
+  if (rawMsg.includes('ERR_INVALID_TAB_SWITCH_POLICY')) {
+    return { status: 422, errorCode: 'ERR_INVALID_TAB_SWITCH_POLICY', message: 'Cấu hình kiểm soát chuyển tab của đề thi không hợp lệ.' };
+  }
+
+  // 500 Fallback Sanitized (Zero SQL / DB leak)
+  return {
+    status: 500,
+    errorCode: 'INTERNAL_ERROR',
+    message: 'Đã xảy ra lỗi nội bộ trong quá trình xử lý sự kiện bài thi.',
   };
 }
 
@@ -370,3 +425,50 @@ export function mapSubmitAttemptSuccess(
 
   return { ok: true, data: projected };
 }
+
+export interface ApprovedIntegrityEventResult {
+  attempt_id: string;
+  tab_switch_policy: 'WARN_AND_LOG' | 'WARN_ONLY' | 'OFF';
+  tab_switch_count: number;
+  active_leave_episode_id: string | null;
+  event_recorded: boolean;
+  event_type: 'episode_opened' | 'episode_closed' | 'focus_loss_auxiliary' | null;
+  idempotent_replay: boolean;
+}
+
+export function mapRecordIntegrityEventSuccess(
+  rpcData: unknown
+): { ok: true; data: ApprovedIntegrityEventResult } | { ok: false } {
+  if (!rpcData || typeof rpcData !== 'object' || Array.isArray(rpcData)) {
+    return { ok: false };
+  }
+
+  const rec = rpcData as Record<string, unknown>;
+
+  if (typeof rec.attempt_id !== 'string' || !rec.attempt_id) return { ok: false };
+  if (typeof rec.tab_switch_policy !== 'string' || !['WARN_AND_LOG', 'WARN_ONLY', 'OFF'].includes(rec.tab_switch_policy)) return { ok: false };
+  if (typeof rec.tab_switch_count !== 'number' || !Number.isInteger(rec.tab_switch_count) || rec.tab_switch_count < 0) return { ok: false };
+  if (typeof rec.event_recorded !== 'boolean') return { ok: false };
+  if (typeof rec.idempotent_replay !== 'boolean') return { ok: false };
+
+  const activeEpisodeId = rec.active_leave_episode_id === null
+    ? null
+    : (typeof rec.active_leave_episode_id === 'string' ? rec.active_leave_episode_id : null);
+
+  const eventType = rec.event_type === null
+    ? null
+    : (typeof rec.event_type === 'string' && ['episode_opened', 'episode_closed', 'focus_loss_auxiliary'].includes(rec.event_type) ? rec.event_type as ApprovedIntegrityEventResult['event_type'] : null);
+
+  const projected: ApprovedIntegrityEventResult = {
+    attempt_id: rec.attempt_id,
+    tab_switch_policy: rec.tab_switch_policy as 'WARN_AND_LOG' | 'WARN_ONLY' | 'OFF',
+    tab_switch_count: rec.tab_switch_count,
+    active_leave_episode_id: activeEpisodeId,
+    event_recorded: rec.event_recorded,
+    event_type: eventType,
+    idempotent_replay: rec.idempotent_replay,
+  };
+
+  return { ok: true, data: projected };
+}
+

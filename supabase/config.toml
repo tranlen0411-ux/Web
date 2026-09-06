@@ -46,3 +46,7 @@ verify_jwt = false
 [functions.exam-submit-attempt]
 verify_jwt = false
 
+[functions.exam-record-integrity-event]
+verify_jwt = false
+
+
