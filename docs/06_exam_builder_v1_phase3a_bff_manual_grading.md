@@ -179,16 +179,16 @@ sequenceDiagram
   > - **Xác thực ứng dụng (Application-Level Auth) là BẮT BUỘC 100%**: Handler Edge Function bắt buộc phải thực hiện xác thực chữ ký số và danh tính của người gọi bằng `coreCallerClient.auth.getUser()` trực tiếp tới dự án CORE trước khi thực hiện bất kỳ thao tác nào.
   > - Tuyệt đối không bao giờ được deploy mà thiếu lớp `authMiddleware` này.
 
-#### 6.2. Danh sách biến môi trường chuẩn (Canonical Environment Variable Names)
+#### 6.2. Danh sách biến môi trường chuẩn & Cơ chế Fallback Runtime
 *Tuyệt đối không lưu hoặc hiển thị giá trị bí mật:*
 
-| Tên biến chuẩn (Canonical) | Dự án đích | Mục đích sử dụng | Ghi chú |
+| Tên biến chuẩn (Canonical) | Dự án đích | Thứ tự Fallback khi đọc môi trường | Ghi chú |
 | :--- | :--- | :--- | :--- |
-| `CORE_SUPABASE_URL` | CORE | URL kết nối dự án CORE Auth & DB | Bắt buộc |
-| `CORE_SUPABASE_ANON_KEY` | CORE | Anon Key để xác thực JWT người dùng CORE qua `auth.getUser()` | Bắt buộc |
-| `CORE_SUPABASE_SERVICE_ROLE_KEY` | CORE | Service Role Key để đọc bảng `profiles` và `classes` trên CORE | Bắt buộc (Server-only) |
-| `EXAM_SUPABASE_URL` | NEW | URL dự án NEW Exam Builder | Bắt buộc (Hỗ trợ fallback `NEW_SUPABASE_URL`) |
-| `EXAM_SUPABASE_SERVICE_ROLE_KEY` | NEW | Service Role Key để gọi RPC `rpc_exam_grade_manual_attempt` trên NEW | Bắt buộc (Server-only, hỗ trợ fallback `NEW_SUPABASE_SERVICE_ROLE_KEY`) |
+| `CORE_SUPABASE_URL` | CORE | Duy nhất `CORE_SUPABASE_URL` | Bắt buộc |
+| `CORE_SUPABASE_ANON_KEY` | CORE | Duy nhất `CORE_SUPABASE_ANON_KEY` | Bắt buộc |
+| `CORE_SUPABASE_SERVICE_ROLE_KEY` | CORE | Duy nhất `CORE_SUPABASE_SERVICE_ROLE_KEY` | Bắt buộc (Server-only) |
+| `EXAM_SUPABASE_URL` | NEW | 1. `EXAM_SUPABASE_URL`<br>2. `NEW_SUPABASE_URL`<br>3. `SUPABASE_URL` (Hosted default) | Tự động nhận diện host project `szptvqkoiphrhlionfoh` |
+| `EXAM_SUPABASE_SERVICE_ROLE_KEY` | NEW | 1. `EXAM_SUPABASE_SERVICE_ROLE_KEY`<br>2. `NEW_SUPABASE_SERVICE_ROLE_KEY`<br>3. `SUPABASE_SERVICE_ROLE_KEY`<br>4. `SUPABASE_SECRET_KEYS['default']` | **`OWNER_MANUAL_SERVICE_KEY_COPY_REQUIRED = NO`** (Tự động kế thừa từ hosted Edge runtime) |
 
 #### 6.3. Đánh giá trùng lặp mã nguồn (Duplication Note & Technical Debt)
 - **`AUTH_LOGIC_COPIED = YES`**
@@ -197,14 +197,14 @@ sequenceDiagram
 
 ---
 
-### 7. KẾT QUẢ KIỂM THỬ ĐƠN VỊ CỤC BỘ (Local Unit Test Suite: 71/71 PASS)
+### 7. KẾT QUẢ KIỂM THỬ ĐƠN VỊ CỤC BỘ (Local Unit Test Suite: 80/80 PASS)
 
-Bộ kiểm thử cục bộ (`scripts/test_exam_grade_manual_attempt_bff.mjs`) bao phủ toàn diện 10 nhóm kiểm thử bảo mật:
+Bộ kiểm thử cục bộ (`scripts/test_exam_grade_manual_attempt_bff.mjs`) bao phủ toàn diện 11 nhóm kiểm thử bảo mật:
 
 ```
 ================================================================
-TOTAL TESTS: 71
-PASSED: 71
+TOTAL TESTS: 80
+PASSED: 80
 FAILED: 0
 ================================================================
 ```
@@ -218,4 +218,6 @@ FAILED: 0
 8. **Nhóm 8 (CORS & Protocol Tests 53..55)**: Hỗ trợ `OPTIONS` preflight, từ chối phương thức khác ngoài `POST` (405), không dùng cấu hình wildcard kèm credentials không an toàn.
 9. **Nhóm 9 (Fail-Closed Class Lookup & Scale Matrix Tests 56..65)**: Attempt có nhưng assignment thiếu (404), Assignment có nhưng class thiếu (403), teacher_id NULL (403), teacher_id khác caller (403), admin được phép vào lớp khác (200), student bị chặn ngay cả khi trùng teacher_id (403), body class_id bị loại bỏ / từ chối (400), NEW/CORE DB errors được khử trùng (500), Ma trận điểm số thập phân (1.23, 1.2, 1, 0.1 PASS; 1.239, 2.555 REJECT).
 10. **Nhóm 10 (Deployment Gate Hardening Tests 66..71)**: Kiểm tra cấu hình `[functions.exam-grade-manual-attempt]` tồn tại trong `config.toml`, `verify_jwt = false`, thiếu auth header vẫn bị chặn 401, token CORE sai vẫn bị chặn 401, không tin cậy gateway claims, callerId duy nhất từ `auth.getUser()`.
+11. **Nhóm 11 (Hosted Runtime Secret Fallback Tests 72..80)**: Ưu tiên `EXAM_SUPABASE_SERVICE_ROLE_KEY`, fallback `NEW_SUPABASE_SERVICE_ROLE_KEY`, fallback `SUPABASE_SERVICE_ROLE_KEY`, fallback `SUPABASE_SECRET_KEYS['default']`, xử lý an toàn JSON hỏng / thiếu default key (fail-closed), fallback `SUPABASE_URL`, bảo vệ không rò rỉ secret trong response hoặc log.
+
 

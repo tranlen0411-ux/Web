@@ -1816,6 +1816,155 @@ async function runAllTests() {
     assert.equal(rpcArgs.p_caller_id, 'strictly-verified-core-user-999');
   });
 
+  // ==========================================================================
+  // SECTION 11: HOSTED RUNTIME SECRET FALLBACK TESTS (72..80)
+  // ==========================================================================
+  console.log('\n--- 11. Hosted Runtime Secret Fallback Tests (72..80) ---');
+
+  function resolveExamEnvCredentials(env = {}) {
+    const getEnv = (key) => env[key];
+
+    const coreUrl = getEnv('CORE_SUPABASE_URL');
+    const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY');
+    const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');
+
+    const examUrl =
+      getEnv('EXAM_SUPABASE_URL') ||
+      getEnv('NEW_SUPABASE_URL') ||
+      getEnv('SUPABASE_URL');
+
+    let examServiceKey =
+      getEnv('EXAM_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('NEW_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!examServiceKey) {
+      const rawSecretKeys = getEnv('SUPABASE_SECRET_KEYS');
+      if (rawSecretKeys) {
+        try {
+          const parsed = JSON.parse(rawSecretKeys);
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            typeof parsed.default === 'string' &&
+            parsed.default.trim() !== ''
+          ) {
+            examServiceKey = parsed.default.trim();
+          }
+        } catch (_) {
+          // Fail-closed: malformed JSON
+        }
+      }
+    }
+
+    const ok = !!(coreUrl && coreAnonKey && coreServiceKey && examUrl && examServiceKey);
+    return { ok, examUrl, examServiceKey };
+  }
+
+  await test('72. EXAM service key preferred when present', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      EXAM_SUPABASE_SERVICE_ROLE_KEY: 'canonical-exam-key',
+      NEW_SUPABASE_SERVICE_ROLE_KEY: 'new-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'default-key',
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.examServiceKey, 'canonical-exam-key');
+  });
+
+  await test('73. NEW service key fallback works', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      NEW_SUPABASE_SERVICE_ROLE_KEY: 'new-key',
+      SUPABASE_SERVICE_ROLE_KEY: 'default-key',
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.examServiceKey, 'new-key');
+  });
+
+  await test('74. SUPABASE_SERVICE_ROLE_KEY fallback works', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      SUPABASE_SERVICE_ROLE_KEY: 'hosted-runtime-service-key',
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.examServiceKey, 'hosted-runtime-service-key');
+  });
+
+  await test('75. SUPABASE_SECRET_KEYS default fallback works', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      SUPABASE_SECRET_KEYS: JSON.stringify({ default: 'json-parsed-secret-key' }),
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.examServiceKey, 'json-parsed-secret-key');
+  });
+
+  await test('76. malformed SUPABASE_SECRET_KEYS fails closed', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      SUPABASE_SECRET_KEYS: '{ broken json syntax',
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.examServiceKey, undefined);
+  });
+
+  await test('77. missing default entry fails closed', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      SUPABASE_SECRET_KEYS: JSON.stringify({ other_key: 'value' }),
+      SUPABASE_URL: 'https://host.supabase.co',
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.examServiceKey, undefined);
+  });
+
+  await test('78. SUPABASE_URL fallback works', () => {
+    const res = resolveExamEnvCredentials({
+      CORE_SUPABASE_URL: 'http://core.local',
+      CORE_SUPABASE_ANON_KEY: 'anon',
+      CORE_SUPABASE_SERVICE_ROLE_KEY: 'core-serv',
+      SUPABASE_SERVICE_ROLE_KEY: 'key',
+      SUPABASE_URL: 'https://szptvqkoiphrhlionfoh.supabase.co',
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.examUrl, 'https://szptvqkoiphrhlionfoh.supabase.co');
+  });
+
+  await test('79. no secret value appears in response/error', async () => {
+    const errorRes = createErrorResponse(500, 'INTERNAL_ERROR', 'Cấu hình máy chủ bị thiếu.');
+    const errorBody = await errorRes.json();
+    const str = JSON.stringify(errorBody);
+    assert.equal(str.includes('secret'), false);
+    assert.equal(str.includes('key'), false);
+    assert.equal(str.includes('eyJhbGciOi'), false);
+  });
+
+  await test('80. no secret value logged', () => {
+    const sampleLog = 'request_id=req_123 status=500 errorCode=INTERNAL_ERROR';
+    assert.equal(sampleLog.includes('canonical-exam-key'), false);
+    assert.equal(sampleLog.includes('hosted-runtime-service-key'), false);
+    assert.equal(sampleLog.includes('json-parsed-secret-key'), false);
+  });
+
   console.log('\n================================================================');
   console.log(`TOTAL TESTS: ${passed + failed}`);
   console.log(`PASSED: ${passed}`);

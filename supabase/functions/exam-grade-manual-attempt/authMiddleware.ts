@@ -158,8 +158,45 @@ export async function verifyAuthAndDeriveContext(
     const coreUrl = getEnv('CORE_SUPABASE_URL');
     const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY');
     const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');
-    const examUrl = getEnv('EXAM_SUPABASE_URL') || getEnv('NEW_SUPABASE_URL');
-    const examServiceKey = getEnv('EXAM_SUPABASE_SERVICE_ROLE_KEY') || getEnv('NEW_SUPABASE_SERVICE_ROLE_KEY');
+
+    // NEW Exam URL resolution order:
+    // 1. EXAM_SUPABASE_URL
+    // 2. NEW_SUPABASE_URL
+    // 3. SUPABASE_URL (Hosted Edge runtime default on host project)
+    const examUrl =
+      getEnv('EXAM_SUPABASE_URL') ||
+      getEnv('NEW_SUPABASE_URL') ||
+      getEnv('SUPABASE_URL');
+
+    // NEW Exam Service Role Key resolution order:
+    // 1. EXAM_SUPABASE_SERVICE_ROLE_KEY
+    // 2. NEW_SUPABASE_SERVICE_ROLE_KEY
+    // 3. SUPABASE_SERVICE_ROLE_KEY
+    // 4. SUPABASE_SECRET_KEYS['default']
+    let examServiceKey =
+      getEnv('EXAM_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('NEW_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!examServiceKey) {
+      const rawSecretKeys = getEnv('SUPABASE_SECRET_KEYS');
+      if (rawSecretKeys) {
+        try {
+          const parsed = JSON.parse(rawSecretKeys);
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            typeof parsed.default === 'string' &&
+            parsed.default.trim() !== ''
+          ) {
+            examServiceKey = parsed.default.trim();
+          }
+        } catch (_) {
+          // Fail-closed: Malformed JSON -> examServiceKey remains undefined
+        }
+      }
+    }
 
     // Fail-Closed: Thiếu cấu hình môi trường bắt buộc -> 500 INTERNAL_ERROR
     if (!coreUrl || !coreAnonKey || !coreServiceKey || !examUrl || !examServiceKey) {
