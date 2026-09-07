@@ -15,6 +15,32 @@ export const CONFIRMED_FINALIZED_STATUSES = Object.freeze([
   'graded',
 ]);
 
+function cloneQuestionsArray(questions) {
+  if (!Array.isArray(questions)) return [];
+  return questions.map((q) => ({
+    id: q.id,
+    question_type: q.question_type,
+    prompt: q.prompt,
+    points: q.points,
+    options: Array.isArray(q.options)
+      ? q.options.map((opt) => ({
+          key: opt.key,
+          text: opt.text,
+        }))
+      : [],
+  }));
+}
+
+function cloneQuestionsResult(data) {
+  if (!data || typeof data !== 'object') return null;
+  return {
+    attempt_id: data.attempt_id,
+    exam_version_id: data.exam_version_id,
+    status: data.status,
+    questions: cloneQuestionsArray(data.questions),
+  };
+}
+
 export class ExamTakingSession {
   #assignmentId;
   #studentClient;
@@ -26,6 +52,9 @@ export class ExamTakingSession {
   #status = 'unstarted';
   #currentVersion = null; // Strictly integer >= 1 once started
   #startResult = null;
+  #questionsResult = null; // Stored { attempt_id, exam_version_id, status, questions }
+  #questions = null; // Array of safe question objects
+  #questionsError = null;
   #answersState = {}; // Record<exam_question_id, { studentAnswerJson, gradingStatus }>
   #submitResult = null;
   #isFinalized = false;
@@ -81,6 +110,24 @@ export class ExamTakingSession {
     return this.#startResult ? { ...this.#startResult } : null;
   }
 
+  getQuestionsResult() {
+    if (!this.#questionsResult) return null;
+    return cloneQuestionsResult(this.#questionsResult);
+  }
+
+  getQuestions() {
+    if (!this.#questions) return null;
+    return cloneQuestionsArray(this.#questions);
+  }
+
+  getQuestionsError() {
+    return this.#questionsError ? { ...this.#questionsError } : null;
+  }
+
+  hasQuestions() {
+    return Boolean(this.#questionsResult);
+  }
+
   getAnswersState() {
     return { ...this.#answersState };
   }
@@ -109,6 +156,8 @@ export class ExamTakingSession {
       answersCount: Object.keys(this.#answersState).length,
       hasStartResult: Boolean(this.#startResult),
       hasSubmitResult: Boolean(this.#submitResult),
+      hasQuestions: Boolean(this.#questionsResult),
+      questionsCount: this.#questions ? this.#questions.length : 0,
     };
   }
 
@@ -171,6 +220,58 @@ export class ExamTakingSession {
     this.#notifyStateChange();
 
     return { ok: true, data };
+  }
+
+  /**
+   * Explicit question loading operation owned by examTakingSession.
+   * Requires authoritative attempt ID from successful start.
+   * Never uses provisional attempt ID.
+   * Memory-only storage (Zero LocalStorage / SessionStorage / IndexedDB).
+   * Does NOT increment or mutate currentVersion.
+   * Does NOT trigger finalization side effects or stop integrity.
+   */
+  async loadQuestions() {
+    if (!this.#attemptId) {
+      return {
+        ok: false,
+        type: 'failed_pre_dispatch',
+        safeErrorCode: 'ATTEMPT_NOT_STARTED',
+      };
+    }
+
+    if (typeof this.#studentClient.getAttemptQuestions !== 'function') {
+      return {
+        ok: false,
+        type: 'failed_client',
+        safeErrorCode: 'INTERNAL_ERROR',
+      };
+    }
+
+    const res = await this.#studentClient.getAttemptQuestions({
+      attempt_id: this.#attemptId,
+    });
+
+    if (!res.ok) {
+      this.#questionsError = res;
+      // Does NOT change currentVersion
+      // Does NOT increment version
+      // Does NOT retry
+      // Does NOT finalize attempt
+      // Does NOT stop integrity
+      // Does NOT auto-submit
+      // Does NOT locally mark expired/finalized as authoritative
+      return res;
+    }
+
+    const rawData = res.data;
+    const clonedData = cloneQuestionsResult(rawData);
+    this.#questionsResult = clonedData;
+    this.#questions = clonedData.questions;
+    this.#questionsError = null;
+
+    this.#notifyStateChange();
+
+    return { ok: true, data: cloneQuestionsResult(this.#questionsResult) };
   }
 
   /**

@@ -12,10 +12,15 @@ import {
   START_FUNCTION_NAME,
   SAVE_FUNCTION_NAME,
   SUBMIT_FUNCTION_NAME,
+  GET_QUESTIONS_FUNCTION_NAME,
+  ALLOWED_QUESTION_TYPES,
+  SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES,
   validateStartResponse,
   validateSaveResponse,
   validateSubmitResponse,
+  validateGetAttemptQuestionsResponse,
   sanitizeClientError,
+  sanitizeGetAttemptQuestionsError,
   generateProvisionalAttemptId,
   isValidUuid,
 } from '../src/services/examStudentClient.js';
@@ -128,6 +133,81 @@ function createValidSubmitEnvelope(overrides = {}) {
   return {
     success: true,
     data: createValidSubmitData(overrides),
+  };
+}
+
+const TEST_QUESTION_ID_SINGLE = '44444444-4444-4444-8444-444444444401';
+const TEST_QUESTION_ID_MULTI = '44444444-4444-4444-8444-444444444402';
+const TEST_QUESTION_ID_FILL = '44444444-4444-4444-8444-444444444403';
+const TEST_QUESTION_ID_SHORT = '44444444-4444-4444-8444-444444444404';
+const TEST_QUESTION_ID_ESSAY = '44444444-4444-4444-8444-444444444405';
+const TEST_QUESTION_ID_IMAGE = '44444444-4444-4444-8444-444444444406';
+const TEST_QUESTION_ID_FILE = '44444444-4444-4444-8444-444444444407';
+
+function createValidGetQuestionsData(overrides = {}) {
+  return {
+    attempt_id: TEST_ATTEMPT_ID_1,
+    exam_version_id: TEST_EXAM_VERSION_ID,
+    status: 'draft',
+    questions: [
+      {
+        id: TEST_QUESTION_ID_SINGLE,
+        question_type: 'single_choice',
+        prompt: '1. What is 2 + 2?',
+        points: 2.0,
+        options: [{ key: 'A', text: '3' }, { key: 'B', text: '4' }],
+      },
+      {
+        id: TEST_QUESTION_ID_MULTI,
+        question_type: 'multiple_choice',
+        prompt: '2. Which are prime numbers?',
+        points: 2.0,
+        options: [{ key: 'A', text: '2' }, { key: 'B', text: '3' }],
+      },
+      {
+        id: TEST_QUESTION_ID_FILL,
+        question_type: 'fill_blank',
+        prompt: '3. Capital of Vietnam',
+        points: 2.0,
+        options: [],
+      },
+      {
+        id: TEST_QUESTION_ID_SHORT,
+        question_type: 'short_answer',
+        prompt: '4. Define velocity',
+        points: 2.0,
+        options: [],
+      },
+      {
+        id: TEST_QUESTION_ID_ESSAY,
+        question_type: 'essay',
+        prompt: '5. Essay on environment',
+        points: 2.0,
+        options: [],
+      },
+      {
+        id: TEST_QUESTION_ID_IMAGE,
+        question_type: 'image_upload',
+        prompt: '6. Image prompt',
+        points: 2.0,
+        options: [],
+      },
+      {
+        id: TEST_QUESTION_ID_FILE,
+        question_type: 'file_upload',
+        prompt: '7. File prompt',
+        points: 2.0,
+        options: [],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function createValidGetQuestionsEnvelope(overrides = {}) {
+  return {
+    success: true,
+    data: createValidGetQuestionsData(overrides),
   };
 }
 
@@ -1005,6 +1085,791 @@ async function main() {
     assert.ok(source.includes('setLastIntegrityResult(null)'));
     assert.ok(source.includes('setLastIntegrityError(null)'));
     assert.ok(source.includes('lastCanonicalAttemptIdRef.current = canonicalAttemptId'));
+  });
+
+  // ===============================================================
+  // 4. Phase 3E-B Step 1 Student Question Delivery Tests (61..90)
+  // ===============================================================
+  await it('61 GET_QUESTIONS_FUNCTION_NAME defined as exam-get-attempt-questions', () => {
+    assert.strictEqual(GET_QUESTIONS_FUNCTION_NAME, 'exam-get-attempt-questions');
+    assert.deepStrictEqual(ALLOWED_QUESTION_TYPES, [
+      'single_choice',
+      'multiple_choice',
+      'fill_blank',
+      'short_answer',
+      'essay',
+      'image_upload',
+      'file_upload',
+    ]);
+  });
+
+  await it('62 getAttemptQuestions sends exact single field body { attempt_id }', async () => {
+    let calledFn = null;
+    let sentBody = null;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn, { body }) => {
+        calledFn = fn;
+        sentBody = body;
+        return { data: createValidGetQuestionsEnvelope() };
+      },
+    });
+
+    const res = await client.getAttemptQuestions({ attempt_id: TEST_ATTEMPT_ID_1 });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(calledFn, 'exam-get-attempt-questions');
+    assert.deepStrictEqual(Object.keys(sentBody), ['attempt_id']);
+    assert.strictEqual(sentBody.attempt_id, TEST_ATTEMPT_ID_1.toLowerCase());
+  });
+
+  await it('63 getAttemptQuestions accepts string UUID or { attemptId } alias', async () => {
+    let sentBodies = [];
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn, { body }) => {
+        sentBodies.push(body);
+        return { data: createValidGetQuestionsEnvelope() };
+      },
+    });
+
+    const res1 = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    const res2 = await client.getAttemptQuestions({ attemptId: TEST_ATTEMPT_ID_2 });
+
+    assert.strictEqual(res1.ok, true);
+    assert.strictEqual(res2.ok, true);
+    assert.strictEqual(sentBodies[0].attempt_id, TEST_ATTEMPT_ID_1.toLowerCase());
+    assert.strictEqual(sentBodies[1].attempt_id, TEST_ATTEMPT_ID_2.toLowerCase());
+  });
+
+  await it('64 getAttemptQuestions validates strictly 4 fields in { success: true, data } envelope', () => {
+    const raw = createValidGetQuestionsEnvelope();
+    const validated = validateGetAttemptQuestionsResponse(raw);
+    assert.ok(validated);
+    assert.deepStrictEqual(Object.keys(validated).sort(), ['attempt_id', 'exam_version_id', 'questions', 'status']);
+    assert.strictEqual(validated.status, 'draft');
+  });
+
+  await it('65 getAttemptQuestions rejects bare projection without { success: true, data }', () => {
+    const bareData = createValidGetQuestionsData();
+    assert.strictEqual(validateGetAttemptQuestionsResponse(bareData), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse({ success: false, data: bareData }), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse({ success: 'true', data: bareData }), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(null), null);
+  });
+
+  await it('66 getAttemptQuestions validates strictly 5 question fields and 2 option fields', () => {
+    const raw = createValidGetQuestionsEnvelope();
+    const validated = validateGetAttemptQuestionsResponse(raw);
+    const q1 = validated.questions[0];
+    assert.deepStrictEqual(Object.keys(q1).sort(), ['id', 'options', 'points', 'prompt', 'question_type']);
+    const opt = q1.options[0];
+    assert.deepStrictEqual(Object.keys(opt).sort(), ['key', 'text']);
+  });
+
+  await it('67 getAttemptQuestions supports all 7 approved question types', () => {
+    const raw = createValidGetQuestionsEnvelope();
+    const validated = validateGetAttemptQuestionsResponse(raw);
+    const deliveredTypes = validated.questions.map(q => q.question_type);
+    assert.deepStrictEqual(deliveredTypes, [
+      'single_choice',
+      'multiple_choice',
+      'fill_blank',
+      'short_answer',
+      'essay',
+      'image_upload',
+      'file_upload',
+    ]);
+  });
+
+  await it('68 getAttemptQuestions rejects unknown question type', () => {
+    const raw = createValidGetQuestionsEnvelope();
+    raw.data.questions[0].question_type = 'audio_matching';
+    assert.strictEqual(validateGetAttemptQuestionsResponse(raw), null);
+  });
+
+  await it('69 getAttemptQuestions rejects non-draft status', () => {
+    const submitted = createValidGetQuestionsEnvelope({ status: 'submitted' });
+    const graded = createValidGetQuestionsEnvelope({ status: 'graded' });
+    const pending = createValidGetQuestionsEnvelope({ status: 'pending_manual_grade' });
+
+    assert.strictEqual(validateGetAttemptQuestionsResponse(submitted), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(graded), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(pending), null);
+  });
+
+  await it('70 getAttemptQuestions rejects invalid UUIDs in attempt, version, or question ID', () => {
+    const badAttempt = createValidGetQuestionsEnvelope({ attempt_id: 'bad-uuid' });
+    const badVersion = createValidGetQuestionsEnvelope({ exam_version_id: 'bad-uuid' });
+    const badQuestion = createValidGetQuestionsEnvelope();
+    badQuestion.data.questions[0].id = 'bad-uuid';
+
+    assert.strictEqual(validateGetAttemptQuestionsResponse(badAttempt), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(badVersion), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(badQuestion), null);
+  });
+
+  await it('71 getAttemptQuestions rejects non-positive or NaN or zero points', () => {
+    const zeroPts = createValidGetQuestionsEnvelope();
+    zeroPts.data.questions[0].points = 0;
+    const negPts = createValidGetQuestionsEnvelope();
+    negPts.data.questions[0].points = -5;
+    const nanPts = createValidGetQuestionsEnvelope();
+    nanPts.data.questions[0].points = NaN;
+    const strPts = createValidGetQuestionsEnvelope();
+    strPts.data.questions[0].points = '2.0';
+
+    assert.strictEqual(validateGetAttemptQuestionsResponse(zeroPts), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(negPts), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(nanPts), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(strPts), null);
+  });
+
+  await it('72 getAttemptQuestions rejects malformed options', () => {
+    const emptyKey = createValidGetQuestionsEnvelope();
+    emptyKey.data.questions[0].options = [{ key: '', text: 'Option A' }];
+    const nonStrText = createValidGetQuestionsEnvelope();
+    nonStrText.data.questions[0].options = [{ key: 'A', text: 123 }];
+    const nullOpt = createValidGetQuestionsEnvelope();
+    nullOpt.data.questions[0].options = [null];
+
+    assert.strictEqual(validateGetAttemptQuestionsResponse(emptyKey), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(nonStrText), null);
+    assert.strictEqual(validateGetAttemptQuestionsResponse(nullOpt), null);
+  });
+
+  await it('73 getAttemptQuestions strips/rejects extra private fields', () => {
+    const rawWithExtra = createValidGetQuestionsEnvelope();
+    rawWithExtra.data.questions[0].answer_key = { correct_answer: 'B' };
+    rawWithExtra.data.questions[0].correct_answer = 'B';
+    rawWithExtra.data.questions[0].options[0].is_correct = true;
+
+    const validated = validateGetAttemptQuestionsResponse(rawWithExtra);
+    assert.ok(validated);
+    assert.strictEqual(validated.questions[0].answer_key, undefined);
+    assert.strictEqual(validated.questions[0].correct_answer, undefined);
+    assert.strictEqual(validated.questions[0].options[0].is_correct, undefined);
+  });
+
+  await it('74 getAttemptQuestions invalid attempt UUID rejected pre-dispatch', async () => {
+    let called = false;
+    const client = new ExamStudentClient({
+      invokeFunction: async () => {
+        called = true;
+        return { data: {} };
+      },
+    });
+
+    const res = await client.getAttemptQuestions('invalid-uuid');
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.type, 'failed_pre_dispatch');
+    assert.strictEqual(res.safeErrorCode, 'INVALID_INPUT');
+    assert.strictEqual(called, false);
+  });
+
+  await it('75 getAttemptQuestions known error codes sanitized cleanly', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => {
+        return {
+          error: {
+            status: 404,
+            code: 'ATTEMPT_NOT_FOUND',
+            message: 'Database query failed or row not found',
+          },
+        };
+      },
+    });
+
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ATTEMPT_NOT_FOUND');
+    assert.strictEqual(res.safeHttpStatus, 404);
+  });
+
+  await it('76 getAttemptQuestions unknown error code maps to safe HTTP fallback', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => {
+        return {
+          error: {
+            status: 502,
+            code: 'PG_CONNECTION_DROPPED_PRIVATE_SECRET',
+            message: 'Internal connection lost to pg pool',
+          },
+        };
+      },
+    });
+
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'HTTP_502');
+  });
+
+  await it('77 getAttemptQuestions no manual Authorization header or token getter used', async () => {
+    let capturedOptions = null;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn, opts) => {
+        capturedOptions = opts;
+        return { data: createValidGetQuestionsEnvelope() };
+      },
+    });
+
+    await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.ok(capturedOptions);
+    assert.strictEqual(capturedOptions.headers, undefined);
+    assert.strictEqual(capturedOptions.token, undefined);
+  });
+
+  await it('78 getAttemptQuestions no retry on failure', async () => {
+    let callCount = 0;
+    const client = new ExamStudentClient({
+      invokeFunction: async () => {
+        callCount++;
+        return { error: { status: 500, code: 'INTERNAL_ERROR' } };
+      },
+    });
+
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(callCount, 1);
+  });
+
+  await it('79 session loadQuestions before start is rejected with ATTEMPT_NOT_STARTED', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({ data: createValidGetQuestionsEnvelope() }),
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    const res = await session.loadQuestions();
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.type, 'failed_pre_dispatch');
+    assert.strictEqual(res.safeErrorCode, 'ATTEMPT_NOT_STARTED');
+    assert.strictEqual(session.hasQuestions(), false);
+  });
+
+  await it('80 session loadQuestions uses authoritative attemptId, never provisional attemptId', async () => {
+    let capturedAttemptId = null;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn, { body }) => {
+        if (fn === START_FUNCTION_NAME) {
+          return { data: createValidStartEnvelope({ attempt_id: TEST_ATTEMPT_ID_2 }) };
+        }
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) {
+          capturedAttemptId = body.attempt_id;
+          return { data: createValidGetQuestionsEnvelope({ attempt_id: TEST_ATTEMPT_ID_2 }) };
+        }
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    const provisionalId = session.getProvisionalAttemptId();
+    await session.start();
+    await session.loadQuestions();
+
+    assert.notStrictEqual(capturedAttemptId, provisionalId);
+    assert.strictEqual(capturedAttemptId, TEST_ATTEMPT_ID_2.toLowerCase());
+    assert.strictEqual(session.getAttemptId(), TEST_ATTEMPT_ID_2.toLowerCase());
+  });
+
+  await it('81 session loadQuestions stores and returns questions on success (memory only)', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    const res = await session.loadQuestions();
+
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(session.hasQuestions(), true);
+    assert.strictEqual(session.getQuestions().length, 7);
+    assert.strictEqual(session.getQuestionsResult().attempt_id, TEST_ATTEMPT_ID_1.toLowerCase());
+  });
+
+  await it('82 session loadQuestions does NOT change or increment currentVersion', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope({ attempt_version: 1 }) };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    assert.strictEqual(session.getCurrentVersion(), 1);
+
+    await session.loadQuestions();
+    assert.strictEqual(session.getCurrentVersion(), 1);
+  });
+
+  await it('83 session loadQuestions failure preserves currentVersion and does not mutate session', async () => {
+    let getShouldFail = true;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope({ attempt_version: 2 }) };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) {
+          if (getShouldFail) return { error: { status: 500, code: 'INTERNAL_ERROR' } };
+          return { data: createValidGetQuestionsEnvelope() };
+        }
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    assert.strictEqual(session.getCurrentVersion(), 2);
+
+    const resFail = await session.loadQuestions();
+    assert.strictEqual(resFail.ok, false);
+    assert.strictEqual(session.getCurrentVersion(), 2);
+    assert.strictEqual(session.hasQuestions(), false);
+    assert.ok(session.getQuestionsError());
+  });
+
+  await it('84 session loadQuestions 409 ERR_ATTEMPT_ALREADY_FINALIZED does NOT fire onConfirmedFinalized', async () => {
+    let finalizedEmitted = false;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) {
+          return { error: { status: 409, code: 'ERR_ATTEMPT_ALREADY_FINALIZED' } };
+        }
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+      onConfirmedFinalized: () => {
+        finalizedEmitted = true;
+      },
+    });
+
+    await session.start();
+    const res = await session.loadQuestions();
+
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ERR_ATTEMPT_ALREADY_FINALIZED');
+    assert.strictEqual(finalizedEmitted, false);
+    assert.strictEqual(session.isFinalized(), false);
+  });
+
+  await it('85 session loadQuestions 409 ERR_ATTEMPT_EXPIRED surfaces safe error without side effects', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) {
+          return { error: { status: 409, code: 'ERR_ATTEMPT_EXPIRED' } };
+        }
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    const res = await session.loadQuestions();
+
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ERR_ATTEMPT_EXPIRED');
+    assert.strictEqual(session.getCurrentVersion(), 1);
+    assert.strictEqual(session.isFinalized(), false);
+  });
+
+  await it('86 session loadQuestions repeat calls return stable memory results without random reshuffle', async () => {
+    let fetchCount = 0;
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) {
+          fetchCount++;
+          return { data: createValidGetQuestionsEnvelope() };
+        }
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    await session.loadQuestions();
+    const q1 = session.getQuestions();
+
+    await session.loadQuestions();
+    const q2 = session.getQuestions();
+
+    assert.strictEqual(fetchCount, 2);
+    assert.deepStrictEqual(q1, q2);
+  });
+
+  await it('87 session loadQuestions notifies state change listener on successful fetch', async () => {
+    const notifications = [];
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+      onStateChange: (state) => notifications.push(state),
+    });
+
+    await session.start();
+    assert.strictEqual(notifications[notifications.length - 1].hasQuestions, false);
+
+    await session.loadQuestions();
+    const lastState = notifications[notifications.length - 1];
+    assert.strictEqual(lastState.hasQuestions, true);
+    assert.strictEqual(lastState.questionsCount, 7);
+  });
+
+  await it('88 session getQuestions / getQuestionsResult / getState return accurate memory snapshot', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    await session.loadQuestions();
+
+    const questionsCopy = session.getQuestions();
+    questionsCopy[0].prompt = 'MUTATED PROMPT';
+    assert.notStrictEqual(session.getQuestions()[0].prompt, 'MUTATED PROMPT');
+
+    const state = session.getState();
+    assert.strictEqual(state.hasQuestions, true);
+    assert.strictEqual(state.questionsCount, 7);
+  });
+
+  await it('89 session questions without options (fill_blank, essay, image_upload, file_upload) return options=[]', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    await session.loadQuestions();
+
+    const questions = session.getQuestions();
+    const essayQ = questions.find(q => q.question_type === 'essay');
+    const imageQ = questions.find(q => q.question_type === 'image_upload');
+    const fileQ = questions.find(q => q.question_type === 'file_upload');
+
+    assert.deepStrictEqual(essayQ.options, []);
+    assert.deepStrictEqual(imageQ.options, []);
+    assert.deepStrictEqual(fileQ.options, []);
+  });
+
+  await it('90 static verification: Zero localStorage / sessionStorage / IndexedDB references in student client and session', () => {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    const clientSource = fs.readFileSync(path.resolve(__dirname, '../src/services/examStudentClient.js'), 'utf8');
+    const sessionSource = fs.readFileSync(path.resolve(__dirname, '../src/services/examTakingSession.js'), 'utf8');
+
+    for (const source of [clientSource, sessionSource]) {
+      assert.strictEqual(source.includes('localStorage'), false, 'Must not reference localStorage');
+      assert.strictEqual(source.includes('sessionStorage'), false, 'Must not reference sessionStorage');
+      assert.strictEqual(source.includes('indexedDB'), false, 'Must not reference indexedDB');
+      assert.strictEqual(source.includes('openDatabase'), false, 'Must not reference WebSQL');
+    }
+  });
+
+  await it('91 sanitizeGetAttemptQuestionsError prevents ERR_OPTIMISTIC_LOCK_CONFLICT from escaping', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 409, code: 'ERR_OPTIMISTIC_LOCK_CONFLICT', message: 'Optimistic lock conflict' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'HTTP_409');
+    assert.strictEqual(res.safeHttpStatus, 409);
+  });
+
+  await it('92 sanitizeGetAttemptQuestionsError prevents ERR_INVALID_ANSWER_PAYLOAD from escaping', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 422, code: 'ERR_INVALID_ANSWER_PAYLOAD', message: 'Invalid answer payload' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'HTTP_422');
+    assert.strictEqual(res.safeHttpStatus, 422);
+  });
+
+  await it('93 sanitizeGetAttemptQuestionsError prevents ERR_IDEMPOTENCY_CONFLICT from escaping', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 409, code: 'ERR_IDEMPOTENCY_CONFLICT', message: 'Idempotency conflict' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'HTTP_409');
+    assert.strictEqual(res.safeHttpStatus, 409);
+  });
+
+  await it('94 sanitizeGetAttemptQuestionsError prevents arbitrary provider code from escaping (no status -> INTERNAL_ERROR)', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { code: 'CUSTOM_UNAPPROVED_PROVIDER_CODE', message: 'Secret provider exception' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'INTERNAL_ERROR');
+    assert.strictEqual(res.safeHttpStatus, undefined);
+  });
+
+  await it('95 sanitizeGetAttemptQuestionsError preserves approved ATTEMPT_NOT_FOUND', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 404, code: 'ATTEMPT_NOT_FOUND' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ATTEMPT_NOT_FOUND');
+    assert.strictEqual(res.safeHttpStatus, 404);
+  });
+
+  await it('96 sanitizeGetAttemptQuestionsError preserves approved CLASS_ACCESS_DENIED', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 403, code: 'CLASS_ACCESS_DENIED' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'CLASS_ACCESS_DENIED');
+    assert.strictEqual(res.safeHttpStatus, 403);
+  });
+
+  await it('97 sanitizeGetAttemptQuestionsError preserves approved ERR_ATTEMPT_EXPIRED', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 409, code: 'ERR_ATTEMPT_EXPIRED' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ERR_ATTEMPT_EXPIRED');
+    assert.strictEqual(res.safeHttpStatus, 409);
+  });
+
+  await it('98 sanitizeGetAttemptQuestionsError preserves approved ERR_ATTEMPT_ALREADY_FINALIZED', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async () => ({
+        error: { status: 409, code: 'ERR_ATTEMPT_ALREADY_FINALIZED' },
+      }),
+    });
+    const res = await client.getAttemptQuestions(TEST_ATTEMPT_ID_1);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.safeErrorCode, 'ERR_ATTEMPT_ALREADY_FINALIZED');
+    assert.strictEqual(res.safeHttpStatus, 409);
+  });
+
+  await it('99 session loadQuestions defensive ownership: mutate loadQuestions returned prompt leaves internal state unchanged', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    const result = await session.loadQuestions();
+    assert.strictEqual(result.ok, true);
+
+    const originalPrompt = result.data.questions[0].prompt;
+    result.data.questions[0].prompt = 'MALICIOUS_PROMPT_MUTATION';
+
+    assert.strictEqual(session.getQuestions()[0].prompt, originalPrompt);
+    assert.strictEqual(session.getQuestionsResult().questions[0].prompt, originalPrompt);
+  });
+
+  await it('100 session loadQuestions defensive ownership: mutate loadQuestions returned option text leaves internal state unchanged', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    const result = await session.loadQuestions();
+    assert.strictEqual(result.ok, true);
+
+    const singleChoiceQ = result.data.questions.find(q => q.options && q.options.length > 0);
+    const originalText = singleChoiceQ.options[0].text;
+    singleChoiceQ.options[0].text = 'MALICIOUS_OPTION_TEXT_MUTATION';
+
+    const internalSingleChoiceQ = session.getQuestions().find(q => q.id === singleChoiceQ.id);
+    assert.strictEqual(internalSingleChoiceQ.options[0].text, originalText);
+  });
+
+  await it('101 session loadQuestions defensive ownership: push into returned questions array leaves internal count unchanged', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    const result = await session.loadQuestions();
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.data.questions.length, 7);
+
+    result.data.questions.push({ id: 'injected-fake-question' });
+    assert.strictEqual(result.data.questions.length, 8);
+
+    assert.strictEqual(session.getQuestions().length, 7);
+    assert.strictEqual(session.getQuestionsResult().questions.length, 7);
+    assert.strictEqual(session.getState().questionsCount, 7);
+  });
+
+  await it('102 session getQuestions defensive ownership: mutating getQuestions result leaves internal state unchanged', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    await session.loadQuestions();
+
+    const qList1 = session.getQuestions();
+    qList1.pop();
+    assert.strictEqual(qList1.length, 6);
+    assert.strictEqual(session.getQuestions().length, 7);
+
+    const qList2 = session.getQuestions();
+    qList2[0].points = 99999;
+    assert.notStrictEqual(session.getQuestions()[0].points, 99999);
+  });
+
+  await it('103 session getQuestionsResult defensive ownership: mutating getQuestionsResult leaves internal state unchanged', async () => {
+    const client = new ExamStudentClient({
+      invokeFunction: async (fn) => {
+        if (fn === START_FUNCTION_NAME) return { data: createValidStartEnvelope() };
+        if (fn === GET_QUESTIONS_FUNCTION_NAME) return { data: createValidGetQuestionsEnvelope() };
+        return { data: {} };
+      },
+    });
+
+    const session = new ExamTakingSession({
+      assignmentId: TEST_ASSIGNMENT_ID,
+      studentClient: client,
+    });
+
+    await session.start();
+    await session.loadQuestions();
+
+    const res1 = session.getQuestionsResult();
+    res1.status = 'tampered_status';
+    res1.questions = [];
+    assert.strictEqual(session.getQuestionsResult().status, 'draft');
+    assert.strictEqual(session.getQuestionsResult().questions.length, 7);
+  });
+
+  await it('104 SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES contains exactly 11 approved codes', () => {
+    assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.size, 11);
+    const expected = [
+      'AUTH_REQUIRED',
+      'INVALID_TOKEN',
+      'FORBIDDEN_ROLE',
+      'ACCOUNT_DISABLED',
+      'INVALID_INPUT',
+      'INVALID_REQUEST_FIELD',
+      'ATTEMPT_NOT_FOUND',
+      'CLASS_ACCESS_DENIED',
+      'ERR_ATTEMPT_ALREADY_FINALIZED',
+      'ERR_ATTEMPT_EXPIRED',
+      'INTERNAL_ERROR',
+    ];
+    for (const code of expected) {
+      assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.has(code), true, `Missing code: ${code}`);
+    }
+    assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.has('ERR_OPTIMISTIC_LOCK_CONFLICT'), false);
+    assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.has('ERR_INVALID_ANSWER_PAYLOAD'), false);
+    assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.has('ERR_IDEMPOTENCY_CONFLICT'), false);
   });
 
   console.log('\n====================================================');
