@@ -52,5 +52,9 @@ verify_jwt = false
 [functions.exam-get-attempt-questions]
 verify_jwt = false
 
+[functions.exam-list-student-assignments]
+verify_jwt = false
+
+
 
 

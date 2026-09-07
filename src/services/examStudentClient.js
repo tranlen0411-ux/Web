@@ -11,6 +11,7 @@ export const START_FUNCTION_NAME = 'exam-start-attempt';
 export const SAVE_FUNCTION_NAME = 'exam-save-answer';
 export const SUBMIT_FUNCTION_NAME = 'exam-submit-attempt';
 export const GET_QUESTIONS_FUNCTION_NAME = 'exam-get-attempt-questions';
+export const LIST_ASSIGNMENTS_FUNCTION_NAME = 'exam-list-student-assignments';
 
 export const ALLOWED_QUESTION_TYPES = Object.freeze([
   'single_choice',
@@ -327,6 +328,176 @@ export function validateGetAttemptQuestionsResponse(raw) {
     exam_version_id: payload.exam_version_id.trim().toLowerCase(),
     status: payload.status.trim(),
     questions: sanitizedQuestions,
+  };
+}
+
+export function validateListStudentAssignmentsResponse(data) {
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    Array.isArray(data) ||
+    data.success !== true ||
+    !data.data ||
+    typeof data.data !== 'object' ||
+    Array.isArray(data.data) ||
+    !Array.isArray(data.data.assignments)
+  ) {
+    return null;
+  }
+
+  // Strict root shape: only success and data
+  const rootKeys = Object.keys(data);
+  for (const k of rootKeys) {
+    if (k !== 'success' && k !== 'data') return null;
+  }
+  // Strict data shape: only assignments
+  const dataKeys = Object.keys(data.data);
+  for (const k of dataKeys) {
+    if (k !== 'assignments') return null;
+  }
+
+  const sanitizedAssignments = [];
+  const APPROVED_ATTEMPT_STATUSES = new Set([
+    'draft',
+    'submitted',
+    'pending_manual_grade',
+    'graded',
+  ]);
+
+  for (const item of data.data.assignments) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return null;
+    }
+
+    // id: valid UUID
+    if (!isValidUuid(item.id)) return null;
+
+    // exam_version_id: valid UUID
+    if (!isValidUuid(item.exam_version_id)) return null;
+
+    // title: non-empty string
+    if (typeof item.title !== 'string' || !item.title.trim()) return null;
+
+    // description: string OR null
+    if (item.description !== null && typeof item.description !== 'string') return null;
+
+    // subject: non-empty string
+    if (typeof item.subject !== 'string' || !item.subject.trim()) return null;
+
+    // grade_level: integer 1..12
+    if (
+      typeof item.grade_level !== 'number' ||
+      !Number.isInteger(item.grade_level) ||
+      item.grade_level < 1 ||
+      item.grade_level > 12
+    ) {
+      return null;
+    }
+
+    // assigned_at: non-empty string
+    if (typeof item.assigned_at !== 'string' || !item.assigned_at.trim()) return null;
+
+    // opens_at: string OR null
+    if (item.opens_at !== null && (typeof item.opens_at !== 'string' || !item.opens_at.trim())) {
+      return null;
+    }
+
+    // closes_at: string OR null
+    if (item.closes_at !== null && (typeof item.closes_at !== 'string' || !item.closes_at.trim())) {
+      return null;
+    }
+
+    // duration_minutes: integer > 0 OR null
+    if (
+      item.duration_minutes !== null &&
+      (typeof item.duration_minutes !== 'number' ||
+        !Number.isInteger(item.duration_minutes) ||
+        item.duration_minutes <= 0)
+    ) {
+      return null;
+    }
+
+    // total_points: finite number >= 0
+    if (
+      typeof item.total_points !== 'number' ||
+      !Number.isFinite(item.total_points) ||
+      Number.isNaN(item.total_points) ||
+      item.total_points < 0
+    ) {
+      return null;
+    }
+
+    // reward_stars: integer >= 0
+    if (
+      typeof item.reward_stars !== 'number' ||
+      !Number.isInteger(item.reward_stars) ||
+      item.reward_stars < 0
+    ) {
+      return null;
+    }
+
+    // attempt_status & attempt_id cross-field invariants
+    if (item.attempt_status === null) {
+      if (item.attempt_id !== null) return null;
+      if (item.latest_score !== null) return null;
+      if (item.max_score !== null) return null;
+    } else if (
+      typeof item.attempt_status === 'string' &&
+      APPROVED_ATTEMPT_STATUSES.has(item.attempt_status)
+    ) {
+      if (!isValidUuid(item.attempt_id)) return null;
+      if (
+        typeof item.max_score !== 'number' ||
+        !Number.isFinite(item.max_score) ||
+        Number.isNaN(item.max_score) ||
+        item.max_score <= 0
+      ) {
+        return null;
+      }
+
+      if (item.attempt_status !== 'graded') {
+        if (item.latest_score !== null) return null;
+      } else {
+        // status === 'graded'
+        if (item.latest_score !== null) {
+          if (
+            typeof item.latest_score !== 'number' ||
+            !Number.isFinite(item.latest_score) ||
+            Number.isNaN(item.latest_score) ||
+            item.latest_score < 0 ||
+            item.latest_score > item.max_score
+          ) {
+            return null;
+          }
+        }
+      }
+    } else {
+      // Invalid status value or type
+      return null;
+    }
+
+    sanitizedAssignments.push({
+      id: item.id.trim().toLowerCase(),
+      exam_version_id: item.exam_version_id.trim().toLowerCase(),
+      title: item.title.trim(),
+      description: item.description !== null ? item.description : null,
+      subject: item.subject.trim(),
+      grade_level: item.grade_level,
+      assigned_at: item.assigned_at.trim(),
+      opens_at: item.opens_at !== null ? item.opens_at.trim() : null,
+      closes_at: item.closes_at !== null ? item.closes_at.trim() : null,
+      duration_minutes: item.duration_minutes !== null ? item.duration_minutes : null,
+      total_points: item.total_points,
+      reward_stars: item.reward_stars,
+      attempt_status: item.attempt_status,
+      attempt_id: item.attempt_id !== null ? item.attempt_id.trim().toLowerCase() : null,
+      latest_score: item.latest_score !== null ? item.latest_score : null,
+      max_score: item.max_score !== null ? item.max_score : null,
+    });
+  }
+
+  return {
+    assignments: sanitizedAssignments,
   };
 }
 
@@ -693,6 +864,35 @@ export class ExamStudentClient {
       };
     } catch (err) {
       return sanitizeGetAttemptQuestionsError(err);
+    }
+  }
+
+  async listStudentExamAssignments() {
+    try {
+      const { data, error } = await this.#invokeFunction(LIST_ASSIGNMENTS_FUNCTION_NAME, {
+        body: {},
+      });
+
+      if (error) {
+        return sanitizeClientError(error, data);
+      }
+
+      const validated = validateListStudentAssignmentsResponse(data);
+      if (!validated) {
+        return {
+          ok: false,
+          type: 'failed_http',
+          safeHttpStatus: 200,
+          safeErrorCode: 'INVALID_RESPONSE_PAYLOAD',
+        };
+      }
+
+      return {
+        ok: true,
+        data: validated,
+      };
+    } catch (err) {
+      return sanitizeClientError(err);
     }
   }
 }
