@@ -49,6 +49,10 @@ export type ErrorCode =
   | 'ERR_INVALID_TAB_SWITCH_POLICY'
   | 'FILE_REFERENCE_NOT_FOUND'
   | 'ERR_EXAM_UPLOAD_NOT_READY'
+  | 'ERR_INVALID_OPTION_SCHEMA'
+  | 'ERR_OPTION_SNAPSHOT_INVALID'
+  | 'ERR_ATTEMPT_SNAPSHOT_INVALID'
+  | 'ERR_QUESTION_SNAPSHOT_INVALID'
   | 'INTERNAL_ERROR';
 
 export interface ErrorEnvelope {
@@ -474,4 +478,157 @@ export function mapRecordIntegrityEventSuccess(
 
   return { ok: true, data: projected };
 }
+
+// ----------------------------------------------------------------------------
+// Scoped Error Normalizer for Question Delivery BFF (Phase 3E-B0)
+// ----------------------------------------------------------------------------
+export function normalizeGetAttemptQuestionsRpcError(
+  err: unknown
+): { status: number; errorCode: ErrorCode; message: string } {
+  const rawMsg = typeof err === 'string'
+    ? err
+    : (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string')
+      ? (err as { message: string }).message
+      : '';
+
+  // 404 Not Found & Anti-Oracle Protection (Unified 404 for nonexistent attempt or student mismatch)
+  if (rawMsg.includes('ERR_ATTEMPT_NOT_FOUND') || rawMsg.includes('ERR_STUDENT_IDENTITY_MISMATCH')) {
+    return { status: 404, errorCode: 'ATTEMPT_NOT_FOUND', message: 'Không tìm thấy lượt làm bài thi.' };
+  }
+
+  // 409 Conflict Domain Errors
+  if (rawMsg.includes('ERR_ATTEMPT_FINALIZED') || rawMsg.includes('ERR_ATTEMPT_NOT_DRAFT')) {
+    return { status: 409, errorCode: 'ERR_ATTEMPT_ALREADY_FINALIZED', message: 'Lượt làm bài đã được nộp hoặc hoàn thành trước đó.' };
+  }
+  if (rawMsg.includes('ERR_ATTEMPT_EXPIRED')) {
+    return { status: 409, errorCode: 'ERR_ATTEMPT_EXPIRED', message: 'Thời gian làm bài thi đã kết thúc.' };
+  }
+
+  // Internal Corruption Markers -> 500 INTERNAL_ERROR
+  if (
+    rawMsg.includes('ERR_ATTEMPT_SNAPSHOT_INVALID') ||
+    rawMsg.includes('ERR_INVALID_OPTION_SCHEMA') ||
+    rawMsg.includes('ERR_OPTION_SNAPSHOT_INVALID') ||
+    rawMsg.includes('ERR_QUESTION_SNAPSHOT_INVALID') ||
+    rawMsg.includes('ERR_UNKNOWN_QUESTION_TYPE')
+  ) {
+    return { status: 500, errorCode: 'INTERNAL_ERROR', message: 'Đã xảy ra lỗi nội bộ trong quá trình tải dữ liệu đề thi.' };
+  }
+
+  // 500 Fallback Sanitized (Zero SQL / DB leak)
+  return {
+    status: 500,
+    errorCode: 'INTERNAL_ERROR',
+    message: 'Đã xảy ra lỗi nội bộ trong quá trình tải dữ liệu đề thi.',
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Response Projection Allowlist for Get Attempt Questions (Phase 3E-B0)
+// ----------------------------------------------------------------------------
+
+export type ApprovedQuestionType =
+  | 'single_choice'
+  | 'multiple_choice'
+  | 'fill_blank'
+  | 'short_answer'
+  | 'essay'
+  | 'image_upload'
+  | 'file_upload';
+
+export const APPROVED_QUESTION_TYPES: ReadonlySet<string> = new Set([
+  'single_choice',
+  'multiple_choice',
+  'fill_blank',
+  'short_answer',
+  'essay',
+  'image_upload',
+  'file_upload',
+]);
+
+export interface ApprovedQuestionOption {
+  key: string;
+  text: string;
+}
+
+export interface ApprovedDeliveredQuestion {
+  id: string;
+  question_type: ApprovedQuestionType;
+  prompt: string;
+  points: number;
+  options: ApprovedQuestionOption[];
+}
+
+export interface ApprovedGetAttemptQuestionsResult {
+  attempt_id: string;
+  exam_version_id: string;
+  status: 'draft';
+  questions: ApprovedDeliveredQuestion[];
+}
+
+const QUESTION_DELIVERY_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function mapGetAttemptQuestionsSuccess(
+  rpcData: unknown
+): { ok: true; data: ApprovedGetAttemptQuestionsResult } | { ok: false } {
+  if (!rpcData || typeof rpcData !== 'object' || Array.isArray(rpcData)) {
+    return { ok: false };
+  }
+
+  const rec = rpcData as Record<string, unknown>;
+
+  if (typeof rec.attempt_id !== 'string' || !QUESTION_DELIVERY_UUID_REGEX.test(rec.attempt_id.trim())) return { ok: false };
+  if (typeof rec.exam_version_id !== 'string' || !QUESTION_DELIVERY_UUID_REGEX.test(rec.exam_version_id.trim())) return { ok: false };
+  if (rec.status !== 'draft') return { ok: false };
+  if (!Array.isArray(rec.questions)) return { ok: false };
+
+  const sanitizedQuestions: ApprovedDeliveredQuestion[] = [];
+
+  for (const q of rec.questions) {
+    if (!q || typeof q !== 'object' || Array.isArray(q)) return { ok: false };
+    const qRec = q as Record<string, unknown>;
+
+    if (typeof qRec.id !== 'string' || !QUESTION_DELIVERY_UUID_REGEX.test(qRec.id.trim())) return { ok: false };
+    if (typeof qRec.question_type !== 'string' || !APPROVED_QUESTION_TYPES.has(qRec.question_type)) return { ok: false };
+    if (typeof qRec.prompt !== 'string') return { ok: false };
+    if (typeof qRec.points !== 'number' || !Number.isFinite(qRec.points) || qRec.points <= 0) return { ok: false };
+    if (!Array.isArray(qRec.options)) return { ok: false };
+
+    const sanitizedOptions: ApprovedQuestionOption[] = [];
+
+    for (const opt of qRec.options) {
+      if (!opt || typeof opt !== 'object' || Array.isArray(opt)) return { ok: false };
+      const optRec = opt as Record<string, unknown>;
+
+      if (typeof optRec.key !== 'string' || optRec.key.trim() === '') return { ok: false };
+      if (typeof optRec.text !== 'string') return { ok: false };
+
+      // Strictly 2 fields: key, text
+      sanitizedOptions.push({
+        key: optRec.key,
+        text: optRec.text,
+      });
+    }
+
+    // Strictly 5 fields: id, question_type, prompt, points, options
+    sanitizedQuestions.push({
+      id: qRec.id,
+      question_type: qRec.question_type as ApprovedQuestionType,
+      prompt: qRec.prompt,
+      points: qRec.points,
+      options: sanitizedOptions,
+    });
+  }
+
+  // Strictly 4 fields: attempt_id, exam_version_id, status, questions
+  const projected: ApprovedGetAttemptQuestionsResult = {
+    attempt_id: rec.attempt_id,
+    exam_version_id: rec.exam_version_id,
+    status: 'draft',
+    questions: sanitizedQuestions,
+  };
+
+  return { ok: true, data: projected };
+}
+
 

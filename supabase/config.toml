@@ -49,4 +49,8 @@ verify_jwt = false
 [functions.exam-record-integrity-event]
 verify_jwt = false
 
+[functions.exam-get-attempt-questions]
+verify_jwt = false
+
+
 
