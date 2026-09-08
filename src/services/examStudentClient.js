@@ -7,6 +7,9 @@ async function getDefaultSupabaseClient() {
   }
 }
 
+export const DEFAULT_EXAM_URL = 'https://szptvqkoiphrhlionfoh.supabase.co';
+export const DEFAULT_EXAM_BASE_URL = `${DEFAULT_EXAM_URL}/functions/v1`;
+
 export const START_FUNCTION_NAME = 'exam-start-attempt';
 export const SAVE_FUNCTION_NAME = 'exam-save-answer';
 export const SUBMIT_FUNCTION_NAME = 'exam-submit-attempt';
@@ -623,24 +626,111 @@ export function sanitizeGetAttemptQuestionsError(err, responseData = null) {
 export class ExamStudentClient {
   #invokeFunction;
   #supabaseClient;
+  #getAccessToken;
+  #examUrl;
+  #fetchImpl;
 
   constructor(options = {}) {
-    const { invokeFunction, supabaseClient } = options;
-    this.#supabaseClient = supabaseClient || null;
+    const {
+      invokeFunction,
+      supabaseClient,
+      supabase: supabaseAlias,
+      getAccessToken,
+      examUrl,
+      fetchImpl,
+    } = options;
+
+    this.#supabaseClient = supabaseClient || supabaseAlias || null;
+    this.#getAccessToken = typeof getAccessToken === 'function' ? getAccessToken : null;
+    this.#examUrl =
+      typeof examUrl === 'string' && examUrl.trim()
+        ? examUrl.trim().replace(/\/$/, '')
+        : DEFAULT_EXAM_URL;
+    this.#fetchImpl = typeof fetchImpl === 'function' ? fetchImpl : null;
 
     if (typeof invokeFunction === 'function') {
       this.#invokeFunction = invokeFunction;
-    } else if (supabaseClient?.functions?.invoke) {
-      this.#invokeFunction = async (fnName, { body }) => {
-        return await supabaseClient.functions.invoke(fnName, { body });
-      };
     } else {
-      this.#invokeFunction = async (fnName, { body }) => {
-        const client = this.#supabaseClient || (await getDefaultSupabaseClient());
-        if (client?.functions?.invoke) {
-          return await client.functions.invoke(fnName, { body });
+      this.#invokeFunction = async (fnName, { body } = {}) => {
+        let token = null;
+        if (this.#getAccessToken) {
+          token = await this.#getAccessToken();
+        } else {
+          const client = this.#supabaseClient || (await getDefaultSupabaseClient());
+          if (client?.auth?.getSession) {
+            const { data: sessionData, error: sessionError } = await client.auth.getSession();
+            if (!sessionError && sessionData?.session?.access_token) {
+              token = sessionData.session.access_token;
+            }
+          }
         }
-        throw new Error('No Supabase functions invoke transport available.');
+
+        if (!token || typeof token !== 'string' || !token.trim()) {
+          return {
+            data: null,
+            error: {
+              status: 401,
+              code: 'AUTH_REQUIRED',
+              message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.',
+            },
+          };
+        }
+
+        const endpoint = `${this.#examUrl}/functions/v1/${fnName}`;
+        const executeFetch = this.#fetchImpl || globalThis.fetch;
+
+        if (typeof executeFetch !== 'function') {
+          return {
+            data: null,
+            error: {
+              status: 500,
+              code: 'FETCH_UNAVAILABLE',
+              message: 'Fetch transport unavailable.',
+            },
+          };
+        }
+
+        try {
+          const response = await executeFetch(endpoint, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token.trim()}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body || {}),
+          });
+
+          let rawJson = null;
+          try {
+            rawJson = await response.json();
+          } catch (_) {
+            rawJson = null;
+          }
+
+          if (!response.ok) {
+            return {
+              data: rawJson,
+              error: {
+                status: response.status,
+                code: rawJson?.error?.code || rawJson?.safeErrorCode || `HTTP_${response.status}`,
+              },
+            };
+          }
+
+          return {
+            data: rawJson,
+            error: null,
+          };
+        } catch (err) {
+          return {
+            data: null,
+            error: {
+              status: 500,
+              code: 'NETWORK_ERROR',
+              message: err?.message || 'Network transport error',
+            },
+          };
+        }
       };
     }
   }

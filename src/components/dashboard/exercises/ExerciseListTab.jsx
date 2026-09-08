@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, Plus, FileText, CheckCircle2, Clock, AlertCircle, 
   Search, Filter, ChevronRight, Star, Send, RotateCcw, Award, Check, Edit3,
-  Share2, Users, Layers, AlertTriangle, X, CheckSquare, Square
+  Share2, Users, Layers, AlertTriangle, X, CheckSquare, Square,
+  GraduationCap, PlayCircle
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
@@ -11,6 +12,8 @@ import { CreateExerciseModal } from './CreateExerciseModal';
 import { ExercisePlayModal } from './ExercisePlayModal';
 import { SubmissionGradingModal } from './SubmissionGradingModal';
 import { SaveExerciseQuestionsModal } from '../question-bank/SaveExerciseQuestionsModal';
+import { ExamTakingModal } from '../exams/ExamTakingModal';
+import { createExamStudentClient } from '../../../services/examStudentClient';
 
 export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const { profile } = useAuth();
@@ -24,6 +27,13 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const [toastMsg, setToastMsg] = useState('');
 
   const [managedClassIds, setManagedClassIds] = useState([]);
+
+  // NEW Exam Builder States (Student only - authoritative list separate from legacy exercises)
+  const [examAssignments, setExamAssignments] = useState([]);
+  const [examAssignmentsLoading, setExamAssignmentsLoading] = useState(false);
+  const [examAssignmentsError, setExamAssignmentsError] = useState(null);
+  const [selectedExamAssignmentId, setSelectedExamAssignmentId] = useState(null);
+  const [isExamTakingOpen, setIsExamTakingOpen] = useState(false);
 
   // Modal Nâng Cao
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -46,9 +56,53 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
     setTimeout(() => setToastMsg(''), 4000);
   };
 
+  const FRIENDLY_EXAM_ASSIGNMENTS_ERROR_MSG = 'Không thể tải danh sách đề kiểm tra. Vui lòng thử lại.';
+
+  const fetchExamAssignments = async () => {
+    if (role !== 'student') return;
+    setExamAssignmentsLoading(true);
+    setExamAssignmentsError(null);
+    try {
+      const client = createExamStudentClient({ supabase });
+      const res = await client.listStudentExamAssignments();
+      if (res && res.ok && res.data && Array.isArray(res.data.assignments)) {
+        setExamAssignments(res.data.assignments);
+      } else {
+        setExamAssignmentsError(FRIENDLY_EXAM_ASSIGNMENTS_ERROR_MSG);
+      }
+    } catch (_err) {
+      setExamAssignmentsError(FRIENDLY_EXAM_ASSIGNMENTS_ERROR_MSG);
+    } finally {
+      setExamAssignmentsLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    if (role === 'student') {
+      fetchExamAssignments();
+    } else {
+      setExamAssignments([]);
+    }
   }, [role, profile?.id]);
+
+  const handleStartExamAssignment = (asg) => {
+    if (role !== 'student' || isExamTakingOpen) return;
+    if (!asg || !asg.id) return;
+    setSelectedExamAssignmentId(asg.id);
+    setIsExamTakingOpen(true);
+  };
+
+  const handleCloseExamTakingModal = () => {
+    setIsExamTakingOpen(false);
+    setSelectedExamAssignmentId(null);
+  };
+
+  const handleExamTakingFinished = () => {
+    setIsExamTakingOpen(false);
+    setSelectedExamAssignmentId(null);
+    fetchExamAssignments();
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -340,6 +394,143 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
           </button>
         )}
       </div>
+
+      {/* SECTION ĐỀ KIỂM TRA (EXAM BUILDER V1 - DÀNH CHO HỌC SINH) */}
+      {role === 'student' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
+              <GraduationCap className="w-5 h-5 text-indigo-600" /> Đề kiểm tra
+            </h3>
+            {examAssignments.length > 0 && (
+              <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 font-extrabold text-xs rounded-full border border-indigo-200">
+                {examAssignments.length} bài
+              </span>
+            )}
+          </div>
+
+          {examAssignmentsLoading ? (
+            <div className="p-6 bg-white rounded-3xl border-2 border-indigo-100 text-center text-xs font-bold text-slate-400">
+              Đang tải danh sách đề kiểm tra...
+            </div>
+          ) : examAssignmentsError ? (
+            <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-xs font-bold flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{examAssignmentsError}</span>
+              </div>
+              <button
+                onClick={() => fetchExamAssignments()}
+                className="px-3 py-1 bg-rose-600 text-white font-black text-xs rounded-lg hover:bg-rose-700 transition-all"
+              >
+                Thử Lại
+              </button>
+            </div>
+          ) : examAssignments.length === 0 ? (
+            <div className="bg-white p-6 rounded-3xl border-2 border-dashed border-indigo-200 text-center">
+              <GraduationCap className="w-10 h-10 text-indigo-300 mx-auto mb-2" />
+              <h4 className="text-xs font-black text-slate-700">Chưa có đề kiểm tra nào</h4>
+              <p className="text-[11px] font-bold text-slate-400 mt-0.5">Hiện tại chưa có đề kiểm tra nào được giao cho lớp của em.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {examAssignments.map((asg) => {
+                const isDraft = asg.attempt_status === 'draft';
+                const isSubmitted = asg.attempt_status === 'submitted';
+                const isPendingManual = asg.attempt_status === 'pending_manual_grade';
+                const isGraded = asg.attempt_status === 'graded';
+
+                return (
+                  <div
+                    key={asg.id}
+                    className="bg-white p-5 rounded-3xl border-2 border-indigo-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-900 font-black text-[11px] rounded-lg border border-indigo-300">
+                          Khối {asg.grade_level}
+                        </span>
+
+                        <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          Hạn: {asg.closes_at ? new Date(asg.closes_at).toLocaleDateString('vi-VN') : 'Không giới hạn'}
+                        </span>
+                      </div>
+
+                      <h4 className="text-base font-black text-slate-800 mb-1">{asg.title}</h4>
+                      <p className="text-xs font-bold text-slate-500 line-clamp-2 mb-3">
+                        {asg.description || 'Không có mô tả chi tiết.'}
+                      </p>
+
+                      <div className="flex items-center gap-2 mb-4 flex-wrap">
+                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-800 font-extrabold text-[10px] rounded-md border border-indigo-200">
+                          Môn {asg.subject}
+                        </span>
+                        {asg.duration_minutes && (
+                          <span className="px-2 py-0.5 bg-slate-50 text-slate-700 font-extrabold text-[10px] rounded-md border border-slate-200 flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-500" /> {asg.duration_minutes} phút
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 bg-amber-50 text-amber-800 font-extrabold text-[10px] rounded-md border border-amber-200 flex items-center gap-0.5">
+                          +{asg.reward_stars} <Star className="w-3 h-3 fill-amber-400" />
+                        </span>
+                        <span className="px-2 py-0.5 bg-sky-50 text-sky-800 font-extrabold text-[10px] rounded-md border border-sky-200">
+                          {asg.total_points} điểm
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                      {isGraded ? (
+                        <div className="w-full flex items-center justify-between bg-emerald-50 p-2.5 rounded-2xl border border-emerald-200 text-emerald-900">
+                          <span className="text-xs font-black flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Đã chấm • Điểm: {asg.latest_score !== null ? asg.latest_score : '-'}/{asg.max_score || asg.total_points}
+                          </span>
+                          <span className="px-3 py-1 bg-emerald-100 text-emerald-800 font-black text-xs rounded-xl border border-emerald-300">
+                            Đã chấm
+                          </span>
+                        </div>
+                      ) : isPendingManual ? (
+                        <div className="w-full flex items-center justify-between bg-amber-50 p-2.5 rounded-2xl border border-amber-200 text-amber-900">
+                          <span className="text-xs font-bold flex items-center gap-1">
+                            <Clock className="w-4 h-4 text-amber-600" /> Chờ chấm
+                          </span>
+                          <span className="px-3 py-1 bg-amber-100 text-amber-800 font-black text-xs rounded-xl border border-amber-300">
+                            Chờ chấm
+                          </span>
+                        </div>
+                      ) : isSubmitted ? (
+                        <div className="w-full flex items-center justify-between bg-sky-50 p-2.5 rounded-2xl border border-sky-200 text-sky-900">
+                          <span className="text-xs font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4 text-sky-600" /> Đã nộp
+                          </span>
+                          <span className="px-3 py-1 bg-sky-100 text-sky-800 font-black text-xs rounded-xl border border-sky-300">
+                            Đã nộp
+                          </span>
+                        </div>
+                      ) : isDraft ? (
+                        <button
+                          onClick={() => handleStartExamAssignment(asg)}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl border-b-4 border-indigo-800 shadow-sm flex items-center justify-center gap-1.5 transition-all active:translate-y-0.5"
+                        >
+                          <PlayCircle className="w-4 h-4" /> Tiếp tục làm bài <ChevronRight className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleStartExamAssignment(asg)}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl border-b-4 border-indigo-800 shadow-sm flex items-center justify-center gap-1.5 transition-all active:translate-y-0.5"
+                        >
+                          <PlayCircle className="w-4 h-4" /> Bắt đầu làm bài <ChevronRight className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SEARCH AND SUB-TABS */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -704,6 +895,16 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
         <SubmissionGradingModal
           exercise={selectedSubmissionToGrade}
           onClose={() => { setSelectedSubmissionToGrade(null); fetchData(); }}
+        />
+      )}
+
+      {/* MODAL LÀM BÀI THI / KIỂM TRA (EXAM BUILDER V1 - DÀNH CHO HỌC SINH) */}
+      {role === 'student' && (
+        <ExamTakingModal
+          isOpen={isExamTakingOpen && !!selectedExamAssignmentId}
+          assignmentId={selectedExamAssignmentId}
+          onClose={handleCloseExamTakingModal}
+          onFinished={handleExamTakingFinished}
         />
       )}
 
