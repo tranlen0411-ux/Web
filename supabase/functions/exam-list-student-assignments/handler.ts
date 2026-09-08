@@ -68,6 +68,7 @@ export async function handleListStudentAssignmentsRequest(
     );
   }
 
+  let currentStage = 'INIT';
   try {
     // 3. Phân giải dependency mode (Production vs Injected Mock)
     let authDeps: AuthDependencies;
@@ -78,6 +79,8 @@ export async function handleListStudentAssignmentsRequest(
     }
 
     // 4. Xác thực JWT và trích xuất Trusted Student Context từ CORE
+    currentStage = 'AUTH';
+    console.log('LIST_STAGE_START=AUTH');
     const authResult = await verifyStudentAuthAndDeriveContext(req, authDeps);
     if (!authResult.ok || !authResult.context) {
       return (
@@ -85,6 +88,7 @@ export async function handleListStudentAssignmentsRequest(
         createErrorResponse(401, 'AUTH_REQUIRED', 'Xác thực không thành công.')
       );
     }
+    console.log('LIST_STAGE_PASS=AUTH');
 
     const { callerId } = authResult.context;
     const coreClient = (deps?.coreClient || authResult.coreClient) as ExtendedCoreQueryClient | undefined;
@@ -124,14 +128,18 @@ export async function handleListStudentAssignmentsRequest(
     }
 
     // 7. Bước 1 (CORE Read-only): Đọc danh sách lớp học mà học sinh này đang tham gia
+    currentStage = 'CLASS_MEMBERS';
+    console.log('LIST_STAGE_START=CLASS_MEMBERS');
     const { data: memberRows, error: memberErr } = await coreClient
       .from('class_members')
       .select('class_id')
       .eq('student_id', callerId);
 
     if (memberErr) {
+      console.error('LIST_QUERY_ERROR=CLASS_MEMBERS');
       return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn danh sách lớp học của học sinh.');
     }
+    console.log('LIST_STAGE_PASS=CLASS_MEMBERS');
 
     const classIds: string[] = (memberRows || [])
       .map((m: any) => m.class_id)
@@ -143,6 +151,8 @@ export async function handleListStudentAssignmentsRequest(
     }
 
     // 8. Bước 2 (NEW Read-only): Đọc các bài giao thuộc các lớp của học sinh từ public.exam_assignments
+    currentStage = 'ASSIGNMENTS';
+    console.log('LIST_STAGE_START=ASSIGNMENTS');
     const { data: assignmentRows, error: assignErr } = await examClient
       .from('exam_assignments')
       .select('id, exam_version_id, class_id, assigned_at, due_date, created_at')
@@ -151,8 +161,10 @@ export async function handleListStudentAssignmentsRequest(
       .order('id', { ascending: false });
 
     if (assignErr) {
+      console.error('LIST_QUERY_ERROR=ASSIGNMENTS');
       return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn danh sách bài thi được giao.');
     }
+    console.log('LIST_STAGE_PASS=ASSIGNMENTS');
 
     if (!assignmentRows || assignmentRows.length === 0) {
       return createSuccessResponse(200, { assignments: [] });
@@ -163,6 +175,8 @@ export async function handleListStudentAssignmentsRequest(
       new Set(assignmentRows.map((a: any) => a.exam_version_id).filter(Boolean))
     );
 
+    currentStage = 'VERSIONS';
+    console.log('LIST_STAGE_START=VERSIONS');
     const { data: versionRows, error: verErr } = await examClient
       .from('exam_versions')
       .select('id, title, description, subject, grade_level, duration_minutes, starts_at, due_date, total_points, reward_stars, status')
@@ -170,8 +184,10 @@ export async function handleListStudentAssignmentsRequest(
       .in('status', ['published', 'superseded']);
 
     if (verErr) {
+      console.error('LIST_QUERY_ERROR=VERSIONS');
       return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn thông tin phiên bản đề thi.');
     }
+    console.log('LIST_STAGE_PASS=VERSIONS');
 
     const versionMap = new Map<string, any>(
       (versionRows || []).map((v: any) => [v.id, v])
@@ -180,6 +196,8 @@ export async function handleListStudentAssignmentsRequest(
     // 10. Bước 4 (NEW Read-only): Đọc trạng thái lượt làm bài của học sinh từ public.exam_attempts
     const assignmentIds: string[] = assignmentRows.map((a: any) => a.id).filter(Boolean);
 
+    currentStage = 'ATTEMPTS';
+    console.log('LIST_STAGE_START=ATTEMPTS');
     const { data: attemptRows, error: attErr } = await examClient
       .from('exam_attempts')
       .select('id, assignment_id, status, attempt_number, total_score, max_score, created_at')
@@ -188,8 +206,10 @@ export async function handleListStudentAssignmentsRequest(
       .order('attempt_number', { ascending: false });
 
     if (attErr) {
+      console.error('LIST_QUERY_ERROR=ATTEMPTS');
       return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn thông tin kết quả làm bài của học sinh.');
     }
+    console.log('LIST_STAGE_PASS=ATTEMPTS');
 
     // Map lượt làm bài mới nhất (attempt_number cao nhất) cho mỗi assignment_id
     const latestAttemptMap = new Map<string, any>();
@@ -200,6 +220,8 @@ export async function handleListStudentAssignmentsRequest(
     }
 
     // 11. Bước 5: Chiếu dữ liệu an toàn tuyệt đối (Strict Response Allowlist)
+    currentStage = 'ASSEMBLY';
+    console.log('LIST_STAGE_START=ASSEMBLY');
     const resultAssignments: StudentExamAssignmentListItem[] = [];
 
     for (const asg of assignmentRows) {
@@ -274,10 +296,26 @@ export async function handleListStudentAssignmentsRequest(
                 : null),
       });
     }
+    console.log('LIST_STAGE_PASS=ASSEMBLY');
 
     // 12. Trả về envelope thành công
     return createSuccessResponse(200, { assignments: resultAssignments });
-  } catch (_) {
+  } catch (err: unknown) {
+    const rawName =
+      err && typeof err === 'object' && 'name' in err && typeof (err as { name: unknown }).name === 'string'
+        ? (err as { name: string }).name
+        : 'UNKNOWN';
+
+    const safeExceptionName =
+      ['TypeError', 'Error', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError'].includes(rawName)
+        ? rawName
+        : 'UNKNOWN';
+
+    console.error(
+      'LIST_FATAL_STAGE=' + currentStage,
+      'TYPE=' + safeExceptionName
+    );
+
     return createErrorResponse(
       500,
       'INTERNAL_ERROR',
