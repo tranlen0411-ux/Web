@@ -1080,6 +1080,152 @@ async function main() {
     assert.equal(v2.errorCode, 'INVALID_INPUT');
   });
 
+  // --- 66. Phase 3E-B: shuffle_options=false with empty option_orders={} returns natural option order ---
+  await test('66. Phase 3E-B: shuffle_options=false with option_orders={} returns natural option order', async () => {
+    const rpcMockResponse = {
+      attempt_id: VALID_ATTEMPT_ID,
+      exam_version_id: VALID_VERSION_ID,
+      status: 'draft',
+      questions: [
+        {
+          id: 'a0000001-0000-4000-8000-000000000001',
+          question_type: 'single_choice',
+          prompt: '2 + 3 = ?',
+          points: 1.0,
+          options: [
+            { key: 'A', text: '4' },
+            { key: 'B', text: '5' },
+            { key: 'C', text: '6' },
+          ],
+        },
+      ],
+    };
+
+    const m = mapGetAttemptQuestionsSuccess(rpcMockResponse);
+    assert.equal(m.ok, true);
+    assert.equal(m.data.questions[0].options.length, 3);
+    assert.equal(m.data.questions[0].options[0].key, 'A');
+    assert.equal(m.data.questions[0].options[1].key, 'B');
+    assert.equal(m.data.questions[0].options[2].key, 'C');
+  });
+
+  // --- 67. Phase 3E-B: shuffle_options=false with 2-question hosted structure (single_choice + fill_blank) ---
+  await test('67. Phase 3E-B: 2-question hosted structure (single_choice + fill_blank) passes cleanly', async () => {
+    const rpcMockResponse = {
+      attempt_id: VALID_ATTEMPT_ID,
+      exam_version_id: VALID_VERSION_ID,
+      status: 'draft',
+      questions: [
+        {
+          id: 'a0000001-0000-4000-8000-000000000001',
+          question_type: 'single_choice',
+          prompt: '2 + 3 = ?',
+          points: 1.0,
+          options: [
+            { key: 'A', text: '4' },
+            { key: 'B', text: '5' },
+            { key: 'C', text: '6' },
+          ],
+        },
+        {
+          id: 'a0000001-0000-4000-8000-000000000002',
+          question_type: 'fill_blank',
+          prompt: '7 - 2 = ___',
+          points: 1.0,
+          options: [],
+        },
+      ],
+    };
+
+    const m = mapGetAttemptQuestionsSuccess(rpcMockResponse);
+    assert.equal(m.ok, true);
+    assert.equal(m.data.questions.length, 2);
+    assert.equal(m.data.questions[0].question_type, 'single_choice');
+    assert.equal(m.data.questions[0].options.length, 3);
+    assert.equal(m.data.questions[1].question_type, 'fill_blank');
+    assert.equal(m.data.questions[1].options.length, 0);
+  });
+
+  // --- 68. Phase 3E-B: shuffle_options=true with valid option snapshot preserves permuted order ---
+  await test('68. Phase 3E-B: shuffle_options=true preserves permuted option snapshot order', async () => {
+    const rpcMockResponse = {
+      attempt_id: VALID_ATTEMPT_ID,
+      exam_version_id: VALID_VERSION_ID,
+      status: 'draft',
+      questions: [
+        {
+          id: 'a0000001-0000-4000-8000-000000000001',
+          question_type: 'single_choice',
+          prompt: '2 + 3 = ?',
+          points: 1.0,
+          options: [
+            { key: 'C', text: '6' },
+            { key: 'A', text: '4' },
+            { key: 'B', text: '5' },
+          ],
+        },
+      ],
+    };
+
+    const m = mapGetAttemptQuestionsSuccess(rpcMockResponse);
+    assert.equal(m.ok, true);
+    assert.equal(m.data.questions[0].options[0].key, 'C');
+    assert.equal(m.data.questions[0].options[1].key, 'A');
+    assert.equal(m.data.questions[0].options[2].key, 'B');
+  });
+
+  // --- 69. Phase 3E-B: normalizeGetAttemptQuestionsRpcError correctly handles ERR_OPTION_SNAPSHOT_INVALID as 500 ---
+  await test('69. Phase 3E-B: missing/invalid snapshot error mapped to safe 500 INTERNAL_ERROR', async () => {
+    const norm = normalizeGetAttemptQuestionsRpcError({
+      message: 'ERR_OPTION_SNAPSHOT_INVALID: Invalid option snapshot',
+    });
+    assert.equal(norm.status, 500);
+    assert.equal(norm.errorCode, 'INTERNAL_ERROR');
+    assert.equal(norm.message, 'Đã xảy ra lỗi nội bộ trong quá trình tải dữ liệu đề thi.');
+  });
+
+  // --- 70. Phase 3E-B: malformed snapshot payload rejected by mapper ---
+  await test('70. Phase 3E-B: malformed options in mapper payload fails closed', async () => {
+    const m = mapGetAttemptQuestionsSuccess({
+      attempt_id: VALID_ATTEMPT_ID,
+      exam_version_id: VALID_VERSION_ID,
+      status: 'draft',
+      questions: [
+        {
+          id: 'a0000001-0000-4000-8000-000000000001',
+          question_type: 'single_choice',
+          prompt: 'P',
+          points: 1,
+          options: [{ invalid_key: 'A' }],
+        },
+      ],
+    });
+    assert.equal(m.ok, false);
+  });
+
+  // --- 71. Phase 3E-B: zero answer keys / correct_answer fields in output ---
+  await test('71. Phase 3E-B: zero answer_key or correct_answer leaked in mapper output', async () => {
+    const m = mapGetAttemptQuestionsSuccess({
+      attempt_id: VALID_ATTEMPT_ID,
+      exam_version_id: VALID_VERSION_ID,
+      status: 'draft',
+      questions: [
+        {
+          id: 'a0000001-0000-4000-8000-000000000001',
+          question_type: 'single_choice',
+          prompt: 'P',
+          points: 1,
+          options: [{ key: 'A', text: 'Opt A' }],
+          correct_answer: 'A',
+          answer_key: { correct_answer: 'A' },
+        },
+      ],
+    });
+    assert.equal(m.ok, true);
+    assert.equal('correct_answer' in m.data.questions[0], false);
+    assert.equal('answer_key' in m.data.questions[0], false);
+  });
+
   console.log('\n================================================================');
   console.log(`BFF TEST RUN COMPLETE: ${passedTests} PASSED, ${failedTests} FAILED (TOTAL: ${totalTests})`);
   console.log('================================================================');
