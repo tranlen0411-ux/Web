@@ -147,7 +147,7 @@ export async function handleListStudentAssignmentsRequest(
 
     // Không thuộc lớp nào -> Empty state success ngay lập tức
     if (classIds.length === 0) {
-      return createSuccessResponse(200, { assignments: [] });
+      return createSuccessResponse({ assignments: [] }, 200);
     }
 
     // 8. Bước 2 (NEW Read-only): Đọc các bài giao thuộc các lớp của học sinh từ public.exam_assignments
@@ -167,7 +167,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_PASS=ASSIGNMENTS');
 
     if (!assignmentRows || assignmentRows.length === 0) {
-      return createSuccessResponse(200, { assignments: [] });
+      return createSuccessResponse({ assignments: [] }, 200);
     }
 
     // 9. Bước 3 (NEW Read-only): Đọc thông tin đề thi snapshot từ public.exam_versions
@@ -299,7 +299,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_PASS=ASSEMBLY');
 
     // 12. Trả về envelope thành công
-    return createSuccessResponse(200, { assignments: resultAssignments });
+    return createSuccessResponse({ assignments: resultAssignments }, 200);
   } catch (err: unknown) {
     const rawName =
       err && typeof err === 'object' && 'name' in err && typeof (err as { name: unknown }).name === 'string'

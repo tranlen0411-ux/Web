@@ -748,6 +748,55 @@ async function main() {
     assert.strictEqual(res.json.data.assignments[0].attempt_status, 'draft');
   });
 
+  // 10. createSuccessResponse Argument-Order Regression Verification
+  await it('36 Handler source strictly uses createSuccessResponse(payload, 200) and zero inverted createSuccessResponse(200, payload) calls', () => {
+    assert.strictEqual(
+      handlerSource.includes('createSuccessResponse(200,'),
+      false,
+      'Must not call createSuccessResponse(200, payload)'
+    );
+    const successCallMatches = handlerSource.match(/createSuccessResponse\([^)]+\)/g) || [];
+    assert.strictEqual(successCallMatches.length, 3, 'Must have exactly 3 createSuccessResponse calls in handler.ts');
+    for (const call of successCallMatches) {
+      assert.ok(
+        call.includes('{ assignments:') && call.includes(', 200)'),
+        `Each call must pass payload first and status 200 second: ${call}`
+      );
+    }
+  });
+
+  await it('37 createSuccessResponse helper contract throws RangeError on inverted args and succeeds on correct args', async () => {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    };
+    function createSuccessResponse(data, status = 200) {
+      const body = { success: true, data };
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    // Proves legacy inverted call (200, { assignments: [] }) throws RangeError
+    assert.throws(
+      () => createSuccessResponse(200, { assignments: [] }),
+      RangeError,
+      'Inverted argument order must throw RangeError in Response constructor'
+    );
+
+    // Proves fixed call ({ assignments: [] }, 200) succeeds and returns valid response
+    const validRes = createSuccessResponse({ assignments: [] }, 200);
+    assert.strictEqual(validRes.status, 200);
+    const validBody = await validRes.json();
+    assert.deepStrictEqual(validBody, { success: true, data: { assignments: [] } });
+  });
+
   console.log('\n================================================================');
   console.log(`TOTAL BFF TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('================================================================\n');
