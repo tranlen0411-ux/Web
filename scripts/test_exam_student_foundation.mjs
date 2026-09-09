@@ -1872,6 +1872,73 @@ async function main() {
     assert.strictEqual(SAFE_GET_ATTEMPT_QUESTIONS_ERROR_CODES.has('ERR_IDEMPOTENCY_CONFLICT'), false);
   });
 
+  await it('105 PostgreSQL UUID structural acceptance: c1000000-0000-0000-0000-000000000001 accepted by isValidUuid', () => {
+    const pgStudentId = 'c1000000-0000-0000-0000-000000000001';
+    const pgClassId = '4f0f3fd3-f4d2-4f5b-9370-a7cc8fa6e45c';
+    const pgAssignmentId = '99999999-9999-4999-8999-000001000004';
+    assert.strictEqual(isValidUuid(pgStudentId), true);
+    assert.strictEqual(isValidUuid(pgClassId), true);
+    assert.strictEqual(isValidUuid(pgAssignmentId), true);
+  });
+
+  await it('106 Normal RFC4122 v4 UUID remains accepted by isValidUuid', () => {
+    const rfc4122Uuid1 = '58c4193e-80d9-461c-903d-9a84a06395cf';
+    const rfc4122Uuid2 = '11111111-1111-4111-8111-111111111111';
+    assert.strictEqual(isValidUuid(rfc4122Uuid1), true);
+    assert.strictEqual(isValidUuid(rfc4122Uuid2), true);
+  });
+
+  await it('107 Invalid UUID values remain strictly rejected by isValidUuid', () => {
+    assert.strictEqual(isValidUuid(''), false);
+    assert.strictEqual(isValidUuid('   '), false);
+    assert.strictEqual(isValidUuid(null), false);
+    assert.strictEqual(isValidUuid(undefined), false);
+    assert.strictEqual(isValidUuid(12345), false);
+    assert.strictEqual(isValidUuid('not-a-uuid'), false);
+    assert.strictEqual(isValidUuid('c1000000-0000-0000-0000-00000000000g'), false); // non-hex 'g'
+    assert.strictEqual(isValidUuid('c1000000-0000-0000-0000-00000000000'), false); // 11 chars
+    assert.strictEqual(isValidUuid('c1000000-0000-0000-0000-0000000000001'), false); // 13 chars
+    assert.strictEqual(isValidUuid('c10000000000000000000000000000001'), false); // missing hyphens
+  });
+
+  await it('108 Exact hosted start-response structure with PostgreSQL student_id passes validateStartResponse', () => {
+    const hostedEnvelope = {
+      success: true,
+      data: {
+        attempt_id: '58c4193e-80d9-461c-903d-9a84a06395cf',
+        assignment_id: '99999999-9999-4999-8999-000001000004',
+        exam_version_id: '99999999-9999-4999-8999-000001000002',
+        student_id: 'c1000000-0000-0000-0000-000000000001',
+        attempt_number: 1,
+        status: 'draft',
+        attempt_started_at: '2026-09-09T15:34:04.123Z',
+        expires_at: '2026-09-09T16:34:04.123Z',
+        max_score: 2,
+        question_order: [
+          '99999999-9999-4999-8999-000001000011',
+          '99999999-9999-4999-8999-000001000012',
+        ],
+        option_orders: {},
+        attempt_version: 1,
+        resumed_existing: true,
+        idempotent_replay: false,
+        expired: false,
+        already_finalized: false,
+      },
+    };
+
+    const validated = validateStartResponse(hostedEnvelope);
+    assert.ok(validated);
+    assert.strictEqual(validated.attempt_id, '58c4193e-80d9-461c-903d-9a84a06395cf');
+    assert.strictEqual(validated.assignment_id, '99999999-9999-4999-8999-000001000004');
+    assert.strictEqual(validated.exam_version_id, '99999999-9999-4999-8999-000001000002');
+    assert.strictEqual(validated.student_id, 'c1000000-0000-0000-0000-000000000001');
+    assert.strictEqual(validated.attempt_number, 1);
+    assert.strictEqual(validated.status, 'draft');
+    assert.strictEqual(validated.max_score, 2);
+    assert.strictEqual(validated.resumed_existing, true);
+  });
+
   console.log('\n====================================================');
   console.log(`TOTAL TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('====================================================\n');
