@@ -33,3 +33,28 @@ verify_jwt = false
 
 [functions.student-qr-login]
 verify_jwt = false
+
+[functions.exam-grade-manual-attempt]
+verify_jwt = false
+
+[functions.exam-start-attempt]
+verify_jwt = false
+
+[functions.exam-save-answer]
+verify_jwt = false
+
+[functions.exam-submit-attempt]
+verify_jwt = false
+
+[functions.exam-record-integrity-event]
+verify_jwt = false
+
+[functions.exam-get-attempt-questions]
+verify_jwt = false
+
+[functions.exam-list-student-assignments]
+verify_jwt = false
+
+
+
+
