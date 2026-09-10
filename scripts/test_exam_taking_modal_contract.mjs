@@ -289,10 +289,10 @@ async function main() {
     assert.strictEqual(closeFunc.includes("setPhase('submitted')"), false, 'Closing modal must not mark attempt submitted');
   });
 
-  // 10. Zero Persistent Storage & Zero Debounce / Retry Queue
-  await it('27 Zero debounce and zero retry queue in ExamTakingModal', () => {
-    assert.strictEqual(modalSource.includes('debounce'), false, 'Must not use debounce autosave');
-    assert.strictEqual(modalSource.includes('setTimeout'), false, 'Must not use setTimeout for save debounce');
+  // 10. Zero Persistent Storage & In-Memory Serialized Autosave
+  await it('27 Text autosave uses in-memory debounce and serialized queue without retryQueue', () => {
+    assert.ok(modalSource.includes('textDebounceTimerRef'), 'Must declare textDebounceTimerRef');
+    assert.ok(modalSource.includes('800'), 'Must use 800ms debounce');
     assert.strictEqual(modalSource.includes('retryQueue'), false, 'Must not build retry queue');
   });
 
@@ -363,7 +363,7 @@ async function main() {
   await it('34 Multiple choice save captures session and epoch, verifying both after await', () => {
     const multiSection = modalSource.substring(
       modalSource.indexOf('const handleSaveMultipleChoice = useCallback('),
-      modalSource.indexOf('const handleTextDraftChange = useCallback(')
+      modalSource.indexOf('const flushPendingTextSave = useCallback(')
     );
     assert.ok(multiSection.includes('const session = sessionRef.current;'), 'Must capture session at dispatch time');
     assert.ok(multiSection.includes('const epoch = lifecycleEpochRef.current;'), 'Must capture epoch at dispatch time');
@@ -376,7 +376,7 @@ async function main() {
 
   await it('35 Text answer save captures session and epoch, verifying both after await', () => {
     const textSection = modalSource.substring(
-      modalSource.indexOf('const handleSaveTextAnswer = useCallback('),
+      modalSource.indexOf('const flushPendingTextSave = useCallback('),
       modalSource.indexOf('const handleOpenSubmitDialog = useCallback(')
     );
     assert.ok(textSection.includes('const session = sessionRef.current;'), 'Must capture session at dispatch time');

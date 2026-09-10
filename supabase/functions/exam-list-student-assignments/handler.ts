@@ -40,12 +40,15 @@ export interface StudentExamAssignmentListItem {
   grade_level: number;
   assigned_at: string;
   opens_at: string | null;
+  last_start_at: string | null;
   closes_at: string | null;
   duration_minutes: number | null;
   total_points: number;
   reward_stars: number;
   attempt_status: string | null;
   attempt_id: string | null;
+  attempt_started_at: string | null;
+  attempt_expires_at: string | null;
   latest_score: number | null;
   max_score: number | null;
 }
@@ -155,7 +158,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=ASSIGNMENTS');
     const { data: assignmentRows, error: assignErr } = await examClient
       .from('exam_assignments')
-      .select('id, exam_version_id, class_id, assigned_at, due_date, created_at')
+      .select('id, exam_version_id, class_id, assigned_at, starts_at, last_start_at, due_date, created_at')
       .in('class_id', classIds)
       .order('assigned_at', { ascending: false })
       .order('id', { ascending: false });
@@ -179,7 +182,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=VERSIONS');
     const { data: versionRows, error: verErr } = await examClient
       .from('exam_versions')
-      .select('id, title, description, subject, grade_level, duration_minutes, starts_at, due_date, total_points, reward_stars, status')
+      .select('id, title, description, subject, grade_level, duration_minutes, starts_at, last_start_at, due_date, total_points, reward_stars, status')
       .in('id', versionIds)
       .in('status', ['published', 'superseded']);
 
@@ -200,7 +203,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=ATTEMPTS');
     const { data: attemptRows, error: attErr } = await examClient
       .from('exam_attempts')
-      .select('id, assignment_id, status, attempt_number, total_score, max_score, created_at')
+      .select('id, assignment_id, status, attempt_number, attempt_started_at, expires_at, total_score, max_score, created_at')
       .eq('student_id', callerId)
       .in('assignment_id', assignmentIds)
       .order('attempt_number', { ascending: false });
@@ -231,12 +234,23 @@ export async function handleListStudentAssignmentsRequest(
 
       const latestAttempt = latestAttemptMap.get(asg.id) || null;
 
-      // Tính toán hạn nộp hiệu lực (effective closes_at): sớm nhất trong hạn của bài giao và hạn của phiên bản
+      // 1. Effective Opens At (Giờ mở đề sớm nhất)
+      const effectiveOpensAt: string | null = asg.starts_at ?? ver.starts_at ?? null;
+
+      // 2. Effective Last Start At (Hạn chót vào thi - Bảo toàn fallback due_date cũ)
+      const effectiveLastStartAt: string | null =
+        asg.last_start_at ??
+        ver.last_start_at ??
+        asg.due_date ??
+        ver.due_date ??
+        null;
+
+      // 3. Effective Hard Close (Trần đóng cứng: sớm nhất trong hạn của bài giao và hạn của phiên bản)
       let closesAt: string | null = null;
       if (asg.due_date && ver.due_date) {
         closesAt = new Date(asg.due_date) < new Date(ver.due_date) ? asg.due_date : ver.due_date;
       } else {
-        closesAt = asg.due_date || ver.due_date || null;
+        closesAt = asg.due_date ?? ver.due_date ?? null;
       }
 
       resultAssignments.push({
@@ -253,7 +267,8 @@ export async function handleListStudentAssignmentsRequest(
             ? ver.grade_level
             : 1,
         assigned_at: asg.assigned_at,
-        opens_at: ver.starts_at || null,
+        opens_at: effectiveOpensAt,
+        last_start_at: effectiveLastStartAt,
         closes_at: closesAt,
         duration_minutes:
           typeof ver.duration_minutes === 'number' &&
@@ -275,6 +290,8 @@ export async function handleListStudentAssignmentsRequest(
             : Math.max(0, Math.floor(Number(ver.reward_stars || 0))),
         attempt_status: latestAttempt ? latestAttempt.status : null,
         attempt_id: latestAttempt ? latestAttempt.id : null,
+        attempt_started_at: latestAttempt ? latestAttempt.attempt_started_at || null : null,
+        attempt_expires_at: latestAttempt ? latestAttempt.expires_at || null : null,
         latest_score:
           latestAttempt &&
           latestAttempt.status === 'graded' &&

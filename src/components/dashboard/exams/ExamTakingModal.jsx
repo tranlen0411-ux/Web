@@ -77,6 +77,13 @@ export function ExamTakingModal({
   const [savingQuestionId, setSavingQuestionId] = useState(null);
   const [saveErrors, setSaveErrors] = useState({});
 
+  // Text autosave serialization & debounce refs (in-memory only, zero persistent storage)
+  const textDebounceTimerRef = useRef(null);
+  const latestTextDraftsRef = useRef({});
+  const isTextSavingRef = useRef(false);
+  const inFlightSavePromiseRef = useRef(null);
+  const queuedQuestionsToSaveRef = useRef(new Set());
+
   // Finalization state
   const [isFinalized, setIsFinalized] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -125,6 +132,12 @@ export function ExamTakingModal({
   useEffect(() => {
     if (!isOpen || !isValidUuid(assignmentId)) {
       lifecycleEpochRef.current++;
+      if (textDebounceTimerRef.current) {
+        clearTimeout(textDebounceTimerRef.current);
+        textDebounceTimerRef.current = null;
+      }
+      latestTextDraftsRef.current = {};
+      queuedQuestionsToSaveRef.current.clear();
       setPhase('idle');
       setQuestions([]);
       setQuestionsLoaded(false);
@@ -219,6 +232,7 @@ export function ExamTakingModal({
           const saved = session.getAnswer(q.id);
           if (saved && saved.studentAnswerJson !== null && saved.studentAnswerJson !== undefined) {
             initialDrafts[q.id] = saved.studentAnswerJson;
+            latestTextDraftsRef.current[q.id] = saved.studentAnswerJson;
           }
         }
         setDraftAnswers(initialDrafts);
@@ -239,6 +253,11 @@ export function ExamTakingModal({
     return () => {
       isSubscribed = false;
       lifecycleEpochRef.current++;
+      if (textDebounceTimerRef.current) {
+        clearTimeout(textDebounceTimerRef.current);
+        textDebounceTimerRef.current = null;
+      }
+      queuedQuestionsToSaveRef.current.clear();
       handleTeardown();
       if (sessionRef.current === session) {
         sessionRef.current = null;
@@ -390,42 +409,137 @@ export function ExamTakingModal({
     [draftAnswers, isFinalized, savingQuestionId]
   );
 
-  // text-based: fill_blank, short_answer, essay
-  const handleTextDraftChange = useCallback((qId, text) => {
-    setDraftAnswers((prev) => ({ ...prev, [qId]: text }));
-  }, []);
+  // text-based: fill_blank, short_answer, essay - serialized autosave queue
+  const flushPendingTextSave = useCallback(
+    async (targetQId = null) => {
+      if (targetQId) {
+        queuedQuestionsToSaveRef.current.add(targetQId);
+      }
+
+      if (isTextSavingRef.current) {
+        if (inFlightSavePromiseRef.current) {
+          try {
+            await inFlightSavePromiseRef.current;
+          } catch (_) {}
+        }
+        return;
+      }
+
+      isTextSavingRef.current = true;
+      let resolveInFlight;
+      inFlightSavePromiseRef.current = new Promise((resolve) => {
+        resolveInFlight = resolve;
+      });
+
+      try {
+        while (queuedQuestionsToSaveRef.current.size > 0) {
+          const session = sessionRef.current;
+          const epoch = lifecycleEpochRef.current;
+          if (!session || isFinalized || !isMountedRef.current) break;
+
+          const qId = queuedQuestionsToSaveRef.current.values().next().value;
+          queuedQuestionsToSaveRef.current.delete(qId);
+
+          const textValue =
+            typeof latestTextDraftsRef.current[qId] === 'string'
+              ? latestTextDraftsRef.current[qId]
+              : typeof draftAnswers[qId] === 'string'
+              ? draftAnswers[qId]
+              : '';
+
+          const currentSaved = session.getAnswersState()[qId]?.studentAnswerJson;
+          if (currentSaved === textValue) {
+            continue;
+          }
+
+          setSavingQuestionId(qId);
+          setSaveErrors((prev) => ({ ...prev, [qId]: null }));
+
+          const res = await session.saveAnswer({
+            examQuestionId: qId,
+            studentAnswerJson: textValue,
+          });
+
+          if (!isMountedRef.current || lifecycleEpochRef.current !== epoch || sessionRef.current !== session) {
+            break;
+          }
+
+          if (!res.ok) {
+            setSaveErrors((prev) => ({
+              ...prev,
+              [qId]: res.safeErrorCode || 'INTERNAL_ERROR',
+            }));
+          } else {
+            setSavedAnswers(session.getAnswersState());
+          }
+
+          setSavingQuestionId(null);
+
+          const newestText =
+            typeof latestTextDraftsRef.current[qId] === 'string'
+              ? latestTextDraftsRef.current[qId]
+              : '';
+          if (newestText !== textValue) {
+            queuedQuestionsToSaveRef.current.add(qId);
+          }
+        }
+      } finally {
+        isTextSavingRef.current = false;
+        setSavingQuestionId(null);
+        if (resolveInFlight) {
+          resolveInFlight();
+        }
+        inFlightSavePromiseRef.current = null;
+      }
+    },
+    [draftAnswers, isFinalized]
+  );
+
+  const handleTextDraftChange = useCallback(
+    (qId, text) => {
+      setDraftAnswers((prev) => ({ ...prev, [qId]: text }));
+      latestTextDraftsRef.current[qId] = text;
+
+      if (textDebounceTimerRef.current) {
+        clearTimeout(textDebounceTimerRef.current);
+      }
+
+      textDebounceTimerRef.current = setTimeout(() => {
+        textDebounceTimerRef.current = null;
+        flushPendingTextSave(qId);
+      }, 800);
+    },
+    [flushPendingTextSave]
+  );
+
+  const handleTextBlur = useCallback(
+    (qId) => {
+      if (textDebounceTimerRef.current) {
+        clearTimeout(textDebounceTimerRef.current);
+        textDebounceTimerRef.current = null;
+      }
+      flushPendingTextSave(qId);
+    },
+    [flushPendingTextSave]
+  );
 
   const handleSaveTextAnswer = useCallback(
     async (question) => {
       const session = sessionRef.current;
       const epoch = lifecycleEpochRef.current;
-      if (!session || isFinalized || savingQuestionId) return;
+      if (!session || isFinalized) return;
 
-      const qId = question.id;
-      setSavingQuestionId(qId);
-      setSaveErrors((prev) => ({ ...prev, [qId]: null }));
-
-      const textValue = typeof draftAnswers[qId] === 'string' ? draftAnswers[qId] : '';
-
-      const res = await session.saveAnswer({
-        examQuestionId: qId,
-        studentAnswerJson: textValue,
-      });
-
-      if (!isMountedRef.current || lifecycleEpochRef.current !== epoch || sessionRef.current !== session) return;
-
-      if (!res.ok) {
-        setSaveErrors((prev) => ({
-          ...prev,
-          [qId]: res.safeErrorCode || 'INTERNAL_ERROR',
-        }));
-      } else {
-        setSavedAnswers(session.getAnswersState());
+      if (textDebounceTimerRef.current) {
+        clearTimeout(textDebounceTimerRef.current);
+        textDebounceTimerRef.current = null;
       }
-
-      setSavingQuestionId(null);
+      const qId = question?.id;
+      if (qId) {
+        await flushPendingTextSave(qId);
+      }
+      if (!isMountedRef.current || lifecycleEpochRef.current !== epoch || sessionRef.current !== session) return;
     },
-    [draftAnswers, isFinalized, savingQuestionId]
+    [flushPendingTextSave, isFinalized]
   );
 
   // Submit Operations
@@ -447,6 +561,25 @@ export function ExamTakingModal({
     setIsSubmitting(true);
     setSubmitError(null);
 
+    // Cancel pending debounce timer before pre-submit flush
+    if (textDebounceTimerRef.current) {
+      clearTimeout(textDebounceTimerRef.current);
+      textDebounceTimerRef.current = null;
+    }
+
+    // Pre-submit flush: Enqueue all dirty text answers across the exam
+    for (const [qId, text] of Object.entries(latestTextDraftsRef.current)) {
+      const savedVal = session.getAnswersState()[qId]?.studentAnswerJson;
+      if (savedVal !== text) {
+        queuedQuestionsToSaveRef.current.add(qId);
+      }
+    }
+
+    // Await serialized text flush until queue is completely empty
+    await flushPendingTextSave();
+
+    if (!isMountedRef.current || lifecycleEpochRef.current !== epoch || sessionRef.current !== session) return;
+
     // Note: Do NOT stop integrity at submit start!
     const res = await session.submitAttempt();
 
@@ -462,7 +595,7 @@ export function ExamTakingModal({
     // Success -> onConfirmedFinalized handles finalization & teardown
     setIsSubmitting(false);
     setShowSubmitConfirm(false);
-  }, [isFinalized, isSubmitting]);
+  }, [flushPendingTextSave, isFinalized, isSubmitting]);
 
   // Close modal handler
   const handleModalClose = useCallback(() => {
@@ -785,6 +918,7 @@ export function ExamTakingModal({
                       }
                       disabled={savingQuestionId === currentQuestion.id || isFinalized}
                       onChange={(e) => handleTextDraftChange(currentQuestion.id, e.target.value)}
+                      onBlur={() => handleTextBlur(currentQuestion.id)}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <div className="flex justify-end">
@@ -823,6 +957,7 @@ export function ExamTakingModal({
                       }
                       disabled={savingQuestionId === currentQuestion.id || isFinalized}
                       onChange={(e) => handleTextDraftChange(currentQuestion.id, e.target.value)}
+                      onBlur={() => handleTextBlur(currentQuestion.id)}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <div className="flex justify-end">
@@ -861,6 +996,7 @@ export function ExamTakingModal({
                       }
                       disabled={savingQuestionId === currentQuestion.id || isFinalized}
                       onChange={(e) => handleTextDraftChange(currentQuestion.id, e.target.value)}
+                      onBlur={() => handleTextBlur(currentQuestion.id)}
                       className="w-full p-4 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 leading-relaxed"
                     />
                     <div className="flex justify-end">

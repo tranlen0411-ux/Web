@@ -401,18 +401,24 @@ export function validateListStudentAssignmentsResponse(data) {
     if (typeof item.assigned_at !== 'string' || !item.assigned_at.trim()) return null;
 
     // opens_at: string OR null
-    if (item.opens_at !== null && (typeof item.opens_at !== 'string' || !item.opens_at.trim())) {
+    if (item.opens_at !== null && item.opens_at !== undefined && (typeof item.opens_at !== 'string' || !item.opens_at.trim())) {
+      return null;
+    }
+
+    // last_start_at: string OR null
+    if (item.last_start_at !== null && item.last_start_at !== undefined && (typeof item.last_start_at !== 'string' || !item.last_start_at.trim())) {
       return null;
     }
 
     // closes_at: string OR null
-    if (item.closes_at !== null && (typeof item.closes_at !== 'string' || !item.closes_at.trim())) {
+    if (item.closes_at !== null && item.closes_at !== undefined && (typeof item.closes_at !== 'string' || !item.closes_at.trim())) {
       return null;
     }
 
     // duration_minutes: integer > 0 OR null
     if (
       item.duration_minutes !== null &&
+      item.duration_minutes !== undefined &&
       (typeof item.duration_minutes !== 'number' ||
         !Number.isInteger(item.duration_minutes) ||
         item.duration_minutes <= 0)
@@ -439,11 +445,21 @@ export function validateListStudentAssignmentsResponse(data) {
       return null;
     }
 
+    // attempt_started_at: string OR null
+    if (item.attempt_started_at !== null && item.attempt_started_at !== undefined && (typeof item.attempt_started_at !== 'string' || !item.attempt_started_at.trim())) {
+      return null;
+    }
+
+    // attempt_expires_at: string OR null
+    if (item.attempt_expires_at !== null && item.attempt_expires_at !== undefined && (typeof item.attempt_expires_at !== 'string' || !item.attempt_expires_at.trim())) {
+      return null;
+    }
+
     // attempt_status & attempt_id cross-field invariants
-    if (item.attempt_status === null) {
-      if (item.attempt_id !== null) return null;
-      if (item.latest_score !== null) return null;
-      if (item.max_score !== null) return null;
+    if (item.attempt_status === null || item.attempt_status === undefined) {
+      if (item.attempt_id !== null && item.attempt_id !== undefined) return null;
+      if (item.latest_score !== null && item.latest_score !== undefined) return null;
+      if (item.max_score !== null && item.max_score !== undefined) return null;
     } else if (
       typeof item.attempt_status === 'string' &&
       APPROVED_ATTEMPT_STATUSES.has(item.attempt_status)
@@ -459,10 +475,10 @@ export function validateListStudentAssignmentsResponse(data) {
       }
 
       if (item.attempt_status !== 'graded') {
-        if (item.latest_score !== null) return null;
+        if (item.latest_score !== null && item.latest_score !== undefined) return null;
       } else {
         // status === 'graded'
-        if (item.latest_score !== null) {
+        if (item.latest_score !== null && item.latest_score !== undefined) {
           if (
             typeof item.latest_score !== 'number' ||
             !Number.isFinite(item.latest_score) ||
@@ -483,19 +499,22 @@ export function validateListStudentAssignmentsResponse(data) {
       id: item.id.trim().toLowerCase(),
       exam_version_id: item.exam_version_id.trim().toLowerCase(),
       title: item.title.trim(),
-      description: item.description !== null ? item.description : null,
+      description: item.description !== null && item.description !== undefined ? item.description : null,
       subject: item.subject.trim(),
       grade_level: item.grade_level,
       assigned_at: item.assigned_at.trim(),
-      opens_at: item.opens_at !== null ? item.opens_at.trim() : null,
-      closes_at: item.closes_at !== null ? item.closes_at.trim() : null,
-      duration_minutes: item.duration_minutes !== null ? item.duration_minutes : null,
+      opens_at: item.opens_at ? item.opens_at.trim() : null,
+      last_start_at: item.last_start_at ? item.last_start_at.trim() : null,
+      closes_at: item.closes_at ? item.closes_at.trim() : null,
+      duration_minutes: item.duration_minutes !== null && item.duration_minutes !== undefined ? item.duration_minutes : null,
       total_points: item.total_points,
       reward_stars: item.reward_stars,
-      attempt_status: item.attempt_status,
-      attempt_id: item.attempt_id !== null ? item.attempt_id.trim().toLowerCase() : null,
-      latest_score: item.latest_score !== null ? item.latest_score : null,
-      max_score: item.max_score !== null ? item.max_score : null,
+      attempt_status: item.attempt_status || null,
+      attempt_id: item.attempt_id ? item.attempt_id.trim().toLowerCase() : null,
+      attempt_started_at: item.attempt_started_at ? item.attempt_started_at.trim() : null,
+      attempt_expires_at: item.attempt_expires_at ? item.attempt_expires_at.trim() : null,
+      latest_score: item.latest_score !== null && item.latest_score !== undefined ? item.latest_score : null,
+      max_score: item.max_score !== null && item.max_score !== undefined ? item.max_score : null,
     });
   }
 
