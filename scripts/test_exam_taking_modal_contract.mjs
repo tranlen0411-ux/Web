@@ -35,7 +35,7 @@ async function main() {
 
   const modalPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamTakingModal.jsx');
   const modalExists = fs.existsSync(modalPath);
-  const modalSource = modalExists ? fs.readFileSync(modalPath, 'utf8') : '';
+  const modalSource = modalExists ? fs.readFileSync(modalPath, 'utf8').replace(/\r\n/g, '\n') : '';
 
   // 1. Structure & Imports
   await it('01 ExamTakingModal.jsx file exists at expected path', () => {

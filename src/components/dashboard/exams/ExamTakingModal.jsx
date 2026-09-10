@@ -134,6 +134,9 @@ export function ExamTakingModal({
       setDraftAnswers({});
       setSavedAnswers({});
       setCurrentQuestionIndex(0);
+      setShowSubmitConfirm(false);
+      setIsSubmitting(false);
+      setSubmitError(null);
       return;
     }
 
@@ -154,6 +157,8 @@ export function ExamTakingModal({
             setIsFinalized(true);
             setSubmitResult(finalizedData);
             setPhase('submitted');
+            setShowSubmitConfirm(false);
+            setIsSubmitting(false);
             handleTeardown();
             if (onFinishedRef.current) onFinishedRef.current(finalizedData);
           },
