@@ -26,7 +26,7 @@ const MIGRATIONS = [
   'supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql',
   'supabase/migrations/20260907000009_exam_builder_v1_get_attempt_questions.sql',
   'supabase/migrations/20260909000010_exam_builder_v1_get_attempt_questions_option_orders_fix.sql',
-  'supabase/migrations/20260910000011_exam_builder_v1_flexible_scheduling_phase_a.sql'
+  'supabase/migrations/20260910121949_exam_builder_v1_flexible_scheduling_phase_a.sql'
 ];
 
 async function initTestDb() {
