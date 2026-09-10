@@ -134,10 +134,14 @@ export function ExamTakingModal({
       setDraftAnswers({});
       setSavedAnswers({});
       setCurrentQuestionIndex(0);
+      setShowSubmitConfirm(false);
+      setIsSubmitting(false);
+      setSubmitError(null);
       return;
     }
 
     let isSubscribed = true;
+    let session = null;
     const epoch = ++lifecycleEpochRef.current;
 
     async function initSession() {
@@ -146,7 +150,7 @@ export function ExamTakingModal({
         setGlobalError(null);
 
         const client = studentClient || createExamStudentClient();
-        const session = createExamTakingSession({
+        session = createExamTakingSession({
           assignmentId,
           studentClient: client,
           onConfirmedFinalized: (finalizedData) => {
@@ -154,6 +158,8 @@ export function ExamTakingModal({
             setIsFinalized(true);
             setSubmitResult(finalizedData);
             setPhase('submitted');
+            setShowSubmitConfirm(false);
+            setIsSubmitting(false);
             handleTeardown();
             if (onFinishedRef.current) onFinishedRef.current(finalizedData);
           },
