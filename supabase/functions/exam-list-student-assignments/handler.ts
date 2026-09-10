@@ -1,5 +1,5 @@
 // supabase/functions/exam-list-student-assignments/handler.ts
-// Exam Builder Student List Assignments Handler V1 (Phase 3E-B Step 2.5 Delivery Contract)
+// Exam Builder Student List Assignments Handler V1 (Phase A Flexible Scheduling Contract)
 // Pure Dispatch Module - Zero Side Effects, Anti-Leak Projection, Multi-Class Ownership Resolution
 
 import {
@@ -40,12 +40,15 @@ export interface StudentExamAssignmentListItem {
   grade_level: number;
   assigned_at: string;
   opens_at: string | null;
+  last_start_at: string | null;
   closes_at: string | null;
   duration_minutes: number | null;
   total_points: number;
   reward_stars: number;
   attempt_status: string | null;
   attempt_id: string | null;
+  attempt_started_at: string | null;
+  attempt_expires_at: string | null;
   latest_score: number | null;
   max_score: number | null;
 }
@@ -59,93 +62,89 @@ export async function handleListStudentAssignmentsRequest(
     return new Response('ok', { headers: corsHeaders });
   }
 
-  // 2. Enforce POST HTTP Method
-  if (req.method !== 'POST') {
+  // 2. Chỉ cho phép method GET hoặc POST
+  if (req.method !== 'GET' && req.method !== 'POST') {
     return createErrorResponse(
       405,
       'METHOD_NOT_ALLOWED',
-      'Phương thức HTTP không được hỗ trợ. Chỉ chấp nhận POST.'
+      'Phương thức HTTP không được hỗ trợ.'
     );
   }
 
-  let currentStage = 'INIT';
-  try {
-    // 3. Phân giải dependency mode (Production vs Injected Mock)
-    let authDeps: AuthDependencies;
-    if (deps?.authDeps && deps.authDeps.mode === 'injected') {
-      authDeps = deps.authDeps;
-    } else {
-      authDeps = { mode: 'production' };
-    }
+  let currentStage: string = 'AUTH';
 
-    // 4. Xác thực JWT và trích xuất Trusted Student Context từ CORE
-    currentStage = 'AUTH';
+  try {
+    // 3. Phân tích Auth Header & Xác thực Token CORE JWT
     console.log('LIST_STAGE_START=AUTH');
-    const authResult = await verifyStudentAuthAndDeriveContext(req, authDeps);
-    if (!authResult.ok || !authResult.context) {
-      return (
-        authResult.response ||
-        createErrorResponse(401, 'AUTH_REQUIRED', 'Xác thực không thành công.')
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
+    const authContext = await verifyStudentAuthAndDeriveContext(authHeader, deps?.authDeps);
+
+    if (!authContext.success || !authContext.studentContext) {
+      console.error('LIST_AUTH_ERROR=' + (authContext.errorCode || 'UNAUTHORIZED'));
+      return createErrorResponse(
+        authContext.httpStatus || 401,
+        authContext.errorCode || 'UNAUTHORIZED',
+        authContext.errorMessage || 'Xác thực tài khoản học sinh không thành công.'
       );
     }
     console.log('LIST_STAGE_PASS=AUTH');
 
-    const { callerId } = authResult.context;
-    const coreClient = (deps?.coreClient || authResult.coreClient) as ExtendedCoreQueryClient | undefined;
-    const examClient = (deps?.examClient || authResult.examClient) as ExtendedExamQueryClient | undefined;
+    const callerId = authContext.studentContext.studentId;
 
-    if (!coreClient || !examClient) {
-      return createErrorResponse(
-        500,
-        'INTERNAL_ERROR',
-        'Máy chủ chưa được cấu hình đầy đủ kết nối cơ sở dữ liệu.'
-      );
-    }
-
-    // 5. Đọc và phân tích JSON Body (nếu có)
-    let rawBody: unknown = {};
-    const text = await req.text();
-    if (text && text.trim().length > 0) {
+    // 4. Nếu là POST, kiểm tra body để ngăn chặn tham số cấm/tiêm nhiễm đặc quyền
+    if (req.method === 'POST') {
+      currentStage = 'VALIDATION';
+      console.log('LIST_STAGE_START=VALIDATION');
+      let body: unknown = undefined;
       try {
-        rawBody = JSON.parse(text);
-      } catch (_) {
+        const text = await req.text();
+        if (text && text.trim().length > 0) {
+          body = JSON.parse(text);
+        }
+      } catch (_jsonErr) {
+        return createErrorResponse(400, 'INVALID_INPUT', 'Dữ liệu JSON không hợp lệ.');
+      }
+
+      const validation = validateListStudentAssignmentsPayload(body, { callerId });
+      if (!validation.valid) {
+        console.error('LIST_VALIDATION_ERROR=' + (validation.errorCode || 'INVALID_INPUT'));
         return createErrorResponse(
           400,
-          'INVALID_INPUT',
-          'Dữ liệu yêu cầu không phải là chuỗi JSON hợp lệ.'
+          validation.errorCode || 'INVALID_INPUT',
+          validation.errorMessage || 'Tham số yêu cầu không hợp lệ.'
         );
       }
+      console.log('LIST_STAGE_PASS=VALIDATION');
     }
 
-    // 6. Kiểm tra hợp lệ cấu trúc Payload (Strict Allowlist & Type Validation)
-    const valResult = validateListStudentAssignmentsPayload(rawBody, { callerId });
-    if (!valResult.valid) {
-      return createErrorResponse(
-        400,
-        valResult.errorCode || 'INVALID_INPUT',
-        valResult.errorMessage || 'Dữ liệu yêu cầu không hợp lệ.'
-      );
+    // 5. Khởi tạo Query Clients cho 2 cơ sở dữ liệu
+    const coreClient = deps?.coreClient;
+    const examClient = deps?.examClient;
+
+    if (!coreClient || !examClient) {
+      console.error('LIST_CONFIG_ERROR=CLIENT_INIT');
+      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi kết nối cơ sở dữ liệu máy chủ.');
     }
 
-    // 7. Bước 1 (CORE Read-only): Đọc danh sách lớp học mà học sinh này đang tham gia
-    currentStage = 'CLASS_MEMBERS';
-    console.log('LIST_STAGE_START=CLASS_MEMBERS');
+    // 6. Bước 1 (CORE Read-only): Truy vấn danh sách lớp học sinh đang là thành viên
+    currentStage = 'MEMBERSHIP';
+    console.log('LIST_STAGE_START=MEMBERSHIP');
     const { data: memberRows, error: memberErr } = await coreClient
       .from('class_members')
       .select('class_id')
       .eq('student_id', callerId);
 
     if (memberErr) {
-      console.error('LIST_QUERY_ERROR=CLASS_MEMBERS');
-      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn danh sách lớp học của học sinh.');
+      console.error('LIST_QUERY_ERROR=MEMBERSHIP');
+      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn thông tin lớp học của học sinh.');
     }
-    console.log('LIST_STAGE_PASS=CLASS_MEMBERS');
+    console.log('LIST_STAGE_PASS=MEMBERSHIP');
 
-    const classIds: string[] = (memberRows || [])
-      .map((m: any) => m.class_id)
-      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0);
+    const classIds: string[] = Array.from(
+      new Set((memberRows || []).map((m: any) => m.class_id).filter(Boolean))
+    );
 
-    // Không thuộc lớp nào -> Empty state success ngay lập tức
+    // 7. Nếu học sinh chưa thuộc lớp nào, trả về danh sách rỗng an toàn
     if (classIds.length === 0) {
       return createSuccessResponse({ assignments: [] }, 200);
     }
@@ -155,7 +154,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=ASSIGNMENTS');
     const { data: assignmentRows, error: assignErr } = await examClient
       .from('exam_assignments')
-      .select('id, exam_version_id, class_id, assigned_at, due_date, created_at')
+      .select('id, exam_version_id, class_id, assigned_at, starts_at, last_start_at, due_date, created_at')
       .in('class_id', classIds)
       .order('assigned_at', { ascending: false })
       .order('id', { ascending: false });
@@ -179,7 +178,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=VERSIONS');
     const { data: versionRows, error: verErr } = await examClient
       .from('exam_versions')
-      .select('id, title, description, subject, grade_level, duration_minutes, starts_at, due_date, total_points, reward_stars, status')
+      .select('id, title, description, subject, grade_level, duration_minutes, starts_at, last_start_at, due_date, total_points, reward_stars, status')
       .in('id', versionIds)
       .in('status', ['published', 'superseded']);
 
@@ -200,7 +199,7 @@ export async function handleListStudentAssignmentsRequest(
     console.log('LIST_STAGE_START=ATTEMPTS');
     const { data: attemptRows, error: attErr } = await examClient
       .from('exam_attempts')
-      .select('id, assignment_id, status, attempt_number, total_score, max_score, created_at')
+      .select('id, assignment_id, status, attempt_number, attempt_started_at, expires_at, total_score, max_score, created_at')
       .eq('student_id', callerId)
       .in('assignment_id', assignmentIds)
       .order('attempt_number', { ascending: false });
@@ -231,12 +230,23 @@ export async function handleListStudentAssignmentsRequest(
 
       const latestAttempt = latestAttemptMap.get(asg.id) || null;
 
-      // Tính toán hạn nộp hiệu lực (effective closes_at): sớm nhất trong hạn của bài giao và hạn của phiên bản
+      // 1. Effective Opens At (Giờ mở đề sớm nhất)
+      const effectiveOpensAt: string | null = asg.starts_at ?? ver.starts_at ?? null;
+
+      // 2. Effective Last Start At (Hạn chót vào thi - Bảo toàn fallback due_date cũ)
+      const effectiveLastStartAt: string | null =
+        asg.last_start_at ??
+        ver.last_start_at ??
+        asg.due_date ??
+        ver.due_date ??
+        null;
+
+      // 3. Effective Hard Close (Trần đóng cứng: sớm nhất trong hạn của bài giao và hạn của phiên bản)
       let closesAt: string | null = null;
       if (asg.due_date && ver.due_date) {
         closesAt = new Date(asg.due_date) < new Date(ver.due_date) ? asg.due_date : ver.due_date;
       } else {
-        closesAt = asg.due_date || ver.due_date || null;
+        closesAt = asg.due_date ?? ver.due_date ?? null;
       }
 
       resultAssignments.push({
@@ -253,7 +263,8 @@ export async function handleListStudentAssignmentsRequest(
             ? ver.grade_level
             : 1,
         assigned_at: asg.assigned_at,
-        opens_at: ver.starts_at || null,
+        opens_at: effectiveOpensAt,
+        last_start_at: effectiveLastStartAt,
         closes_at: closesAt,
         duration_minutes:
           typeof ver.duration_minutes === 'number' &&
@@ -275,6 +286,8 @@ export async function handleListStudentAssignmentsRequest(
             : Math.max(0, Math.floor(Number(ver.reward_stars || 0))),
         attempt_status: latestAttempt ? latestAttempt.status : null,
         attempt_id: latestAttempt ? latestAttempt.id : null,
+        attempt_started_at: latestAttempt ? latestAttempt.attempt_started_at || null : null,
+        attempt_expires_at: latestAttempt ? latestAttempt.expires_at || null : null,
         latest_score:
           latestAttempt &&
           latestAttempt.status === 'graded' &&

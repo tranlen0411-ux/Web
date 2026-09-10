@@ -267,7 +267,15 @@ async function simulateHandler(req, deps) {
     if (!ver) continue;
     const latestAttempt = latestAttemptMap.get(asg.id) || null;
 
-    let closesAt = asg.due_date || ver.due_date || null;
+    const effectiveOpensAt = asg.starts_at ?? ver.starts_at ?? null;
+    const effectiveLastStartAt =
+      asg.last_start_at ??
+      ver.last_start_at ??
+      asg.due_date ??
+      ver.due_date ??
+      null;
+
+    let closesAt = asg.due_date ?? ver.due_date ?? null;
     if (asg.due_date && ver.due_date) {
       closesAt = new Date(asg.due_date) < new Date(ver.due_date) ? asg.due_date : ver.due_date;
     }
@@ -280,13 +288,16 @@ async function simulateHandler(req, deps) {
       subject: ver.subject,
       grade_level: ver.grade_level,
       assigned_at: asg.assigned_at,
-      opens_at: ver.starts_at || null,
+      opens_at: effectiveOpensAt,
+      last_start_at: effectiveLastStartAt,
       closes_at: closesAt,
       duration_minutes: ver.duration_minutes || null,
       total_points: ver.total_points,
       reward_stars: ver.reward_stars,
       attempt_status: latestAttempt ? latestAttempt.status : null,
       attempt_id: latestAttempt ? latestAttempt.id : null,
+      attempt_started_at: latestAttempt ? (latestAttempt.attempt_started_at || latestAttempt.created_at || null) : null,
+      attempt_expires_at: latestAttempt ? (latestAttempt.expires_at || null) : null,
       latest_score: latestAttempt && latestAttempt.status === 'graded' ? latestAttempt.total_score : null,
       max_score: latestAttempt ? latestAttempt.max_score : null,
     });
@@ -537,12 +548,15 @@ async function main() {
     grade_level: 5,
     assigned_at: '2026-09-08T00:00:00.000Z',
     opens_at: '2026-09-08T00:00:00.000Z',
+    last_start_at: '2026-09-09T00:00:00.000Z',
     closes_at: '2026-09-10T00:00:00.000Z',
     duration_minutes: 45,
     total_points: 10,
     reward_stars: 20,
     attempt_status: null,
     attempt_id: null,
+    attempt_started_at: null,
+    attempt_expires_at: null,
     latest_score: null,
     max_score: null,
   });
@@ -795,6 +809,222 @@ async function main() {
     assert.strictEqual(validRes.status, 200);
     const validBody = await validRes.json();
     assert.deepStrictEqual(validBody, { success: true, data: { assignments: [] } });
+  });
+
+  // 11. Flexible Scheduling & Legacy Fallback Verification
+  await it('38 BFF projects assignment last_start_at when explicitly configured', async () => {
+    const req = createMockRequest();
+    const deps = createMockDeps({
+      examAssignments: [
+        {
+          id: 'asg-flex-1',
+          exam_version_id: 'ver-flex-1',
+          class_id: 'c1111111-1111-4111-8111-111111111111',
+          assigned_at: '2026-09-08T00:00:00.000Z',
+          starts_at: '2026-09-08T08:00:00.000Z',
+          last_start_at: '2026-09-08T08:30:00.000Z',
+          due_date: '2026-09-08T12:00:00.000Z',
+        },
+      ],
+      examVersions: [
+        {
+          id: 'ver-flex-1',
+          title: 'Đề linh hoạt',
+          subject: 'Toán',
+          grade_level: 5,
+          duration_minutes: 45,
+          starts_at: '2026-09-08T07:00:00.000Z',
+          last_start_at: '2026-09-08T07:30:00.000Z',
+          due_date: '2026-09-08T18:00:00.000Z',
+          total_points: 10,
+          reward_stars: 20,
+          status: 'published',
+        },
+      ],
+    });
+    const res = await simulateHandler(req, deps);
+    assert.strictEqual(res.status, 200);
+    const asg = res.json.data.assignments[0];
+    assert.strictEqual(asg.opens_at, '2026-09-08T08:00:00.000Z', 'Assignment starts_at takes precedence');
+    assert.strictEqual(asg.last_start_at, '2026-09-08T08:30:00.000Z', 'Assignment last_start_at takes precedence');
+    assert.strictEqual(asg.closes_at, '2026-09-08T12:00:00.000Z', 'Closes at earliest due_date');
+  });
+
+  await it('39 BFF falls back to version last_start_at when assignment last_start_at is null', async () => {
+    const req = createMockRequest();
+    const deps = createMockDeps({
+      examAssignments: [
+        {
+          id: 'asg-flex-2',
+          exam_version_id: 'ver-flex-2',
+          class_id: 'c1111111-1111-4111-8111-111111111111',
+          assigned_at: '2026-09-08T00:00:00.000Z',
+          starts_at: null,
+          last_start_at: null,
+          due_date: '2026-09-08T12:00:00.000Z',
+        },
+      ],
+      examVersions: [
+        {
+          id: 'ver-flex-2',
+          title: 'Đề linh hoạt ver level',
+          subject: 'Toán',
+          grade_level: 5,
+          duration_minutes: 45,
+          starts_at: '2026-09-08T07:00:00.000Z',
+          last_start_at: '2026-09-08T07:30:00.000Z',
+          due_date: '2026-09-08T18:00:00.000Z',
+          total_points: 10,
+          reward_stars: 20,
+          status: 'published',
+        },
+      ],
+    });
+    const res = await simulateHandler(req, deps);
+    assert.strictEqual(res.status, 200);
+    const asg = res.json.data.assignments[0];
+    assert.strictEqual(asg.opens_at, '2026-09-08T07:00:00.000Z', 'Falls back to version starts_at');
+    assert.strictEqual(asg.last_start_at, '2026-09-08T07:30:00.000Z', 'Falls back to version last_start_at');
+  });
+
+  await it('40 BFF legacy fallback: falls back to assignment due_date when last_start_at is null everywhere', async () => {
+    const req = createMockRequest();
+    const deps = createMockDeps({
+      examAssignments: [
+        {
+          id: 'asg-legacy-1',
+          exam_version_id: 'ver-legacy-1',
+          class_id: 'c1111111-1111-4111-8111-111111111111',
+          assigned_at: '2026-09-08T00:00:00.000Z',
+          starts_at: null,
+          last_start_at: null,
+          due_date: '2026-09-08T15:00:00.000Z',
+        },
+      ],
+      examVersions: [
+        {
+          id: 'ver-legacy-1',
+          title: 'Đề cũ legacy',
+          subject: 'Toán',
+          grade_level: 5,
+          duration_minutes: 45,
+          starts_at: '2026-09-08T07:00:00.000Z',
+          last_start_at: null,
+          due_date: '2026-09-08T18:00:00.000Z',
+          total_points: 10,
+          reward_stars: 20,
+          status: 'published',
+        },
+      ],
+    });
+    const res = await simulateHandler(req, deps);
+    assert.strictEqual(res.status, 200);
+    const asg = res.json.data.assignments[0];
+    assert.strictEqual(asg.last_start_at, '2026-09-08T15:00:00.000Z', 'Falls back to assignment due_date');
+    assert.strictEqual(asg.closes_at, '2026-09-08T15:00:00.000Z');
+  });
+
+  await it('41 BFF legacy fallback: falls back to version due_date when assignment due_date and last_start_at are null', async () => {
+    const req = createMockRequest();
+    const deps = createMockDeps({
+      examAssignments: [
+        {
+          id: 'asg-legacy-2',
+          exam_version_id: 'ver-legacy-2',
+          class_id: 'c1111111-1111-4111-8111-111111111111',
+          assigned_at: '2026-09-08T00:00:00.000Z',
+          starts_at: null,
+          last_start_at: null,
+          due_date: null,
+        },
+      ],
+      examVersions: [
+        {
+          id: 'ver-legacy-2',
+          title: 'Đề cũ chỉ có version due_date',
+          subject: 'Toán',
+          grade_level: 5,
+          duration_minutes: 45,
+          starts_at: null,
+          last_start_at: null,
+          due_date: '2026-09-08T20:00:00.000Z',
+          total_points: 10,
+          reward_stars: 20,
+          status: 'published',
+        },
+      ],
+    });
+    const res = await simulateHandler(req, deps);
+    assert.strictEqual(res.status, 200);
+    const asg = res.json.data.assignments[0];
+    assert.strictEqual(asg.last_start_at, '2026-09-08T20:00:00.000Z', 'Falls back to version due_date');
+    assert.strictEqual(asg.closes_at, '2026-09-08T20:00:00.000Z');
+  });
+
+  await it('42 BFF projects attempt_started_at and attempt_expires_at for student attempts', async () => {
+    const req = createMockRequest();
+    const deps = createMockDeps({
+      examAttempts: [
+        {
+          id: 'att-started-1',
+          assignment_id: 'asg-1111-1111-4111-8111-111111111111',
+          student_id: 'a1111111-1111-4111-8111-111111111111',
+          status: 'draft',
+          attempt_number: 1,
+          attempt_started_at: '2026-09-08T08:05:00.000Z',
+          expires_at: '2026-09-08T08:50:00.000Z',
+          total_score: null,
+          max_score: 10,
+        },
+      ],
+    });
+    const res = await simulateHandler(req, deps);
+    assert.strictEqual(res.status, 200);
+    const asg = res.json.data.assignments[0];
+    assert.strictEqual(asg.attempt_status, 'draft');
+    assert.strictEqual(asg.attempt_started_at, '2026-09-08T08:05:00.000Z');
+    assert.strictEqual(asg.attempt_expires_at, '2026-09-08T08:50:00.000Z');
+  });
+
+  await it('43 Client SDK validates all flexible scheduling response fields correctly', () => {
+    const valid = validateListStudentAssignmentsResponse({
+      success: true,
+      data: {
+        assignments: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            exam_version_id: '22222222-2222-4222-8222-222222222222',
+            title: 'Đề thi linh hoạt',
+            description: 'Mô tả',
+            subject: 'Toán',
+            grade_level: 5,
+            assigned_at: '2026-09-08T00:00:00.000Z',
+            opens_at: '2026-09-08T08:00:00.000Z',
+            last_start_at: '2026-09-08T08:30:00.000Z',
+            closes_at: '2026-09-08T12:00:00.000Z',
+            duration_minutes: 30,
+            total_points: 10,
+            reward_stars: 20,
+            attempt_status: 'draft',
+            attempt_id: '33333333-3333-4333-8333-333333333333',
+            attempt_started_at: '2026-09-08T08:15:00.000Z',
+            attempt_expires_at: '2026-09-08T08:45:00.000Z',
+            latest_score: null,
+            max_score: 10,
+          },
+        ],
+      },
+    });
+    assert.ok(valid);
+    assert.strictEqual(valid.assignments[0].last_start_at, '2026-09-08T08:30:00.000Z');
+    assert.strictEqual(valid.assignments[0].attempt_started_at, '2026-09-08T08:15:00.000Z');
+    assert.strictEqual(valid.assignments[0].attempt_expires_at, '2026-09-08T08:45:00.000Z');
+  });
+
+  await it('44 Zero leaking of private question or grading internals in BFF output', () => {
+    assert.strictEqual(handlerSource.includes('answer_key'), false);
+    assert.strictEqual(handlerSource.includes('exam_questions'), false);
+    assert.strictEqual(handlerSource.includes('grading_config'), false);
   });
 
   console.log('\n================================================================');
