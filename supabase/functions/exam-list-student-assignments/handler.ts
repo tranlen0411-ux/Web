@@ -1,5 +1,5 @@
 // supabase/functions/exam-list-student-assignments/handler.ts
-// Exam Builder Student List Assignments Handler V1 (Phase A Flexible Scheduling Contract)
+// Exam Builder Student List Assignments Handler V1 (Phase 3E-B Step 2.5 Delivery Contract)
 // Pure Dispatch Module - Zero Side Effects, Anti-Leak Projection, Multi-Class Ownership Resolution
 
 import {
@@ -62,89 +62,93 @@ export async function handleListStudentAssignmentsRequest(
     return new Response('ok', { headers: corsHeaders });
   }
 
-  // 2. Chỉ cho phép method GET hoặc POST
-  if (req.method !== 'GET' && req.method !== 'POST') {
+  // 2. Enforce POST HTTP Method
+  if (req.method !== 'POST') {
     return createErrorResponse(
       405,
       'METHOD_NOT_ALLOWED',
-      'Phương thức HTTP không được hỗ trợ.'
+      'Phương thức HTTP không được hỗ trợ. Chỉ chấp nhận POST.'
     );
   }
 
-  let currentStage: string = 'AUTH';
-
+  let currentStage = 'INIT';
   try {
-    // 3. Phân tích Auth Header & Xác thực Token CORE JWT
-    console.log('LIST_STAGE_START=AUTH');
-    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
-    const authContext = await verifyStudentAuthAndDeriveContext(authHeader, deps?.authDeps);
+    // 3. Phân giải dependency mode (Production vs Injected Mock)
+    let authDeps: AuthDependencies;
+    if (deps?.authDeps && deps.authDeps.mode === 'injected') {
+      authDeps = deps.authDeps;
+    } else {
+      authDeps = { mode: 'production' };
+    }
 
-    if (!authContext.success || !authContext.studentContext) {
-      console.error('LIST_AUTH_ERROR=' + (authContext.errorCode || 'UNAUTHORIZED'));
-      return createErrorResponse(
-        authContext.httpStatus || 401,
-        authContext.errorCode || 'UNAUTHORIZED',
-        authContext.errorMessage || 'Xác thực tài khoản học sinh không thành công.'
+    // 4. Xác thực JWT và trích xuất Trusted Student Context từ CORE
+    currentStage = 'AUTH';
+    console.log('LIST_STAGE_START=AUTH');
+    const authResult = await verifyStudentAuthAndDeriveContext(req, authDeps);
+    if (!authResult.ok || !authResult.context) {
+      return (
+        authResult.response ||
+        createErrorResponse(401, 'AUTH_REQUIRED', 'Xác thực không thành công.')
       );
     }
     console.log('LIST_STAGE_PASS=AUTH');
 
-    const callerId = authContext.studentContext.studentId;
-
-    // 4. Nếu là POST, kiểm tra body để ngăn chặn tham số cấm/tiêm nhiễm đặc quyền
-    if (req.method === 'POST') {
-      currentStage = 'VALIDATION';
-      console.log('LIST_STAGE_START=VALIDATION');
-      let body: unknown = undefined;
-      try {
-        const text = await req.text();
-        if (text && text.trim().length > 0) {
-          body = JSON.parse(text);
-        }
-      } catch (_jsonErr) {
-        return createErrorResponse(400, 'INVALID_INPUT', 'Dữ liệu JSON không hợp lệ.');
-      }
-
-      const validation = validateListStudentAssignmentsPayload(body, { callerId });
-      if (!validation.valid) {
-        console.error('LIST_VALIDATION_ERROR=' + (validation.errorCode || 'INVALID_INPUT'));
-        return createErrorResponse(
-          400,
-          validation.errorCode || 'INVALID_INPUT',
-          validation.errorMessage || 'Tham số yêu cầu không hợp lệ.'
-        );
-      }
-      console.log('LIST_STAGE_PASS=VALIDATION');
-    }
-
-    // 5. Khởi tạo Query Clients cho 2 cơ sở dữ liệu
-    const coreClient = deps?.coreClient;
-    const examClient = deps?.examClient;
+    const { callerId } = authResult.context;
+    const coreClient = (deps?.coreClient || authResult.coreClient) as ExtendedCoreQueryClient | undefined;
+    const examClient = (deps?.examClient || authResult.examClient) as ExtendedExamQueryClient | undefined;
 
     if (!coreClient || !examClient) {
-      console.error('LIST_CONFIG_ERROR=CLIENT_INIT');
-      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi kết nối cơ sở dữ liệu máy chủ.');
+      return createErrorResponse(
+        500,
+        'INTERNAL_ERROR',
+        'Máy chủ chưa được cấu hình đầy đủ kết nối cơ sở dữ liệu.'
+      );
     }
 
-    // 6. Bước 1 (CORE Read-only): Truy vấn danh sách lớp học sinh đang là thành viên
-    currentStage = 'MEMBERSHIP';
-    console.log('LIST_STAGE_START=MEMBERSHIP');
+    // 5. Đọc và phân tích JSON Body (nếu có)
+    let rawBody: unknown = {};
+    const text = await req.text();
+    if (text && text.trim().length > 0) {
+      try {
+        rawBody = JSON.parse(text);
+      } catch (_) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'Dữ liệu yêu cầu không phải là chuỗi JSON hợp lệ.'
+        );
+      }
+    }
+
+    // 6. Kiểm tra hợp lệ cấu trúc Payload (Strict Allowlist & Type Validation)
+    const valResult = validateListStudentAssignmentsPayload(rawBody, { callerId });
+    if (!valResult.valid) {
+      return createErrorResponse(
+        400,
+        valResult.errorCode || 'INVALID_INPUT',
+        valResult.errorMessage || 'Dữ liệu yêu cầu không hợp lệ.'
+      );
+    }
+
+    // 7. Bước 1 (CORE Read-only): Đọc danh sách lớp học mà học sinh này đang tham gia
+    currentStage = 'CLASS_MEMBERS';
+    console.log('LIST_STAGE_START=CLASS_MEMBERS');
     const { data: memberRows, error: memberErr } = await coreClient
       .from('class_members')
       .select('class_id')
       .eq('student_id', callerId);
 
     if (memberErr) {
-      console.error('LIST_QUERY_ERROR=MEMBERSHIP');
-      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn thông tin lớp học của học sinh.');
+      console.error('LIST_QUERY_ERROR=CLASS_MEMBERS');
+      return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi truy vấn danh sách lớp học của học sinh.');
     }
-    console.log('LIST_STAGE_PASS=MEMBERSHIP');
+    console.log('LIST_STAGE_PASS=CLASS_MEMBERS');
 
-    const classIds: string[] = Array.from(
-      new Set((memberRows || []).map((m: any) => m.class_id).filter(Boolean))
-    );
+    const classIds: string[] = (memberRows || [])
+      .map((m: any) => m.class_id)
+      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0);
 
-    // 7. Nếu học sinh chưa thuộc lớp nào, trả về danh sách rỗng an toàn
+    // Không thuộc lớp nào -> Empty state success ngay lập tức
     if (classIds.length === 0) {
       return createSuccessResponse({ assignments: [] }, 200);
     }
