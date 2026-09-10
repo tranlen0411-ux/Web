@@ -793,8 +793,9 @@ BEGIN
         RAISE EXCEPTION 'ERR_EXAM_NOT_STARTED: Exam has not started yet (starts at %)', v_effective_starts_at USING ERRCODE = '22000';
     END IF;
 
-    -- B. Last start window check (Gate for new attempt creation: allowed up to and including last_start_at)
-    IF v_effective_last_start IS NOT NULL AND v_now > v_effective_last_start THEN
+    -- B. Last start window check (Gate for new attempt creation: [starts_at, last_start_at) half-open interval)
+    -- Allowed only while NOW() < last_start_at, blocked when NOW() >= last_start_at
+    IF v_effective_last_start IS NOT NULL AND v_now >= v_effective_last_start THEN
         RAISE EXCEPTION 'ERR_EXAM_CLOSED: Exam start window has closed (closed at %)', v_effective_last_start USING ERRCODE = '22000';
     END IF;
 

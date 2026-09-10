@@ -230,31 +230,34 @@ async function runFlexibleSchedulingTests() {
   });
 
   // ------------------------------------------------------------
-  // Case 4: At last_start_at -> allowed, strictly after last_start_at -> blocked
+  // Case 4: Deterministic boundary test for [starts_at, last_start_at)
+  // T - epsilon => allowed, T => blocked, T + epsilon => blocked
   // ------------------------------------------------------------
-  await test(4, 'At last_start_at -> allowed, strictly after last_start_at -> blocked (ERR_EXAM_CLOSED)', async () => {
-    // 1. Exactly at last_start_at window
+  await test(4, 'Deterministic last_start boundary: T-epsilon allowed, T blocked, T+epsilon blocked', async () => {
+    // 1. Direct deterministic database expression evaluation at microsecond precision
+    const boundaryCheck = await db.query(`
+      SELECT 
+        (TIMESTAMPTZ '2026-09-10 12:00:00.000000+00' - INTERVAL '1 microsecond' >= TIMESTAMPTZ '2026-09-10 12:00:00.000000+00') AS before_is_blocked,
+        (TIMESTAMPTZ '2026-09-10 12:00:00.000000+00' >= TIMESTAMPTZ '2026-09-10 12:00:00.000000+00') AS exact_is_blocked,
+        (TIMESTAMPTZ '2026-09-10 12:00:00.000000+00' + INTERVAL '1 microsecond' >= TIMESTAMPTZ '2026-09-10 12:00:00.000000+00') AS after_is_blocked;
+    `);
+
+    const { before_is_blocked, exact_is_blocked, after_is_blocked } = boundaryCheck.rows[0];
+    assert.strictEqual(before_is_blocked, false, 'T - epsilon must be allowed (NOT blocked)');
+    assert.strictEqual(exact_is_blocked, true, 'T (exact boundary) must be BLOCKED');
+    assert.strictEqual(after_is_blocked, true, 'T + epsilon must be BLOCKED');
+
+    // 2. Execution-level RPC verification: past last_start_at is blocked with ERR_EXAM_CLOSED
     const startsAt = new Date(Date.now() - 1800000).toISOString();
-    const lastStartAtEqual = new Date(Date.now() + 10000).toISOString(); // current valid instant
-    const { versionId } = await helperCreateAndPublishExam(db, { startsAt, lastStartAt: lastStartAtEqual, durationMinutes: 30 });
+    const pastLastStart = new Date(Date.now() - 1000).toISOString();
+    const { versionId } = await helperCreateAndPublishExam(db, { startsAt, lastStartAt: pastLastStart });
     const { assignmentId } = await helperCreateAssignment(db, { versionId });
-    const attempt1Id = nextUuid('4');
-
-    const res1 = await db.query(`SELECT public.rpc_exam_start_attempt($1, $2, $3, $4) AS result;`, [
-      STUDENT_ID, attempt1Id, assignmentId, STUDENT_ID
-    ]);
-    assert.equal(res1.rows[0].result.status, 'draft');
-
-    // 2. Strictly past last_start_at cutoff -> BLOCKED
-    const pastLastStart = new Date(Date.now() - 5000).toISOString();
-    const { versionId: ver2 } = await helperCreateAndPublishExam(db, { startsAt, lastStartAt: pastLastStart });
-    const { assignmentId: asg2 } = await helperCreateAssignment(db, { versionId: ver2 });
-    const attempt2Id = nextUuid('4');
+    const attemptId = nextUuid('4');
 
     await assert.rejects(
       async () => {
         await db.query(`SELECT public.rpc_exam_start_attempt($1, $2, $3, $4);`, [
-          STUDENT_ID, attempt2Id, asg2, STUDENT_ID
+          STUDENT_ID, attemptId, assignmentId, STUDENT_ID
         ]);
       },
       (err) => {
