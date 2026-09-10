@@ -141,6 +141,7 @@ export function ExamTakingModal({
     }
 
     let isSubscribed = true;
+    let session = null;
     const epoch = ++lifecycleEpochRef.current;
 
     async function initSession() {
@@ -149,7 +150,7 @@ export function ExamTakingModal({
         setGlobalError(null);
 
         const client = studentClient || createExamStudentClient();
-        const session = createExamTakingSession({
+        session = createExamTakingSession({
           assignmentId,
           studentClient: client,
           onConfirmedFinalized: (finalizedData) => {
