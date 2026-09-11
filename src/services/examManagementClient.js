@@ -1,0 +1,173 @@
+// src/services/examManagementClient.js
+// Exam Builder V1 Management API Client (Admin & Teacher Authoring + Assignment BFF Transport)
+
+async function getDefaultSupabaseClient() {
+  try {
+    const mod = await import('../lib/supabase.js');
+    return mod.supabase;
+  } catch (_) {
+    return null;
+  }
+}
+
+export const EXAM_MANAGEMENT_API_BASE_URL =
+  'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/exam-management-api';
+
+export class ExamManagementClient {
+  constructor(options = {}) {
+    this.supabase = options.supabase || null;
+    this.baseUrl = options.baseUrl || EXAM_MANAGEMENT_API_BASE_URL;
+    this.invokeFunction = options.invokeFunction || null;
+  }
+
+  /**
+   * Lấy Bearer Access Token an toàn từ Supabase session
+   */
+  async getAccessToken() {
+    let client = this.supabase;
+    if (!client) {
+      client = await getDefaultSupabaseClient();
+    }
+    if (!client || !client.auth) {
+      throw new Error('Supabase client chưa được khởi tạo.');
+    }
+    const { data, error } = await client.auth.getSession();
+    if (error || !data?.session?.access_token) {
+      throw new Error('Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
+    }
+    return data.session.access_token;
+  }
+
+  /**
+   * Thực hiện HTTP request đến Edge Function BFF
+   */
+  async dispatch(action, method = 'POST', payload = null, queryParams = {}) {
+    try {
+      // 1. Kiểm tra nếu có mock transport được inject (dành cho Unit Testing)
+      if (typeof this.invokeFunction === 'function') {
+        const result = await this.invokeFunction({
+          action,
+          method,
+          payload,
+          queryParams,
+        });
+        return result;
+      }
+
+      // 2. Lấy Token xác thực CORE JWT
+      const token = await this.getAccessToken();
+
+      // 3. Xây dựng URL
+      const url = new URL(`${this.baseUrl}/${action}`);
+      Object.entries(queryParams).forEach(([key, val]) => {
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          url.searchParams.set(key, String(val).trim());
+        }
+      });
+
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      };
+
+      const options = {
+        method,
+        headers,
+      };
+
+      if (method !== 'GET' && method !== 'HEAD' && payload) {
+        options.body = JSON.stringify(payload);
+      }
+
+      const response = await fetch(url.toString(), options);
+      let jsonResult;
+      try {
+        jsonResult = await response.json();
+      } catch (_) {
+        return {
+          ok: false,
+          error: {
+            status: response.status,
+            errorCode: 'INVALID_JSON_RESPONSE',
+            message: 'Phản hồi từ máy chủ không phải là JSON hợp lệ.',
+          },
+        };
+      }
+
+      if (!response.ok || jsonResult?.success === false) {
+        return {
+          ok: false,
+          error: {
+            status: response.status,
+            errorCode: jsonResult?.error_code || 'REQUEST_FAILED',
+            message: jsonResult?.message || 'Yêu cầu không thành công.',
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        data: jsonResult?.data,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          status: 0,
+          errorCode: 'NETWORK_ERROR',
+          message: err?.message || 'Không thể kết nối đến máy chủ quản lý đề thi.',
+        },
+      };
+    }
+  }
+
+  /**
+   * Lấy danh sách đề thi (Admin: toàn trường; Teacher: đề do mình tạo)
+   */
+  async listTests() {
+    return await this.dispatch('list-tests', 'GET');
+  }
+
+  /**
+   * Lấy chi tiết đề thi & phiên bản câu hỏi để phục vụ soạn thảo
+   */
+  async getTestDetail({ examId, versionId }) {
+    return await this.dispatch('get-test-detail', 'GET', null, {
+      exam_id: examId,
+      version_id: versionId,
+    });
+  }
+
+  /**
+   * Tạo mới đề thi container & draft version v1
+   */
+  async createTest(payload) {
+    return await this.dispatch('create-test', 'POST', payload);
+  }
+
+  /**
+   * Lưu bản nháp đề thi kèm câu hỏi & lịch thi linh hoạt
+   */
+  async saveDraft(payload) {
+    return await this.dispatch('save-draft', 'POST', payload);
+  }
+
+  /**
+   * Xuất bản phiên bản đề thi
+   */
+  async publishVersion(payload) {
+    return await this.dispatch('publish', 'POST', payload);
+  }
+
+  /**
+   * Giao đề thi đã xuất bản cho lớp học (Server-Side kiểm tra quyền sở hữu lớp)
+   */
+  async createAssignment(payload) {
+    return await this.dispatch('create-assignment', 'POST', payload);
+  }
+}
+
+export function createExamManagementClient(options = {}) {
+  return new ExamManagementClient(options);
+}

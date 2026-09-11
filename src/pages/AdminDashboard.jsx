@@ -33,21 +33,30 @@ import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
+import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
 
 export const AdminDashboard = () => {
   const { profile, globalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   const [searchParams] = useSearchParams();
 
-  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=academic-assignments
+  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=exams hoặc ?tab=academic-assignments
   const tabParam = searchParams.get('tab');
   const [activeAdminTab, setActiveAdminTab] = useState(
-    tabParam === 'question-bank' ? 'question-bank' : (tabParam === 'exercises' || tabParam === 'academic-assignments') ? 'academic-assignments' : tabParam === 'games' ? 'games' : 'users'
+    tabParam === 'exams'
+      ? 'exams'
+      : tabParam === 'question-bank'
+      ? 'question-bank'
+      : (tabParam === 'exercises' || tabParam === 'academic-assignments')
+      ? 'academic-assignments'
+      : tabParam === 'games'
+      ? 'games'
+      : 'users'
   );
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments' || tab === 'question-bank') {
+    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments' || tab === 'question-bank' || tab === 'exams') {
       setActiveAdminTab(tab === 'exercises' ? 'academic-assignments' : tab);
     }
   }, [searchParams]);
@@ -55,6 +64,7 @@ export const AdminDashboard = () => {
   const [stats, setStats] = useState({ users: 0, games: 0, classes: 0 });
   const [usersList, setUsersList] = useState([]);
   const [gamesList, setGamesList] = useState([]);
+  const [classesListState, setClassesListState] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -90,9 +100,10 @@ export const AdminDashboard = () => {
       // 1. Thống kê tổng số
       const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
       const { count: gCount } = await supabase.from('games').select('id', { count: 'exact', head: true });
-      const { count: cCount } = await supabase.from('classes').select('id', { count: 'exact', head: true });
+      const { count: cCount, data: cData } = await supabase.from('classes').select('*', { count: 'exact' }).order('grade_level');
 
       setStats({ users: uCount || 0, games: gCount || 0, classes: cCount || 0 });
+      setClassesListState(cData || []);
 
       // 2. Lấy danh sách người dùng
       const { data: uData } = await supabase
@@ -239,6 +250,16 @@ export const AdminDashboard = () => {
         >
           <Layers className="w-4 h-4" /> Ngân Hàng Câu Hỏi
         </button>
+        <button
+          onClick={() => { setActiveAdminTab('exams'); triggerSound('click'); }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeAdminTab === 'exams'
+              ? 'bg-purple-600 text-white shadow-md border-b-4 border-purple-800'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" /> Quản Lý Đề Kiểm Tra
+        </button>
       </div>
 
       {activeAdminTab === 'exercises' && (
@@ -250,6 +271,15 @@ export const AdminDashboard = () => {
         <div className="mb-10 animate-fadeIn">
           <QuestionBankListTab
             role="admin"
+            globalClassFilter={globalClassFilter}
+          />
+        </div>
+      )}
+      {activeAdminTab === 'exams' && (
+        <div className="mb-10 animate-fadeIn">
+          <ExamManagementTab
+            role="admin"
+            classes={classesListState}
             globalClassFilter={globalClassFilter}
           />
         </div>
