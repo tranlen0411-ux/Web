@@ -93,9 +93,12 @@ async function main() {
 
   // 6. Verify Submitted (Auto-graded) Card Render Invariants
   await it('06 Parent renders submitted card correctly', () => {
+    const nextDraftIndex = parentSource.indexOf('isDraftExpired ? (') !== -1
+      ? parentSource.indexOf('isDraftExpired ? (')
+      : parentSource.indexOf('isDraft ? (');
     const submittedSection = parentSource.substring(
       parentSource.indexOf('isSubmitted ? ('),
-      parentSource.indexOf('isDraft ? (')
+      nextDraftIndex
     );
     assert.ok(submittedSection.includes('Đã nộp'), 'Must render Đã nộp label');
   });

@@ -436,6 +436,15 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {examAssignments.map((asg) => {
                 const isDraft = asg.attempt_status === 'draft';
+                const attemptExpiresAtMs = asg.attempt_expires_at
+                  ? new Date(asg.attempt_expires_at).getTime()
+                  : null;
+                const isDraftExpired =
+                  isDraft &&
+                  attemptExpiresAtMs !== null &&
+                  Number.isFinite(attemptExpiresAtMs) &&
+                  attemptExpiresAtMs <= Date.now();
+                const isDraftActive = isDraft && !isDraftExpired;
                 const isSubmitted = asg.attempt_status === 'submitted';
                 const isPendingManual = asg.attempt_status === 'pending_manual_grade';
                 const isGraded = asg.attempt_status === 'graded';
@@ -508,7 +517,16 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                             Đã nộp
                           </span>
                         </div>
-                      ) : isDraft ? (
+                      ) : isDraftExpired ? (
+                        <div className="w-full flex items-center justify-between bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-slate-700">
+                          <span className="text-xs font-bold flex items-center gap-1 text-slate-500">
+                            <Clock className="w-4 h-4 text-slate-400" /> Đã hết thời gian làm bài thi
+                          </span>
+                          <span className="px-3 py-1 bg-slate-100 text-slate-700 font-black text-xs rounded-xl border border-slate-300">
+                            Hết thời gian
+                          </span>
+                        </div>
+                      ) : isDraftActive ? (
                         <button
                           onClick={() => handleStartExamAssignment(asg)}
                           className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl border-b-4 border-indigo-800 shadow-sm flex items-center justify-center gap-1.5 transition-all active:translate-y-0.5"
