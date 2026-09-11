@@ -1181,6 +1181,64 @@ async function runAllManagementTests() {
     assert.equal(code.includes('setQuestions([])'), true);
   });
 
+  await test('34. [CONTRACT] Migration 20260911000011 has ALL valid RAISE formats with matching placeholders', () => {
+    const migrationPath = path.resolve(__dirname, '../supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
+    assert.equal(fs.existsSync(migrationPath), true);
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+
+    // Extract all RAISE EXCEPTION statements
+    const raiseRegex = /RAISE\s+EXCEPTION\s+('([^']*)'(?:\s*,\s*([^;]+?))?)\s+USING\s+ERRCODE/gi;
+    let match;
+    let count = 0;
+    while ((match = raiseRegex.exec(sql)) !== null) {
+      count++;
+      const fullClause = match[1];
+      const formatStr = match[2];
+      const argsPart = match[3];
+
+      // Count % placeholders in format string
+      const placeholderCount = (formatStr.match(/%/g) || []).length;
+
+      // Count arguments if present
+      const argCount = argsPart ? argsPart.split(',').map(s => s.trim()).filter(Boolean).length : 0;
+
+      assert.equal(
+        placeholderCount,
+        argCount,
+        `RAISE EXCEPTION placeholder mismatch in migration: "${fullClause}". Placeholders: ${placeholderCount}, Args: ${argCount}`
+      );
+    }
+    assert.ok(count >= 7, `Expected at least 7 RAISE EXCEPTION statements audited, found ${count}`);
+  });
+
+  await test('35. [CONTRACT] ExamEditorModal enforces persistent fail-closed gate on detail failure & preserves new exam flow', () => {
+    const modalPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamEditorModal.jsx');
+    const code = fs.readFileSync(modalPath, 'utf8');
+
+    // 1. Explicit load state
+    assert.equal(code.includes("const [detailLoadStatus, setDetailLoadStatus] = useState('idle')"), true);
+
+    // 2. New exam initialization sets ready
+    assert.equal(code.includes("setDetailLoadStatus('ready')"), true);
+
+    // 3. Existing exam sets loading, ready on success, failed on error
+    assert.equal(code.includes("setDetailLoadStatus('loading')"), true);
+    assert.equal(code.includes("setDetailLoadStatus('failed')"), true);
+
+    // 4. Invariant: handleSaveDraft blocked when examToEdit && detailLoadStatus !== 'ready'
+    assert.equal(code.includes("Boolean(examToEdit) && detailLoadStatus !== 'ready'"), true);
+
+    // 5. Invariant: Save and Publish buttons disabled when detailLoadStatus !== 'ready'
+    assert.equal(
+      code.includes("disabled={loading || fetchingDetail || (Boolean(examToEdit) && detailLoadStatus !== 'ready')}"),
+      true
+    );
+
+    // 6. Fail-closed UI banner rendered on failed state
+    assert.equal(code.includes("Boolean(examToEdit) && detailLoadStatus === 'failed'"), true);
+    assert.equal(code.includes('Khóa An Toàn / Fail-Closed'), true);
+  });
+
   console.log('\n======================================================================');
   console.log(`TOTAL MANAGEMENT TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('======================================================================\n');

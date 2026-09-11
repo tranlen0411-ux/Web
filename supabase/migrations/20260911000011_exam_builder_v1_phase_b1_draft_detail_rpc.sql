@@ -47,7 +47,7 @@ BEGIN
 
     -- 4. Check Exam container status
     IF v_test.status <> 'active' THEN
-        RAISE EXCEPTION 'ERR_EXAM_ARCHIVED: Exam container is not active', v_ver.exam_id USING ERRCODE = '22000';
+        RAISE EXCEPTION 'ERR_EXAM_ARCHIVED: Exam container % is not active', v_ver.exam_id USING ERRCODE = '22000';
     END IF;
 
     -- 5. Enforce Draft-Only: This authoring RPC is ONLY for editable drafts

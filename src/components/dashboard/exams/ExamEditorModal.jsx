@@ -101,6 +101,7 @@ export const ExamEditorModal = ({
 
   const [loading, setLoading] = useState(false);
   const [fetchingDetail, setFetchingDetail] = useState(false);
+  const [detailLoadStatus, setDetailLoadStatus] = useState('idle'); // 'idle' | 'loading' | 'ready' | 'failed'
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -117,6 +118,9 @@ export const ExamEditorModal = ({
   }, [isOpen, examToEdit]);
 
   const initNewExam = () => {
+    setDetailLoadStatus('ready');
+    setFetchingDetail(false);
+
     setExamId('');
     setVersionId('');
     setVersionNumber(1);
@@ -156,6 +160,7 @@ export const ExamEditorModal = ({
   };
 
   const initExistingExam = async (exam) => {
+    setDetailLoadStatus('loading');
     setExamId(exam.id);
     setTitle(exam.title || '');
     setSubject(exam.subject || 'Toán');
@@ -187,6 +192,7 @@ export const ExamEditorModal = ({
       if (!res.ok || !res.data) {
         setErrorMsg(res.error?.message || 'Không thể tải chi tiết câu hỏi và cấu hình đáp án của đề thi.');
         setQuestions([]);
+        setDetailLoadStatus('failed');
         return;
       }
 
@@ -225,10 +231,12 @@ export const ExamEditorModal = ({
       } else {
         setQuestions([]);
       }
+      setDetailLoadStatus('ready');
     } catch (err) {
       console.error('Fetch test detail exception:', err);
       setErrorMsg(err?.message || 'Lỗi hệ thống khi tải chi tiết đề thi.');
       setQuestions([]);
+      setDetailLoadStatus('failed');
     } finally {
       setFetchingDetail(false);
     }
@@ -236,6 +244,10 @@ export const ExamEditorModal = ({
 
   // Thêm câu hỏi mới
   const handleAddQuestion = (type = 'single_choice') => {
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      return;
+    }
+
     const nextNum = questions.length + 1;
     let initialOptions = [];
     let initialAnswerKey = null;
@@ -264,6 +276,9 @@ export const ExamEditorModal = ({
   };
 
   const handleDeleteQuestion = (qIndex) => {
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      return;
+    }
     if (questions.length <= 1) {
       alert('Đề thi phải có ít nhất 1 câu hỏi.');
       return;
@@ -278,6 +293,9 @@ export const ExamEditorModal = ({
   };
 
   const handleUpdateQuestion = (qIndex, field, value) => {
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      return;
+    }
     const updated = [...questions];
     updated[qIndex] = {
       ...updated[qIndex],
@@ -288,6 +306,12 @@ export const ExamEditorModal = ({
 
   // Lưu bản nháp (hoặc tạo mới nếu chưa có)
   const handleSaveDraft = async (shouldPublishAfter = false) => {
+    // Invariant Guard: Fail-closed if existing exam detail is not ready or failed
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      setErrorMsg('Không thể lưu hoặc xuất bản đề thi khi chưa tải hoàn tất dữ liệu gốc từ máy chủ. Vui lòng đóng và mở lại.');
+      return;
+    }
+
     if (!title.trim()) {
       setErrorMsg('Vui lòng nhập tiêu đề đề thi.');
       setActiveTab('general');
@@ -529,6 +553,20 @@ export const ExamEditorModal = ({
             </div>
           )}
 
+          {Boolean(examToEdit) && detailLoadStatus === 'failed' && (
+            <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-start gap-3 text-rose-900 shadow-sm">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h5 className="text-xs font-black uppercase text-rose-900">
+                  Lỗi Tải Dữ Liệu Đề Thi (Khóa An Toàn / Fail-Closed)
+                </h5>
+                <p className="text-xs font-bold text-rose-700">
+                  Không thể tải đầy đủ danh sách câu hỏi và cấu hình đáp án từ máy chủ. Để đảm bảo không ghi đè dữ liệu rỗng lên đề thi hiện có, tính năng Lưu nháp và Xuất bản đã bị khóa hoàn toàn. Vui lòng đóng cửa sổ này và thử lại.
+                </p>
+              </div>
+            </div>
+          )}
+
           {isPublished && (
             <div className="p-3.5 bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl text-xs font-bold flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
@@ -715,21 +753,24 @@ export const ExamEditorModal = ({
                       <button
                         type="button"
                         onClick={() => handleAddQuestion('single_choice')}
-                        className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all"
+                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3.5 h-3.5" /> + Trắc nghiệm
                       </button>
                       <button
                         type="button"
                         onClick={() => handleAddQuestion('essay')}
-                        className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all"
+                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3.5 h-3.5" /> + Tự luận
                       </button>
                       <button
                         type="button"
                         onClick={() => handleAddQuestion('fill_blank')}
-                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all"
+                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3.5 h-3.5" /> + Điền từ
                       </button>
@@ -998,8 +1039,8 @@ export const ExamEditorModal = ({
             <button
               type="button"
               onClick={() => handleSaveDraft(false)}
-              disabled={loading || fetchingDetail}
-              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md border-b-4 border-amber-700 flex items-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50"
+              disabled={loading || fetchingDetail || (Boolean(examToEdit) && detailLoadStatus !== 'ready')}
+              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md border-b-4 border-amber-700 flex items-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Lưu Bản Nháp
@@ -1008,8 +1049,8 @@ export const ExamEditorModal = ({
             <button
               type="button"
               onClick={() => handleSaveDraft(true)}
-              disabled={loading || fetchingDetail}
-              className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md border-b-4 border-emerald-800 flex items-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50"
+              disabled={loading || fetchingDetail || (Boolean(examToEdit) && detailLoadStatus !== 'ready')}
+              className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md border-b-4 border-emerald-800 flex items-center gap-2 active:translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               Xuất Bản Đề Thi
