@@ -34,6 +34,7 @@ import { useSound } from '../context/SoundContext';
 import { formatClassLabel } from '../utils/helpers';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
+import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
 
 export const TeacherDashboard = () => {
   const { profile, globalClassFilter } = useAuth();
@@ -42,6 +43,7 @@ export const TeacherDashboard = () => {
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'exams') return 'exams';
     if (tabParam === 'question-bank') return 'question-bank';
     if (tabParam === 'academic-assignments' || tabParam === 'exercises') return 'academic-assignments';
     if (tabParam === 'games') return 'games';
@@ -52,7 +54,7 @@ export const TeacherDashboard = () => {
   // Tự động đồng bộ URL query parameter cho Giáo viên
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'classes' || tab === 'question-bank') {
+    if (tab === 'games' || tab === 'classes' || tab === 'question-bank' || tab === 'exams') {
       setActiveTab(tab);
     } else if (tab === 'academic-assignments' || tab === 'exercises') {
       setActiveTab('academic-assignments');
@@ -305,6 +307,20 @@ export const TeacherDashboard = () => {
         >
           <Layers className="w-4 h-4" /> Ngân Hàng Câu Hỏi
         </button>
+        <button
+          onClick={() => {
+            setActiveTab('exams');
+            triggerSound('click');
+            setSearchParams({ tab: 'exams' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'exams'
+              ? 'bg-purple-600 text-white shadow-md border-b-4 border-purple-800'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" /> Quản Lý Đề Kiểm Tra
+        </button>
       </div>
 
       {(activeTab === 'academic-assignments' || activeTab === 'exercises') && (
@@ -316,6 +332,15 @@ export const TeacherDashboard = () => {
           globalClassFilter={globalClassFilter}
           classes={classes}
         />
+      )}
+      {activeTab === 'exams' && (
+        <div className="mb-10 animate-fadeIn">
+          <ExamManagementTab
+            role="teacher"
+            classes={classes}
+            globalClassFilter={globalClassFilter}
+          />
+        </div>
       )}
 
       {/* KHU VỰC 1: QUẢN LÝ LỚP HỌC & HỌC SINH (tab=classes) */}
