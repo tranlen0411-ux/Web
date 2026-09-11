@@ -218,114 +218,52 @@ export async function handleExamManagementRequest(
     // ENDPOINT 2: GET /get-test-detail
     // =========================================================================
     if (req.method === 'GET' && action === 'get-test-detail') {
+      let targetVersionId = url.searchParams.get('version_id');
       const examId = url.searchParams.get('exam_id');
-      const versionId = url.searchParams.get('version_id');
 
-      if (!examId && !versionId) {
+      if (!targetVersionId && !examId) {
         return createErrorResponse(400, 'INVALID_INPUT', 'Yêu cầu tham số exam_id hoặc version_id.');
       }
 
-      let testRow: any = null;
-      let versionRow: any = null;
-
-      if (versionId) {
-        const { data: vData, error: vErr } = await examClient
+      if (!targetVersionId && examId) {
+        // Tìm version nháp mới nhất của đề thi
+        const { data: vList, error: vListErr } = await examClient
           .from('exam_versions')
-          .select('*')
-          .eq('id', versionId)
-          .maybeSingle();
-
-        if (vErr || !vData) {
-          return createErrorResponse(404, 'NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
-        }
-        versionRow = vData;
-
-        const { data: tData, error: tErr } = await examClient
-          .from('exam_tests')
-          .select('*')
-          .eq('id', versionRow.exam_id)
-          .maybeSingle();
-
-        if (tErr || !tData) {
-          return createErrorResponse(404, 'NOT_FOUND', 'Không tìm thấy đề thi.');
-        }
-        testRow = tData;
-      } else if (examId) {
-        const { data: tData, error: tErr } = await examClient
-          .from('exam_tests')
-          .select('*')
-          .eq('id', examId)
-          .maybeSingle();
-
-        if (tErr || !tData) {
-          return createErrorResponse(404, 'NOT_FOUND', 'Không tìm thấy đề thi.');
-        }
-        testRow = tData;
-
-        // Tìm version nháp mới nhất hoặc current_version
-        const { data: vList } = await examClient
-          .from('exam_versions')
-          .select('*')
+          .select('id, version_number, status')
           .eq('exam_id', examId)
           .order('version_number', { ascending: false });
 
-        versionRow =
-          (vList || []).find((v: any) => v.id === testRow.current_version_id) ||
-          (vList || [])[0] ||
-          null;
-      }
-
-      // Phân quyền: Teacher chỉ được xem đề thi do mình tạo
-      if (actorRole === 'teacher' && testRow.author_id !== callerId) {
-        return createErrorResponse(403, 'ERR_UNAUTHORIZED', 'Bạn không có quyền xem đề thi của giáo viên khác.');
-      }
-
-      let questions: any[] = [];
-      if (versionRow) {
-        const { data: qData } = await examClient
-          .from('exam_questions')
-          .select(`
-            id,
-            exam_version_id,
-            question_number,
-            question_type,
-            prompt,
-            options_json,
-            points,
-            source_question_bank_item_id,
-            source_question_bank_version_id,
-            created_at
-          `)
-          .eq('exam_version_id', versionRow.id)
-          .order('question_number', { ascending: true });
-
-        questions = qData || [];
-
-        // Lấy đáp án từ app_private.exam_answer_keys để hiển thị cho Tác giả / Admin soạn thảo
-        if (questions.length > 0) {
-          const qIds = questions.map((q: any) => q.id);
-          try {
-            const { data: keysData } = await examClient
-              .from('exam_answer_keys')
-              .select('*')
-              .in('question_id', qIds);
-
-            const keysMap = new Map((keysData || []).map((k: any) => [k.question_id, k]));
-            questions = questions.map((q: any) => ({
-              ...q,
-              answer_key: keysMap.get(q.id) || null,
-            }));
-          } catch (_) {
-            // Non-fatal
-          }
+        if (vListErr) {
+          return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tra cứu phiên bản đề thi.');
         }
+
+        const draftV = (vList || []).find((v: any) => v.status === 'draft') || (vList || [])[0];
+        if (!draftV) {
+          return createErrorResponse(404, 'NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
+        }
+        targetVersionId = draftV.id;
       }
 
-      return createSuccessResponse({
-        test: testRow,
-        version: versionRow,
-        questions,
+      if (!isValidUUID(targetVersionId)) {
+        return createErrorResponse(400, 'INVALID_INPUT', 'Mã version_id không hợp lệ.');
+      }
+
+      const rpcRes = await examClient.rpc('rpc_exam_get_draft_questions_with_answers', {
+        p_caller_id: callerId,
+        p_version_id: targetVersionId,
+        p_is_admin: actorRole === 'admin',
       });
+
+      if (rpcRes.error) {
+        const norm = normalizeRpcError(rpcRes.error);
+        return createErrorResponse(norm.status, norm.errorCode, norm.message);
+      }
+
+      if (!rpcRes.data) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Không thể tải chi tiết đề thi.');
+      }
+
+      return createSuccessResponse(rpcRes.data);
     }
 
     // =========================================================================

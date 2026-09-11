@@ -1,6 +1,6 @@
 // scripts/test_exam_management_bff.mjs
 // Comprehensive Unit & Security Test Suite for Exam Builder Management BFF (Phase B1)
-// Covers Auth, Admin Scope, Teacher Scope, Server-Side Class Ownership (P0), Scheduling, Data Safety & UI Contracts
+// Covers Auth, Admin Scope, Teacher Scope, Server-Side Class Ownership (P0), Scheduling, Safe RPC Answer Access & Real Source Contract Assertions
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -307,7 +307,52 @@ async function handleManagementRequestRunner(req, deps) {
     return createSuccessResponse({ tests: enrichedTests });
   }
 
-  // 2. POST /create-test
+  // 2. GET /get-test-detail (SECURE RPC DRIVEN)
+  if (req.method === 'GET' && action === 'get-test-detail') {
+    let targetVersionId = url.searchParams.get('version_id');
+    const examId = url.searchParams.get('exam_id');
+
+    if (!targetVersionId && !examId) {
+      return createErrorResponse(400, 'INVALID_INPUT', 'Yêu cầu tham số exam_id hoặc version_id.');
+    }
+
+    if (!targetVersionId && examId) {
+      const { data: vList, error: vListErr } = await examClient
+        .from('exam_versions')
+        .select('id, version_number, status')
+        .eq('exam_id', examId)
+        .order('version_number', { ascending: false });
+
+      if (vListErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tra cứu phiên bản đề thi.');
+      }
+
+      const draftV = (vList || []).find((v) => v.status === 'draft') || (vList || [])[0];
+      if (!draftV) {
+        return createErrorResponse(404, 'NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
+      }
+      targetVersionId = draftV.id;
+    }
+
+    const rpcRes = await examClient.rpc('rpc_exam_get_draft_questions_with_answers', {
+      p_caller_id: callerId,
+      p_version_id: targetVersionId,
+      p_is_admin: actorRole === 'admin',
+    });
+
+    if (rpcRes.error) {
+      const norm = normalizeRpcError(rpcRes.error);
+      return createErrorResponse(norm.status, norm.errorCode, norm.message);
+    }
+
+    if (!rpcRes.data) {
+      return createErrorResponse(500, 'INTERNAL_ERROR', 'Không thể tải chi tiết đề thi.');
+    }
+
+    return createSuccessResponse(rpcRes.data);
+  }
+
+  // 3. POST /create-test
   if (req.method === 'POST' && action === 'create-test') {
     let rawBody;
     try { rawBody = await req.json(); } catch (_) { return createErrorResponse(400, 'INVALID_INPUT', 'JSON không hợp lệ.'); }
@@ -331,7 +376,7 @@ async function handleManagementRequestRunner(req, deps) {
     return createSuccessResponse(rpcRes.data, 201);
   }
 
-  // 3. POST /save-draft
+  // 4. POST /save-draft
   if (req.method === 'POST' && action === 'save-draft') {
     let rawBody;
     try { rawBody = await req.json(); } catch (_) { return createErrorResponse(400, 'INVALID_INPUT', 'JSON không hợp lệ.'); }
@@ -366,7 +411,7 @@ async function handleManagementRequestRunner(req, deps) {
     return createSuccessResponse(rpcRes.data, 200);
   }
 
-  // 4. POST /publish
+  // 5. POST /publish
   if (req.method === 'POST' && action === 'publish') {
     let rawBody;
     try { rawBody = await req.json(); } catch (_) { return createErrorResponse(400, 'INVALID_INPUT', 'JSON không hợp lệ.'); }
@@ -385,7 +430,7 @@ async function handleManagementRequestRunner(req, deps) {
     return createSuccessResponse(rpcRes.data, 200);
   }
 
-  // 5. POST /create-assignment (P0 SECURITY)
+  // 6. POST /create-assignment (P0 SECURITY)
   if (req.method === 'POST' && action === 'create-assignment') {
     let rawBody;
     try { rawBody = await req.json(); } catch (_) { return createErrorResponse(400, 'INVALID_INPUT', 'JSON không hợp lệ.'); }
@@ -620,6 +665,7 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
           select: () => {
             let filtered = Array.from(versionsDb.values());
             const builder = {
+              order: () => builder,
               eq: (col, val) => {
                 filtered = filtered.filter((v) => v[col] === val);
                 return builder;
@@ -645,6 +691,37 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
             version_number: 1,
             status: 'draft',
             idempotent_replay: false,
+          },
+          error: null,
+        };
+      }
+      if (name === 'rpc_exam_get_draft_questions_with_answers') {
+        const v = versionsDb.get(args.p_version_id);
+        if (!v) return { data: null, error: { message: 'ERR_VERSION_NOT_FOUND' } };
+        const test = examsDb.get(v.exam_id);
+        if (!test) return { data: null, error: { message: 'ERR_EXAM_NOT_FOUND' } };
+        if (v.status !== 'draft') {
+          return { data: null, error: { message: 'ERR_VERSION_IMMUTABLE' } };
+        }
+        if (!args.p_is_admin && test.author_id !== args.p_caller_id) {
+          return { data: null, error: { message: 'ERR_UNAUTHORIZED' } };
+        }
+        return {
+          data: {
+            test: { ...test },
+            version: { ...v },
+            questions: [
+              {
+                id: '99999999-9999-4999-a999-999999999991',
+                exam_version_id: v.id,
+                question_number: 1,
+                question_type: 'single_choice',
+                prompt: '1 + 1 = ?',
+                options_json: ['1', '2', '3', '4'],
+                points: 1,
+                answer_key: { correct_answer: '2' },
+              },
+            ],
           },
           error: null,
         };
@@ -1046,6 +1123,62 @@ async function runAllManagementTests() {
     assert.equal(content.includes('Thời gian mở đề:'), true);
     assert.equal(content.includes('Hạn chót vào làm:'), true);
     assert.equal(content.includes('Hạn nộp bài cưỡng chế:'), true);
+  });
+
+  // 9. REAL PRODUCTION SOURCE CONTRACT ASSERTIONS
+  await test('28. Migration file contains secure rpc_exam_get_draft_questions_with_answers with draft check & app_private join', () => {
+    const migrationPath = path.resolve(__dirname, '../supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
+    assert.equal(fs.existsSync(migrationPath), true);
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+    assert.equal(sql.includes('rpc_exam_get_draft_questions_with_answers'), true);
+    assert.equal(sql.includes('SECURITY DEFINER'), true);
+    assert.equal(sql.includes('SET search_path = public, app_private'), true);
+    assert.equal(sql.includes("v_ver.status <> 'draft'"), true);
+    assert.equal(sql.includes('ERR_VERSION_IMMUTABLE'), true);
+    assert.equal(sql.includes('v_test.author_id <> p_caller_id'), true);
+    assert.equal(sql.includes('LEFT JOIN app_private.exam_answer_keys'), true);
+    assert.equal(sql.includes('REVOKE ALL ON FUNCTION public.rpc_exam_get_draft_questions_with_answers'), true);
+    assert.equal(sql.includes('GRANT EXECUTE ON FUNCTION public.rpc_exam_get_draft_questions_with_answers(UUID, UUID, BOOLEAN) TO service_role'), true);
+  });
+
+  await test('29. Real handler.ts calls rpc_exam_get_draft_questions_with_answers and has NO direct exam_answer_keys query', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+    assert.equal(code.includes('rpc_exam_get_draft_questions_with_answers'), true);
+    assert.equal(code.includes("from('exam_answer_keys')"), false);
+    assert.equal(code.includes("schema('app_private')"), false);
+    assert.equal(code.includes('rpcRes.error'), true);
+  });
+
+  await test('30. Real handler.ts enforces server-derived callerId and role-derived is_admin', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+    assert.equal(code.includes('p_caller_id: callerId'), true);
+    assert.equal(code.includes("p_is_admin: actorRole === 'admin'"), true);
+    assert.equal(code.includes("query.eq('author_id', callerId)"), true);
+  });
+
+  await test('31. Real handler.ts enforces Teacher class ownership and returns CLASS_ACCESS_DENIED', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+    assert.equal(code.includes("actorRole === 'teacher' && classRow.teacher_id !== callerId"), true);
+    assert.equal(code.includes('CLASS_ACCESS_DENIED'), true);
+  });
+
+  await test('32. Real authMiddleware.ts derives context strictly from CORE auth.getUser and profiles', () => {
+    const authPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/authMiddleware.ts');
+    const code = fs.readFileSync(authPath, 'utf8');
+    assert.equal(code.includes('callerClient.auth.getUser()'), true);
+    assert.equal(code.includes("from('profiles')"), true);
+    assert.equal(code.includes('userData.user.id'), true);
+    assert.equal(code.includes('FORBIDDEN_ROLE'), true);
+  });
+
+  await test('33. ExamEditorModal.jsx implements fail-closed error handling when draft details fail to load', () => {
+    const modalPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamEditorModal.jsx');
+    const code = fs.readFileSync(modalPath, 'utf8');
+    assert.equal(code.includes('!res.ok || !res.data'), true);
+    assert.equal(code.includes('setQuestions([])'), true);
   });
 
   console.log('\n======================================================================');

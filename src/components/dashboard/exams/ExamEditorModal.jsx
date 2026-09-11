@@ -184,43 +184,51 @@ export const ExamEditorModal = ({
         versionId: activeV?.id,
       });
 
-      if (res.ok && res.data) {
-        const v = res.data.version;
-        if (v) {
-          setVersionId(v.id);
-          setVersionNumber(v.version_number || 1);
-          setVersionStatus(v.status || 'draft');
-          setDescription(v.description || '');
-          setDurationMinutes(v.duration_minutes || 45);
-          setStartsAt(formatDateTimeLocal(v.starts_at));
-          setLastStartAt(formatDateTimeLocal(v.last_start_at));
-          setDueDate(formatDateTimeLocal(v.due_date));
-          setMaxAttempts(v.max_attempts || 1);
-          setRewardStars(v.reward_stars || 0);
-          setShuffleQuestions(Boolean(v.shuffle_questions));
-          setShuffleOptions(Boolean(v.shuffle_options));
-          setTabSwitchPolicy(v.tab_switch_policy || 'WARN_AND_LOG');
-          setShowScoreAfterSubmit(v.show_score_after_submit !== undefined ? Boolean(v.show_score_after_submit) : true);
-          setShowCorrectAnswers(Boolean(v.show_correct_answers));
-        }
+      if (!res.ok || !res.data) {
+        setErrorMsg(res.error?.message || 'Không thể tải chi tiết câu hỏi và cấu hình đáp án của đề thi.');
+        setQuestions([]);
+        return;
+      }
 
-        const rawQuestions = res.data.questions || [];
-        if (rawQuestions.length > 0) {
-          setQuestions(
-            rawQuestions.map((q, idx) => ({
-              id: q.id || generateUuid(),
-              question_number: q.question_number || idx + 1,
-              question_type: q.question_type || 'single_choice',
-              prompt: q.prompt || '',
-              points: Number(q.points) || 1,
-              options_json: Array.isArray(q.options_json) ? q.options_json : ['A', 'B', 'C', 'D'],
-              answer_key: q.answer_key || { correct_answer: '' },
-            }))
-          );
-        }
+      const v = res.data.version;
+      if (v) {
+        setVersionId(v.id);
+        setVersionNumber(v.version_number || 1);
+        setVersionStatus(v.status || 'draft');
+        setDescription(v.description || '');
+        setDurationMinutes(v.duration_minutes || 45);
+        setStartsAt(formatDateTimeLocal(v.starts_at));
+        setLastStartAt(formatDateTimeLocal(v.last_start_at));
+        setDueDate(formatDateTimeLocal(v.due_date));
+        setMaxAttempts(v.max_attempts || 1);
+        setRewardStars(v.reward_stars || 0);
+        setShuffleQuestions(Boolean(v.shuffle_questions));
+        setShuffleOptions(Boolean(v.shuffle_options));
+        setTabSwitchPolicy(v.tab_switch_policy || 'WARN_AND_LOG');
+        setShowScoreAfterSubmit(v.show_score_after_submit !== undefined ? Boolean(v.show_score_after_submit) : true);
+        setShowCorrectAnswers(Boolean(v.show_correct_answers));
+      }
+
+      const rawQuestions = res.data.questions || [];
+      if (rawQuestions.length > 0) {
+        setQuestions(
+          rawQuestions.map((q, idx) => ({
+            id: q.id || generateUuid(),
+            question_number: q.question_number || idx + 1,
+            question_type: q.question_type || 'single_choice',
+            prompt: q.prompt || '',
+            points: Number(q.points) || 1,
+            options_json: Array.isArray(q.options_json) ? q.options_json : ['A', 'B', 'C', 'D'],
+            answer_key: q.answer_key || null,
+          }))
+        );
+      } else {
+        setQuestions([]);
       }
     } catch (err) {
       console.error('Fetch test detail exception:', err);
+      setErrorMsg(err?.message || 'Lỗi hệ thống khi tải chi tiết đề thi.');
+      setQuestions([]);
     } finally {
       setFetchingDetail(false);
     }
