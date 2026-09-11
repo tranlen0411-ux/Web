@@ -690,12 +690,20 @@ export function ExamTakingModal({
                 <AlertTriangle className="w-8 h-8" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-lg font-bold text-slate-800">Không thể tải bài thi</h3>
+                <h3 className="text-lg font-bold text-slate-800">
+                  {globalError?.safeErrorCode === 'ERR_ATTEMPT_EXPIRED'
+                    ? 'Bài thi đã hết thời gian'
+                    : 'Không thể tải bài thi'}
+                </h3>
                 <p className="text-sm text-slate-600">
-                  Đã xảy ra sự cố khi nạp đề thi. Mã lỗi an toàn:{' '}
-                  <code className="px-2 py-0.5 bg-slate-100 rounded font-mono text-xs font-semibold text-rose-600">
-                    {globalError?.safeErrorCode || 'INTERNAL_ERROR'}
-                  </code>
+                  {globalError?.safeErrorCode === 'ERR_ATTEMPT_EXPIRED'
+                    ? 'Thời gian làm bài thi này đã kết thúc.'
+                    : 'Đã xảy ra sự cố khi nạp đề thi. Mã lỗi an toàn: '}
+                  {globalError?.safeErrorCode !== 'ERR_ATTEMPT_EXPIRED' && (
+                    <code className="px-2 py-0.5 bg-slate-100 rounded font-mono text-xs font-semibold text-rose-600">
+                      {globalError?.safeErrorCode || 'INTERNAL_ERROR'}
+                    </code>
+                  )}
                 </p>
               </div>
               <button

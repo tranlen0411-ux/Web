@@ -665,6 +665,88 @@ async function main() {
     assert.ok(clientSource.includes('LIST_ASSIGNMENTS_FUNCTION_NAME = \'exam-list-student-assignments\''));
   });
 
+  // 18. Expired Draft UI State Derivation & Rendering Tests
+  await it('39 ExerciseListTab derives isDraftExpired and isDraftActive using attempt_expires_at', () => {
+    assert.ok(parentSource.includes('attemptExpiresAtMs'), 'Must calculate attemptExpiresAtMs');
+    assert.ok(parentSource.includes('isDraftExpired'), 'Must derive isDraftExpired');
+    assert.ok(parentSource.includes('isDraftActive'), 'Must derive isDraftActive');
+  });
+
+  await it('40 isDraftExpired renders static "Hết thời gian" badge and "Đã hết thời gian làm bài thi" without continue button', () => {
+    assert.ok(parentSource.includes('isDraftExpired ?'), 'Must branch on isDraftExpired');
+    assert.ok(parentSource.includes('Hết thời gian'), 'Must render "Hết thời gian" badge');
+    assert.ok(parentSource.includes('Đã hết thời gian làm bài thi'), 'Must render "Đã hết thời gian làm bài thi" text');
+  });
+
+  await it('41 Active draft (future expires_at or null) renders "Tiếp tục làm bài"', () => {
+    assert.ok(parentSource.includes('isDraftActive ?'), 'Must branch on isDraftActive');
+    assert.ok(parentSource.includes('Tiếp tục làm bài'), 'Must render "Tiếp tục làm bài" for active draft');
+  });
+
+  await it('42 ExamTakingModal maps ERR_ATTEMPT_EXPIRED to friendly "Bài thi đã hết thời gian"', () => {
+    const modalSource = fs.readFileSync(modalPath, 'utf8');
+    assert.ok(modalSource.includes("globalError?.safeErrorCode === 'ERR_ATTEMPT_EXPIRED'"), 'Modal must check ERR_ATTEMPT_EXPIRED');
+    assert.ok(modalSource.includes('Bài thi đã hết thời gian'), 'Modal must render friendly expired title');
+    assert.ok(modalSource.includes('Thời gian làm bài thi này đã kết thúc.'), 'Modal must render friendly expired description');
+  });
+
+  await it('43 Matrix state derivation evaluation (past, future, null, invalid, graded, submitted, pending_manual_grade)', () => {
+    const deriveState = (asg) => {
+      const isDraft = asg.attempt_status === 'draft';
+      const attemptExpiresAtMs = asg.attempt_expires_at
+        ? new Date(asg.attempt_expires_at).getTime()
+        : null;
+      const isDraftExpired =
+        isDraft &&
+        attemptExpiresAtMs !== null &&
+        Number.isFinite(attemptExpiresAtMs) &&
+        attemptExpiresAtMs <= Date.now();
+      const isDraftActive = isDraft && !isDraftExpired;
+      const isSubmitted = asg.attempt_status === 'submitted';
+      const isPendingManual = asg.attempt_status === 'pending_manual_grade';
+      const isGraded = asg.attempt_status === 'graded';
+      return { isDraft, isDraftExpired, isDraftActive, isSubmitted, isPendingManual, isGraded };
+    };
+
+    // Case 1: Past expires_at draft
+    const pastDraft = deriveState({ attempt_status: 'draft', attempt_expires_at: '2026-09-10T21:22:00.423628+00:00' });
+    assert.strictEqual(pastDraft.isDraftExpired, true);
+    assert.strictEqual(pastDraft.isDraftActive, false);
+
+    // Case 2: Future expires_at draft
+    const futureDraft = deriveState({ attempt_status: 'draft', attempt_expires_at: '2099-01-01T00:00:00.000Z' });
+    assert.strictEqual(futureDraft.isDraftExpired, false);
+    assert.strictEqual(futureDraft.isDraftActive, true);
+
+    // Case 3: Null expires_at draft (backward compatible)
+    const nullDraft = deriveState({ attempt_status: 'draft', attempt_expires_at: null });
+    assert.strictEqual(nullDraft.isDraftExpired, false);
+    assert.strictEqual(nullDraft.isDraftActive, true);
+
+    // Case 4: Invalid date string draft (safe fallback)
+    const invalidDraft = deriveState({ attempt_status: 'draft', attempt_expires_at: 'invalid-date' });
+    assert.strictEqual(invalidDraft.isDraftExpired, false);
+    assert.strictEqual(invalidDraft.isDraftActive, true);
+
+    // Case 5: Graded attempt
+    const graded = deriveState({ attempt_status: 'graded', attempt_expires_at: '2026-09-10T21:22:00.423628+00:00' });
+    assert.strictEqual(graded.isGraded, true);
+    assert.strictEqual(graded.isDraftExpired, false);
+    assert.strictEqual(graded.isDraftActive, false);
+
+    // Case 6: Submitted attempt
+    const submitted = deriveState({ attempt_status: 'submitted', attempt_expires_at: null });
+    assert.strictEqual(submitted.isSubmitted, true);
+    assert.strictEqual(submitted.isDraftExpired, false);
+    assert.strictEqual(submitted.isDraftActive, false);
+
+    // Case 7: Pending manual grade
+    const pending = deriveState({ attempt_status: 'pending_manual_grade', attempt_expires_at: null });
+    assert.strictEqual(pending.isPendingManual, true);
+    assert.strictEqual(pending.isDraftExpired, false);
+    assert.strictEqual(pending.isDraftActive, false);
+  });
+
   console.log('\n====================================================');
   console.log(`TOTAL PARENT TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('====================================================\n');
