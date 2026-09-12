@@ -540,7 +540,7 @@ export function validateGetAttemptDetailParams(params: {
 }
 
 export interface ImportQuestionBankPayload {
-  version_id?: string | null;
+  version_id: string;
   exam_id?: string | null;
   question_bank_item_ids: string[];
 }
@@ -554,6 +554,12 @@ export function validateImportQuestionBankPayload(raw: unknown): {
   if (!isPlainObject(raw)) {
     return { valid: false, errorCode: 'INVALID_INPUT', errorMessage: 'Dữ liệu yêu cầu phải là một JSON object.' };
   }
+
+  const rawVersionId = (raw as any).version_id;
+  if (!rawVersionId || typeof rawVersionId !== 'string' || !isValidUUID(rawVersionId)) {
+    return { valid: false, errorCode: 'INVALID_VERSION_ID', errorMessage: 'Mã version_id bắt buộc và phải đúng định dạng UUID.' };
+  }
+  const versionId = rawVersionId.trim();
 
   const rawIds = (raw as any).question_bank_item_ids ?? (raw as any).question_bank_ids ?? (raw as any).item_ids;
   if (!Array.isArray(rawIds) || rawIds.length === 0) {
@@ -577,14 +583,6 @@ export function validateImportQuestionBankPayload(raw: unknown): {
     }
   }
 
-  let versionId: string | null = null;
-  if ((raw as any).version_id) {
-    if (!isValidUUID((raw as any).version_id)) {
-      return { valid: false, errorCode: 'INVALID_VERSION_ID', errorMessage: 'Mã version_id không đúng định dạng UUID.' };
-    }
-    versionId = (raw as any).version_id.trim();
-  }
-
   let examId: string | null = null;
   if ((raw as any).exam_id) {
     if (!isValidUUID((raw as any).exam_id)) {
@@ -602,4 +600,5 @@ export function validateImportQuestionBankPayload(raw: unknown): {
     },
   };
 }
+
 

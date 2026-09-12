@@ -355,9 +355,33 @@ export const ExamEditorModal = ({
 
     try {
       const client = createExamManagementClient();
+      let currentVerId = versionId;
+      let currentExamId = examId;
+
+      // Nếu chưa có exam_id hoặc version_id trên DB (soạn mới từ đầu): gọi createTest để tạo draft container
+      if (!currentExamId || !currentVerId) {
+        const createRes = await client.createTest({
+          title: title.trim() || 'Đề thi mới',
+          subject: subject.trim() || 'Toán',
+          grade_level: Number(gradeLevel) || 1,
+          description: description.trim() || null,
+        });
+
+        if (!createRes.ok || !createRes.data) {
+          throw new Error(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+        }
+
+        currentExamId = createRes.data.exam_id;
+        currentVerId = createRes.data.version_id;
+        setExamId(currentExamId);
+        setVersionId(currentVerId);
+        setVersionStatus('draft');
+      }
+
+      // Gọi endpoint BFF nhập câu hỏi và lưu Snapshot an toàn trên server
       const res = await client.importQuestionsFromQuestionBank({
-        versionId: versionId || null,
-        examId: examId || null,
+        versionId: currentVerId,
+        examId: currentExamId,
         questionBankItemIds: selectedItemIds,
       });
 
@@ -370,14 +394,44 @@ export const ExamEditorModal = ({
         throw new Error('Không có câu hỏi nào được nhập.');
       }
 
-      setQuestions(prevQuestions => {
-        const startNum = prevQuestions.length;
-        const mapped = imported.map((q, idx) => ({
-          ...q,
-          question_number: startNum + idx + 1,
-        }));
-        return [...prevQuestions, ...mapped];
+      // Tải lại chi tiết đề thi bản nháp cho tác giả qua RPC Authoring an toàn
+      const detailRes = await client.getTestDetail({
+        examId: currentExamId,
+        versionId: currentVerId,
       });
+
+      if (detailRes.ok && detailRes.data?.questions) {
+        setQuestions(
+          detailRes.data.questions.map((q, idx) => ({
+            id: q.id || generateUuid(),
+            question_number: q.question_number || idx + 1,
+            question_type: q.question_type || 'single_choice',
+            prompt: q.prompt || '',
+            points: Number(q.points) || 1,
+            options_json: Array.isArray(q.options_json)
+              ? q.options_json.map((opt, optIdx) => ({
+                  key: typeof opt === 'object' && opt !== null ? opt.key : String.fromCharCode(65 + optIdx),
+                  text: typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? ''),
+                }))
+              : [],
+            answer_key: q.answer_key || null,
+            source_question_bank_item_id: q.source_question_bank_item_id || null,
+            source_question_bank_version_id: q.source_question_bank_version_id || null,
+          }))
+        );
+      } else {
+        // Fallback cập nhật danh sách an toàn
+        setQuestions(prevQuestions => {
+          const isDefaultDummy = prevQuestions.length === 1 && prevQuestions[0].prompt === '1 + 1 = ?' && !examToEdit;
+          const baseQuestions = isDefaultDummy ? [] : prevQuestions;
+          const startNum = baseQuestions.length;
+          const mapped = imported.map((q, idx) => ({
+            ...q,
+            question_number: startNum + idx + 1,
+          }));
+          return [...baseQuestions, ...mapped];
+        });
+      }
 
       showToast(`Đã thêm thành công ${imported.length} câu hỏi từ Ngân hàng câu hỏi vào đề thi.`);
       setActiveTab('questions');
