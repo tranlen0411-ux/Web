@@ -242,8 +242,25 @@ function simulateImportEndpoint(callerRole, callerId, payload, db) {
   }
 
   const items = db.questionBankItems.filter(item => payload.question_bank_item_ids.includes(item.id));
-  if (items.length === 0) {
-    return { status: 404, error_code: 'QUESTION_NOT_FOUND', message: 'Không tìm thấy câu hỏi nào.' };
+  const itemMap = new Map(items.map(i => [i.id, i]));
+
+  // Yêu cầu khớp chính xác 100% tập hợp câu hỏi (Không cho phép import một phần)
+  if (items.length !== payload.question_bank_item_ids.length) {
+    return {
+      status: 404,
+      error_code: 'ERR_QB_ITEM_NOT_FOUND',
+      message: `Một hoặc nhiều câu hỏi không tồn tại trong ngân hàng câu hỏi (Tìm thấy ${items.length}/${payload.question_bank_item_ids.length}).`,
+    };
+  }
+
+  for (const reqId of payload.question_bank_item_ids) {
+    if (!itemMap.has(reqId)) {
+      return {
+        status: 404,
+        error_code: 'ERR_QB_ITEM_NOT_FOUND',
+        message: `Không tìm thấy câu hỏi có ID '${reqId}'.`,
+      };
+    }
   }
 
   const validatedQuestions = [];
@@ -538,24 +555,52 @@ async function main() {
     assert.equal(res.data.total_imported, 1);
   });
 
-  await test('3.8 Từ chối câu hỏi có options không hợp lệ với 400 ERR_QB_OPTIONS_INVALID', () => {
+  await test('3.8 Batch Integrity: 3 câu yêu cầu / chỉ 2 câu tìm thấy => toàn bộ request bị từ chối 404 ERR_QB_ITEM_NOT_FOUND', () => {
     const db = createMockDb();
     const res = simulateImportEndpoint('teacher', db.teacher1Id, {
       version_id: '33333333-0000-4000-8000-000000000001',
-      question_bank_item_ids: ['qb-item-invalid-opts'],
+      question_bank_item_ids: ['qb-item-101', 'qb-item-102', 'non-existent-item-uuid'],
+    }, db);
+    assert.equal(res.status, 404);
+    assert.equal(res.error_code, 'ERR_QB_ITEM_NOT_FOUND');
+    // Đảm bảo không có dòng nào bị ghi vào DB (Zero partial mutation)
+    assert.equal(db.examQuestions.length, 0);
+    assert.equal(db.examAnswerKeys.length, 0);
+  });
+
+  await test('3.9 Batch Integrity: 1 câu yêu cầu / 0 câu tìm thấy => bị từ chối 404 ERR_QB_ITEM_NOT_FOUND', () => {
+    const db = createMockDb();
+    const res = simulateImportEndpoint('teacher', db.teacher1Id, {
+      version_id: '33333333-0000-4000-8000-000000000001',
+      question_bank_item_ids: ['completely-missing-id'],
+    }, db);
+    assert.equal(res.status, 404);
+    assert.equal(res.error_code, 'ERR_QB_ITEM_NOT_FOUND');
+    assert.equal(db.examQuestions.length, 0);
+  });
+
+  await test('3.10 Batch Integrity: Không xảy ra mutation nếu có bất kỳ câu hỏi nào trong batch bị lỗi options/đáp án', () => {
+    const db = createMockDb();
+    const res = simulateImportEndpoint('teacher', db.teacher1Id, {
+      version_id: '33333333-0000-4000-8000-000000000001',
+      question_bank_item_ids: ['qb-item-101', 'qb-item-invalid-opts'], // 1 câu tốt, 1 câu lỗi options
     }, db);
     assert.equal(res.status, 400);
     assert.equal(res.error_code, 'ERR_QB_OPTIONS_INVALID');
+    // Tuyệt đối không lưu một phần câu số 1
+    assert.equal(db.examQuestions.length, 0);
+    assert.equal(db.examAnswerKeys.length, 0);
   });
 
-  await test('3.9 Từ chối câu hỏi thiếu đáp án với 400 ERR_QB_ANSWER_KEY_INVALID', () => {
+  await test('3.11 Batch Integrity: Batch hoàn chỉnh 100% hợp lệ => Thành công 200 OK và lưu đầy đủ', () => {
     const db = createMockDb();
     const res = simulateImportEndpoint('teacher', db.teacher1Id, {
       version_id: '33333333-0000-4000-8000-000000000001',
-      question_bank_item_ids: ['qb-item-missing-ans'],
+      question_bank_item_ids: ['qb-item-101', 'qb-item-102', 'qb-item-104'], // 3 câu hợp lệ
     }, db);
-    assert.equal(res.status, 400);
-    assert.equal(res.error_code, 'ERR_QB_ANSWER_KEY_INVALID');
+    assert.equal(res.status, 200);
+    assert.equal(res.data.total_imported, 3);
+    assert.equal(db.examQuestions.length, 3);
   });
 
   // =========================================================================

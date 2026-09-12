@@ -1023,12 +1023,33 @@ export async function handleExamManagementRequest(
       }
 
       const itemsList = qbItems || [];
-      if (itemsList.length === 0) {
-        return createErrorResponse(404, 'QUESTION_NOT_FOUND', 'Không tìm thấy câu hỏi nào trong danh sách được chọn.');
+      const itemMap = new Map(itemsList.map((i: any) => [i.id, i]));
+
+      // Yêu cầu tập hợp câu hỏi tìm thấy phải khớp chính xác 100% với danh sách yêu cầu (Tuyệt đối KHÔNG import một phần)
+      if (itemsList.length !== qbItemIds.length) {
+        return createErrorResponse(
+          404,
+          'ERR_QB_ITEM_NOT_FOUND',
+          `Một hoặc nhiều câu hỏi được chọn không tồn tại trong ngân hàng câu hỏi (Tìm thấy ${itemsList.length}/${qbItemIds.length}).`
+        );
+      }
+
+      for (const reqId of qbItemIds) {
+        if (!itemMap.has(reqId)) {
+          return createErrorResponse(
+            404,
+            'ERR_QB_ITEM_NOT_FOUND',
+            `Không tìm thấy câu hỏi có ID '${reqId}' trong ngân hàng câu hỏi.`
+          );
+        }
       }
 
       // 4. Lấy danh sách version_id
       const versionIds = itemsList.map((i: any) => i.current_version_id).filter(Boolean);
+      if (versionIds.length !== itemsList.length) {
+        return createErrorResponse(404, 'ERR_QB_VERSION_NOT_FOUND', 'Một hoặc nhiều câu hỏi chưa có phiên bản nội dung hợp lệ.');
+      }
+
       const { data: versionsData, error: verErr } = await examClient
         .from('question_bank_versions')
         .select(`
@@ -1065,8 +1086,6 @@ export async function handleExamManagementRequest(
         }
       }
 
-      const itemMap = new Map(itemsList.map((i: any) => [i.id, i]));
-
       // 6. Kiểm tra quyền truy cập và chuyển đổi Canonical Schema với kiểm tra fail-closed nghiêm ngặt
       const validatedQuestions: Array<{
         id: string;
@@ -1086,7 +1105,9 @@ export async function handleExamManagementRequest(
       for (let i = 0; i < qbItemIds.length; i++) {
         const itemId = qbItemIds[i];
         const item = itemMap.get(itemId);
-        if (!item) continue;
+        if (!item) {
+          return createErrorResponse(404, 'ERR_QB_ITEM_NOT_FOUND', `Không tìm thấy câu hỏi có ID '${itemId}'.`);
+        }
 
         // Phân quyền trên từng câu hỏi:
         // Teacher: Được dùng câu của chính mình HOẶC câu đã published có visibility = public_template
