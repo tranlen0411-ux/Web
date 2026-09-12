@@ -53,7 +53,6 @@ function formatDateTimeLocal(isoStr) {
 
 const QUESTION_TYPE_LABELS = {
   single_choice: 'Trắc nghiệm 1 đáp án',
-  multiple_choice: 'Trắc nghiệm nhiều đáp án',
   fill_blank: 'Điền khuyết',
   short_answer: 'Trả lời ngắn',
   essay: 'Tự luận (GV chấm)',
@@ -157,9 +156,14 @@ export const ExamEditorModal = ({
         question_type: 'single_choice',
         prompt: '1 + 1 = ?',
         points: 1,
-        options_json: ['1', '2', '3', '4'],
+        options_json: [
+          { key: 'A', text: '1' },
+          { key: 'B', text: '2' },
+          { key: 'C', text: '3' },
+          { key: 'D', text: '4' },
+        ],
         answer_key: {
-          correct_answer: '2',
+          correct_answer: 'B',
         },
       },
     ]);
@@ -224,15 +228,52 @@ export const ExamEditorModal = ({
       const rawQuestions = res.data.questions || [];
       if (rawQuestions.length > 0) {
         setQuestions(
-          rawQuestions.map((q, idx) => ({
-            id: q.id || generateUuid(),
-            question_number: q.question_number || idx + 1,
-            question_type: q.question_type || 'single_choice',
-            prompt: q.prompt || '',
-            points: Number(q.points) || 1,
-            options_json: Array.isArray(q.options_json) ? q.options_json : ['A', 'B', 'C', 'D'],
-            answer_key: q.answer_key || null,
-          }))
+          rawQuestions.map((q, idx) => {
+            let normalizedOptions = [];
+            if (Array.isArray(q.options_json)) {
+              normalizedOptions = q.options_json.map((opt, optIdx) => {
+                if (typeof opt === 'object' && opt !== null && opt.key && opt.text !== undefined) {
+                  return { key: String(opt.key), text: String(opt.text) };
+                }
+                const fallbackKey = String.fromCharCode(65 + optIdx);
+                return { key: fallbackKey, text: String(opt ?? '') };
+              });
+            }
+
+            let normalizedAnswerKey = q.answer_key || null;
+            if (q.question_type === 'single_choice' && normalizedAnswerKey?.correct_answer) {
+              const currentAns = String(normalizedAnswerKey.correct_answer);
+              const existsByKey = normalizedOptions.some((o) => o.key === currentAns);
+              if (!existsByKey) {
+                const matchByText = normalizedOptions.find((o) => o.text === currentAns);
+                if (matchByText) {
+                  normalizedAnswerKey = { ...normalizedAnswerKey, correct_answer: matchByText.key };
+                }
+              }
+            } else if (q.question_type === 'multiple_choice' && normalizedAnswerKey?.correct_answer) {
+              const currentAnsList = Array.isArray(normalizedAnswerKey.correct_answer)
+                ? normalizedAnswerKey.correct_answer
+                : [normalizedAnswerKey.correct_answer];
+              const mapped = currentAnsList.map((ans) => {
+                const strAns = String(ans);
+                const existsByKey = normalizedOptions.some((o) => o.key === strAns);
+                if (existsByKey) return strAns;
+                const matchByText = normalizedOptions.find((o) => o.text === strAns);
+                return matchByText ? matchByText.key : strAns;
+              });
+              normalizedAnswerKey = { ...normalizedAnswerKey, correct_answer: mapped };
+            }
+
+            return {
+              id: q.id || generateUuid(),
+              question_number: q.question_number || idx + 1,
+              question_type: q.question_type || 'single_choice',
+              prompt: q.prompt || '',
+              points: Number(q.points) || 1,
+              options_json: normalizedOptions,
+              answer_key: normalizedAnswerKey,
+            };
+          })
         );
       } else {
         setQuestions([]);
@@ -259,11 +300,21 @@ export const ExamEditorModal = ({
     let initialAnswerKey = null;
 
     if (type === 'single_choice') {
-      initialOptions = ['Lựa chọn 1', 'Lựa chọn 2', 'Lựa chọn 3', 'Lựa chọn 4'];
-      initialAnswerKey = { correct_answer: 'Lựa chọn 1' };
+      initialOptions = [
+        { key: 'A', text: 'Lựa chọn 1' },
+        { key: 'B', text: 'Lựa chọn 2' },
+        { key: 'C', text: 'Lựa chọn 3' },
+        { key: 'D', text: 'Lựa chọn 4' },
+      ];
+      initialAnswerKey = { correct_answer: 'A' };
     } else if (type === 'multiple_choice') {
-      initialOptions = ['Lựa chọn A', 'Lựa chọn B', 'Lựa chọn C', 'Lựa chọn D'];
-      initialAnswerKey = { correct_answer: ['Lựa chọn A'] };
+      initialOptions = [
+        { key: 'A', text: 'Lựa chọn 1' },
+        { key: 'B', text: 'Lựa chọn 2' },
+        { key: 'C', text: 'Lựa chọn 3' },
+        { key: 'D', text: 'Lựa chọn 4' },
+      ];
+      initialAnswerKey = { correct_answer: ['A'] };
     } else if (type === 'fill_blank' || type === 'short_answer') {
       initialAnswerKey = { correct_answer: '' };
     }
@@ -303,10 +354,61 @@ export const ExamEditorModal = ({
       return;
     }
     const updated = [...questions];
-    updated[qIndex] = {
-      ...updated[qIndex],
-      [field]: value,
-    };
+    let q = { ...updated[qIndex] };
+
+    if (field === 'question_type') {
+      q.question_type = value;
+      if (value === 'single_choice') {
+        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
+          q.options_json = [
+            { key: 'A', text: 'Lựa chọn 1' },
+            { key: 'B', text: 'Lựa chọn 2' },
+            { key: 'C', text: 'Lựa chọn 3' },
+            { key: 'D', text: 'Lựa chọn 4' },
+          ];
+        } else {
+          q.options_json = q.options_json.map((opt, idx) => ({
+            key: typeof opt === 'object' && opt !== null ? opt.key : String.fromCharCode(65 + idx),
+            text: typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? ''),
+          }));
+        }
+        const firstKey = q.options_json[0]?.key || 'A';
+        const currentAns = typeof q.answer_key?.correct_answer === 'string' ? q.answer_key.correct_answer : firstKey;
+        const validKey = q.options_json.some((o) => o.key === currentAns) ? currentAns : firstKey;
+        q.answer_key = { correct_answer: validKey };
+      } else if (value === 'multiple_choice') {
+        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
+          q.options_json = [
+            { key: 'A', text: 'Lựa chọn 1' },
+            { key: 'B', text: 'Lựa chọn 2' },
+            { key: 'C', text: 'Lựa chọn 3' },
+            { key: 'D', text: 'Lựa chọn 4' },
+          ];
+        } else {
+          q.options_json = q.options_json.map((opt, idx) => ({
+            key: typeof opt === 'object' && opt !== null ? opt.key : String.fromCharCode(65 + idx),
+            text: typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? ''),
+          }));
+        }
+        const firstKey = q.options_json[0]?.key || 'A';
+        const currentAns = Array.isArray(q.answer_key?.correct_answer)
+          ? q.answer_key.correct_answer.filter((k) => q.options_json.some((o) => o.key === k))
+          : [firstKey];
+        q.answer_key = { correct_answer: currentAns.length > 0 ? currentAns : [firstKey] };
+      } else if (['fill_blank', 'short_answer'].includes(value)) {
+        q.options_json = [];
+        q.answer_key = {
+          correct_answer: typeof q.answer_key?.correct_answer === 'string' ? q.answer_key.correct_answer : '',
+        };
+      } else {
+        q.options_json = [];
+        q.answer_key = null;
+      }
+    } else {
+      q[field] = value;
+    }
+
+    updated[qIndex] = q;
     setQuestions(updated);
   };
 
@@ -349,7 +451,47 @@ export const ExamEditorModal = ({
         setActiveTab('questions');
         return;
       }
-      if (['single_choice', 'multiple_choice', 'fill_blank', 'short_answer'].includes(q.question_type)) {
+      if (q.question_type === 'single_choice') {
+        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
+          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm 1 đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
+          setActiveTab('questions');
+          return;
+        }
+        for (let oi = 0; oi < q.options_json.length; oi++) {
+          const opt = q.options_json[oi];
+          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
+          if (!optText || !optText.trim()) {
+            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
+            setActiveTab('questions');
+            return;
+          }
+        }
+        if (!q.answer_key || !q.answer_key.correct_answer) {
+          setErrorMsg(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
+          setActiveTab('questions');
+          return;
+        }
+      } else if (q.question_type === 'multiple_choice') {
+        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
+          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm nhiều đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
+          setActiveTab('questions');
+          return;
+        }
+        for (let oi = 0; oi < q.options_json.length; oi++) {
+          const opt = q.options_json[oi];
+          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
+          if (!optText || !optText.trim()) {
+            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
+            setActiveTab('questions');
+            return;
+          }
+        }
+        if (!q.answer_key || !Array.isArray(q.answer_key.correct_answer) || q.answer_key.correct_answer.length === 0) {
+          setErrorMsg(`Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi số ${i + 1}.`);
+          setActiveTab('questions');
+          return;
+        }
+      } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
         if (!q.answer_key || q.answer_key.correct_answer === undefined || q.answer_key.correct_answer === '') {
           setErrorMsg(`Vui lòng cấu hình đáp án đúng cho câu hỏi số ${i + 1} (${QUESTION_TYPE_LABELS[q.question_type]}).`);
           setActiveTab('questions');
@@ -397,7 +539,7 @@ export const ExamEditorModal = ({
         setVersionId(currentVerId);
       }
 
-      // Chuẩn bị payload lưu nháp
+      // Chuẩn bị payload lưu nháp với canonical options schema [{key, text}]
       const savePayload = {
         version_id: currentVerId,
         title: title.trim(),
@@ -415,17 +557,44 @@ export const ExamEditorModal = ({
         tab_switch_policy: tabSwitchPolicy,
         show_score_after_submit: Boolean(showScoreAfterSubmit),
         show_correct_answers: Boolean(showCorrectAnswers),
-        questions: questions.map((q, idx) => ({
-          id: q.id || generateUuid(),
-          question_number: idx + 1,
-          question_type: q.question_type,
-          prompt: q.prompt.trim(),
-          points: Number(q.points) || 1,
-          options_json: q.options_json || [],
-          answer_key: ['single_choice', 'multiple_choice', 'fill_blank', 'short_answer'].includes(q.question_type)
-            ? q.answer_key
-            : null,
-        })),
+        questions: questions.map((q, idx) => {
+          let canonicalOptions = [];
+          if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
+            canonicalOptions = (Array.isArray(q.options_json) ? q.options_json : []).map((opt, oIdx) => {
+              if (typeof opt === 'object' && opt !== null && opt.key) {
+                return { key: String(opt.key).trim(), text: String(opt.text ?? '').trim() };
+              }
+              return { key: String.fromCharCode(65 + oIdx), text: String(opt ?? '').trim() };
+            });
+          }
+
+          let answerKey = null;
+          if (q.question_type === 'single_choice') {
+            answerKey = {
+              correct_answer: String(q.answer_key?.correct_answer || canonicalOptions[0]?.key || 'A').trim(),
+            };
+          } else if (q.question_type === 'multiple_choice') {
+            const rawAns = q.answer_key?.correct_answer;
+            const ansArray = Array.isArray(rawAns) ? rawAns : [String(rawAns || 'A')];
+            answerKey = {
+              correct_answer: ansArray.map((a) => String(a).trim()),
+            };
+          } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
+            answerKey = {
+              correct_answer: String(q.answer_key?.correct_answer || '').trim(),
+            };
+          }
+
+          return {
+            id: q.id || generateUuid(),
+            question_number: idx + 1,
+            question_type: q.question_type,
+            prompt: q.prompt.trim(),
+            points: Number(q.points) || 1,
+            options_json: canonicalOptions,
+            answer_key: answerKey,
+          };
+        }),
       };
 
       const saveRes = await client.saveDraft(savePayload);
@@ -857,60 +1026,89 @@ export const ExamEditorModal = ({
                         {q.question_type === 'single_choice' && (
                           <div className="space-y-2 pt-1">
                             <label className="block text-[11px] font-black text-slate-700">
-                              Các lựa chọn & Đáp án đúng:
+                              Các lựa chọn & Đáp án đúng (Bấm chọn chữ cái A/B/C... để đặt làm đáp án đúng):
                             </label>
-                            {(q.options_json || []).map((opt, optIdx) => (
-                              <div key={optIdx} className="flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name={`correct_radio_${q.id}`}
-                                  checked={q.answer_key?.correct_answer === opt}
-                                  onChange={() =>
-                                    handleUpdateQuestion(qIndex, 'answer_key', {
-                                      correct_answer: opt,
-                                    })
-                                  }
-                                  className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
-                                />
-                                <input
-                                  type="text"
-                                  value={opt}
-                                  onChange={(e) => {
-                                    const newOpts = [...q.options_json];
-                                    const oldOptVal = newOpts[optIdx];
-                                    newOpts[optIdx] = e.target.value;
-                                    const isSelected = q.answer_key?.correct_answer === oldOptVal;
-                                    handleUpdateQuestion(qIndex, 'options_json', newOpts);
-                                    if (isSelected) {
-                                      handleUpdateQuestion(qIndex, 'answer_key', {
-                                        correct_answer: e.target.value,
+                            {(q.options_json || []).map((opt, optIdx) => {
+                              const optKey = typeof opt === 'object' && opt !== null ? opt.key : String.fromCharCode(65 + optIdx);
+                              const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
+                              const isCorrect = q.answer_key?.correct_answer === optKey;
+                              return (
+                                <div key={optKey || optIdx} className="flex items-center gap-2">
+                                  <label
+                                    className={`flex items-center gap-1.5 px-2 py-1 rounded-xl cursor-pointer border-2 transition-all shrink-0 ${
+                                      isCorrect
+                                        ? 'bg-emerald-500 border-emerald-600 text-white shadow-sm font-black'
+                                        : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200 font-bold'
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`correct_radio_${q.id}`}
+                                      checked={isCorrect}
+                                      onChange={() =>
+                                        handleUpdateQuestion(qIndex, 'answer_key', {
+                                          correct_answer: optKey,
+                                        })
+                                      }
+                                      className="sr-only"
+                                    />
+                                    <span className="text-xs">{optKey}</span>
+                                    {isCorrect && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder={`Nội dung lựa chọn ${optKey}...`}
+                                    value={optText}
+                                    onChange={(e) => {
+                                      const newOpts = [...q.options_json].map((item, i) => {
+                                        const k = typeof item === 'object' && item !== null ? item.key : String.fromCharCode(65 + i);
+                                        const t = typeof item === 'object' && item !== null ? item.text : String(item ?? '');
+                                        return { key: k, text: i === optIdx ? e.target.value : t };
                                       });
-                                    }
-                                  }}
-                                  className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (q.options_json.length <= 2) return;
-                                    const newOpts = q.options_json.filter((_, idx) => idx !== optIdx);
-                                    handleUpdateQuestion(qIndex, 'options_json', newOpts);
-                                  }}
-                                  className="p-1 text-slate-400 hover:text-rose-500"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ))}
+                                      handleUpdateQuestion(qIndex, 'options_json', newOpts);
+                                    }}
+                                    className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (q.options_json.length <= 2) return;
+                                      const remaining = q.options_json.filter((_, idx) => idx !== optIdx);
+                                      const reindexed = remaining.map((item, i) => ({
+                                        key: String.fromCharCode(65 + i),
+                                        text: typeof item === 'object' && item !== null ? item.text : String(item ?? ''),
+                                      }));
+                                      let newCorrect = q.answer_key?.correct_answer;
+                                      if (!reindexed.some((o) => o.key === newCorrect)) {
+                                        newCorrect = reindexed[0].key;
+                                      }
+                                      handleUpdateQuestion(qIndex, 'options_json', reindexed);
+                                      handleUpdateQuestion(qIndex, 'answer_key', { correct_answer: newCorrect });
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-rose-500"
+                                    title="Xóa lựa chọn này"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              );
+                            })}
 
                             <button
                               type="button"
                               onClick={() => {
-                                const nextOptName = `Lựa chọn ${(q.options_json?.length || 0) + 1}`;
-                                handleUpdateQuestion(qIndex, 'options_json', [
-                                  ...(q.options_json || []),
-                                  nextOptName,
-                                ]);
+                                const currentOpts = Array.isArray(q.options_json) ? q.options_json : [];
+                                const nextIdx = currentOpts.length;
+                                const nextKey = String.fromCharCode(65 + nextIdx);
+                                const nextOpt = { key: nextKey, text: `Lựa chọn ${nextIdx + 1}` };
+                                const newOpts = [
+                                  ...currentOpts.map((item, i) => ({
+                                    key: typeof item === 'object' && item !== null ? item.key : String.fromCharCode(65 + i),
+                                    text: typeof item === 'object' && item !== null ? item.text : String(item ?? ''),
+                                  })),
+                                  nextOpt,
+                                ];
+                                handleUpdateQuestion(qIndex, 'options_json', newOpts);
                               }}
                               className="text-xs font-bold text-indigo-600 hover:underline pt-1"
                             >

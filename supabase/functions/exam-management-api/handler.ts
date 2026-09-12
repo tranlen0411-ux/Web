@@ -369,6 +369,40 @@ export async function handleExamManagementRequest(
         return createErrorResponse(400, valResult.errorCode || 'INVALID_INPUT', valResult.errorMessage || 'Dữ liệu không hợp lệ.');
       }
 
+      // Pre-publish choice schema check (Defense-in-depth)
+      const { data: questions, error: qErr } = await examClient
+        .from('exam_questions')
+        .select('id, question_number, question_type, options_json')
+        .eq('exam_version_id', valResult.data.version_id);
+
+      if (qErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi kiểm tra danh sách câu hỏi trước khi xuất bản.');
+      }
+
+      if (Array.isArray(questions)) {
+        for (const q of questions) {
+          if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
+            if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
+              return createErrorResponse(
+                422,
+                'ERR_INVALID_OPTION_SCHEMA',
+                `Câu hỏi trắc nghiệm số ${q.question_number} không có đủ tối thiểu 2 phương án hợp lệ.`
+              );
+            }
+            for (let idx = 0; idx < q.options_json.length; idx++) {
+              const opt = q.options_json[idx];
+              if (!opt || typeof opt !== 'object' || Array.isArray(opt) || typeof opt.key !== 'string' || !opt.key.trim()) {
+                return createErrorResponse(
+                  422,
+                  'ERR_INVALID_OPTION_SCHEMA',
+                  `Câu hỏi trắc nghiệm số ${q.question_number} chứa phương án không đúng định dạng chuẩn {key, text}.`
+                );
+              }
+            }
+          }
+        }
+      }
+
       const rpcRes = await examClient.rpc('rpc_exam_publish_version', {
         p_caller_id: callerId,
         p_version_id: valResult.data.version_id,
