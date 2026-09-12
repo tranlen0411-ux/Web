@@ -1239,6 +1239,43 @@ async function runAllManagementTests() {
     assert.equal(code.includes('Khóa An Toàn / Fail-Closed'), true);
   });
 
+  await test('36. [UX CONTRACT] ExamManagementTab disables edit button for published exams and renders "Đã Xuất Bản"', () => {
+    const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
+    const code = fs.readFileSync(tabPath, 'utf8');
+
+    // Conditional render of disabled "Đã Xuất Bản" vs active "Chỉnh Sửa"
+    assert.equal(code.includes('isPublished ? ('), true);
+    assert.equal(code.includes('Đã Xuất Bản'), true);
+    assert.equal(code.includes('Chỉnh Sửa'), true);
+    assert.equal(code.includes('onClick={() => handleOpenEditModal(t)}'), true);
+  });
+
+  await test('37. [UX CONTRACT] ExamManagementTab guards handleOpenEditModal against published exams', () => {
+    const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
+    const code = fs.readFileSync(tabPath, 'utf8');
+
+    assert.equal(code.includes("const isPublished = exam?.active_version?.status === 'published';"), true);
+    assert.equal(code.includes("showToast('ℹ️ Đề thi đã xuất bản ở trạng thái bất biến, không thể chỉnh sửa trực tiếp.');"), true);
+  });
+
+  await test('38. [UX CONTRACT] ExamEditorModal removes misleading "bản nháp tiếp theo" text & guards against published version', () => {
+    const modalPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamEditorModal.jsx');
+    const code = fs.readFileSync(modalPath, 'utf8');
+
+    // Banned misleading text
+    assert.equal(code.includes('bản nháp tiếp theo'), false);
+    assert.equal(code.includes('Mọi chỉnh sửa và lưu nháp sẽ được áp dụng cho bản nháp tiếp theo'), false);
+
+    // Accurate immutable notice present
+    assert.equal(code.includes('Đề thi đã được xuất bản chính thức. Phiên bản này ở trạng thái bất biến và không thể chỉnh sửa trực tiếp.'), true);
+
+    // useEffect guard for published exam
+    assert.equal(code.includes("if (examToEdit.active_version?.status === 'published')"), true);
+
+    // handleSaveDraft guard for published exam
+    assert.equal(code.includes('if (isPublished) {'), true);
+  });
+
   console.log('\n======================================================================');
   console.log(`TOTAL MANAGEMENT TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('======================================================================\n');

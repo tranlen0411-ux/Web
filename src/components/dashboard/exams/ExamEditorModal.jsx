@@ -110,6 +110,12 @@ export const ExamEditorModal = ({
       setActiveTab('general');
 
       if (examToEdit) {
+        if (examToEdit.active_version?.status === 'published') {
+          setErrorMsg('Đề thi đã được xuất bản chính thức và không thể chỉnh sửa.');
+          setDetailLoadStatus('failed');
+          setFetchingDetail(false);
+          return;
+        }
         initExistingExam(examToEdit);
       } else {
         initNewExam();
@@ -306,6 +312,11 @@ export const ExamEditorModal = ({
 
   // Lưu bản nháp (hoặc tạo mới nếu chưa có)
   const handleSaveDraft = async (shouldPublishAfter = false) => {
+    if (isPublished) {
+      setErrorMsg('Đề thi đã được xuất bản chính thức và không thể chỉnh sửa.');
+      return;
+    }
+
     // Invariant Guard: Fail-closed if existing exam detail is not ready or failed
     if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
       setErrorMsg('Không thể lưu hoặc xuất bản đề thi khi chưa tải hoàn tất dữ liệu gốc từ máy chủ. Vui lòng đóng và mở lại.');
@@ -571,7 +582,7 @@ export const ExamEditorModal = ({
             <div className="p-3.5 bg-amber-50 border-2 border-amber-300 text-amber-900 rounded-2xl text-xs font-bold flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                Phiên bản này đã được xuất bản chính thức. Mọi chỉnh sửa và lưu nháp sẽ được áp dụng cho bản nháp tiếp theo của đề thi.
+                Đề thi đã được xuất bản chính thức. Phiên bản này ở trạng thái bất biến và không thể chỉnh sửa trực tiếp.
               </span>
             </div>
           )}
