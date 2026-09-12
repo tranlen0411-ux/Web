@@ -189,7 +189,7 @@ export async function handleGetStudentAttemptResultRequest(
     // 10. Truy vấn câu hỏi từ public.exam_questions (Explicit projection - 0% Answer Keys)
     const { data: questionRows, error: qErr } = await examClient
       .from('exam_questions')
-      .select('id, prompt, question_type, points_possible, options_json')
+      .select('id, prompt, question_type, points, options_json')
       .eq('exam_version_id', attemptRow.exam_version_id);
 
     if (qErr) {
@@ -245,7 +245,7 @@ export async function handleGetStudentAttemptResultRequest(
         question_number: i + 1,
         prompt: q.prompt,
         question_type: q.question_type,
-        points_possible: Number(q.points_possible || 0),
+        points_possible: Number(q.points || 0),
         options_json: safeOptions,
         student_answer: ans?.student_answer_json ?? null,
         file_url: ans?.file_url ?? null,

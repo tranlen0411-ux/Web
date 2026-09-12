@@ -190,7 +190,7 @@ const mockQuestions = {
       { key: 'B', text: '3' },
       { key: 'C', text: '4' },
     ],
-    points_possible: 5.0,
+    points: 5.0,
     order_index: 1,
     correct_answer: 'A', // MUST NEVER BE LEAKED TO STUDENT
   },
@@ -200,7 +200,7 @@ const mockQuestions = {
     question_type: 'essay',
     prompt: 'Tính diện tích hình tròn có bán kính r = 3cm.',
     options_json: null,
-    points_possible: 4.0,
+    points: 4.0,
     order_index: 2,
     correct_answer: '28.26', // MUST NEVER BE LEAKED
   },
@@ -210,7 +210,7 @@ const mockQuestions = {
     question_type: 'short_answer',
     prompt: 'Thủ đô của Việt Nam là gì?',
     options_json: null,
-    points_possible: 1.0,
+    points: 1.0,
     order_index: 3,
     correct_answer: 'Hà Nội', // MUST NEVER BE LEAKED
   },
@@ -398,7 +398,7 @@ async function simulateGetStudentAttemptResult(req, deps) {
       prompt: q.prompt,
       question_type: q.question_type,
       options_json: safeOptions,
-      points_possible: Number(q.points_possible || 0),
+      points_possible: Number(q.points || 0),
       student_answer: ans?.student_answer !== undefined ? ans.student_answer : null,
       file_url: ans?.file_url || null,
       points_earned: ans && typeof ans.points_earned === 'number' ? ans.points_earned : 0,
@@ -799,6 +799,73 @@ async function runAllTests() {
       handlerSource.includes('ERR_RESULT_NOT_FINAL'),
       'Handler must return ERR_RESULT_NOT_FINAL'
     );
+  });
+
+  await it('Regression: DB_COLUMN_SOURCE=points and API_RESPONSE_FIELD=points_possible', async () => {
+    const handlerSource = fs.readFileSync(
+      path.join(__dirname, '../supabase/functions/exam-get-student-attempt-result/handler.ts'),
+      'utf-8'
+    );
+
+    // 1. Must query 'points' from public.exam_questions
+    assert.ok(
+      handlerSource.includes(".select('id, prompt, question_type, points, options_json')"),
+      "Handler must select 'points' from public.exam_questions"
+    );
+
+    // 2. Must NOT query 'points_possible' in the SQL select
+    assert.equal(
+      handlerSource.includes("select('id, prompt, question_type, points_possible"),
+      false,
+      "Handler must NOT query 'points_possible' from DB"
+    );
+
+    // 3. Must map 'points_possible: Number(q.points || 0)' for the frontend API response
+    assert.ok(
+      handlerSource.includes('points_possible: Number(q.points || 0)'),
+      'Handler must map points_possible from q.points'
+    );
+
+    // 4. Client validation strictly accepts points_possible
+    const sampleResponse = {
+      success: true,
+      data: {
+        attempt: {
+          id: ATTEMPT_GRADED_A,
+          status: 'graded',
+          attempt_number: 1,
+          submitted_at: '2026-09-12T08:00:00.000Z',
+          objective_score: 5.0,
+          manual_score: 3.5,
+          total_score: 8.5,
+          max_score: 10.0,
+          teacher_feedback: 'Tốt',
+          reward_stars_awarded: 10,
+        },
+        exam: {
+          title: 'Đề Toán',
+          subject: 'Toán',
+          grade_level: 5,
+        },
+        questions: [
+          {
+            exam_question_id: Q_UUID_1,
+            question_number: 1,
+            prompt: '1 + 1 = ?',
+            question_type: 'single_choice',
+            points_possible: 5.0,
+            options_json: [{ key: 'A', text: '2' }],
+            student_answer: 'A',
+            file_url: null,
+            points_earned: 5.0,
+            teacher_comment: null,
+          },
+        ],
+      },
+    };
+    const validated = validateGetStudentAttemptResultResponse(sampleResponse);
+    assert.ok(validated);
+    assert.equal(validated.questions[0].points_possible, 5.0);
   });
 
   console.log('\n====================================================');
