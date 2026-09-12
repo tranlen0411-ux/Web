@@ -61,3 +61,7 @@ verify_jwt = false
 [functions.exam-get-student-attempt-result]
 verify_jwt = false
 
+[functions.exam-update-graded-feedback]
+verify_jwt = false
+
+
