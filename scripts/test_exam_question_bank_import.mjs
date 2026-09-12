@@ -1439,6 +1439,116 @@ async function main() {
     assert.equal(pickerOpened, true);
   });
 
+  // =========================================================================
+  // PHẦN 7: PR #75 HOTFIX REGRESSION TESTS (EXAM_TESTS LOOKUP & ERROR SEPARATION)
+  // =========================================================================
+  console.log('\n--- PHẦN 7: PR #75 Hotfix: exam_tests Lookup & Error Classification ---');
+
+  await test('7.1 Valid draft version + existing exam_tests row => import proceeds past target exam lookup', async () => {
+    const db = createMockDb();
+    const res = simulateImportEndpoint('teacher', db.teacher1Id, {
+      version_id: '33333333-0000-4000-8000-000000000001',
+      question_bank_item_ids: ['qb-item-101'],
+    }, db);
+    assert.equal(res.status, 200);
+    assert.equal(res.data.total_imported, 1);
+  });
+
+  await test('7.2 exam_tests query returns database error => 500 INTERNAL_ERROR (NOT ERR_EXAM_NOT_FOUND)', async () => {
+    // Mô phỏng hàm xử lý khi query exam_tests bị lỗi DB (Postgres / PostgREST error)
+    function simulateExamTestsLookup(tErr, tRow) {
+      if (tErr) {
+        return {
+          status: 500,
+          errorCode: 'INTERNAL_ERROR',
+          message: 'Lỗi khi kiểm tra thông tin đề thi.',
+        };
+      }
+      if (!tRow) {
+        return {
+          status: 404,
+          errorCode: 'ERR_EXAM_NOT_FOUND',
+          message: 'Không tìm thấy đề thi.',
+        };
+      }
+      return { status: 200, data: tRow };
+    }
+
+    const dbError = { code: '42703', message: 'column "description" does not exist' };
+    const res = simulateExamTestsLookup(dbError, null);
+
+    assert.equal(res.status, 500);
+    assert.equal(res.errorCode, 'INTERNAL_ERROR');
+    assert.notEqual(res.errorCode, 'ERR_EXAM_NOT_FOUND');
+  });
+
+  await test('7.3 exam_tests query succeeds but row absent => 404 ERR_EXAM_NOT_FOUND', async () => {
+    function simulateExamTestsLookup(tErr, tRow) {
+      if (tErr) {
+        return {
+          status: 500,
+          errorCode: 'INTERNAL_ERROR',
+          message: 'Lỗi khi kiểm tra thông tin đề thi.',
+        };
+      }
+      if (!tRow) {
+        return {
+          status: 404,
+          errorCode: 'ERR_EXAM_NOT_FOUND',
+          message: 'Không tìm thấy đề thi.',
+        };
+      }
+      return { status: 200, data: tRow };
+    }
+
+    const res = simulateExamTestsLookup(null, null);
+
+    assert.equal(res.status, 404);
+    assert.equal(res.errorCode, 'ERR_EXAM_NOT_FOUND');
+    assert.equal(res.message, 'Không tìm thấy đề thi.');
+  });
+
+  await test('7.4 Static analysis: handler.ts does not query nonexistent exam_tests.description', async () => {
+    const fs = await import('node:fs');
+    const handlerSource = fs.readFileSync('supabase/functions/exam-management-api/handler.ts', 'utf8');
+
+    // Đảm bảo không có chuỗi truy vấn 'exam_tests' nào chứa 'description'
+    const examTestsQueries = handlerSource.match(/\.from\(['"]exam_tests['"]\)\s*\.select\([^)]+\)/g) || [];
+    assert.ok(examTestsQueries.length > 0, 'Phải tìm thấy ít nhất 1 câu truy vấn exam_tests');
+
+    for (const q of examTestsQueries) {
+      assert.equal(
+        q.includes('description'),
+        false,
+        `Truy vấn exam_tests không được chứa cột description: ${q}`
+      );
+    }
+  });
+
+  await test('7.5 Static analysis: handler.ts separates tErr (500) and !tRow (404) in import endpoint', async () => {
+    const fs = await import('node:fs');
+    const handlerSource = fs.readFileSync('supabase/functions/exam-management-api/handler.ts', 'utf8');
+
+    // Kiểm tra không còn biểu thức gộp tErr || !tRow trong import endpoint
+    assert.equal(
+      handlerSource.includes('if (tErr || !tRow)'),
+      false,
+      'Không được sử dụng guard gộp if (tErr || !tRow)'
+    );
+
+    // Kiểm tra có nhánh if (tErr) trả về 500 INTERNAL_ERROR
+    assert.ok(
+      handlerSource.includes("if (tErr) {\n        console.error('[exam-management-api] exam_tests lookup failed'"),
+      'Phải có nhánh if (tErr) log lỗi và trả về 500'
+    );
+
+    // Kiểm tra có nhánh if (!tRow) trả về 404 ERR_EXAM_NOT_FOUND
+    assert.ok(
+      handlerSource.includes("if (!tRow) {\n        return createErrorResponse(\n          404,\n          'ERR_EXAM_NOT_FOUND'"),
+      'Phải có nhánh if (!tRow) trả về 404 ERR_EXAM_NOT_FOUND'
+    );
+  });
+
   console.log('\n==================================================');
   console.log(`KẾT QUẢ KIỂM THỬ: ${passed}/${total} TESTS PASSED`);
   if (passed === total) {
@@ -1453,3 +1563,4 @@ main().catch(err => {
   console.error('Lỗi khi chạy test suite:', err);
   process.exit(1);
 });
+

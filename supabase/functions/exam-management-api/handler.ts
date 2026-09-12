@@ -985,12 +985,29 @@ export async function handleExamManagementRequest(
 
       const { data: tRow, error: tErr } = await examClient
         .from('exam_tests')
-        .select('id, author_id, title, subject, grade_level, description')
+        .select('id, author_id, title, subject, grade_level')
         .eq('id', vRow.exam_id)
         .maybeSingle();
 
-      if (tErr || !tRow) {
-        return createErrorResponse(404, 'ERR_EXAM_NOT_FOUND', 'Không tìm thấy đề thi.');
+      if (tErr) {
+        console.error('[exam-management-api] exam_tests lookup failed', {
+          code: (tErr as any).code,
+          message: (tErr as any).message,
+        });
+
+        return createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          'Lỗi khi kiểm tra thông tin đề thi.'
+        );
+      }
+
+      if (!tRow) {
+        return createErrorResponse(
+          404,
+          'ERR_EXAM_NOT_FOUND',
+          'Không tìm thấy đề thi.'
+        );
       }
 
       if (actorRole === 'teacher' && tRow.author_id !== callerId) {
