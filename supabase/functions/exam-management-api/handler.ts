@@ -21,6 +21,7 @@ import {
   validateCreateAssignmentPayload,
   validateListExamAttemptsParams,
   validateGetAttemptDetailParams,
+  validateImportQuestionBankPayload,
   isValidUUID,
 } from './validation.ts';
 
@@ -922,6 +923,260 @@ export async function handleExamManagementRequest(
         },
         questions: enrichedQuestions,
       });
+    }
+
+    // =========================================================================
+    // ENDPOINT 9: POST /import-question-bank-items
+    // =========================================================================
+    if (req.method === 'POST' && (action === 'import-question-bank-items' || action === 'import-qb-questions')) {
+      let rawBody: unknown;
+      try {
+        rawBody = await req.json();
+      } catch (_) {
+        return createErrorResponse(400, 'INVALID_INPUT', 'Dữ liệu yêu cầu không phải là chuỗi JSON hợp lệ.');
+      }
+
+      const valResult = validateImportQuestionBankPayload(rawBody);
+      if (!valResult.valid || !valResult.data) {
+        return createErrorResponse(400, valResult.errorCode || 'INVALID_INPUT', valResult.errorMessage || 'Dữ liệu không hợp lệ.');
+      }
+
+      const { version_id: versionId, exam_id: examId, question_bank_item_ids: qbItemIds } = valResult.data;
+
+      // 1. Phân quyền: Chỉ Giáo viên hoặc Admin
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(403, 'FORBIDDEN_ROLE', 'Chỉ Giáo viên hoặc Quản trị viên mới có quyền nhập câu hỏi.');
+      }
+
+      // 2. Nếu có version_id -> kiểm tra quyền sở hữu exam và trạng thái draft
+      if (versionId) {
+        const { data: vRow, error: vErr } = await examClient
+          .from('exam_versions')
+          .select('id, exam_id, status')
+          .eq('id', versionId)
+          .maybeSingle();
+
+        if (vErr || !vRow) {
+          return createErrorResponse(404, 'ERR_VERSION_NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
+        }
+
+        if (vRow.status !== 'draft') {
+          return createErrorResponse(403, 'ERR_VERSION_IMMUTABLE', 'Chỉ có thể nhập câu hỏi vào phiên bản đề thi đang ở trạng thái nháp (draft).');
+        }
+
+        const { data: tRow, error: tErr } = await examClient
+          .from('exam_tests')
+          .select('id, author_id, status')
+          .eq('id', vRow.exam_id)
+          .maybeSingle();
+
+        if (tErr || !tRow) {
+          return createErrorResponse(404, 'ERR_EXAM_NOT_FOUND', 'Không tìm thấy đề thi.');
+        }
+
+        if (actorRole === 'teacher' && tRow.author_id !== callerId) {
+          return createErrorResponse(403, 'FORBIDDEN', 'Bạn không có quyền chỉnh sửa đề thi của giáo viên khác.');
+        }
+      }
+
+      // 3. Re-query từng Question Bank Item từ database bằng examClient (Service Role)
+      const { data: qbItems, error: qbErr } = await examClient
+        .from('question_bank_items')
+        .select(`
+          id,
+          code,
+          title,
+          question_type,
+          subject,
+          grade_level,
+          difficulty,
+          status,
+          visibility,
+          school_id,
+          author_id,
+          current_version_id,
+          version_count,
+          tags
+        `)
+        .in('id', qbItemIds);
+
+      if (qbErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tra cứu ngân hàng câu hỏi.');
+      }
+
+      const itemsList = qbItems || [];
+      if (itemsList.length === 0) {
+        return createErrorResponse(404, 'QUESTION_NOT_FOUND', 'Không tìm thấy câu hỏi nào trong danh sách được chọn.');
+      }
+
+      // 4. Lấy danh sách version_id
+      const versionIds = itemsList.map((i: any) => i.current_version_id).filter(Boolean);
+      const { data: versionsData, error: verErr } = await examClient
+        .from('question_bank_versions')
+        .select(`
+          id,
+          question_bank_item_id,
+          version_number,
+          prompt,
+          options,
+          media_urls,
+          hints,
+          explanation
+        `)
+        .in('id', versionIds);
+
+      if (verErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải chi tiết phiên bản câu hỏi.');
+      }
+
+      const versionsMap = new Map((versionsData || []).map((v: any) => [v.id, v]));
+
+      // 5. Lấy đáp án từ app_private.question_bank_answer_keys
+      const { data: keysData, error: keyErr } = await examClient
+        .from('question_bank_answer_keys')
+        .select('version_id, correct_answers, case_sensitive')
+        .in('version_id', versionIds);
+
+      const keysMap = new Map((keysData || []).map((k: any) => [k.version_id, k]));
+
+      // 6. Kiểm tra quyền truy cập từng câu và chuyển đổi sang Exam Canonical Question
+      const importedQuestions: any[] = [];
+      const itemMap = new Map(itemsList.map((i: any) => [i.id, i]));
+
+      // Giữ nguyên thứ tự theo qbItemIds mà người dùng đã chọn
+      for (let i = 0; i < qbItemIds.length; i++) {
+        const itemId = qbItemIds[i];
+        const item = itemMap.get(itemId);
+        if (!item) continue;
+
+        // Phân quyền trên từng câu hỏi:
+        // Teacher: Được dùng câu của chính mình HOẶC câu đã published có visibility = public_template (hoặc school_shared)
+        if (actorRole === 'teacher') {
+          const isOwn = item.author_id === callerId;
+          const isPublishedShared = item.status === 'published' && item.visibility === 'public_template';
+          if (!isOwn && !isPublishedShared) {
+            return createErrorResponse(403, 'FORBIDDEN_QUESTION_ACCESS', `Bạn không có quyền sử dụng câu hỏi '${item.title || item.id}'.`);
+          }
+        }
+
+        const ver = versionsMap.get(item.current_version_id);
+        if (!ver) continue;
+
+        const ansKey = keysMap.get(ver.id) || null;
+
+        // Chuyển đổi sang Canonical Schema
+        const qType = item.question_type || 'single_choice';
+        let canonicalOptions: Array<{ key: string; text: string; originalId?: string }> = [];
+
+        if (['single_choice', 'multiple_choice'].includes(qType)) {
+          const rawOpts = ver.options || [];
+          canonicalOptions = (Array.isArray(rawOpts) ? rawOpts : []).map((opt: any, idx: number) => {
+            const key = String.fromCharCode(65 + idx);
+            if (typeof opt === 'string') {
+              return { key, text: opt.trim(), originalId: `opt_${idx + 1}` };
+            }
+            if (opt && typeof opt === 'object') {
+              const text = typeof opt.text === 'string' ? opt.text.trim() : String(opt.text ?? '').trim();
+              const originalId = opt.id ? String(opt.id).trim() : (opt.key ? String(opt.key).trim() : `opt_${idx + 1}`);
+              return { key, text, originalId };
+            }
+            return { key, text: String(opt ?? '').trim(), originalId: `opt_${idx + 1}` };
+          });
+
+          if (canonicalOptions.length < 2) {
+            canonicalOptions = [
+              { key: 'A', text: 'Lựa chọn 1', originalId: 'opt_1' },
+              { key: 'B', text: 'Lựa chọn 2', originalId: 'opt_2' },
+              { key: 'C', text: 'Lựa chọn 3', originalId: 'opt_3' },
+              { key: 'D', text: 'Lựa chọn 4', originalId: 'opt_4' },
+            ];
+          }
+        }
+
+        // Map answer key
+        let canonicalAnswerKey: any = null;
+        const correctObj = ansKey?.correct_answers || {};
+
+        if (qType === 'single_choice') {
+          const rawTarget = correctObj.correct_option_id || correctObj.correct_answer || correctObj.correct_option;
+          let matchedKey = canonicalOptions[0]?.key || 'A';
+          if (rawTarget !== undefined && rawTarget !== null) {
+            const targetStr = String(rawTarget).trim();
+            const matchByOrig = canonicalOptions.find(o => o.originalId && o.originalId.toLowerCase() === targetStr.toLowerCase());
+            if (matchByOrig) {
+              matchedKey = matchByOrig.key;
+            } else {
+              const matchByKey = canonicalOptions.find(o => o.key.toUpperCase() === targetStr.toUpperCase());
+              if (matchByKey) {
+                matchedKey = matchByKey.key;
+              } else {
+                const matchByText = canonicalOptions.find(o => o.text.toLowerCase() === targetStr.toLowerCase());
+                if (matchByText) matchedKey = matchByText.key;
+              }
+            }
+          }
+          canonicalAnswerKey = { correct_answer: matchedKey };
+        } else if (qType === 'multiple_choice') {
+          const rawList = correctObj.correct_option_ids || correctObj.correct_answers || correctObj.correct_answer;
+          let targets: string[] = [];
+          if (Array.isArray(rawList)) {
+            targets = rawList.map(s => String(s).trim()).filter(Boolean);
+          } else if (typeof rawList === 'string' && rawList.trim()) {
+            targets = rawList.split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+          }
+          const matchedKeys: string[] = [];
+          for (const target of targets) {
+            const matchByOrig = canonicalOptions.find(o => o.originalId && o.originalId.toLowerCase() === target.toLowerCase());
+            if (matchByOrig && !matchedKeys.includes(matchByOrig.key)) {
+              matchedKeys.push(matchByOrig.key);
+              continue;
+            }
+            const matchByKey = canonicalOptions.find(o => o.key.toUpperCase() === target.toUpperCase());
+            if (matchByKey && !matchedKeys.includes(matchByKey.key)) {
+              matchedKeys.push(matchByKey.key);
+              continue;
+            }
+            const matchByText = canonicalOptions.find(o => o.text.toLowerCase() === target.toLowerCase());
+            if (matchByText && !matchedKeys.includes(matchByText.key)) {
+              matchedKeys.push(matchByText.key);
+              continue;
+            }
+          }
+          if (matchedKeys.length === 0 && canonicalOptions.length > 0) {
+            matchedKeys.push(canonicalOptions[0].key);
+          }
+          canonicalAnswerKey = { correct_answer: matchedKeys };
+        } else if (['fill_blank', 'short_answer'].includes(qType)) {
+          const rawCorrect = correctObj.correct_text !== undefined ? correctObj.correct_text : (correctObj.correct_answer || '');
+          const accepted = Array.isArray(correctObj.accepted_texts)
+            ? correctObj.accepted_texts.map(String)
+            : (Array.isArray(correctObj.accepted_answers) ? correctObj.accepted_answers.map(String) : []);
+          canonicalAnswerKey = {
+            correct_answer: String(rawCorrect || '').trim(),
+            accepted_answers: accepted.filter(Boolean),
+          };
+        } else {
+          // Manual question (essay, image_upload, file_upload)
+          canonicalAnswerKey = null;
+        }
+
+        importedQuestions.push({
+          id: generateUuid(),
+          question_number: importedQuestions.length + 1,
+          question_type: qType,
+          prompt: ver.prompt || item.title || '',
+          points: 1,
+          options_json: canonicalOptions.map(o => ({ key: o.key, text: o.text })),
+          answer_key: canonicalAnswerKey,
+          source_question_bank_item_id: item.id,
+          source_question_bank_version_id: ver.id,
+        });
+      }
+
+      return createSuccessResponse({
+        total_imported: importedQuestions.length,
+        imported_questions: importedQuestions,
+      }, 200);
     }
 
     // Nếu không khớp action nào

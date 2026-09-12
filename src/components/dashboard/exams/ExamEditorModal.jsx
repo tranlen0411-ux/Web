@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { deleteSingleChoiceOption } from './examOptionUtils.js';
+import { QuestionBankPickerModal } from './QuestionBankPickerModal.jsx';
 
 export { deleteSingleChoiceOption };
 
@@ -100,6 +101,15 @@ export const ExamEditorModal = ({
 
   // Questions Array
   const [questions, setQuestions] = useState([]);
+
+  // Question Bank Picker Modal State
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3500);
+  };
 
   const [loading, setLoading] = useState(false);
   const [fetchingDetail, setFetchingDetail] = useState(false);
@@ -333,6 +343,48 @@ export const ExamEditorModal = ({
     };
 
     setQuestions([...questions, newQ]);
+  };
+
+  // Nhập danh sách câu hỏi từ Question Bank Picker
+  const handleImportFromQuestionBank = async (selectedItemIds, selectedItems) => {
+    if (!Array.isArray(selectedItemIds) || selectedItemIds.length === 0) return;
+
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      throw new Error('Chưa tải xong dữ liệu gốc của đề thi.');
+    }
+
+    try {
+      const client = createExamManagementClient();
+      const res = await client.importQuestionsFromQuestionBank({
+        versionId: versionId || null,
+        examId: examId || null,
+        questionBankItemIds: selectedItemIds,
+      });
+
+      if (!res.ok || !res.data) {
+        throw new Error(res.error?.message || 'Không thể nhập câu hỏi từ Ngân hàng câu hỏi.');
+      }
+
+      const imported = res.data.imported_questions || [];
+      if (imported.length === 0) {
+        throw new Error('Không có câu hỏi nào được nhập.');
+      }
+
+      setQuestions(prevQuestions => {
+        const startNum = prevQuestions.length;
+        const mapped = imported.map((q, idx) => ({
+          ...q,
+          question_number: startNum + idx + 1,
+        }));
+        return [...prevQuestions, ...mapped];
+      });
+
+      showToast(`Đã thêm thành công ${imported.length} câu hỏi từ Ngân hàng câu hỏi vào đề thi.`);
+      setActiveTab('questions');
+    } catch (err) {
+      console.error('[ExamEditorModal] Lỗi nhập câu hỏi từ Ngân hàng:', err);
+      throw err;
+    }
   };
 
   const handleDeleteQuestion = (qIndex) => {
@@ -932,7 +984,17 @@ export const ExamEditorModal = ({
                     </div>
 
                     {/* NÚT THÊM CÂU HỎI */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setIsPickerOpen(true)}
+                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        title="Chọn và lấy câu hỏi từ Ngân hàng câu hỏi"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-200" />
+                        <span>Lấy từ Ngân hàng</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleAddQuestion('single_choice')}
@@ -1265,8 +1327,28 @@ export const ExamEditorModal = ({
             </button>
           </div>
         </div>
+
+        {/* QUESTION BANK PICKER MODAL */}
+        <QuestionBankPickerModal
+          isOpen={isPickerOpen}
+          onClose={() => setIsPickerOpen(false)}
+          onImportQuestions={handleImportFromQuestionBank}
+          existingQuestions={questions}
+          defaultSubject={subject}
+          defaultGrade={gradeLevel}
+          role={role}
+        />
+
+        {/* TOAST NOTIFICATION */}
+        {toastMsg && (
+          <div className="fixed top-6 right-6 z-[100] bg-emerald-700 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-emerald-500 animate-in fade-in slide-in-from-top-4 duration-200">
+            <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+            <span className="text-sm font-bold">{toastMsg}</span>
+          </div>
+        )}
       </div>
     </div>,
     document.body
   );
 };
+
