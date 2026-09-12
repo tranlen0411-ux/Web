@@ -21,6 +21,7 @@ import {
   validateCreateAssignmentPayload,
   validateListExamAttemptsParams,
   validateGetAttemptDetailParams,
+  validateImportQuestionBankPayload,
   isValidUUID,
 } from './validation.ts';
 
@@ -922,6 +923,467 @@ export async function handleExamManagementRequest(
         },
         questions: enrichedQuestions,
       });
+    }
+
+    // =========================================================================
+    // ENDPOINT 9: POST /import-question-bank-items (SERVER-SIDE SNAPSHOT PERSISTENCE)
+    // =========================================================================
+    if (req.method === 'POST' && (action === 'import-question-bank-items' || action === 'import-qb-questions')) {
+      let rawBody: unknown;
+      try {
+        rawBody = await req.json();
+      } catch (_) {
+        return createErrorResponse(400, 'INVALID_INPUT', 'Dữ liệu yêu cầu không phải là chuỗi JSON hợp lệ.');
+      }
+
+      const valResult = validateImportQuestionBankPayload(rawBody);
+      if (!valResult.valid || !valResult.data) {
+        return createErrorResponse(400, valResult.errorCode || 'INVALID_INPUT', valResult.errorMessage || 'Dữ liệu không hợp lệ.');
+      }
+
+      const { version_id: versionId, exam_id: examId, question_bank_item_ids: qbItemIds } = valResult.data;
+
+      // 1. Phân quyền: Chỉ Giáo viên hoặc Quản trị viên
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(403, 'FORBIDDEN_ROLE', 'Chỉ Giáo viên hoặc Quản trị viên mới có quyền nhập câu hỏi.');
+      }
+
+      // 2. Kiểm tra phiên bản đề thi đích (BẮT BUỘC tồn tại và ở trạng thái nháp 'draft')
+      const { data: vRow, error: vErr } = await examClient
+        .from('exam_versions')
+        .select(`
+          id,
+          exam_id,
+          version_number,
+          status,
+          title,
+          subject,
+          grade_level,
+          description,
+          duration_minutes,
+          starts_at,
+          last_start_at,
+          due_date,
+          max_attempts,
+          reward_stars,
+          shuffle_questions,
+          shuffle_options,
+          tab_switch_policy,
+          show_score_after_submit,
+          show_correct_answers
+        `)
+        .eq('id', versionId)
+        .maybeSingle();
+
+      if (vErr || !vRow) {
+        return createErrorResponse(404, 'ERR_VERSION_NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
+      }
+
+      if (vRow.status !== 'draft') {
+        return createErrorResponse(403, 'ERR_VERSION_IMMUTABLE', 'Chỉ có thể nhập câu hỏi vào phiên bản đề thi đang ở trạng thái nháp (draft).');
+      }
+
+      const { data: tRow, error: tErr } = await examClient
+        .from('exam_tests')
+        .select('id, author_id, title, subject, grade_level, description')
+        .eq('id', vRow.exam_id)
+        .maybeSingle();
+
+      if (tErr || !tRow) {
+        return createErrorResponse(404, 'ERR_EXAM_NOT_FOUND', 'Không tìm thấy đề thi.');
+      }
+
+      if (actorRole === 'teacher' && tRow.author_id !== callerId) {
+        return createErrorResponse(403, 'FORBIDDEN', 'Bạn không có quyền chỉnh sửa đề thi của giáo viên khác.');
+      }
+
+      // 3. Re-query từng Question Bank Item từ database bằng examClient (Service Role)
+      const { data: qbItems, error: qbErr } = await examClient
+        .from('question_bank_items')
+        .select(`
+          id,
+          code,
+          title,
+          question_type,
+          subject,
+          grade_level,
+          difficulty,
+          status,
+          visibility,
+          school_id,
+          author_id,
+          current_version_id,
+          version_count,
+          tags
+        `)
+        .in('id', qbItemIds);
+
+      if (qbErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tra cứu ngân hàng câu hỏi.');
+      }
+
+      const itemsList = qbItems || [];
+      const itemMap = new Map(itemsList.map((i: any) => [i.id, i]));
+
+      // Yêu cầu tập hợp câu hỏi tìm thấy phải khớp chính xác 100% với danh sách yêu cầu (Tuyệt đối KHÔNG import một phần)
+      if (itemsList.length !== qbItemIds.length) {
+        return createErrorResponse(
+          404,
+          'ERR_QB_ITEM_NOT_FOUND',
+          `Một hoặc nhiều câu hỏi được chọn không tồn tại trong ngân hàng câu hỏi (Tìm thấy ${itemsList.length}/${qbItemIds.length}).`
+        );
+      }
+
+      for (const reqId of qbItemIds) {
+        if (!itemMap.has(reqId)) {
+          return createErrorResponse(
+            404,
+            'ERR_QB_ITEM_NOT_FOUND',
+            `Không tìm thấy câu hỏi có ID '${reqId}' trong ngân hàng câu hỏi.`
+          );
+        }
+      }
+
+      // 4. Lấy danh sách version_id
+      const versionIds = itemsList.map((i: any) => i.current_version_id).filter(Boolean);
+      if (versionIds.length !== itemsList.length) {
+        return createErrorResponse(404, 'ERR_QB_VERSION_NOT_FOUND', 'Một hoặc nhiều câu hỏi chưa có phiên bản nội dung hợp lệ.');
+      }
+
+      const { data: versionsData, error: verErr } = await examClient
+        .from('question_bank_versions')
+        .select(`
+          id,
+          question_bank_item_id,
+          version_number,
+          prompt,
+          options,
+          media_urls,
+          hints,
+          explanation
+        `)
+        .in('id', versionIds);
+
+      if (verErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải chi tiết phiên bản câu hỏi.');
+      }
+
+      const versionsMap = new Map((versionsData || []).map((v: any) => [v.id, v]));
+
+      // 5. Lấy đáp án bảo mật từ Server-Only RPC rpc_qb_get_answer_key_server_only
+      const keysMap = new Map<string, any>();
+      for (const item of itemsList) {
+        if (!item.current_version_id) continue;
+        const rpcKeyRes = await examClient.rpc('rpc_qb_get_answer_key_server_only', {
+          p_caller_id: callerId,
+          p_actor_role: 'admin', // Context server backend
+          p_item_id: item.id,
+          p_version_id: item.current_version_id,
+        });
+
+        if (rpcKeyRes.data && rpcKeyRes.data.success && rpcKeyRes.data.has_answer_key) {
+          keysMap.set(item.current_version_id, rpcKeyRes.data.answer_key);
+        }
+      }
+
+      // 6. Kiểm tra quyền truy cập và chuyển đổi Canonical Schema với kiểm tra fail-closed nghiêm ngặt
+      const validatedQuestions: Array<{
+        id: string;
+        question_type: string;
+        prompt: string;
+        options_json: Array<{ key: string; text: string }>;
+        answer_key: {
+          correct_answer: any;
+          accepted_answers?: string[];
+          case_sensitive?: boolean;
+          grading_config?: any;
+        } | null;
+        source_question_bank_item_id: string;
+        source_question_bank_version_id: string;
+      }> = [];
+
+      for (let i = 0; i < qbItemIds.length; i++) {
+        const itemId = qbItemIds[i];
+        const item = itemMap.get(itemId);
+        if (!item) {
+          return createErrorResponse(404, 'ERR_QB_ITEM_NOT_FOUND', `Không tìm thấy câu hỏi có ID '${itemId}'.`);
+        }
+
+        // Phân quyền trên từng câu hỏi:
+        // Teacher: Được dùng câu của chính mình HOẶC câu đã published có visibility = public_template
+        if (actorRole === 'teacher') {
+          const isOwn = item.author_id === callerId;
+          const isPublishedShared = item.status === 'published' && item.visibility === 'public_template';
+          if (!isOwn && !isPublishedShared) {
+            return createErrorResponse(403, 'FORBIDDEN_QUESTION_ACCESS', `Bạn không có quyền sử dụng câu hỏi '${item.title || item.id}'.`);
+          }
+        }
+
+        const ver = versionsMap.get(item.current_version_id);
+        if (!ver) {
+          return createErrorResponse(404, 'ERR_QB_VERSION_NOT_FOUND', `Không tìm thấy phiên bản câu hỏi cho '${item.title || item.id}'.`);
+        }
+
+        const ansKey = keysMap.get(ver.id) || null;
+        const qType = item.question_type || 'single_choice';
+        const prompt = String(ver.prompt || item.title || '').trim();
+
+        if (!prompt) {
+          return createErrorResponse(400, 'ERR_QB_PROMPT_EMPTY', `Câu hỏi '${item.title || item.id}' có nội dung đề bài rỗng.`);
+        }
+
+        // Validate options cho câu hỏi trắc nghiệm
+        let canonicalOptions: Array<{ key: string; text: string; originalId?: string }> = [];
+        if (['single_choice', 'multiple_choice'].includes(qType)) {
+          const rawOpts = ver.options;
+          if (!Array.isArray(rawOpts) || rawOpts.length < 2) {
+            return createErrorResponse(400, 'ERR_QB_OPTIONS_INVALID', `Câu hỏi '${item.title || item.id}' phải có ít nhất 2 phương án lựa chọn hợp lệ.`);
+          }
+
+          const seenTexts = new Set<string>();
+          const seenIds = new Set<string>();
+
+          for (let oi = 0; oi < rawOpts.length; oi++) {
+            const opt = rawOpts[oi];
+            const key = String.fromCharCode(65 + oi);
+            let text = '';
+            let originalId = `opt_${oi + 1}`;
+
+            if (typeof opt === 'string') {
+              text = opt.trim();
+            } else if (opt && typeof opt === 'object') {
+              text = typeof opt.text === 'string' ? opt.text.trim() : String(opt.text ?? '').trim();
+              if (opt.id) originalId = String(opt.id).trim();
+              else if (opt.key) originalId = String(opt.key).trim();
+            } else {
+              return createErrorResponse(400, 'ERR_QB_OPTIONS_INVALID', `Phương án thứ ${oi + 1} của câu hỏi '${item.title || item.id}' không hợp lệ.`);
+            }
+
+            if (!text) {
+              return createErrorResponse(400, 'ERR_QB_OPTIONS_INVALID', `Phương án ${key} của câu hỏi '${item.title || item.id}' có nội dung rỗng.`);
+            }
+
+            const lower = text.toLowerCase();
+            if (seenTexts.has(lower)) {
+              return createErrorResponse(400, 'ERR_QB_OPTIONS_INVALID', `Câu hỏi '${item.title || item.id}' có phương án lựa chọn bị trùng lặp: "${text}".`);
+            }
+            seenTexts.add(lower);
+
+            if (originalId) {
+              const idLower = originalId.toLowerCase();
+              if (seenIds.has(idLower)) {
+                return createErrorResponse(400, 'ERR_QB_OPTIONS_INVALID', `Câu hỏi '${item.title || item.id}' có mã phương án bị trùng lặp: "${originalId}".`);
+              }
+              seenIds.add(idLower);
+            }
+
+            canonicalOptions.push({ key, text, originalId });
+          }
+        }
+
+        // Validate answer key cho auto-gradable types
+        let canonicalAnswerKey: any = null;
+
+        if (qType === 'single_choice') {
+          if (!ansKey || !ansKey.correct_answers) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu đáp án đúng trong ngân hàng câu hỏi.`);
+          }
+          const correctObj = ansKey.correct_answers;
+          const rawTarget = correctObj.correct_option_id ?? correctObj.correct_answer ?? correctObj.correct_option;
+          if (rawTarget === undefined || rawTarget === null || String(rawTarget).trim() === '') {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu cấu hình đáp án đúng.`);
+          }
+
+          const targetStr = String(rawTarget).trim();
+          let matchedKey: string | null = null;
+
+          const matchByOrig = canonicalOptions.find(o => o.originalId && o.originalId.toLowerCase() === targetStr.toLowerCase());
+          if (matchByOrig) {
+            matchedKey = matchByOrig.key;
+          } else {
+            const matchByKey = canonicalOptions.find(o => o.key.toUpperCase() === targetStr.toUpperCase());
+            if (matchByKey) {
+              matchedKey = matchByKey.key;
+            } else {
+              const matchByText = canonicalOptions.find(o => o.text.toLowerCase() === targetStr.toLowerCase());
+              if (matchByText) matchedKey = matchByText.key;
+              else {
+                const num = parseInt(targetStr, 10);
+                if (!isNaN(num) && num >= 1 && num <= canonicalOptions.length) {
+                  matchedKey = canonicalOptions[num - 1].key;
+                }
+              }
+            }
+          }
+
+          if (!matchedKey) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Đáp án đúng "${targetStr}" không khớp với bất kỳ phương án lựa chọn nào của câu hỏi '${item.title || item.id}'.`);
+          }
+
+          canonicalAnswerKey = { correct_answer: matchedKey };
+        } else if (qType === 'multiple_choice') {
+          if (!ansKey || !ansKey.correct_answers) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu đáp án đúng trong ngân hàng câu hỏi.`);
+          }
+          const correctObj = ansKey.correct_answers;
+          const rawList = correctObj.correct_option_ids ?? correctObj.correct_answers ?? correctObj.correct_answer;
+          let targets: string[] = [];
+          if (Array.isArray(rawList)) {
+            targets = rawList.map(s => String(s).trim()).filter(Boolean);
+          } else if (typeof rawList === 'string' && rawList.trim()) {
+            targets = rawList.split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+          }
+
+          if (targets.length === 0) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm nhiều đáp án '${item.title || item.id}' thiếu danh sách đáp án đúng.`);
+          }
+
+          const matchedKeys: string[] = [];
+          for (const target of targets) {
+            const matchByOrig = canonicalOptions.find(o => o.originalId && o.originalId.toLowerCase() === target.toLowerCase());
+            if (matchByOrig && !matchedKeys.includes(matchByOrig.key)) {
+              matchedKeys.push(matchByOrig.key);
+              continue;
+            }
+            const matchByKey = canonicalOptions.find(o => o.key.toUpperCase() === target.toUpperCase());
+            if (matchByKey && !matchedKeys.includes(matchByKey.key)) {
+              matchedKeys.push(matchByKey.key);
+              continue;
+            }
+            const matchByText = canonicalOptions.find(o => o.text.toLowerCase() === target.toLowerCase());
+            if (matchByText && !matchedKeys.includes(matchByText.key)) {
+              matchedKeys.push(matchByText.key);
+              continue;
+            }
+
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Đáp án đúng "${target}" không khớp với bất kỳ phương án nào của câu hỏi '${item.title || item.id}'.`);
+          }
+
+          if (matchedKeys.length === 0) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Không tìm thấy đáp án đúng hợp lệ cho câu hỏi '${item.title || item.id}'.`);
+          }
+
+          canonicalAnswerKey = { correct_answer: matchedKeys.sort() };
+        } else if (['fill_blank', 'short_answer'].includes(qType)) {
+          if (!ansKey || !ansKey.correct_answers) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' thiếu đáp án đúng.`);
+          }
+          const correctObj = ansKey.correct_answers;
+          const rawCorrect = correctObj.correct_text !== undefined ? correctObj.correct_text : (correctObj.correct_answer || '');
+          const correctStr = String(rawCorrect || '').trim();
+
+          if (!correctStr) {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' có nội dung đáp án đúng rỗng.`);
+          }
+
+          const accepted = Array.isArray(correctObj.accepted_texts)
+            ? correctObj.accepted_texts.map(String)
+            : (Array.isArray(correctObj.accepted_answers) ? correctObj.accepted_answers.map(String) : []);
+
+          canonicalAnswerKey = {
+            correct_answer: correctStr,
+            accepted_answers: accepted.map(s => s.trim()).filter(Boolean),
+          };
+        } else {
+          // Manual question types (essay, image_upload, file_upload)
+          canonicalAnswerKey = null;
+        }
+
+        validatedQuestions.push({
+          id: generateUuid(),
+          question_type: qType,
+          prompt,
+          options_json: canonicalOptions.map(o => ({ key: o.key, text: o.text })),
+          answer_key: canonicalAnswerKey,
+          source_question_bank_item_id: item.id,
+          source_question_bank_version_id: ver.id,
+        });
+      }
+
+      // 7. Lấy danh sách câu hỏi hiện tại trong draft qua RPC an toàn
+      const existingRes = await examClient.rpc('rpc_exam_get_draft_questions_with_answers', {
+        p_caller_id: callerId,
+        p_version_id: versionId,
+        p_is_admin: actorRole === 'admin',
+      });
+
+      if (existingRes.error) {
+        const norm = normalizeRpcError(existingRes.error);
+        return createErrorResponse(norm.status, norm.errorCode, norm.message);
+      }
+
+      const existingQuestions: any[] = existingRes.data?.questions || [];
+      const baseIndex = existingQuestions.length;
+
+      // 8. Kết hợp câu hỏi cũ và câu hỏi mới thành danh sách hoàn chỉnh
+      const safeProjectedQuestions: any[] = [];
+      const newQuestionsForSave: any[] = [];
+
+      for (let i = 0; i < validatedQuestions.length; i++) {
+        const q = validatedQuestions[i];
+        const qNum = baseIndex + i + 1;
+
+        newQuestionsForSave.push({
+          id: q.id,
+          question_number: qNum,
+          question_type: q.question_type,
+          prompt: q.prompt,
+          points: 1.0,
+          options_json: q.options_json,
+          answer_key: q.answer_key,
+          source_question_bank_item_id: q.source_question_bank_item_id,
+          source_question_bank_version_id: q.source_question_bank_version_id,
+        });
+
+        // Safe projection (KHÔNG chứa answer_key)
+        safeProjectedQuestions.push({
+          id: q.id,
+          exam_version_id: versionId,
+          question_number: qNum,
+          question_type: q.question_type,
+          prompt: q.prompt,
+          points: 1.0,
+          options_json: q.options_json,
+          source_question_bank_item_id: q.source_question_bank_item_id,
+          source_question_bank_version_id: q.source_question_bank_version_id,
+        });
+      }
+
+      const combinedQuestions = [...existingQuestions, ...newQuestionsForSave];
+
+      // 9. Thực hiện lưu Snapshot nguyên tử (Atomic Server-Side Persistence) bằng rpc_exam_save_draft_version
+      const saveRes = await examClient.rpc('rpc_exam_save_draft_version', {
+        p_caller_id: callerId,
+        p_version_id: versionId,
+        p_title: vRow.title || tRow.title,
+        p_subject: vRow.subject || tRow.subject,
+        p_grade_level: vRow.grade_level || tRow.grade_level,
+        p_description: vRow.description || tRow.description,
+        p_duration_minutes: vRow.duration_minutes,
+        p_starts_at: vRow.starts_at,
+        p_last_start_at: vRow.last_start_at,
+        p_due_date: vRow.due_date,
+        p_max_attempts: vRow.max_attempts || 1,
+        p_reward_stars: vRow.reward_stars || 0,
+        p_shuffle_questions: vRow.shuffle_questions,
+        p_shuffle_options: vRow.shuffle_options,
+        p_tab_switch_policy: vRow.tab_switch_policy,
+        p_show_score_after_submit: vRow.show_score_after_submit,
+        p_show_correct_answers: vRow.show_correct_answers,
+        p_questions: combinedQuestions,
+        p_is_admin: actorRole === 'admin',
+      });
+
+      if (saveRes.error) {
+        const norm = normalizeRpcError(saveRes.error);
+        return createErrorResponse(norm.status, norm.errorCode, norm.message);
+      }
+
+      // 10. Phản hồi hoàn tất với Safe Projection (ZERO ANSWER KEY LEAK)
+      return createSuccessResponse({
+        total_imported: safeProjectedQuestions.length,
+        imported_questions: safeProjectedQuestions,
+      }, 200);
     }
 
     // Nếu không khớp action nào

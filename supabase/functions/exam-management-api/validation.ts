@@ -539,3 +539,66 @@ export function validateGetAttemptDetailParams(params: {
   };
 }
 
+export interface ImportQuestionBankPayload {
+  version_id: string;
+  exam_id?: string | null;
+  question_bank_item_ids: string[];
+}
+
+export function validateImportQuestionBankPayload(raw: unknown): {
+  valid: boolean;
+  data?: ImportQuestionBankPayload;
+  errorCode?: string;
+  errorMessage?: string;
+} {
+  if (!isPlainObject(raw)) {
+    return { valid: false, errorCode: 'INVALID_INPUT', errorMessage: 'Dữ liệu yêu cầu phải là một JSON object.' };
+  }
+
+  const rawVersionId = (raw as any).version_id;
+  if (!rawVersionId || typeof rawVersionId !== 'string' || !isValidUUID(rawVersionId)) {
+    return { valid: false, errorCode: 'INVALID_VERSION_ID', errorMessage: 'Mã version_id bắt buộc và phải đúng định dạng UUID.' };
+  }
+  const versionId = rawVersionId.trim();
+
+  const rawIds = (raw as any).question_bank_item_ids ?? (raw as any).question_bank_ids ?? (raw as any).item_ids;
+  if (!Array.isArray(rawIds) || rawIds.length === 0) {
+    return { valid: false, errorCode: 'INVALID_QUESTION_BANK_IDS', errorMessage: 'Danh sách question_bank_item_ids không được để trống.' };
+  }
+
+  if (rawIds.length > 100) {
+    return { valid: false, errorCode: 'INVALID_BATCH_SIZE', errorMessage: 'Không thể nhập quá 100 câu hỏi trong một lần.' };
+  }
+
+  const validIds: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < rawIds.length; i++) {
+    const id = typeof rawIds[i] === 'string' ? rawIds[i].trim() : '';
+    if (!isValidUUID(id)) {
+      return { valid: false, errorCode: 'INVALID_QUESTION_BANK_ID', errorMessage: `ID câu hỏi thứ ${i + 1} không đúng định dạng UUID.` };
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      validIds.push(id);
+    }
+  }
+
+  let examId: string | null = null;
+  if ((raw as any).exam_id) {
+    if (!isValidUUID((raw as any).exam_id)) {
+      return { valid: false, errorCode: 'INVALID_EXAM_ID', errorMessage: 'Mã exam_id không đúng định dạng UUID.' };
+    }
+    examId = (raw as any).exam_id.trim();
+  }
+
+  return {
+    valid: true,
+    data: {
+      version_id: versionId,
+      exam_id: examId,
+      question_bank_item_ids: validIds,
+    },
+  };
+}
+
+

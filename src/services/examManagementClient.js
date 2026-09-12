@@ -329,6 +329,21 @@ export class ExamManagementClient {
       };
     }
   }
+
+  /**
+   * Nhập câu hỏi từ Ngân hàng câu hỏi vào bản nháp đề thi
+   * @param {Object} params
+   * @param {string} [params.versionId]
+   * @param {string} [params.examId]
+   * @param {string[]} params.questionBankItemIds
+   */
+  async importQuestionsFromQuestionBank({ versionId, examId, questionBankItemIds }) {
+    return await this.dispatch('import-question-bank-items', 'POST', {
+      version_id: versionId || null,
+      exam_id: examId || null,
+      question_bank_item_ids: Array.isArray(questionBankItemIds) ? questionBankItemIds : [],
+    });
+  }
 }
 
 export function createExamManagementClient(options = {}) {

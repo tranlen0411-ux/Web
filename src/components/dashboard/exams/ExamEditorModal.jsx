@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { deleteSingleChoiceOption } from './examOptionUtils.js';
+import { QuestionBankPickerModal } from './QuestionBankPickerModal.jsx';
 
 export { deleteSingleChoiceOption };
 
@@ -100,6 +101,15 @@ export const ExamEditorModal = ({
 
   // Questions Array
   const [questions, setQuestions] = useState([]);
+
+  // Question Bank Picker Modal State
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
+
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3500);
+  };
 
   const [loading, setLoading] = useState(false);
   const [fetchingDetail, setFetchingDetail] = useState(false);
@@ -333,6 +343,102 @@ export const ExamEditorModal = ({
     };
 
     setQuestions([...questions, newQ]);
+  };
+
+  // Nhập danh sách câu hỏi từ Question Bank Picker
+  const handleImportFromQuestionBank = async (selectedItemIds, selectedItems) => {
+    if (!Array.isArray(selectedItemIds) || selectedItemIds.length === 0) return;
+
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') {
+      throw new Error('Chưa tải xong dữ liệu gốc của đề thi.');
+    }
+
+    try {
+      const client = createExamManagementClient();
+      let currentVerId = versionId;
+      let currentExamId = examId;
+
+      // Nếu chưa có exam_id hoặc version_id trên DB (soạn mới từ đầu): gọi createTest để tạo draft container
+      if (!currentExamId || !currentVerId) {
+        const createRes = await client.createTest({
+          title: title.trim() || 'Đề thi mới',
+          subject: subject.trim() || 'Toán',
+          grade_level: Number(gradeLevel) || 1,
+          description: description.trim() || null,
+        });
+
+        if (!createRes.ok || !createRes.data) {
+          throw new Error(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+        }
+
+        currentExamId = createRes.data.exam_id;
+        currentVerId = createRes.data.version_id;
+        setExamId(currentExamId);
+        setVersionId(currentVerId);
+        setVersionStatus('draft');
+      }
+
+      // Gọi endpoint BFF nhập câu hỏi và lưu Snapshot an toàn trên server
+      const res = await client.importQuestionsFromQuestionBank({
+        versionId: currentVerId,
+        examId: currentExamId,
+        questionBankItemIds: selectedItemIds,
+      });
+
+      if (!res.ok || !res.data) {
+        throw new Error(res.error?.message || 'Không thể nhập câu hỏi từ Ngân hàng câu hỏi.');
+      }
+
+      const imported = res.data.imported_questions || [];
+      if (imported.length === 0) {
+        throw new Error('Không có câu hỏi nào được nhập.');
+      }
+
+      // Tải lại chi tiết đề thi bản nháp cho tác giả qua RPC Authoring an toàn
+      const detailRes = await client.getTestDetail({
+        examId: currentExamId,
+        versionId: currentVerId,
+      });
+
+      if (detailRes.ok && detailRes.data?.questions) {
+        setQuestions(
+          detailRes.data.questions.map((q, idx) => ({
+            id: q.id || generateUuid(),
+            question_number: q.question_number || idx + 1,
+            question_type: q.question_type || 'single_choice',
+            prompt: q.prompt || '',
+            points: Number(q.points) || 1,
+            options_json: Array.isArray(q.options_json)
+              ? q.options_json.map((opt, optIdx) => ({
+                  key: typeof opt === 'object' && opt !== null ? opt.key : String.fromCharCode(65 + optIdx),
+                  text: typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? ''),
+                }))
+              : [],
+            answer_key: q.answer_key || null,
+            source_question_bank_item_id: q.source_question_bank_item_id || null,
+            source_question_bank_version_id: q.source_question_bank_version_id || null,
+          }))
+        );
+      } else {
+        // Fallback cập nhật danh sách an toàn
+        setQuestions(prevQuestions => {
+          const isDefaultDummy = prevQuestions.length === 1 && prevQuestions[0].prompt === '1 + 1 = ?' && !examToEdit;
+          const baseQuestions = isDefaultDummy ? [] : prevQuestions;
+          const startNum = baseQuestions.length;
+          const mapped = imported.map((q, idx) => ({
+            ...q,
+            question_number: startNum + idx + 1,
+          }));
+          return [...baseQuestions, ...mapped];
+        });
+      }
+
+      showToast(`Đã thêm thành công ${imported.length} câu hỏi từ Ngân hàng câu hỏi vào đề thi.`);
+      setActiveTab('questions');
+    } catch (err) {
+      console.error('[ExamEditorModal] Lỗi nhập câu hỏi từ Ngân hàng:', err);
+      throw err;
+    }
   };
 
   const handleDeleteQuestion = (qIndex) => {
@@ -932,7 +1038,17 @@ export const ExamEditorModal = ({
                     </div>
 
                     {/* NÚT THÊM CÂU HỎI */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setIsPickerOpen(true)}
+                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        title="Chọn và lấy câu hỏi từ Ngân hàng câu hỏi"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-200" />
+                        <span>Lấy từ Ngân hàng</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleAddQuestion('single_choice')}
@@ -1265,8 +1381,28 @@ export const ExamEditorModal = ({
             </button>
           </div>
         </div>
+
+        {/* QUESTION BANK PICKER MODAL */}
+        <QuestionBankPickerModal
+          isOpen={isPickerOpen}
+          onClose={() => setIsPickerOpen(false)}
+          onImportQuestions={handleImportFromQuestionBank}
+          existingQuestions={questions}
+          defaultSubject={subject}
+          defaultGrade={gradeLevel}
+          role={role}
+        />
+
+        {/* TOAST NOTIFICATION */}
+        {toastMsg && (
+          <div className="fixed top-6 right-6 z-[100] bg-emerald-700 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-emerald-500 animate-in fade-in slide-in-from-top-4 duration-200">
+            <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+            <span className="text-sm font-bold">{toastMsg}</span>
+          </div>
+        )}
       </div>
     </div>,
     document.body
   );
 };
+
