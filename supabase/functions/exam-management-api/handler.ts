@@ -1036,6 +1036,10 @@ export async function handleExamManagementRequest(
         .in('id', qbItemIds);
 
       if (qbErr) {
+        console.error('[exam-management-api] question_bank_items lookup failed', {
+          code: (qbErr as any).code,
+          message: (qbErr as any).message,
+        });
         return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tra cứu ngân hàng câu hỏi.');
       }
 
@@ -1082,6 +1086,10 @@ export async function handleExamManagementRequest(
         .in('id', versionIds);
 
       if (verErr) {
+        console.error('[exam-management-api] question_bank_versions lookup failed', {
+          code: (verErr as any).code,
+          message: (verErr as any).message,
+        });
         return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải chi tiết phiên bản câu hỏi.');
       }
 
