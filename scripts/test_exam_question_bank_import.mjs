@@ -13,6 +13,7 @@ import { ExamManagementClient } from '../src/services/examManagementClient.js';
 import {
   isUntouchedDemoQuestion,
   buildSaveDraftQuestionsPayload,
+  validateDraftQuestions,
 } from '../src/components/dashboard/exams/examDraftUtils.js';
 
 let passed = 0;
@@ -1237,6 +1238,207 @@ async function main() {
     assert.notEqual(createError, null);
     assert.equal(createError.message, 'Mất kết nối mạng');
   });
+
+  await test('6.11 buildSaveDraftQuestionsPayload: Tuyệt đối không tự động bịa đáp án A hay fallback khi chưa chọn đáp án', async () => {
+    const unconfiguredQuestions = [
+      {
+        id: 'q-sc-no-ans',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Trắc nghiệm chưa chọn đáp án',
+        options_json: [
+          { key: 'A', text: 'Opt A' },
+          { key: 'B', text: 'Opt B' },
+        ],
+        answer_key: null, // Chưa chọn
+      },
+      {
+        id: 'q-mc-no-ans',
+        question_number: 2,
+        question_type: 'multiple_choice',
+        prompt: 'Nhiều đáp án chưa chọn',
+        options_json: [
+          { key: 'A', text: 'Opt A' },
+          { key: 'B', text: 'Opt B' },
+        ],
+        answer_key: { correct_answer: [] }, // Trống
+      },
+      {
+        id: 'q-fb-no-ans',
+        question_number: 3,
+        question_type: 'fill_blank',
+        prompt: 'Điền khuyết chưa có mẫu',
+        answer_key: { correct_answer: '' },
+      },
+    ];
+
+    const payload = buildSaveDraftQuestionsPayload(unconfiguredQuestions);
+
+    // Single choice: correct_answer phải là null, TUYỆT ĐỐI KHÔNG fallback về 'A' hay Opt 1
+    assert.equal(payload[0].answer_key?.correct_answer, null);
+
+    // Multiple choice: correct_answer phải là [], TUYỆT ĐỐI KHÔNG fallback về ['A']
+    assert.deepEqual(payload[1].answer_key?.correct_answer, []);
+
+    // Fill blank: correct_answer phải là '', TUYỆT ĐỐI KHÔNG bịa giá trị
+    assert.equal(payload[2].answer_key?.correct_answer, '');
+  });
+
+  await test('6.12 validateDraftQuestions: Từ chối single_choice khi chưa chọn đáp án đúng hợp lệ', async () => {
+    const invalidSingleChoice = [
+      {
+        id: 'q1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Câu hỏi 1',
+        options_json: [
+          { key: 'A', text: 'Lựa chọn A' },
+          { key: 'B', text: 'Lựa chọn B' },
+        ],
+        answer_key: { correct_answer: '' }, // Rỗng
+      },
+    ];
+
+    const res = validateDraftQuestions(invalidSingleChoice);
+    assert.equal(res.valid, false);
+    assert.equal(res.message, 'Vui lòng chọn đáp án đúng cho câu hỏi số 1.');
+  });
+
+  await test('6.13 validateDraftQuestions: Từ chối multiple_choice khi chưa chọn ít nhất một đáp án đúng', async () => {
+    const invalidMultipleChoice = [
+      {
+        id: 'q1',
+        question_number: 1,
+        question_type: 'multiple_choice',
+        prompt: 'Câu hỏi nhiều đáp án',
+        options_json: [
+          { key: 'A', text: 'Lựa chọn A' },
+          { key: 'B', text: 'Lựa chọn B' },
+        ],
+        answer_key: { correct_answer: [] }, // Không chọn đáp án nào
+      },
+    ];
+
+    const res = validateDraftQuestions(invalidMultipleChoice);
+    assert.equal(res.valid, false);
+    assert.equal(res.message, 'Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi số 1.');
+  });
+
+  await test('6.14 validateDraftQuestions: Từ chối khi đáp án đúng trỏ tới option key không tồn tại', async () => {
+    const invalidKeyQuestion = [
+      {
+        id: 'q1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Câu hỏi có key sai',
+        options_json: [
+          { key: 'A', text: 'Lựa chọn A' },
+          { key: 'B', text: 'Lựa chọn B' },
+        ],
+        answer_key: { correct_answer: 'Z' }, // Không tồn tại
+      },
+    ];
+
+    const res = validateDraftQuestions(invalidKeyQuestion);
+    assert.equal(res.valid, false);
+    assert.equal(res.message, 'Vui lòng chọn đáp án đúng cho câu hỏi số 1.');
+  });
+
+  await test('6.15 validateDraftQuestions: Từ chối fill_blank / short_answer khi chưa nhập đáp án', async () => {
+    const invalidFillBlank = [
+      {
+        id: 'q1',
+        question_number: 1,
+        question_type: 'fill_blank',
+        prompt: 'Điền từ còn thiếu vào chỗ trống',
+        answer_key: { correct_answer: '   ' }, // Chỉ khoảng trắng
+      },
+    ];
+
+    const res = validateDraftQuestions(invalidFillBlank);
+    assert.equal(res.valid, false);
+    assert.equal(res.message, 'Vui lòng cấu hình đáp án đúng cho câu hỏi số 1.');
+  });
+
+  await test('6.16 Pre-import validation: Chặn mở picker và không gọi saveDraft nếu câu hỏi tự tạo bị thiếu đáp án', async () => {
+    let saveDraftCalled = false;
+    let pickerOpened = false;
+
+    // Giả lập câu hỏi tự tạo nhưng giáo viên chưa chọn đáp án
+    const unconfiguredLocalQuestions = [
+      {
+        id: 'q-custom-1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Câu hỏi tự soạn nhưng quên chọn đáp án đúng',
+        points: 1,
+        options_json: [
+          { key: 'A', text: 'Lựa chọn 1' },
+          { key: 'B', text: 'Lựa chọn 2' },
+        ],
+        answer_key: null,
+      },
+    ];
+
+    // Kiểm tra fail-closed gate trước khi mở Picker
+    const isUntouched = isUntouchedDemoQuestion(unconfiguredLocalQuestions, true);
+    assert.equal(isUntouched, false);
+
+    const questionsToPersist = isUntouched ? [] : unconfiguredLocalQuestions;
+    const valResult = validateDraftQuestions(questionsToPersist);
+
+    assert.equal(valResult.valid, false);
+    assert.equal(valResult.message, 'Vui lòng chọn đáp án đúng cho câu hỏi số 1.');
+
+    // Luồng xử lý nếu validation thất bại: không gọi saveDraft, không mở picker
+    if (valResult.valid) {
+      saveDraftCalled = true;
+      pickerOpened = true;
+    }
+
+    assert.equal(saveDraftCalled, false);
+    assert.equal(pickerOpened, false);
+    // State câu hỏi cục bộ không bị biến đổi
+    assert.equal(unconfiguredLocalQuestions.length, 1);
+    assert.equal(unconfiguredLocalQuestions[0].answer_key, null);
+  });
+
+  await test('6.17 Pre-import validation: Câu hỏi tự tạo hợp lệ -> saveDraft thành công và mở Picker', async () => {
+    let saveDraftCalled = false;
+    let pickerOpened = false;
+
+    const validLocalQuestions = [
+      {
+        id: 'q-custom-1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Hà Nội là thủ đô của nước nào?',
+        points: 2,
+        options_json: [
+          { key: 'A', text: 'Việt Nam' },
+          { key: 'B', text: 'Lào' },
+        ],
+        answer_key: { correct_answer: 'A' },
+      },
+    ];
+
+    const isUntouched = isUntouchedDemoQuestion(validLocalQuestions, true);
+    assert.equal(isUntouched, false);
+
+    const questionsToPersist = isUntouched ? [] : validLocalQuestions;
+    const valResult = validateDraftQuestions(questionsToPersist);
+
+    assert.equal(valResult.valid, true);
+
+    if (valResult.valid) {
+      saveDraftCalled = true;
+      pickerOpened = true;
+    }
+
+    assert.equal(saveDraftCalled, true);
+    assert.equal(pickerOpened, true);
+  });
+
   console.log('\n==================================================');
   console.log(`KẾT QUẢ KIỂM THỬ: ${passed}/${total} TESTS PASSED`);
   if (passed === total) {

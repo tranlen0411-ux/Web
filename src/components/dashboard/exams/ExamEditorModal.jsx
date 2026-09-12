@@ -31,9 +31,15 @@ import { QuestionBankPickerModal } from './QuestionBankPickerModal.jsx';
 import {
   isUntouchedDemoQuestion,
   buildSaveDraftQuestionsPayload,
+  validateDraftQuestions,
 } from './examDraftUtils.js';
 
-export { deleteSingleChoiceOption, isUntouchedDemoQuestion, buildSaveDraftQuestionsPayload };
+export {
+  deleteSingleChoiceOption,
+  isUntouchedDemoQuestion,
+  buildSaveDraftQuestionsPayload,
+  validateDraftQuestions,
+};
 
 function generateUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -357,14 +363,31 @@ export const ExamEditorModal = ({
     if (examToEdit?.active_version?.status === 'published') return;
     if (Boolean(examToEdit) && detailLoadStatus !== 'ready') return;
 
-    setInitializingDraft(true);
     setErrorMsg('');
+
+    // 1. Xác định danh sách câu hỏi cần lưu:
+    // - Nếu chỉ có câu hỏi demo mặc định chưa sửa (1 + 1 = ?): lưu [] để QB import thay thế sạch sẽ
+    // - Nếu giáo viên đã sửa câu demo hoặc thêm câu hỏi thủ công: xác thực câu hỏi thủ công trước khi lưu
+    const isUntouchedDemo = isUntouchedDemoQuestion(questions, !examToEdit);
+    const questionsToPersist = isUntouchedDemo ? [] : questions;
+
+    // 2. Kiểm tra tính hợp lệ của câu hỏi thủ công (Fail-closed)
+    if (questionsToPersist.length > 0) {
+      const valResult = validateDraftQuestions(questionsToPersist);
+      if (!valResult.valid) {
+        setErrorMsg(valResult.message || 'Vui lòng hoàn thiện nội dung câu hỏi trước khi mở Ngân hàng câu hỏi.');
+        setActiveTab('questions');
+        return;
+      }
+    }
+
+    setInitializingDraft(true);
     try {
       const client = createExamManagementClient();
       let currentVerId = versionId;
       let currentExamId = examId;
 
-      // 1. Nếu là đề mới chưa có container trên DB: gọi createTest trước
+      // 3. Nếu là đề mới chưa có container trên DB: gọi createTest trước
       if (!currentExamId || !currentVerId) {
         const createRes = await client.createTest({
           title: title.trim() || 'Đề thi mới',
@@ -386,13 +409,7 @@ export const ExamEditorModal = ({
         setVersionStatus('draft');
       }
 
-      // 2. Xác định danh sách câu hỏi cần lưu:
-      // - Nếu chỉ có câu hỏi demo mặc định chưa sửa (1 + 1 = ?): lưu [] để QB import thay thế sạch sẽ
-      // - Nếu giáo viên đã sửa câu demo hoặc thêm câu hỏi thủ công: lưu toàn bộ câu hỏi hiện tại lên DB
-      const isUntouchedDemo = isUntouchedDemoQuestion(questions, !examToEdit);
-      const questionsToPersist = isUntouchedDemo ? [] : questions;
-
-      // 3. Gọi saveDraft lưu đầy đủ metadata & câu hỏi hiện tại lên DB
+      // 4. Gọi saveDraft lưu đầy đủ metadata & câu hỏi hiện tại lên DB
       const savePayload = {
         version_id: currentVerId,
         title: title.trim() || 'Đề thi mới',
@@ -419,7 +436,7 @@ export const ExamEditorModal = ({
         return;
       }
 
-      // 4. Chỉ khi lưu bản nháp thành công mới mở QuestionBankPickerModal
+      // 5. Chỉ khi lưu bản nháp thành công mới mở QuestionBankPickerModal
       setIsPickerOpen(true);
     } catch (err) {
       console.error('[ExamEditorModal] Lỗi khởi tạo & lưu bản nháp khi mở QB picker:', err);
@@ -620,61 +637,12 @@ export const ExamEditorModal = ({
       return;
     }
 
-    // Kiểm tra câu hỏi
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (!q.prompt?.trim()) {
-        setErrorMsg(`Vui lòng nhập nội dung câu hỏi số ${i + 1}.`);
-        setActiveTab('questions');
-        return;
-      }
-      if (q.question_type === 'single_choice') {
-        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
-          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm 1 đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
-          setActiveTab('questions');
-          return;
-        }
-        for (let oi = 0; oi < q.options_json.length; oi++) {
-          const opt = q.options_json[oi];
-          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
-          if (!optText || !optText.trim()) {
-            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
-            setActiveTab('questions');
-            return;
-          }
-        }
-        if (!q.answer_key || !q.answer_key.correct_answer) {
-          setErrorMsg(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
-          setActiveTab('questions');
-          return;
-        }
-      } else if (q.question_type === 'multiple_choice') {
-        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
-          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm nhiều đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
-          setActiveTab('questions');
-          return;
-        }
-        for (let oi = 0; oi < q.options_json.length; oi++) {
-          const opt = q.options_json[oi];
-          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
-          if (!optText || !optText.trim()) {
-            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
-            setActiveTab('questions');
-            return;
-          }
-        }
-        if (!q.answer_key || !Array.isArray(q.answer_key.correct_answer) || q.answer_key.correct_answer.length === 0) {
-          setErrorMsg(`Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi số ${i + 1}.`);
-          setActiveTab('questions');
-          return;
-        }
-      } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-        if (!q.answer_key || q.answer_key.correct_answer === undefined || q.answer_key.correct_answer === '') {
-          setErrorMsg(`Vui lòng cấu hình đáp án đúng cho câu hỏi số ${i + 1} (${QUESTION_TYPE_LABELS[q.question_type]}).`);
-          setActiveTab('questions');
-          return;
-        }
-      }
+    // Kiểm tra câu hỏi bằng Shared Pure Validator
+    const questionsValidation = validateDraftQuestions(questions);
+    if (!questionsValidation.valid) {
+      setErrorMsg(questionsValidation.message);
+      setActiveTab('questions');
+      return;
     }
 
     // Kiểm tra lịch thi
