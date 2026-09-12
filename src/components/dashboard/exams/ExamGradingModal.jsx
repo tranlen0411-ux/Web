@@ -258,8 +258,8 @@ export const ExamGradingModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-      <div className="bg-white w-[95vw] md:w-[90vw] max-w-5xl h-[90vh] max-h-[90vh] rounded-3xl border-4 border-indigo-400 shadow-2xl p-4 sm:p-6 flex flex-col overflow-hidden animate-fadeIn">
+    <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-white w-[96vw] md:w-[92vw] max-w-5xl max-h-[calc(100vh-1rem)] sm:max-h-[calc(100vh-2rem)] md:max-h-[90vh] h-[92vh] sm:h-[90vh] my-auto rounded-3xl border-4 border-indigo-400 shadow-2xl p-4 sm:p-6 flex flex-col min-h-0 overflow-hidden animate-fadeIn shrink-0">
         {/* MODAL HEADER */}
         <div className="flex items-center justify-between pb-4 border-b-2 border-indigo-100 shrink-0">
           <div className="flex items-center gap-3">
@@ -283,7 +283,7 @@ export const ExamGradingModal = ({
 
           <button
             onClick={() => onClose?.()}
-            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl transition-all shrink-0"
+            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl transition-all shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
             title="Đóng modal"
           >
             <X className="w-5 h-5" />
@@ -312,7 +312,7 @@ export const ExamGradingModal = ({
             <p className="text-xs font-bold text-slate-400">Đang tải chi tiết bài làm...</p>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto space-y-4 pt-4 pr-1">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-4 pt-4 pr-1 sm:pr-2">
             {/* ATTEMPT SUMMARY BAR */}
             <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-4 rounded-2xl text-white border-2 border-indigo-500/40 shadow-md">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -578,7 +578,7 @@ export const ExamGradingModal = ({
             <button
               onClick={() => onClose?.()}
               disabled={isSubmitting}
-              className="flex-1 sm:flex-initial px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-2xl transition-all"
+              className="flex-1 sm:flex-initial px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-2xl transition-all focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1"
             >
               Đóng
             </button>
@@ -586,7 +586,7 @@ export const ExamGradingModal = ({
             <button
               onClick={handleSaveGrading}
               disabled={isSubmitting || loading}
-              className="flex-1 sm:flex-initial px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black text-xs rounded-2xl shadow-lg border-b-4 border-amber-700 flex items-center justify-center gap-2 disabled:opacity-50 active:translate-y-0.5 transition-all"
+              className="flex-1 sm:flex-initial px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black text-xs rounded-2xl shadow-lg border-b-4 border-amber-700 flex items-center justify-center gap-2 disabled:opacity-50 active:translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
             >
               {isSubmitting ? (
                 <>
