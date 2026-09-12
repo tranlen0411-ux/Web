@@ -724,8 +724,224 @@ async function main() {
   });
 
   // =========================================================================
-  // TỔNG KẾT
+  // PHẦN 6: Draft Lifecycle & Auto-Init Regression Tests
   // =========================================================================
+  console.log('\n--- PHẦN 6: Draft Lifecycle & Auto-Init Regression Tests ---');
+
+  await test('6.1 Brand-new exam: Tự động khởi tạo draft container trước khi import -> Có version_id thật -> Import thành công', async () => {
+    let createTestCalled = false;
+    let importCalled = false;
+    let persistedExamId = null;
+    let persistedVersionId = null;
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action, payload }) => {
+        if (action === 'create-test') {
+          createTestCalled = true;
+          persistedExamId = '11111111-0000-4000-8000-000000000099';
+          persistedVersionId = '33333333-0000-4000-8000-000000000099';
+          return {
+            ok: true,
+            data: {
+              exam_id: persistedExamId,
+              version_id: persistedVersionId,
+              version_number: 1,
+              status: 'draft',
+            },
+          };
+        }
+        if (action === 'import-question-bank-items') {
+          importCalled = true;
+          // Verify correct persisted version_id sent
+          assert.equal(payload.version_id, persistedVersionId);
+          assert.equal(payload.exam_id, persistedExamId);
+          return {
+            ok: true,
+            data: {
+              total_imported: payload.question_bank_item_ids.length,
+              imported_questions: payload.question_bank_item_ids.map((id, idx) => ({
+                id: `q-${idx + 1}`,
+                exam_version_id: payload.version_id,
+                question_number: idx + 1,
+                question_type: 'single_choice',
+                prompt: `Câu ${idx + 1}`,
+                points: 1,
+                options_json: [{ key: 'A', text: 'Opt 1' }, { key: 'B', text: 'Opt 2' }],
+              })),
+            },
+          };
+        }
+        throw new Error(`Unexpected action: ${action}`);
+      },
+    });
+
+    // Mô phỏng luồng handleOpenQuestionBankPicker / handleImportFromQuestionBank cho đề mới toanh (chưa có examId/versionId)
+    let currentExamId = '';
+    let currentVerId = '';
+
+    // Step 1: Chuẩn bị draft
+    if (!currentExamId || !currentVerId) {
+      const createRes = await mockClient.createTest({
+        title: 'Đề thi mới',
+        subject: 'Toán',
+        grade_level: 1,
+        description: null,
+      });
+      assert.equal(createRes.ok, true);
+      currentExamId = createRes.data.exam_id;
+      currentVerId = createRes.data.version_id;
+    }
+
+    assert.equal(createTestCalled, true);
+    assert.equal(currentVerId, '33333333-0000-4000-8000-000000000099');
+
+    // Step 2: Import
+    const importRes = await mockClient.importQuestionsFromQuestionBank({
+      versionId: currentVerId,
+      examId: currentExamId,
+      questionBankItemIds: ['qb-item-1', 'qb-item-2'],
+    });
+
+    assert.equal(importCalled, true);
+    assert.equal(importRes.ok, true);
+    assert.equal(importRes.data.total_imported, 2);
+  });
+
+  await test('6.2 Edit existing draft: Đã có sẵn version_id thật -> Không gọi create-test -> Import trực tiếp thành công', async () => {
+    let createTestCalled = false;
+    let importCalled = false;
+
+    const existingVersionId = '33333333-0000-4000-8000-000000000001';
+    const existingExamId = '11111111-0000-4000-8000-000000000001';
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action, payload }) => {
+        if (action === 'create-test') {
+          createTestCalled = true;
+          return { ok: false, error: { message: 'Should not be called!' } };
+        }
+        if (action === 'import-question-bank-items') {
+          importCalled = true;
+          assert.equal(payload.version_id, existingVersionId);
+          assert.equal(payload.exam_id, existingExamId);
+          return {
+            ok: true,
+            data: {
+              total_imported: payload.question_bank_item_ids.length,
+              imported_questions: [],
+            },
+          };
+        }
+        throw new Error(`Unexpected action: ${action}`);
+      },
+    });
+
+    let currentExamId = existingExamId;
+    let currentVerId = existingVersionId;
+
+    if (!currentExamId || !currentVerId) {
+      await mockClient.createTest({ title: 'test', subject: 'Toán', grade_level: 1 });
+    }
+
+    const importRes = await mockClient.importQuestionsFromQuestionBank({
+      versionId: currentVerId,
+      examId: currentExamId,
+      questionBankItemIds: ['qb-item-101'],
+    });
+
+    assert.equal(createTestCalled, false);
+    assert.equal(importCalled, true);
+    assert.equal(importRes.ok, true);
+  });
+
+  await test('6.3 Import bị chặn nếu version_id rỗng hoặc null khi gửi lên backend', async () => {
+    const db = createMockDb();
+    const res = simulateImportEndpoint('teacher', db.teacher1Id, {
+      version_id: '',
+      question_bank_item_ids: ['qb-item-101'],
+    }, db);
+
+    assert.equal(res.status, 400);
+    assert.equal(res.error_code, 'INVALID_VERSION_ID');
+  });
+
+  await test('6.4 Khi create-test thất bại -> Import không được thực hiện', async () => {
+    let createTestAttempted = false;
+    let importAttempted = false;
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action }) => {
+        if (action === 'create-test') {
+          createTestAttempted = true;
+          return {
+            ok: false,
+            error: { status: 500, errorCode: 'NETWORK_ERROR', message: 'Mất kết nối mạng' },
+          };
+        }
+        if (action === 'import-question-bank-items') {
+          importAttempted = true;
+          return { ok: true, data: {} };
+        }
+        throw new Error(`Unexpected action: ${action}`);
+      },
+    });
+
+    let currentExamId = '';
+    let currentVerId = '';
+    let createError = null;
+
+    try {
+      if (!currentExamId || !currentVerId) {
+        const createRes = await mockClient.createTest({ title: 'Đề mới', subject: 'Toán', grade_level: 1 });
+        if (!createRes.ok || !createRes.data) {
+          throw new Error(createRes.error?.message || 'Không thể khởi tạo bản nháp');
+        }
+        currentExamId = createRes.data.exam_id;
+        currentVerId = createRes.data.version_id;
+      }
+
+      await mockClient.importQuestionsFromQuestionBank({
+        versionId: currentVerId,
+        examId: currentExamId,
+        questionBankItemIds: ['qb-item-101'],
+      });
+    } catch (err) {
+      createError = err;
+    }
+
+    assert.equal(createTestAttempted, true);
+    assert.equal(importAttempted, false);
+    assert.notEqual(createError, null);
+    assert.equal(createError.message, 'Mất kết nối mạng');
+  });
+
+  await test('6.5 Correct persisted version_id sent to import endpoint', async () => {
+    let capturedVersionId = null;
+    let capturedExamId = null;
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action, payload }) => {
+        if (action === 'import-question-bank-items') {
+          capturedVersionId = payload.version_id;
+          capturedExamId = payload.exam_id;
+          return { ok: true, data: { total_imported: 1, imported_questions: [] } };
+        }
+        return { ok: false };
+      },
+    });
+
+    const expectedVer = '33333333-0000-4000-8000-000000000088';
+    const expectedExam = '11111111-0000-4000-8000-000000000088';
+
+    await mockClient.importQuestionsFromQuestionBank({
+      versionId: expectedVer,
+      examId: expectedExam,
+      questionBankItemIds: ['qb-item-1'],
+    });
+
+    assert.equal(capturedVersionId, expectedVer);
+    assert.equal(capturedExamId, expectedExam);
+  });
   console.log('\n==================================================');
   console.log(`KẾT QUẢ KIỂM THỬ: ${passed}/${total} TESTS PASSED`);
   if (passed === total) {

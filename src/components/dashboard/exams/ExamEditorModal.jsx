@@ -104,6 +104,7 @@ export const ExamEditorModal = ({
 
   // Question Bank Picker Modal State
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [initializingDraft, setInitializingDraft] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
   const showToast = (msg) => {
@@ -345,6 +346,48 @@ export const ExamEditorModal = ({
     setQuestions([...questions, newQ]);
   };
 
+  // Mở Question Bank Picker: đảm bảo đã có bản nháp trên cơ sở dữ liệu trước khi chọn câu hỏi
+  const handleOpenQuestionBankPicker = async () => {
+    if (examToEdit?.active_version?.status === 'published') return;
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') return;
+
+    // Nếu đã có examId & versionId (đang chỉnh sửa hoặc đã khởi tạo draft trước đó): mở picker trực tiếp
+    if (examId && versionId) {
+      setIsPickerOpen(true);
+      return;
+    }
+
+    // Nếu là đề thi mới chưa lưu DB: tự động tạo draft container trước
+    setInitializingDraft(true);
+    setErrorMsg('');
+    try {
+      const client = createExamManagementClient();
+      const createRes = await client.createTest({
+        title: title.trim() || 'Đề thi mới',
+        subject: subject.trim() || 'Toán',
+        grade_level: Number(gradeLevel) || 1,
+        description: description.trim() || null,
+      });
+
+      if (!createRes.ok || !createRes.data) {
+        setErrorMsg(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+        return;
+      }
+
+      setExamId(createRes.data.exam_id);
+      setVersionId(createRes.data.version_id);
+      setVersionNumber(createRes.data.version_number || 1);
+      setVersionStatus('draft');
+
+      setIsPickerOpen(true);
+    } catch (err) {
+      console.error('[ExamEditorModal] Lỗi khởi tạo draft container khi mở QB picker:', err);
+      setErrorMsg(err?.message || 'Có lỗi xảy ra khi chuẩn bị bản nháp đề thi.');
+    } finally {
+      setInitializingDraft(false);
+    }
+  };
+
   // Nhập danh sách câu hỏi từ Question Bank Picker
   const handleImportFromQuestionBank = async (selectedItemIds, selectedItems) => {
     if (!Array.isArray(selectedItemIds) || selectedItemIds.length === 0) return;
@@ -358,7 +401,7 @@ export const ExamEditorModal = ({
       let currentVerId = versionId;
       let currentExamId = examId;
 
-      // Nếu chưa có exam_id hoặc version_id trên DB (soạn mới từ đầu): gọi createTest để tạo draft container
+      // Fallback an toàn: nếu chưa có exam_id hoặc version_id trên DB: gọi createTest trước
       if (!currentExamId || !currentVerId) {
         const createRes = await client.createTest({
           title: title.trim() || 'Đề thi mới',
@@ -1041,13 +1084,13 @@ export const ExamEditorModal = ({
                     <div className="flex items-center gap-2 flex-wrap justify-end">
                       <button
                         type="button"
-                        onClick={() => setIsPickerOpen(true)}
-                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        onClick={handleOpenQuestionBankPicker}
+                        disabled={initializingDraft || loading || fetchingDetail || (Boolean(examToEdit) && detailLoadStatus !== 'ready')}
                         className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                         title="Chọn và lấy câu hỏi từ Ngân hàng câu hỏi"
                       >
-                        <Layers className="w-3.5 h-3.5 text-indigo-200" />
-                        <span>Lấy từ Ngân hàng</span>
+                        {initializingDraft ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5 text-indigo-200" />}
+                        <span>{initializingDraft ? 'Đang khởi tạo...' : 'Lấy từ Ngân hàng'}</span>
                       </button>
                       <button
                         type="button"
