@@ -16,6 +16,7 @@ import {
   createExamManagementClient,
   EXAM_MANAGEMENT_API_BASE_URL,
 } from '../src/services/examManagementClient.js';
+import { deleteSingleChoiceOption } from '../src/components/dashboard/exams/examOptionUtils.js';
 
 // ----------------------------------------------------------------------------
 // Local BFF Implementation Mirror (Pure Logic for Node ESM Execution)
@@ -144,6 +145,188 @@ function validateSaveDraftPayload(raw) {
     return { valid: false, errorCode: 'INVALID_SCHEDULE', errorMessage: 'Hạn chót vào làm bài không thể muộn hơn hạn nộp bài cưỡng chế.' };
   }
 
+  if (!Array.isArray(raw.questions)) {
+    return { valid: false, errorCode: 'INVALID_QUESTIONS', errorMessage: 'Danh sách câu hỏi questions phải là một mảng.' };
+  }
+
+  const validQuestions = [];
+  const seenNumbers = new Set();
+  const seenIds = new Set();
+
+  for (let i = 0; i < raw.questions.length; i++) {
+    const q = raw.questions[i];
+    if (!isPlainObject(q)) {
+      return { valid: false, errorCode: 'INVALID_QUESTION_ITEM', errorMessage: `Câu hỏi số ${i + 1} không đúng định dạng.` };
+    }
+
+    const qId = typeof q.id === 'string' && isValidUUID(q.id) ? q.id : null;
+    if (!qId) {
+      return { valid: false, errorCode: 'INVALID_QUESTION_ID', errorMessage: `Câu hỏi số ${i + 1} thiếu ID UUID hợp lệ.` };
+    }
+    if (seenIds.has(qId)) {
+      return { valid: false, errorCode: 'DUPLICATE_QUESTION_ID', errorMessage: `Trùng lặp ID câu hỏi: ${qId}` };
+    }
+    seenIds.add(qId);
+
+    const qNum = Number(q.question_number);
+    if (!Number.isInteger(qNum) || qNum < 1) {
+      return { valid: false, errorCode: 'INVALID_QUESTION_NUMBER', errorMessage: `Số thứ tự câu hỏi ${i + 1} không hợp lệ.` };
+    }
+    if (seenNumbers.has(qNum)) {
+      return { valid: false, errorCode: 'DUPLICATE_QUESTION_NUMBER', errorMessage: `Trùng lặp số thứ tự câu hỏi: ${qNum}` };
+    }
+    seenNumbers.add(qNum);
+
+    const qType = typeof q.question_type === 'string' ? q.question_type : '';
+    const allowedTypes = ['single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay', 'image_upload', 'file_upload'];
+    if (!allowedTypes.includes(qType)) {
+      return { valid: false, errorCode: 'INVALID_QUESTION_TYPE', errorMessage: `Loại câu hỏi không hợp lệ: ${qType}` };
+    }
+
+    const prompt = typeof q.prompt === 'string' ? q.prompt.trim() : '';
+    if (!prompt) {
+      return { valid: false, errorCode: 'INVALID_PROMPT', errorMessage: `Nội dung câu hỏi ${qNum} không được để trống.` };
+    }
+
+    const points = Number(q.points);
+    if (isNaN(points) || points <= 0) {
+      return { valid: false, errorCode: 'INVALID_POINTS', errorMessage: `Điểm số câu ${qNum} phải lớn hơn 0.` };
+    }
+
+    let validatedOptionsJson = [];
+    let validatedAnswerKey = null;
+
+    if (qType === 'single_choice' || qType === 'multiple_choice') {
+      const rawOpts = q.options_json ?? q.options;
+      if (!Array.isArray(rawOpts) || rawOpts.length < 2) {
+        return {
+          valid: false,
+          errorCode: 'INVALID_OPTION_SCHEMA',
+          errorMessage: `Câu hỏi trắc nghiệm ${qNum} phải có ít nhất 2 lựa chọn dạng mảng đối tượng {key, text}.`,
+        };
+      }
+
+      const seenOptionKeys = new Set();
+      for (let oIdx = 0; oIdx < rawOpts.length; oIdx++) {
+        const opt = rawOpts[oIdx];
+        if (!isPlainObject(opt)) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Phương án ${oIdx + 1} của câu ${qNum} phải là đối tượng có thuộc tính 'key' và 'text'.`,
+          };
+        }
+
+        const optKey = typeof opt.key === 'string' ? opt.key.trim() : '';
+        if (!optKey) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Thuộc tính 'key' của phương án ${oIdx + 1} câu ${qNum} không được để trống.`,
+          };
+        }
+
+        if (seenOptionKeys.has(optKey)) {
+          return {
+            valid: false,
+            errorCode: 'DUPLICATE_OPTION_KEY',
+            errorMessage: `Trùng lặp key '${optKey}' trong các phương án của câu ${qNum}.`,
+          };
+        }
+        seenOptionKeys.add(optKey);
+
+        if (typeof opt.text !== 'string') {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} phải là chuỗi văn bản (string).`,
+          };
+        }
+
+        const trimmedText = opt.text.trim();
+        if (!trimmedText) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} không được để trống hoặc chỉ chứa khoảng trắng.`,
+          };
+        }
+
+        validatedOptionsJson.push({
+          key: optKey,
+          text: trimmedText,
+        });
+      }
+
+      const rawAnsKey = q.answer_key ?? q.correct_answer_key ?? (q.correct_answer !== undefined ? { correct_answer: q.correct_answer } : null);
+      if (!isPlainObject(rawAnsKey)) {
+        return {
+          valid: false,
+          errorCode: 'INVALID_ANSWER_KEY',
+          errorMessage: `Câu hỏi ${qNum} phải có cấu hình đáp án đúng (answer_key).`,
+        };
+      }
+
+      if (qType === 'single_choice') {
+        const correctAns = typeof rawAnsKey.correct_answer === 'string' ? rawAnsKey.correct_answer.trim() : '';
+        if (!correctAns || !seenOptionKeys.has(correctAns)) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_ANSWER_KEY',
+            errorMessage: `Đáp án đúng của câu ${qNum} ('${correctAns}') phải là một key hợp lệ tồn tại trong options_json.`,
+          };
+        }
+        validatedAnswerKey = { correct_answer: correctAns };
+      } else if (qType === 'multiple_choice') {
+        const correctList = Array.isArray(rawAnsKey.correct_answer)
+          ? rawAnsKey.correct_answer
+          : (typeof rawAnsKey.correct_answer === 'string' ? [rawAnsKey.correct_answer] : []);
+
+        if (correctList.length === 0) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_ANSWER_KEY',
+            errorMessage: `Câu hỏi ${qNum} phải có ít nhất 1 đáp án đúng.`,
+          };
+        }
+        for (const k of correctList) {
+          if (typeof k !== 'string' || !seenOptionKeys.has(k.trim())) {
+            return {
+              valid: false,
+              errorCode: 'INVALID_ANSWER_KEY',
+              errorMessage: `Đáp án đúng '${k}' của câu ${qNum} không tồn tại trong options_json.`,
+            };
+          }
+        }
+        validatedAnswerKey = { correct_answer: correctList.map((k) => k.trim()) };
+      }
+    } else if (qType === 'fill_blank' || qType === 'short_answer') {
+      validatedOptionsJson = [];
+      const rawAnsKey = q.answer_key ?? q.correct_answer_key ?? (q.correct_answer !== undefined ? { correct_answer: q.correct_answer } : null);
+      if (!isPlainObject(rawAnsKey) || rawAnsKey.correct_answer === undefined || rawAnsKey.correct_answer === null || String(rawAnsKey.correct_answer).trim() === '') {
+        return {
+          valid: false,
+          errorCode: 'INVALID_ANSWER_KEY',
+          errorMessage: `Câu hỏi ${qNum} phải có đáp án đúng.`,
+        };
+      }
+      validatedAnswerKey = { correct_answer: String(rawAnsKey.correct_answer).trim() };
+    } else {
+      validatedOptionsJson = [];
+      validatedAnswerKey = null;
+    }
+
+    validQuestions.push({
+      id: qId,
+      question_number: qNum,
+      question_type: qType,
+      prompt,
+      points,
+      options_json: validatedOptionsJson,
+      answer_key: validatedAnswerKey,
+    });
+  }
+
   return {
     valid: true,
     data: {
@@ -163,7 +346,7 @@ function validateSaveDraftPayload(raw) {
       tab_switch_policy: raw.tab_switch_policy || 'WARN_AND_LOG',
       show_score_after_submit: raw.show_score_after_submit !== undefined ? Boolean(raw.show_score_after_submit) : true,
       show_correct_answers: Boolean(raw.show_correct_answers),
-      questions: Array.isArray(raw.questions) ? raw.questions : [],
+      questions: validQuestions,
     },
   };
 }
@@ -870,8 +1053,13 @@ async function runAllManagementTests() {
           question_type: 'single_choice',
           prompt: '1 + 2 = ?',
           points: 10,
-          options_json: ['1', '2', '3', '4'],
-          answer_key: { correct_answer: '3' },
+          options_json: [
+            { key: 'A', text: '1' },
+            { key: 'B', text: '2' },
+            { key: 'C', text: '3' },
+            { key: 'D', text: '4' },
+          ],
+          answer_key: { correct_answer: 'C' },
         },
       ],
     }, ADMIN_ID);
@@ -925,8 +1113,13 @@ async function runAllManagementTests() {
           question_type: 'single_choice',
           prompt: '2 + 2 = ?',
           points: 10,
-          options_json: ['2', '3', '4', '5'],
-          answer_key: { correct_answer: '4' },
+          options_json: [
+            { key: 'A', text: '2' },
+            { key: 'B', text: '3' },
+            { key: 'C', text: '4' },
+            { key: 'D', text: '5' },
+          ],
+          answer_key: { correct_answer: 'C' },
         },
       ],
     }, TEACHER_1_ID);
@@ -1274,6 +1467,304 @@ async function runAllManagementTests() {
 
     // handleSaveDraft guard for published exam
     assert.equal(code.includes('if (isPublished) {'), true);
+  });
+
+  // 10. CHOICE OPTION SCHEMA MISMATCH & VALIDATION TESTS
+  await test('39. [SCHEMA] save-draft rejects legacy plain string options with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Malformed Strings',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999993',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: ['1', '2', '3', '4'], // Legacy plain strings
+          answer_key: { correct_answer: '2' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
+  });
+
+  await test('40. [SCHEMA] save-draft rejects duplicate option keys with 400 DUPLICATE_OPTION_KEY', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Duplicate Keys',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999994',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '1' },
+            { key: 'A', text: '2' }, // Duplicate key
+          ],
+          answer_key: { correct_answer: 'A' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'DUPLICATE_OPTION_KEY');
+  });
+
+  await test('41. [SCHEMA] save-draft rejects correct_answer that does not exist in options_json keys', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Nonexistent Correct Answer',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999995',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '1' },
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'Z' }, // Z does not exist
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_ANSWER_KEY');
+  });
+
+  await test('42. [SCHEMA] save-draft accepts canonical [{key, text}] schema with correct option key', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Chuẩn Canonical Options',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999996',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 5,
+          options_json: [
+            { key: 'A', text: '1' },
+            { key: 'B', text: '2' },
+            { key: 'C', text: '3' },
+            { key: 'D', text: '4' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+  });
+
+  await test('43. [SCHEMA] save-draft accepts multiple_choice canonical schema with array of keys', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Chuẩn Multiple Choice',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999997',
+          question_number: 1,
+          question_type: 'multiple_choice',
+          prompt: 'Chọn các số chẵn:',
+          points: 5,
+          options_json: [
+            { key: 'A', text: '2' },
+            { key: 'B', text: '3' },
+            { key: 'C', text: '4' },
+            { key: 'D', text: '5' },
+          ],
+          answer_key: { correct_answer: ['A', 'C'] },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+  });
+
+  await test('44. [SCHEMA] save-draft accepts essay/upload questions without options or answer_key', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Tự Luận',
+      subject: 'Tiếng Việt',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999998',
+          question_number: 1,
+          question_type: 'essay',
+          prompt: 'Viết đoạn văn ngắn tả con mèo nhà em.',
+          points: 10,
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+  });
+
+  await test('45. [CONTRACT] Real validation.ts strictly validates canonical {key, text} option objects and answer keys', () => {
+    const valPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/validation.ts');
+    const code = fs.readFileSync(valPath, 'utf8');
+
+    assert.equal(code.includes('INVALID_OPTION_SCHEMA'), true);
+    assert.equal(code.includes('DUPLICATE_OPTION_KEY'), true);
+    assert.equal(code.includes('INVALID_ANSWER_KEY'), true);
+    assert.equal(code.includes("typeof opt.key === 'string'"), true);
+    assert.equal(code.includes('seenOptionKeys.has(correctAns)'), true);
+    assert.equal(code.includes('seenOptionKeys.has(k.trim())'), true);
+  });
+
+  await test('46. [CONTRACT] Real handler.ts validates choice question options before calling rpc_exam_publish_version', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+
+    assert.equal(code.includes('ERR_INVALID_OPTION_SCHEMA'), true);
+    assert.equal(code.includes('options_json'), true);
+    assert.equal(code.includes('rpc_exam_publish_version'), true);
+  });
+
+  // 11. OPTION DELETION REMAPPING & EMPTY TEXT VALIDATION TESTS
+  await test('47. [REINDEX] Delete option BEFORE selected answer remaps correct key to old item content', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete A (index 0)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 0);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '2' },
+      { key: 'B', text: '3' },
+      { key: 'C', text: '4' },
+    ]);
+    assert.equal(result.correctKey, 'B'); // Old C ("3") is now B ("3")
+  });
+
+  await test('48. [REINDEX] Delete selected answer falls back safely to first remaining option', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete C (index 2)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 2);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '4' },
+    ]);
+    assert.equal(result.correctKey, 'A'); // Explicit safe fallback to first option
+  });
+
+  await test('49. [REINDEX] Delete option AFTER selected answer keeps correct answer mapping', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete D (index 3)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 3);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' },
+    ]);
+    assert.equal(result.correctKey, 'C'); // Remains C ("3")
+  });
+
+  await test('50. [VALIDATION] Empty option text "" is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Empty Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999999',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '' }, // empty text
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
+  });
+
+  await test('51. [VALIDATION] Whitespace-only option text "   " is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Whitespace Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-99999999999a',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '   ' }, // whitespace only
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
+  });
+
+  await test('52. [VALIDATION] Non-string option text is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Non-String Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-99999999999b',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: 123 }, // number instead of string
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
   });
 
   console.log('\n======================================================================');

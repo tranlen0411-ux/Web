@@ -208,16 +208,141 @@ export function validateSaveDraftPayload(raw: unknown): {
       return { valid: false, errorCode: 'INVALID_POINTS', errorMessage: `Điểm số câu ${qNum} phải lớn hơn 0.` };
     }
 
+    let validatedOptionsJson: Array<{ key: string; text: string }> = [];
+    let validatedAnswerKey: Record<string, unknown> | null = null;
+
+    if (qType === 'single_choice' || qType === 'multiple_choice') {
+      const rawOpts = q.options_json ?? q.options;
+      if (!Array.isArray(rawOpts) || rawOpts.length < 2) {
+        return {
+          valid: false,
+          errorCode: 'INVALID_OPTION_SCHEMA',
+          errorMessage: `Câu hỏi trắc nghiệm ${qNum} phải có ít nhất 2 lựa chọn dạng mảng đối tượng {key, text}.`,
+        };
+      }
+
+      const seenOptionKeys = new Set<string>();
+      for (let oIdx = 0; oIdx < rawOpts.length; oIdx++) {
+        const opt = rawOpts[oIdx];
+        if (!isPlainObject(opt)) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Phương án ${oIdx + 1} của câu ${qNum} phải là đối tượng có thuộc tính 'key' và 'text'.`,
+          };
+        }
+
+        const optKey = typeof opt.key === 'string' ? opt.key.trim() : '';
+        if (!optKey) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Thuộc tính 'key' của phương án ${oIdx + 1} câu ${qNum} không được để trống.`,
+          };
+        }
+
+        if (seenOptionKeys.has(optKey)) {
+          return {
+            valid: false,
+            errorCode: 'DUPLICATE_OPTION_KEY',
+            errorMessage: `Trùng lặp key '${optKey}' trong các phương án của câu ${qNum}.`,
+          };
+        }
+        seenOptionKeys.add(optKey);
+
+        if (typeof opt.text !== 'string') {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} phải là chuỗi văn bản (string).`,
+          };
+        }
+
+        const trimmedText = opt.text.trim();
+        if (!trimmedText) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} không được để trống hoặc chỉ chứa khoảng trắng.`,
+          };
+        }
+
+        validatedOptionsJson.push({
+          key: optKey,
+          text: trimmedText,
+        });
+      }
+
+      // Validate answer_key for choice questions
+      const rawAnsKey = q.answer_key ?? q.correct_answer_key ?? (q.correct_answer !== undefined ? { correct_answer: q.correct_answer } : null);
+      if (!isPlainObject(rawAnsKey)) {
+        return {
+          valid: false,
+          errorCode: 'INVALID_ANSWER_KEY',
+          errorMessage: `Câu hỏi ${qNum} phải có cấu hình đáp án đúng (answer_key).`,
+        };
+      }
+
+      if (qType === 'single_choice') {
+        const correctAns = typeof rawAnsKey.correct_answer === 'string' ? rawAnsKey.correct_answer.trim() : '';
+        if (!correctAns || !seenOptionKeys.has(correctAns)) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_ANSWER_KEY',
+            errorMessage: `Đáp án đúng của câu ${qNum} ('${correctAns}') phải là một key hợp lệ tồn tại trong options_json.`,
+          };
+        }
+        validatedAnswerKey = { correct_answer: correctAns };
+      } else if (qType === 'multiple_choice') {
+        const correctList = Array.isArray(rawAnsKey.correct_answer)
+          ? rawAnsKey.correct_answer
+          : (typeof rawAnsKey.correct_answer === 'string' ? [rawAnsKey.correct_answer] : []);
+
+        if (correctList.length === 0) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_ANSWER_KEY',
+            errorMessage: `Câu hỏi ${qNum} phải có ít nhất 1 đáp án đúng.`,
+          };
+        }
+        for (const k of correctList) {
+          if (typeof k !== 'string' || !seenOptionKeys.has(k.trim())) {
+            return {
+              valid: false,
+              errorCode: 'INVALID_ANSWER_KEY',
+              errorMessage: `Đáp án đúng '${k}' của câu ${qNum} không tồn tại trong options_json.`,
+            };
+          }
+        }
+        validatedAnswerKey = { correct_answer: correctList.map((k: string) => k.trim()) };
+      }
+    } else if (qType === 'fill_blank' || qType === 'short_answer') {
+      validatedOptionsJson = [];
+      const rawAnsKey = q.answer_key ?? q.correct_answer_key ?? (q.correct_answer !== undefined ? { correct_answer: q.correct_answer } : null);
+      if (!isPlainObject(rawAnsKey) || rawAnsKey.correct_answer === undefined || rawAnsKey.correct_answer === null || String(rawAnsKey.correct_answer).trim() === '') {
+        return {
+          valid: false,
+          errorCode: 'INVALID_ANSWER_KEY',
+          errorMessage: `Câu hỏi ${qNum} phải có đáp án đúng.`,
+        };
+      }
+      validatedAnswerKey = { correct_answer: String(rawAnsKey.correct_answer).trim() };
+    } else {
+      // essay, image_upload, file_upload
+      validatedOptionsJson = [];
+      validatedAnswerKey = null; // No objective answer key
+    }
+
     validQuestions.push({
       id: qId,
       question_number: qNum,
       question_type: qType,
       prompt,
       points,
-      options_json: Array.isArray(q.options_json) ? q.options_json : (Array.isArray(q.options) ? q.options : []),
+      options_json: validatedOptionsJson,
       source_question_bank_item_id: isValidUUID(q.source_question_bank_item_id) ? q.source_question_bank_item_id : null,
       source_question_bank_version_id: isValidUUID(q.source_question_bank_version_id) ? q.source_question_bank_version_id : null,
-      answer_key: isPlainObject(q.answer_key) ? q.answer_key : (isPlainObject(q.correct_answer_key) ? q.correct_answer_key : (q.correct_answer !== undefined ? { correct_answer: q.correct_answer } : null)),
+      answer_key: validatedAnswerKey,
     });
   }
 
