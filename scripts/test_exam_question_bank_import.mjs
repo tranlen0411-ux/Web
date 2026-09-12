@@ -10,6 +10,10 @@ import {
 } from '../src/utils/examQuestionBankAdapter.js';
 import { validateImportQuestionBankPayload } from '../supabase/functions/exam-management-api/validation.ts';
 import { ExamManagementClient } from '../src/services/examManagementClient.js';
+import {
+  isUntouchedDemoQuestion,
+  buildSaveDraftQuestionsPayload,
+} from '../src/components/dashboard/exams/examDraftUtils.js';
 
 let passed = 0;
 let total = 0;
@@ -728,18 +732,126 @@ async function main() {
   // =========================================================================
   console.log('\n--- PHẦN 6: Draft Lifecycle & Auto-Init Regression Tests ---');
 
-  await test('6.1 Brand-new exam: Tự động khởi tạo draft container trước khi import -> Có version_id thật -> Import thành công', async () => {
-    let createTestCalled = false;
+  await test('6.1 isUntouchedDemoQuestion: Nhận diện chính xác câu demo mặc định, từ chối khi đã chỉnh sửa hoặc trên đề cũ', async () => {
+    const defaultDemo = [
+      {
+        id: 'demo-uuid-1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: '1 + 1 = ?',
+        points: 1,
+        options_json: [
+          { key: 'A', text: '1' },
+          { key: 'B', text: '2' },
+          { key: 'C', text: '3' },
+          { key: 'D', text: '4' },
+        ],
+        answer_key: { correct_answer: 'B' },
+      },
+    ];
+
+    // Case 1: Đề mới + câu demo nguyên bản => TRUE
+    assert.equal(isUntouchedDemoQuestion(defaultDemo, true), true);
+
+    // Case 2: Đang chỉnh sửa đề đã lưu trước đó (isNewExam = false) => FALSE
+    assert.equal(isUntouchedDemoQuestion(defaultDemo, false), false);
+
+    // Case 3: Giáo viên đã chỉnh sửa nội dung câu hỏi (prompt) => FALSE
+    const editedPrompt = [{ ...defaultDemo[0], prompt: 'Tìm x: x + 1 = 2' }];
+    assert.equal(isUntouchedDemoQuestion(editedPrompt, true), false);
+
+    // Case 4: Giáo viên đã đổi điểm số (points) => FALSE
+    const editedPoints = [{ ...defaultDemo[0], points: 2 }];
+    assert.equal(isUntouchedDemoQuestion(editedPoints, true), false);
+
+    // Case 5: Giáo viên đổi đáp án đúng => FALSE
+    const editedAnswer = [{ ...defaultDemo[0], answer_key: { correct_answer: 'A' } }];
+    assert.equal(isUntouchedDemoQuestion(editedAnswer, true), false);
+
+    // Case 6: Giáo viên thêm câu hỏi thứ 2 => FALSE
+    const multipleQuestions = [...defaultDemo, { id: 'q2', prompt: 'Câu 2', question_type: 'essay' }];
+    assert.equal(isUntouchedDemoQuestion(multipleQuestions, true), false);
+
+    // Case 7: Câu hỏi đã có liên kết ngân hàng câu hỏi (source_question_bank_item_id) => FALSE
+    const withQbSource = [{ ...defaultDemo[0], source_question_bank_item_id: 'qb-item-123' }];
+    assert.equal(isUntouchedDemoQuestion(withQbSource, true), false);
+  });
+
+  await test('6.2 buildSaveDraftQuestionsPayload: Bảo tồn nguyên vẹn source_question_bank_item_id và version_id', async () => {
+    const localQuestions = [
+      {
+        id: 'q-manual-1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Câu hỏi soạn tay 1',
+        points: 2,
+        options_json: [
+          { key: 'A', text: 'Phương án A' },
+          { key: 'B', text: 'Phương án B' },
+        ],
+        answer_key: { correct_answer: 'A' },
+        // Không có QB metadata
+      },
+      {
+        id: 'q-qb-imported-2',
+        question_number: 2,
+        question_type: 'multiple_choice',
+        prompt: 'Câu hỏi đã nhập từ QB',
+        points: 3,
+        options_json: [
+          { key: 'A', text: 'Đáp án 1' },
+          { key: 'B', text: 'Đáp án 2' },
+        ],
+        answer_key: { correct_answer: ['A', 'B'] },
+        source_question_bank_item_id: 'qb-item-999',
+        source_question_bank_version_id: 'qb-ver-888',
+      },
+    ];
+
+    const payload = buildSaveDraftQuestionsPayload(localQuestions);
+    assert.equal(payload.length, 2);
+
+    // Question 1: Soạn tay
+    assert.equal(payload[0].id, 'q-manual-1');
+    assert.equal(payload[0].source_question_bank_item_id, null);
+    assert.equal(payload[0].source_question_bank_version_id, null);
+
+    // Question 2: Nhập từ QB -> Phải bảo tồn audit metadata
+    assert.equal(payload[1].id, 'q-qb-imported-2');
+    assert.equal(payload[1].source_question_bank_item_id, 'qb-item-999');
+    assert.equal(payload[1].source_question_bank_version_id, 'qb-ver-888');
+    assert.deepEqual(payload[1].options_json, [
+      { key: 'A', text: 'Đáp án 1' },
+      { key: 'B', text: 'Đáp án 2' },
+    ]);
+  });
+
+  await test('6.3 Brand-new exam + edited manual question + QB import: Lưu nháp trước -> Giữ nguyên câu soạn tay + Nối tiếp câu import', async () => {
+    let savedDraftQuestions = null;
     let importCalled = false;
-    let persistedExamId = null;
-    let persistedVersionId = null;
+    const persistedExamId = '11111111-0000-4000-8000-000000000055';
+    const persistedVersionId = '33333333-0000-4000-8000-000000000055';
+
+    // Giả lập state phía Frontend khi giáo viên soạn câu hỏi thủ công
+    const manualQuestion = {
+      id: 'custom-q-1',
+      question_number: 1,
+      question_type: 'single_choice',
+      prompt: '3 + 5 = ? (Giáo viên tự soạn)',
+      points: 2,
+      options_json: [
+        { key: 'A', text: '7' },
+        { key: 'B', text: '8' },
+        { key: 'C', text: '9' },
+        { key: 'D', text: '10' },
+      ],
+      answer_key: { correct_answer: 'B' },
+    };
+    let localQuestionsState = [manualQuestion];
 
     const mockClient = new ExamManagementClient({
       invokeFunction: async ({ action, payload }) => {
         if (action === 'create-test') {
-          createTestCalled = true;
-          persistedExamId = '11111111-0000-4000-8000-000000000099';
-          persistedVersionId = '33333333-0000-4000-8000-000000000099';
           return {
             ok: true,
             data: {
@@ -750,24 +862,60 @@ async function main() {
             },
           };
         }
+        if (action === 'save-draft') {
+          savedDraftQuestions = payload.questions;
+          return { ok: true, data: { success: true } };
+        }
         if (action === 'import-question-bank-items') {
           importCalled = true;
-          // Verify correct persisted version_id sent
           assert.equal(payload.version_id, persistedVersionId);
-          assert.equal(payload.exam_id, persistedExamId);
           return {
             ok: true,
             data: {
-              total_imported: payload.question_bank_item_ids.length,
-              imported_questions: payload.question_bank_item_ids.map((id, idx) => ({
-                id: `q-${idx + 1}`,
-                exam_version_id: payload.version_id,
-                question_number: idx + 1,
-                question_type: 'single_choice',
-                prompt: `Câu ${idx + 1}`,
-                points: 1,
-                options_json: [{ key: 'A', text: 'Opt 1' }, { key: 'B', text: 'Opt 2' }],
-              })),
+              total_imported: 1,
+              imported_questions: [
+                {
+                  id: 'qb-imported-q2',
+                  exam_version_id: payload.version_id,
+                  question_number: 2,
+                  question_type: 'single_choice',
+                  prompt: 'Câu hỏi từ Ngân hàng',
+                  points: 1,
+                  options_json: [{ key: 'A', text: 'A1' }, { key: 'B', text: 'A2' }],
+                  source_question_bank_item_id: 'qb-item-101',
+                  source_question_bank_version_id: 'qb-ver-101',
+                },
+              ],
+            },
+          };
+        }
+        if (action === 'get-test-detail') {
+          // Mô phỏng server snapshot trả về cả câu soạn tay đã persist và câu import vừa append
+          return {
+            ok: true,
+            data: {
+              version: { id: persistedVersionId, version_number: 1, status: 'draft' },
+              questions: [
+                {
+                  id: 'custom-q-1',
+                  question_number: 1,
+                  question_type: 'single_choice',
+                  prompt: '3 + 5 = ? (Giáo viên tự soạn)',
+                  points: 2,
+                  options_json: manualQuestion.options_json,
+                  answer_key: manualQuestion.answer_key,
+                },
+                {
+                  id: 'qb-imported-q2',
+                  question_number: 2,
+                  question_type: 'single_choice',
+                  prompt: 'Câu hỏi từ Ngân hàng',
+                  points: 1,
+                  options_json: [{ key: 'A', text: 'A1' }, { key: 'B', text: 'A2' }],
+                  source_question_bank_item_id: 'qb-item-101',
+                  source_question_bank_version_id: 'qb-ver-101',
+                },
+              ],
             },
           };
         }
@@ -775,39 +923,214 @@ async function main() {
       },
     });
 
-    // Mô phỏng luồng handleOpenQuestionBankPicker / handleImportFromQuestionBank cho đề mới toanh (chưa có examId/versionId)
-    let currentExamId = '';
-    let currentVerId = '';
+    // --- Mô phỏng quy trình xử lý của ExamEditorModal ---
+    // 1. Giáo viên ấn "Ngân hàng câu hỏi" -> handleOpenQuestionBankPicker
+    const isUntouched = isUntouchedDemoQuestion(localQuestionsState, true);
+    assert.equal(isUntouched, false); // Đã chỉnh sửa -> không phải dummy
 
-    // Step 1: Chuẩn bị draft
-    if (!currentExamId || !currentVerId) {
-      const createRes = await mockClient.createTest({
-        title: 'Đề thi mới',
-        subject: 'Toán',
-        grade_level: 1,
-        description: null,
-      });
-      assert.equal(createRes.ok, true);
-      currentExamId = createRes.data.exam_id;
-      currentVerId = createRes.data.version_id;
-    }
+    const createRes = await mockClient.createTest({ title: 'Đề mới', subject: 'Toán', grade_level: 1 });
+    assert.equal(createRes.ok, true);
 
-    assert.equal(createTestCalled, true);
-    assert.equal(currentVerId, '33333333-0000-4000-8000-000000000099');
-
-    // Step 2: Import
-    const importRes = await mockClient.importQuestionsFromQuestionBank({
-      versionId: currentVerId,
-      examId: currentExamId,
-      questionBankItemIds: ['qb-item-1', 'qb-item-2'],
+    const questionsToPersist = isUntouched ? [] : localQuestionsState;
+    const saveRes = await mockClient.saveDraft({
+      version_id: createRes.data.version_id,
+      title: 'Đề mới',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: buildSaveDraftQuestionsPayload(questionsToPersist),
     });
+    assert.equal(saveRes.ok, true);
+    assert.equal(savedDraftQuestions.length, 1);
+    assert.equal(savedDraftQuestions[0].prompt, '3 + 5 = ? (Giáo viên tự soạn)');
 
-    assert.equal(importCalled, true);
+    // 2. Giáo viên chọn câu hỏi trong Modal -> handleImportFromQuestionBank
+    const importRes = await mockClient.importQuestionsFromQuestionBank({
+      versionId: createRes.data.version_id,
+      examId: createRes.data.exam_id,
+      questionBankItemIds: ['qb-item-101'],
+    });
     assert.equal(importRes.ok, true);
-    assert.equal(importRes.data.total_imported, 2);
+
+    // 3. Tải lại chi tiết đề thi -> Cập nhật state
+    const detailRes = await mockClient.getTestDetail({
+      examId: createRes.data.exam_id,
+      versionId: createRes.data.version_id,
+    });
+    assert.equal(detailRes.ok, true);
+    localQuestionsState = detailRes.data.questions;
+
+    // Kiểm tra kết quả bảo toàn:
+    assert.equal(localQuestionsState.length, 2);
+    assert.equal(localQuestionsState[0].prompt, '3 + 5 = ? (Giáo viên tự soạn)');
+    assert.equal(localQuestionsState[0].points, 2);
+    assert.equal(localQuestionsState[1].prompt, 'Câu hỏi từ Ngân hàng');
+    assert.equal(localQuestionsState[1].source_question_bank_item_id, 'qb-item-101');
   });
 
-  await test('6.2 Edit existing draft: Đã có sẵn version_id thật -> Không gọi create-test -> Import trực tiếp thành công', async () => {
+  await test('6.4 Brand-new exam + 2 manually-added questions + QB import: Bảo toàn đúng thứ tự các câu', async () => {
+    let savedPayloadQuestions = [];
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action, payload }) => {
+        if (action === 'create-test') {
+          return { ok: true, data: { exam_id: 'exam-1', version_id: 'ver-1' } };
+        }
+        if (action === 'save-draft') {
+          savedPayloadQuestions = payload.questions;
+          return { ok: true, data: { success: true } };
+        }
+        return { ok: true, data: {} };
+      },
+    });
+
+    const localQuestions = [
+      { id: 'q1', question_number: 1, question_type: 'single_choice', prompt: 'Câu 1', points: 1, options_json: [{ key: 'A', text: '1' }, { key: 'B', text: '2' }] },
+      { id: 'q2', question_number: 2, question_type: 'short_answer', prompt: 'Câu 2', points: 2, answer_key: { correct_answer: 'abc' } },
+    ];
+
+    assert.equal(isUntouchedDemoQuestion(localQuestions, true), false);
+
+    const createRes = await mockClient.createTest({ title: 'Đề 2 câu', subject: 'Toán', grade_level: 1 });
+    await mockClient.saveDraft({
+      version_id: createRes.data.version_id,
+      questions: buildSaveDraftQuestionsPayload(localQuestions),
+    });
+
+    assert.equal(savedPayloadQuestions.length, 2);
+    assert.equal(savedPayloadQuestions[0].prompt, 'Câu 1');
+    assert.equal(savedPayloadQuestions[0].question_number, 1);
+    assert.equal(savedPayloadQuestions[1].prompt, 'Câu 2');
+    assert.equal(savedPayloadQuestions[1].question_number, 2);
+  });
+
+  await test('6.5 createTest succeeds nhưng pre-import saveDraft thất bại -> Fail-closed: Picker không mở, Import không gọi, Local questions nguyên vẹn', async () => {
+    let pickerOpened = false;
+    let importCalled = false;
+    let errorDisplayed = '';
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action }) => {
+        if (action === 'create-test') {
+          return { ok: true, data: { exam_id: 'exam-err-1', version_id: 'ver-err-1' } };
+        }
+        if (action === 'save-draft') {
+          return { ok: false, error: { message: 'DB Connection Timeout on Save Draft' } };
+        }
+        if (action === 'import-question-bank-items') {
+          importCalled = true;
+          return { ok: true, data: {} };
+        }
+        throw new Error(`Unexpected action: ${action}`);
+      },
+    });
+
+    const localQuestions = [
+      { id: 'unsaved-q1', question_number: 1, question_type: 'single_choice', prompt: 'Câu hỏi quan trọng vừa tạo', points: 5 },
+    ];
+    let localStateQuestions = [...localQuestions];
+
+    // Mô phỏng handleOpenQuestionBankPicker
+    const createRes = await mockClient.createTest({ title: 'Đề mới', subject: 'Toán', grade_level: 1 });
+    assert.equal(createRes.ok, true);
+
+    const saveRes = await mockClient.saveDraft({
+      version_id: createRes.data.version_id,
+      questions: buildSaveDraftQuestionsPayload(localStateQuestions),
+    });
+
+    if (!saveRes.ok) {
+      errorDisplayed = saveRes.error?.message || 'Lỗi lưu bản nháp';
+      // Không bật picker, không import
+    } else {
+      pickerOpened = true;
+    }
+
+    assert.equal(pickerOpened, false);
+    assert.equal(importCalled, false);
+    assert.equal(errorDisplayed, 'DB Connection Timeout on Save Draft');
+    // Local questions hoàn toàn được giữ nguyên không bị mất
+    assert.equal(localStateQuestions.length, 1);
+    assert.equal(localStateQuestions[0].prompt, 'Câu hỏi quan trọng vừa tạo');
+  });
+
+  await test('6.6 Untouched default demo + QB import: Lưu mảng rỗng -> QB items thay thế hoàn toàn -> Không bị nhân đôi câu demo', async () => {
+    let savedPayloadQuestions = null;
+    const defaultDemo = [
+      {
+        id: 'dummy-1',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: '1 + 1 = ?',
+        points: 1,
+        options_json: [
+          { key: 'A', text: '1' },
+          { key: 'B', text: '2' },
+          { key: 'C', text: '3' },
+          { key: 'D', text: '4' },
+        ],
+        answer_key: { correct_answer: 'B' },
+      },
+    ];
+
+    const mockClient = new ExamManagementClient({
+      invokeFunction: async ({ action, payload }) => {
+        if (action === 'create-test') {
+          return { ok: true, data: { exam_id: 'exam-dummy-1', version_id: 'ver-dummy-1' } };
+        }
+        if (action === 'save-draft') {
+          savedPayloadQuestions = payload.questions;
+          return { ok: true, data: { success: true } };
+        }
+        return { ok: true, data: {} };
+      },
+    });
+
+    // Check dummy helper
+    const isUntouched = isUntouchedDemoQuestion(defaultDemo, true);
+    assert.equal(isUntouched, true);
+
+    // Khi untouched demo -> questionsToPersist = []
+    const questionsToPersist = isUntouched ? [] : defaultDemo;
+    assert.equal(questionsToPersist.length, 0);
+
+    const createRes = await mockClient.createTest({ title: 'Đề mới', subject: 'Toán', grade_level: 1 });
+    await mockClient.saveDraft({
+      version_id: createRes.data.version_id,
+      questions: buildSaveDraftQuestionsPayload(questionsToPersist),
+    });
+
+    // DB nhận [] trước khi QB import ghi đè snapshot -> không còn câu 1 + 1 = ? thừa
+    assert.equal(savedPayloadQuestions.length, 0);
+  });
+
+  await test('6.7 source_question_bank_item_id và source_question_bank_version_id sống sót qua các lần Save Draft tiếp theo', async () => {
+    // Mô phỏng câu hỏi sau khi import từ QB đã nạp vào state
+    const importedStateQuestions = [
+      {
+        id: 'imported-id-123',
+        question_number: 1,
+        question_type: 'single_choice',
+        prompt: 'Nội dung câu hỏi nhập từ QB (Giáo viên đã sửa nhẹ chữ)',
+        points: 2,
+        options_json: [
+          { key: 'A', text: 'Lựa chọn A' },
+          { key: 'B', text: 'Lựa chọn B' },
+        ],
+        answer_key: { correct_answer: 'A' },
+        source_question_bank_item_id: 'qb-origin-item-001',
+        source_question_bank_version_id: 'qb-origin-ver-001',
+      },
+    ];
+
+    // Thực hiện build payload lưu nháp (như handleSaveDraft)
+    const savePayload = buildSaveDraftQuestionsPayload(importedStateQuestions);
+
+    assert.equal(savePayload[0].source_question_bank_item_id, 'qb-origin-item-001');
+    assert.equal(savePayload[0].source_question_bank_version_id, 'qb-origin-ver-001');
+    assert.equal(savePayload[0].prompt, 'Nội dung câu hỏi nhập từ QB (Giáo viên đã sửa nhẹ chữ)');
+    assert.equal(savePayload[0].points, 2);
+  });
+
+  await test('6.8 Edit existing draft: Đã có sẵn version_id thật -> Không gọi create-test -> Import trực tiếp thành công', async () => {
     let createTestCalled = false;
     let importCalled = false;
 
@@ -854,7 +1177,7 @@ async function main() {
     assert.equal(importRes.ok, true);
   });
 
-  await test('6.3 Import bị chặn nếu version_id rỗng hoặc null khi gửi lên backend', async () => {
+  await test('6.9 Import bị chặn nếu version_id rỗng hoặc null khi gửi lên backend', async () => {
     const db = createMockDb();
     const res = simulateImportEndpoint('teacher', db.teacher1Id, {
       version_id: '',
@@ -865,7 +1188,7 @@ async function main() {
     assert.equal(res.error_code, 'INVALID_VERSION_ID');
   });
 
-  await test('6.4 Khi create-test thất bại -> Import không được thực hiện', async () => {
+  await test('6.10 Khi create-test thất bại -> Import không được thực hiện', async () => {
     let createTestAttempted = false;
     let importAttempted = false;
 
@@ -913,34 +1236,6 @@ async function main() {
     assert.equal(importAttempted, false);
     assert.notEqual(createError, null);
     assert.equal(createError.message, 'Mất kết nối mạng');
-  });
-
-  await test('6.5 Correct persisted version_id sent to import endpoint', async () => {
-    let capturedVersionId = null;
-    let capturedExamId = null;
-
-    const mockClient = new ExamManagementClient({
-      invokeFunction: async ({ action, payload }) => {
-        if (action === 'import-question-bank-items') {
-          capturedVersionId = payload.version_id;
-          capturedExamId = payload.exam_id;
-          return { ok: true, data: { total_imported: 1, imported_questions: [] } };
-        }
-        return { ok: false };
-      },
-    });
-
-    const expectedVer = '33333333-0000-4000-8000-000000000088';
-    const expectedExam = '11111111-0000-4000-8000-000000000088';
-
-    await mockClient.importQuestionsFromQuestionBank({
-      versionId: expectedVer,
-      examId: expectedExam,
-      questionBankItemIds: ['qb-item-1'],
-    });
-
-    assert.equal(capturedVersionId, expectedVer);
-    assert.equal(capturedExamId, expectedExam);
   });
   console.log('\n==================================================');
   console.log(`KẾT QUẢ KIỂM THỬ: ${passed}/${total} TESTS PASSED`);

@@ -28,8 +28,12 @@ import {
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { deleteSingleChoiceOption } from './examOptionUtils.js';
 import { QuestionBankPickerModal } from './QuestionBankPickerModal.jsx';
+import {
+  isUntouchedDemoQuestion,
+  buildSaveDraftQuestionsPayload,
+} from './examDraftUtils.js';
 
-export { deleteSingleChoiceOption };
+export { deleteSingleChoiceOption, isUntouchedDemoQuestion, buildSaveDraftQuestionsPayload };
 
 function generateUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -286,6 +290,8 @@ export const ExamEditorModal = ({
               points: Number(q.points) || 1,
               options_json: normalizedOptions,
               answer_key: normalizedAnswerKey,
+              source_question_bank_item_id: q.source_question_bank_item_id || null,
+              source_question_bank_version_id: q.source_question_bank_version_id || null,
             };
           })
         );
@@ -346,42 +352,77 @@ export const ExamEditorModal = ({
     setQuestions([...questions, newQ]);
   };
 
-  // Mở Question Bank Picker: đảm bảo đã có bản nháp trên cơ sở dữ liệu trước khi chọn câu hỏi
+  // Mở Question Bank Picker: đảm bảo đã lưu toàn bộ bản nháp hiện tại lên cơ sở dữ liệu trước khi chọn câu hỏi
   const handleOpenQuestionBankPicker = async () => {
     if (examToEdit?.active_version?.status === 'published') return;
     if (Boolean(examToEdit) && detailLoadStatus !== 'ready') return;
 
-    // Nếu đã có examId & versionId (đang chỉnh sửa hoặc đã khởi tạo draft trước đó): mở picker trực tiếp
-    if (examId && versionId) {
-      setIsPickerOpen(true);
-      return;
-    }
-
-    // Nếu là đề thi mới chưa lưu DB: tự động tạo draft container trước
     setInitializingDraft(true);
     setErrorMsg('');
     try {
       const client = createExamManagementClient();
-      const createRes = await client.createTest({
+      let currentVerId = versionId;
+      let currentExamId = examId;
+
+      // 1. Nếu là đề mới chưa có container trên DB: gọi createTest trước
+      if (!currentExamId || !currentVerId) {
+        const createRes = await client.createTest({
+          title: title.trim() || 'Đề thi mới',
+          subject: subject.trim() || 'Toán',
+          grade_level: Number(gradeLevel) || 1,
+          description: description?.trim() || null,
+        });
+
+        if (!createRes.ok || !createRes.data) {
+          setErrorMsg(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+          return;
+        }
+
+        currentExamId = createRes.data.exam_id;
+        currentVerId = createRes.data.version_id;
+        setExamId(currentExamId);
+        setVersionId(currentVerId);
+        setVersionNumber(createRes.data.version_number || 1);
+        setVersionStatus('draft');
+      }
+
+      // 2. Xác định danh sách câu hỏi cần lưu:
+      // - Nếu chỉ có câu hỏi demo mặc định chưa sửa (1 + 1 = ?): lưu [] để QB import thay thế sạch sẽ
+      // - Nếu giáo viên đã sửa câu demo hoặc thêm câu hỏi thủ công: lưu toàn bộ câu hỏi hiện tại lên DB
+      const isUntouchedDemo = isUntouchedDemoQuestion(questions, !examToEdit);
+      const questionsToPersist = isUntouchedDemo ? [] : questions;
+
+      // 3. Gọi saveDraft lưu đầy đủ metadata & câu hỏi hiện tại lên DB
+      const savePayload = {
+        version_id: currentVerId,
         title: title.trim() || 'Đề thi mới',
         subject: subject.trim() || 'Toán',
         grade_level: Number(gradeLevel) || 1,
-        description: description.trim() || null,
-      });
+        description: description?.trim() || null,
+        duration_minutes: durationMinutes ? Number(durationMinutes) : null,
+        starts_at: startsAt ? new Date(startsAt).toISOString() : null,
+        last_start_at: lastStartAt ? new Date(lastStartAt).toISOString() : null,
+        due_date: dueDate ? new Date(dueDate).toISOString() : null,
+        max_attempts: Number(maxAttempts) || 1,
+        reward_stars: Number(rewardStars) || 0,
+        shuffle_questions: Boolean(shuffleQuestions),
+        shuffle_options: Boolean(shuffleOptions),
+        tab_switch_policy: tabSwitchPolicy,
+        show_score_after_submit: Boolean(showScoreAfterSubmit),
+        show_correct_answers: Boolean(showCorrectAnswers),
+        questions: buildSaveDraftQuestionsPayload(questionsToPersist),
+      };
 
-      if (!createRes.ok || !createRes.data) {
-        setErrorMsg(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+      const saveRes = await client.saveDraft(savePayload);
+      if (!saveRes.ok) {
+        setErrorMsg(saveRes.error?.message || 'Không thể đồng bộ bản nháp lên máy chủ trước khi mở Ngân hàng câu hỏi.');
         return;
       }
 
-      setExamId(createRes.data.exam_id);
-      setVersionId(createRes.data.version_id);
-      setVersionNumber(createRes.data.version_number || 1);
-      setVersionStatus('draft');
-
+      // 4. Chỉ khi lưu bản nháp thành công mới mở QuestionBankPickerModal
       setIsPickerOpen(true);
     } catch (err) {
-      console.error('[ExamEditorModal] Lỗi khởi tạo draft container khi mở QB picker:', err);
+      console.error('[ExamEditorModal] Lỗi khởi tạo & lưu bản nháp khi mở QB picker:', err);
       setErrorMsg(err?.message || 'Có lỗi xảy ra khi chuẩn bị bản nháp đề thi.');
     } finally {
       setInitializingDraft(false);
@@ -401,24 +442,8 @@ export const ExamEditorModal = ({
       let currentVerId = versionId;
       let currentExamId = examId;
 
-      // Fallback an toàn: nếu chưa có exam_id hoặc version_id trên DB: gọi createTest trước
       if (!currentExamId || !currentVerId) {
-        const createRes = await client.createTest({
-          title: title.trim() || 'Đề thi mới',
-          subject: subject.trim() || 'Toán',
-          grade_level: Number(gradeLevel) || 1,
-          description: description.trim() || null,
-        });
-
-        if (!createRes.ok || !createRes.data) {
-          throw new Error(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
-        }
-
-        currentExamId = createRes.data.exam_id;
-        currentVerId = createRes.data.version_id;
-        setExamId(currentExamId);
-        setVersionId(currentVerId);
-        setVersionStatus('draft');
+        throw new Error('Bản nháp đề thi chưa được khởi tạo.');
       }
 
       // Gọi endpoint BFF nhập câu hỏi và lưu Snapshot an toàn trên server
@@ -708,45 +733,7 @@ export const ExamEditorModal = ({
         shuffle_options: Boolean(shuffleOptions),
         tab_switch_policy: tabSwitchPolicy,
         show_score_after_submit: Boolean(showScoreAfterSubmit),
-        show_correct_answers: Boolean(showCorrectAnswers),
-        questions: questions.map((q, idx) => {
-          let canonicalOptions = [];
-          if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
-            canonicalOptions = (Array.isArray(q.options_json) ? q.options_json : []).map((opt, oIdx) => {
-              if (typeof opt === 'object' && opt !== null && opt.key) {
-                return { key: String(opt.key).trim(), text: String(opt.text ?? '').trim() };
-              }
-              return { key: String.fromCharCode(65 + oIdx), text: String(opt ?? '').trim() };
-            });
-          }
-
-          let answerKey = null;
-          if (q.question_type === 'single_choice') {
-            answerKey = {
-              correct_answer: String(q.answer_key?.correct_answer || canonicalOptions[0]?.key || 'A').trim(),
-            };
-          } else if (q.question_type === 'multiple_choice') {
-            const rawAns = q.answer_key?.correct_answer;
-            const ansArray = Array.isArray(rawAns) ? rawAns : [String(rawAns || 'A')];
-            answerKey = {
-              correct_answer: ansArray.map((a) => String(a).trim()),
-            };
-          } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-            answerKey = {
-              correct_answer: String(q.answer_key?.correct_answer || '').trim(),
-            };
-          }
-
-          return {
-            id: q.id || generateUuid(),
-            question_number: idx + 1,
-            question_type: q.question_type,
-            prompt: q.prompt.trim(),
-            points: Number(q.points) || 1,
-            options_json: canonicalOptions,
-            answer_key: answerKey,
-          };
-        }),
+        questions: buildSaveDraftQuestionsPayload(questions),
       };
 
       const saveRes = await client.saveDraft(savePayload);
