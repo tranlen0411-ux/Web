@@ -87,6 +87,11 @@ export const ExamManagementTab = ({
   };
 
   const handleOpenEditModal = (exam) => {
+    const isPublished = exam?.active_version?.status === 'published';
+    if (isPublished) {
+      showToast('ℹ️ Đề thi đã xuất bản ở trạng thái bất biến, không thể chỉnh sửa trực tiếp.');
+      return;
+    }
     triggerSound('click');
     setExamToEdit(exam);
     setIsEditorModalOpen(true);
@@ -394,13 +399,23 @@ export const ExamManagementTab = ({
                       {/* THAO TÁC */}
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleOpenEditModal(t)}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all"
-                            title="Chỉnh sửa đề thi"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" /> Chỉnh Sửa
-                          </button>
+                          {isPublished ? (
+                            <button
+                              disabled
+                              className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 cursor-not-allowed"
+                              title="Đề thi đã xuất bản ở trạng thái cố định, không thể chỉnh sửa trực tiếp"
+                            >
+                              <Lock className="w-3.5 h-3.5 text-slate-400" /> Đã Xuất Bản
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenEditModal(t)}
+                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all"
+                              title="Chỉnh sửa bản nháp đề thi"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" /> Chỉnh Sửa
+                            </button>
+                          )}
 
                           <button
                             onClick={() => handleOpenAssignModal(t)}
