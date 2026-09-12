@@ -303,7 +303,7 @@ export const ExamManagementTab = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-bold whitespace-nowrap">
+            <table className="w-full text-left text-xs font-bold whitespace-nowrap min-w-[920px]">
               <thead className="bg-slate-100 text-slate-700 uppercase border-b-2 border-slate-200 text-[11px]">
                 <tr>
                   <th className="p-4">Tên Đề Thi</th>
@@ -312,7 +312,7 @@ export const ExamManagementTab = ({
                   <th className="p-4">Trạng Thái</th>
                   <th className="p-4">Thời Lượng</th>
                   <th className="p-4">Lịch Thi Linh Hoạt</th>
-                  <th className="p-4 text-center">Thao Tác</th>
+                  <th className="p-4 text-center min-w-[280px]">Thao Tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -407,13 +407,13 @@ export const ExamManagementTab = ({
                       </td>
 
                       {/* THAO TÁC */}
-                      <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
+                      <td className="p-4 text-center min-w-[280px]">
+                        <div className="flex items-center justify-center flex-wrap gap-1.5 sm:gap-2 max-w-[340px] mx-auto">
                           {isPublished ? (
                             <>
                               <button
                                 disabled
-                                className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 cursor-not-allowed"
+                                className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-black inline-flex items-center gap-1.5 border border-slate-200 cursor-not-allowed shrink-0 select-none"
                                 title="Đề thi đã xuất bản ở trạng thái cố định, không thể chỉnh sửa trực tiếp"
                               >
                                 <Lock className="w-3.5 h-3.5 text-slate-400" /> Đã Xuất Bản
@@ -421,7 +421,7 @@ export const ExamManagementTab = ({
 
                               <button
                                 onClick={() => handleOpenResultsModal(t)}
-                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm active:translate-y-0.5 transition-all"
+                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 shadow-sm active:translate-y-0.5 transition-all shrink-0 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
                                 title="Xem danh sách kết quả bài làm và chấm bài tự luận"
                               >
                                 <FileText className="w-3.5 h-3.5" /> Xem Kết Quả
@@ -430,7 +430,7 @@ export const ExamManagementTab = ({
                           ) : (
                             <button
                               onClick={() => handleOpenEditModal(t)}
-                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all"
+                              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shrink-0 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
                               title="Chỉnh sửa bản nháp đề thi"
                             >
                               <Edit2 className="w-3.5 h-3.5" /> Chỉnh Sửa
@@ -440,9 +440,9 @@ export const ExamManagementTab = ({
                           <button
                             onClick={() => handleOpenAssignModal(t)}
                             disabled={!isPublished}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-sm ${
+                            className={`px-3.5 py-1.5 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shadow-sm shrink-0 focus:outline-none focus:ring-2 focus:ring-offset-1 ${
                               isPublished
-                                ? 'bg-indigo-600 hover:bg-indigo-700 text-white active:translate-y-0.5'
+                                ? 'bg-indigo-600 hover:bg-indigo-700 text-white active:translate-y-0.5 focus:ring-indigo-500'
                                 : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
                             }`}
                             title={isPublished ? 'Giao đề thi cho lớp học' : 'Xuất bản đề thi trước khi giao'}
