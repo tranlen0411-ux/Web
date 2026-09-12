@@ -511,6 +511,7 @@ export async function handleExamManagementRequest(
     }
 
     // =========================================================================
+    // =========================================================================
     // ENDPOINT 7: GET /list-exam-attempts
     // =========================================================================
     if (req.method === 'GET' && (action === 'list-exam-attempts' || action === 'list-attempts' || action === 'attempts')) {
@@ -536,7 +537,6 @@ export async function handleExamManagementRequest(
 
       // 1. Resolve target exam_version_ids
       let versionIds: string[] = [];
-      let targetExamAuthorId: string | null = null;
 
       if (params.version_id) {
         const { data: vRow, error: vErr } = await examClient
@@ -549,24 +549,16 @@ export async function handleExamManagementRequest(
           return createErrorResponse(404, 'ERR_VERSION_NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
         }
         versionIds = [vRow.id];
-
-        const { data: eRow } = await examClient
-          .from('exam_tests')
-          .select('id, author_id')
-          .eq('id', vRow.exam_id)
-          .maybeSingle();
-        targetExamAuthorId = eRow?.author_id || null;
       } else if (params.exam_id) {
         const { data: eRow, error: eErr } = await examClient
           .from('exam_tests')
-          .select('id, author_id')
+          .select('id')
           .eq('id', params.exam_id)
           .maybeSingle();
 
         if (eErr || !eRow) {
           return createErrorResponse(404, 'ERR_EXAM_NOT_FOUND', 'Không tìm thấy đề thi.');
         }
-        targetExamAuthorId = eRow.author_id;
 
         const { data: vRows } = await examClient
           .from('exam_versions')
@@ -598,33 +590,47 @@ export async function handleExamManagementRequest(
         return createSuccessResponse({ attempts: [] });
       }
 
-      // 3. Authorization check and scope narrowing for Teacher
+      // 3. Authorization check and scope narrowing for Teacher (PURE CLASS-OWNERSHIP RULE)
       let scopedAssignments = assignments;
       if (actorRole === 'teacher') {
-        const isAuthor = targetExamAuthorId === callerId;
-        if (!isAuthor) {
-          // If teacher is not the exam author, they may ONLY see assignments for classes they teach
-          const authorizedAssignments: any[] = [];
-          for (const a of assignments) {
-            const { data: cRow } = await coreClient
-              .from('classes')
-              .select('id, teacher_id')
-              .eq('id', a.class_id)
-              .maybeSingle();
-            if (cRow && cRow.teacher_id === callerId) {
-              authorizedAssignments.push(a);
-            }
+        // If teacher requested a specific class_id, verify caller is the teacher of that class
+        if (params.class_id) {
+          const { data: requestedClass, error: reqClassErr } = await coreClient
+            .from('classes')
+            .select('id, teacher_id')
+            .eq('id', params.class_id)
+            .maybeSingle();
+
+          if (reqClassErr) {
+            return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi kiểm tra quyền hạn lớp học.');
           }
 
-          if (authorizedAssignments.length === 0) {
+          if (!requestedClass || requestedClass.teacher_id !== callerId) {
             return createErrorResponse(
               403,
               'CLASS_ACCESS_DENIED',
-              'Bạn không có quyền xem kết quả của đề thi này.'
+              'Bạn không có quyền xem kết quả của lớp học này.'
             );
           }
-          scopedAssignments = authorizedAssignments;
         }
+
+        // Narrow assignments strictly to classes managed by this teacher
+        const authorizedAssignments: any[] = [];
+        for (const a of assignments) {
+          const { data: cRow } = await coreClient
+            .from('classes')
+            .select('id, teacher_id')
+            .eq('id', a.class_id)
+            .maybeSingle();
+          if (cRow && cRow.teacher_id === callerId) {
+            authorizedAssignments.push(a);
+          }
+        }
+        scopedAssignments = authorizedAssignments;
+      }
+
+      if (scopedAssignments.length === 0) {
+        return createSuccessResponse({ attempts: [] });
       }
 
       const assignmentIds = scopedAssignments.map((a: any) => a.id);
@@ -786,39 +792,23 @@ export async function handleExamManagementRequest(
         return createErrorResponse(404, 'ERR_ASSIGNMENT_NOT_FOUND', 'Không tìm thấy bài giao của lượt thi.');
       }
 
-      // 3. Resolve parent exam & author
-      const { data: vRow } = await examClient
-        .from('exam_versions')
-        .select('id, exam_id')
-        .eq('id', attemptRow.exam_version_id)
-        .maybeSingle();
-
-      let authorId: string | null = null;
-      if (vRow?.exam_id) {
-        const { data: eRow } = await examClient
-          .from('exam_tests')
-          .select('id, author_id')
-          .eq('id', vRow.exam_id)
-          .maybeSingle();
-        authorId = eRow?.author_id || null;
-      }
-
-      // 4. Authorization check for Teacher
+      // 3. Authorization check for Teacher (PURE CLASS-OWNERSHIP RULE: Must be teacher of the assigned class)
       if (actorRole === 'teacher') {
-        const isAuthor = authorId === callerId;
-        const { data: classRow } = await coreClient
+        const { data: classRow, error: classErr } = await coreClient
           .from('classes')
           .select('id, teacher_id')
           .eq('id', assignRow.class_id)
           .maybeSingle();
 
-        const isClassTeacher = classRow?.teacher_id === callerId;
+        if (classErr) {
+          return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi kiểm tra quyền hạn lớp học.');
+        }
 
-        if (!isAuthor && !isClassTeacher) {
+        if (!classRow || classRow.teacher_id !== callerId) {
           return createErrorResponse(
             403,
             'CLASS_ACCESS_DENIED',
-            'Bạn không có quyền xem chi tiết bài làm của lượt thi này.'
+            'Bạn không có quyền xem chi tiết bài làm của lớp học này.'
           );
         }
       }
