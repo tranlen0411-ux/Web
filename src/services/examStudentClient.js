@@ -15,6 +15,8 @@ export const SAVE_FUNCTION_NAME = 'exam-save-answer';
 export const SUBMIT_FUNCTION_NAME = 'exam-submit-attempt';
 export const GET_QUESTIONS_FUNCTION_NAME = 'exam-get-attempt-questions';
 export const LIST_ASSIGNMENTS_FUNCTION_NAME = 'exam-list-student-assignments';
+export const GET_RESULT_FUNCTION_NAME = 'exam-get-student-attempt-result';
+
 
 export const ALLOWED_QUESTION_TYPES = Object.freeze([
   'single_choice',
@@ -80,6 +82,8 @@ const SAFE_STUDENT_ERROR_CODES = Object.freeze(
     'INVALID_RESPONSE_PAYLOAD',
     'ATTEMPT_NOT_STARTED',
     'INVALID_VERSION_STATE',
+    'ERR_RESULT_NOT_FINAL',
+    'RESULT_NOT_FINAL',
     'INTERNAL_ERROR',
   ])
 );
@@ -537,6 +541,8 @@ export function sanitizeClientError(err, responseData = null) {
     }
     if (typeof responseData.safeErrorCode === 'string') {
       candidateCode = responseData.safeErrorCode.trim();
+    } else if (typeof responseData.error_code === 'string') {
+      candidateCode = responseData.error_code.trim();
     } else if (typeof responseData.error?.code === 'string') {
       candidateCode = responseData.error.code.trim();
     }
@@ -1004,8 +1010,122 @@ export class ExamStudentClient {
       return sanitizeClientError(err);
     }
   }
+
+  async getStudentAttemptResult(params = {}) {
+    let attempt_id;
+    if (typeof params === 'string') {
+      attempt_id = params;
+    } else {
+      attempt_id = params?.attempt_id || params?.attemptId;
+    }
+
+    if (!isValidUuid(attempt_id)) {
+      return {
+        ok: false,
+        type: 'failed_pre_dispatch',
+        safeErrorCode: 'INVALID_INPUT',
+      };
+    }
+
+    const cleanAttemptId = attempt_id.trim().toLowerCase();
+
+    try {
+      const { data, error } = await this.#invokeFunction(GET_RESULT_FUNCTION_NAME, {
+        body: {
+          attempt_id: cleanAttemptId,
+        },
+      });
+
+      if (error) {
+        return sanitizeClientError(error, data);
+      }
+
+      const validated = validateGetStudentAttemptResultResponse(data);
+      if (!validated) {
+        return {
+          ok: false,
+          type: 'failed_http',
+          safeHttpStatus: 200,
+          safeErrorCode: 'INVALID_RESPONSE_PAYLOAD',
+        };
+      }
+
+      return {
+        ok: true,
+        data: validated,
+      };
+    } catch (err) {
+      return sanitizeClientError(err);
+    }
+  }
+}
+
+/**
+ * Validates strictly the approved student attempt result response shape.
+ */
+export function validateGetStudentAttemptResultResponse(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  if (raw.success !== true && raw.ok !== true) {
+    return null;
+  }
+  if (!raw.data || typeof raw.data !== 'object' || Array.isArray(raw.data)) {
+    return null;
+  }
+
+  const { attempt, exam, questions } = raw.data;
+
+  if (!attempt || typeof attempt !== 'object' || !isValidUuid(attempt.id)) {
+    return null;
+  }
+
+  if (attempt.status !== 'graded') {
+    return null;
+  }
+
+  if (!exam || typeof exam !== 'object' || typeof exam.title !== 'string') {
+    return null;
+  }
+
+  if (!Array.isArray(questions)) {
+    return null;
+  }
+
+  return {
+    attempt: {
+      id: attempt.id,
+      status: attempt.status,
+      attempt_number: typeof attempt.attempt_number === 'number' ? attempt.attempt_number : 1,
+      submitted_at: typeof attempt.submitted_at === 'string' ? attempt.submitted_at : null,
+      objective_score: Number(attempt.objective_score || 0),
+      manual_score: Number(attempt.manual_score || 0),
+      total_score: Number(attempt.total_score || 0),
+      max_score: Number(attempt.max_score || 0),
+      teacher_feedback: typeof attempt.teacher_feedback === 'string' ? attempt.teacher_feedback : null,
+      reward_stars_awarded: Number(attempt.reward_stars_awarded || 0),
+    },
+    exam: {
+      title: exam.title,
+      subject: typeof exam.subject === 'string' ? exam.subject : 'Chung',
+      grade_level: typeof exam.grade_level === 'number' ? exam.grade_level : 1,
+    },
+    questions: questions.map((q, idx) => ({
+      exam_question_id: q.exam_question_id || q.id || '',
+      question_number: typeof q.question_number === 'number' ? q.question_number : idx + 1,
+      prompt: typeof q.prompt === 'string' ? q.prompt : '',
+      question_type: typeof q.question_type === 'string' ? q.question_type : 'single_choice',
+      points_possible: Number(q.points_possible || 0),
+      options_json: Array.isArray(q.options_json) ? q.options_json : null,
+      student_answer: q.student_answer !== undefined ? q.student_answer : null,
+      file_url: typeof q.file_url === 'string' ? q.file_url : null,
+      points_earned: Number(q.points_earned || 0),
+      teacher_comment: typeof q.teacher_comment === 'string' ? q.teacher_comment : null,
+    })),
+  };
 }
 
 export function createExamStudentClient(options = {}) {
   return new ExamStudentClient(options);
 }
+
