@@ -838,6 +838,149 @@ async function runTests() {
     assert.equal(body.data.version, currentVersion + 1);
   });
 
+  // 17. Two-Project Resolution: Source Inspection of authMiddleware.ts
+  await it('17. Two-Project Resolution: authMiddleware resolves CORE_SUPABASE_URL and EXAM_SUPABASE_URL correctly', async () => {
+    const middlewareSource = fs.readFileSync(
+      'supabase/functions/exam-update-graded-feedback/authMiddleware.ts',
+      'utf8'
+    );
+
+    // Assert CORE URL resolution
+    assert.equal(
+      middlewareSource.includes("const coreUrl = getEnv('CORE_SUPABASE_URL');"),
+      true,
+      'coreUrl must read CORE_SUPABASE_URL directly'
+    );
+    assert.equal(
+      middlewareSource.includes("const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY');"),
+      true,
+      'coreAnonKey must read CORE_SUPABASE_ANON_KEY'
+    );
+    assert.equal(
+      middlewareSource.includes("const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');"),
+      true,
+      'coreServiceKey must read CORE_SUPABASE_SERVICE_ROLE_KEY'
+    );
+
+    // Assert EXAM / NEW URL resolution
+    assert.equal(
+      middlewareSource.includes("getEnv('EXAM_SUPABASE_URL') ||"),
+      true,
+      'examUrl must support EXAM_SUPABASE_URL'
+    );
+    assert.equal(
+      middlewareSource.includes("getEnv('NEW_SUPABASE_URL') ||"),
+      true,
+      'examUrl must support NEW_SUPABASE_URL'
+    );
+    assert.equal(
+      middlewareSource.includes("getEnv('SUPABASE_URL')"),
+      true,
+      'examUrl must fallback to SUPABASE_URL on hosted project'
+    );
+
+    // Assert SUPABASE_SECRET_KEYS fallback exists
+    assert.equal(
+      middlewareSource.includes("getEnv('SUPABASE_SECRET_KEYS')"),
+      true,
+      'Must support SUPABASE_SECRET_KEYS JSON fallback'
+    );
+  });
+
+  // 18. Two-Project Runtime Isolation Verification
+  await it('18. Two-Project Runtime: verifyAuth uses CORE client for auth/profile and EXAM client for RPC', async () => {
+    let authCheckedOnCore = false;
+    let profileCheckedOnCore = false;
+    let classCheckedOnCore = false;
+    let rpcRunOnExam = false;
+
+    const mockCore = {
+      from(table) {
+        return {
+          select(cols) {
+            return {
+              eq(col, val) {
+                return {
+                  async maybeSingle() {
+                    if (table === 'profiles') {
+                      profileCheckedOnCore = true;
+                      return { data: { id: TEACHER_1_ID, role: 'teacher', is_disabled: false }, error: null };
+                    }
+                    if (table === 'classes') {
+                      classCheckedOnCore = true;
+                      return { data: { id: CLASS_1_ID, teacher_id: TEACHER_1_ID }, error: null };
+                    }
+                    return { data: null, error: null };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+
+    const mockExam = {
+      from(table) {
+        return {
+          select(cols) {
+            return {
+              eq(col, val) {
+                return {
+                  async maybeSingle() {
+                    if (table === 'exam_attempts') {
+                      return { data: { id: ATTEMPT_GRADED_ID, assignment_id: ASSIGNMENT_ID }, error: null };
+                    }
+                    if (table === 'exam_assignments') {
+                      return { data: { id: ASSIGNMENT_ID, class_id: CLASS_1_ID }, error: null };
+                    }
+                    return { data: null, error: null };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+      async rpc(name, args) {
+        rpcRunOnExam = true;
+        return { data: { attempt_id: ATTEMPT_GRADED_ID, status: 'graded', teacher_feedback: 'ok', version: 99 }, error: null };
+      },
+    };
+
+    const req = new Request('http://localhost/exam-update-graded-feedback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer valid_teacher_1_token',
+      },
+      body: JSON.stringify({
+        attempt_id: ATTEMPT_GRADED_ID,
+        expected_version: 5,
+        teacher_feedback: 'Two-project isolated test',
+      }),
+    });
+
+    const res = await handleUpdateGradedFeedback(req, {
+      callerAuthClient: {
+        auth: {
+          async getUser() {
+            authCheckedOnCore = true;
+            return { data: { user: { id: TEACHER_1_ID } }, error: null };
+          },
+        },
+      },
+      coreQueryClient: mockCore,
+      examQueryClient: mockExam,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(authCheckedOnCore, true, 'User auth must be resolved on CORE');
+    assert.equal(profileCheckedOnCore, true, 'Profile must be read from CORE');
+    assert.equal(classCheckedOnCore, true, 'Class ownership must be verified on CORE');
+    assert.equal(rpcRunOnExam, true, 'RPC must execute on EXAM client');
+  });
+
   console.log(`\n========================================`);
   console.log(`SUMMARY: ${passedTests}/${totalTests} TESTS PASSED`);
   console.log(`========================================\n`);
@@ -851,3 +994,4 @@ runTests().catch((err) => {
   console.error('Fatal test error:', err);
   process.exit(1);
 });
+

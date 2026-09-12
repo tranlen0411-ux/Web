@@ -184,21 +184,54 @@ export async function verifyAuthAndDeriveContext(
       return undefined;
     };
 
-    const coreUrl = getEnv('SUPABASE_URL') || getEnv('CORE_SUPABASE_URL');
-    const coreAnonKey = getEnv('SUPABASE_ANON_KEY') || getEnv('CORE_SUPABASE_ANON_KEY');
-    const coreServiceKey = getEnv('SUPABASE_SERVICE_ROLE_KEY') || getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');
+    const coreUrl = getEnv('CORE_SUPABASE_URL');
+    const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY');
+    const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');
 
-    const newUrl = getEnv('NEW_SUPABASE_URL') || coreUrl;
-    const newServiceKey = getEnv('NEW_SUPABASE_SERVICE_ROLE_KEY') || coreServiceKey;
+    // NEW Exam URL resolution order:
+    // 1. EXAM_SUPABASE_URL
+    // 2. NEW_SUPABASE_URL
+    // 3. SUPABASE_URL (Hosted Edge runtime default on host project)
+    const examUrl =
+      getEnv('EXAM_SUPABASE_URL') ||
+      getEnv('NEW_SUPABASE_URL') ||
+      getEnv('SUPABASE_URL');
 
-    if (!coreUrl || !coreAnonKey || !coreServiceKey || !newUrl || !newServiceKey) {
+    // NEW Exam Service Role Key resolution order:
+    // 1. EXAM_SUPABASE_SERVICE_ROLE_KEY
+    // 2. NEW_SUPABASE_SERVICE_ROLE_KEY
+    // 3. SUPABASE_SERVICE_ROLE_KEY
+    // 4. SUPABASE_SECRET_KEYS['default']
+    let examServiceKey =
+      getEnv('EXAM_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('NEW_SUPABASE_SERVICE_ROLE_KEY') ||
+      getEnv('SUPABASE_SERVICE_ROLE_KEY');
+
+    if (!examServiceKey) {
+      const rawSecretKeys = getEnv('SUPABASE_SECRET_KEYS');
+      if (rawSecretKeys) {
+        try {
+          const parsed = JSON.parse(rawSecretKeys);
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            typeof parsed.default === 'string' &&
+            parsed.default.trim() !== ''
+          ) {
+            examServiceKey = parsed.default.trim();
+          }
+        } catch (_) {
+          // Fail-closed: Malformed JSON -> examServiceKey remains undefined
+        }
+      }
+    }
+
+    // Fail-Closed: Thiếu cấu hình môi trường bắt buộc -> 500 INTERNAL_ERROR
+    if (!coreUrl || !coreAnonKey || !coreServiceKey || !examUrl || !examServiceKey) {
       return {
         ok: false,
-        response: createErrorResponse(
-          500,
-          'INTERNAL_ERROR',
-          'Cấu hình biến môi trường kết nối Supabase không đầy đủ.'
-        ),
+        response: createErrorResponse(500, 'INTERNAL_ERROR', 'Cấu hình máy chủ bị thiếu.'),
       };
     }
 
@@ -214,18 +247,27 @@ export async function verifyAuthAndDeriveContext(
       };
     }
 
-    callerClient = createClient(coreUrl, coreAnonKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    }) as unknown as CallerAuthClient;
+    // 1. Client 1: Xác thực JWT danh tính Caller bằng CORE Anon Key trên CORE URL
+    const coreCallerClient = createClient(coreUrl, coreAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false },
+    });
 
-    coreClient = createClient(coreUrl, coreServiceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    }) as unknown as CoreQueryClient;
+    // 2. Client 2: Đọc CORE Database (profiles, classes) bằng CORE Service Role Key trên CORE URL
+    const coreAdminClient = createClient(coreUrl, coreServiceKey, {
+      auth: { persistSession: false },
+    });
 
-    examClient = createClient(newUrl, newServiceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    }) as unknown as ExamQueryClient;
+    // 3. Client 3: Thao tác NEW Database (exam_attempts, assignments, RPC) bằng EXAM Service Role Key trên EXAM URL
+    const examAdminClient = createClient(examUrl, examServiceKey, {
+      auth: { persistSession: false },
+    });
+
+    callerClient = coreCallerClient;
+    coreClient = coreAdminClient as unknown as CoreQueryClient;
+    examClient = examAdminClient as unknown as ExamQueryClient;
   }
+
 
 
   // 1. Xác thực JWT với CORE Auth
