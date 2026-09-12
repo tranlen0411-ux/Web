@@ -125,10 +125,18 @@ export function mapAnswerKeyToCanonical(examType, canonicalOptions, qbAnswerKey)
     throw err;
   }
 
-  const correctObj = qbAnswerKey.correct_answers || qbAnswerKey;
+  const correctObj = qbAnswerKey.correct_answers !== undefined ? qbAnswerKey.correct_answers : qbAnswerKey;
 
   if (examType === 'single_choice') {
-    const rawTarget = correctObj.correct_option_id ?? correctObj.correct_answer ?? correctObj.correct_option;
+    let rawTarget;
+    if (Array.isArray(correctObj)) {
+      rawTarget = correctObj[0];
+    } else if (correctObj && typeof correctObj === 'object') {
+      rawTarget = correctObj.correct_option_id ?? correctObj.correct_answer ?? correctObj.correct_option;
+    } else {
+      rawTarget = correctObj;
+    }
+
     if (rawTarget === undefined || rawTarget === null || String(rawTarget).trim() === '') {
       const err = new Error('Câu hỏi trắc nghiệm thiếu đáp án đúng.');
       err.code = 'ERR_QB_ANSWER_KEY_INVALID';
@@ -162,7 +170,15 @@ export function mapAnswerKeyToCanonical(examType, canonicalOptions, qbAnswerKey)
   }
 
   if (examType === 'multiple_choice') {
-    const rawList = correctObj.correct_option_ids ?? correctObj.correct_answers ?? correctObj.correct_answer;
+    let rawList;
+    if (Array.isArray(correctObj)) {
+      rawList = correctObj;
+    } else if (correctObj && typeof correctObj === 'object') {
+      rawList = correctObj.correct_option_ids ?? correctObj.correct_answers ?? correctObj.correct_answer;
+    } else {
+      rawList = correctObj;
+    }
+
     let targets = [];
     if (Array.isArray(rawList)) {
       targets = rawList.map(s => String(s).trim()).filter(Boolean);
@@ -210,22 +226,64 @@ export function mapAnswerKeyToCanonical(examType, canonicalOptions, qbAnswerKey)
   }
 
   if (examType === 'fill_blank' || examType === 'short_answer') {
-    const rawCorrect = correctObj.correct_text !== undefined ? correctObj.correct_text : (correctObj.correct_answer || '');
-    const correctStr = String(rawCorrect || '').trim();
+    let correctStr = '';
+    let acceptedList = [];
 
-    if (!correctStr) {
-      const err = new Error('Câu hỏi điền khuyết / trả lời ngắn thiếu nội dung đáp án đúng.');
+    if (Array.isArray(correctObj)) {
+      const nonEmpties = [];
+      const seen = new Set();
+      for (const itemAns of correctObj) {
+        const s = itemAns !== undefined && itemAns !== null ? String(itemAns).trim() : '';
+        if (s && !seen.has(s)) {
+          seen.add(s);
+          nonEmpties.push(s);
+        }
+      }
+      if (nonEmpties.length === 0) {
+        const err = new Error('Câu hỏi điền khuyết / trả lời ngắn thiếu nội dung đáp án đúng.');
+        err.code = 'ERR_QB_ANSWER_KEY_INVALID';
+        throw err;
+      }
+      correctStr = nonEmpties[0];
+      acceptedList = nonEmpties;
+    } else if (correctObj && typeof correctObj === 'object') {
+      const rawCorrect = correctObj.correct_text !== undefined
+        ? correctObj.correct_text
+        : (correctObj.correct_answer !== undefined ? correctObj.correct_answer : '');
+      correctStr = String(rawCorrect || '').trim();
+
+      if (!correctStr) {
+        const err = new Error('Câu hỏi điền khuyết / trả lời ngắn thiếu nội dung đáp án đúng.');
+        err.code = 'ERR_QB_ANSWER_KEY_INVALID';
+        throw err;
+      }
+
+      const rawAccepted = Array.isArray(correctObj.accepted_texts)
+        ? correctObj.accepted_texts
+        : (Array.isArray(correctObj.accepted_answers) ? correctObj.accepted_answers : []);
+
+      const acceptedStrings = rawAccepted.map(s => String(s || '').trim()).filter(Boolean);
+      const seen = new Set();
+      seen.add(correctStr);
+      acceptedList.push(correctStr);
+      for (const a of acceptedStrings) {
+        if (!seen.has(a)) {
+          seen.add(a);
+          acceptedList.push(a);
+        }
+      }
+    } else if (typeof correctObj === 'string' && correctObj.trim()) {
+      correctStr = correctObj.trim();
+      acceptedList = [correctStr];
+    } else {
+      const err = new Error('Câu hỏi điền khuyết / trả lời ngắn có cấu hình đáp án đúng không hợp lệ.');
       err.code = 'ERR_QB_ANSWER_KEY_INVALID';
       throw err;
     }
 
-    const accepted = Array.isArray(correctObj.accepted_texts)
-      ? correctObj.accepted_texts.map(s => String(s).trim())
-      : (Array.isArray(correctObj.accepted_answers) ? correctObj.accepted_answers.map(s => String(s).trim()) : []);
-
     return {
       correct_answer: correctStr,
-      accepted_answers: accepted.filter(Boolean),
+      accepted_answers: acceptedList,
     };
   }
 

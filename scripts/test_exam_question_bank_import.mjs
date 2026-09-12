@@ -424,7 +424,7 @@ async function main() {
     assert.throws(() => mapAnswerKeyToCanonical('fill_blank', [], { correct_text: '' }), (err) => err.code === 'ERR_QB_ANSWER_KEY_INVALID');
     assert.deepEqual(
       mapAnswerKeyToCanonical('fill_blank', [], { correct_text: 'Thủ đô', accepted_texts: ['thu do'] }),
-      { correct_answer: 'Thủ đô', accepted_answers: ['thu do'] }
+      { correct_answer: 'Thủ đô', accepted_answers: ['Thủ đô', 'thu do'] }
     );
   });
 
@@ -1547,6 +1547,130 @@ async function main() {
       handlerSource.includes("if (!tRow) {\n        return createErrorResponse(\n          404,\n          'ERR_EXAM_NOT_FOUND'"),
       'Phải có nhánh if (!tRow) trả về 404 ERR_EXAM_NOT_FOUND'
     );
+  });
+
+  await test('7.6 fill_blank correct_answers=["6"] => import PASS, correct_answer="6", accepted_answers=["6"]', async () => {
+    const res = mapAnswerKeyToCanonical('fill_blank', [], {
+      correct_answers: ['6'],
+    });
+    assert.deepEqual(res, {
+      correct_answer: '6',
+      accepted_answers: ['6'],
+    });
+  });
+
+  await test('7.7 fill_blank correct_answers=["6", "06"] => PASS, preserves accepted values', async () => {
+    const res = mapAnswerKeyToCanonical('fill_blank', [], {
+      correct_answers: ['6', '06', 'sáu'],
+    });
+    assert.deepEqual(res, {
+      correct_answer: '6',
+      accepted_answers: ['6', '06', 'sáu'],
+    });
+  });
+
+  await test('7.8 fill_blank correct_answers=[] => ERR_QB_ANSWER_KEY_INVALID (fail-closed)', async () => {
+    assert.throws(
+      () => mapAnswerKeyToCanonical('fill_blank', [], { correct_answers: [] }),
+      (err) => err.code === 'ERR_QB_ANSWER_KEY_INVALID'
+    );
+  });
+
+  await test('7.9 fill_blank correct_answers=["", "   "] => ERR_QB_ANSWER_KEY_INVALID (fail-closed)', async () => {
+    assert.throws(
+      () => mapAnswerKeyToCanonical('fill_blank', [], { correct_answers: ['', '   '] }),
+      (err) => err.code === 'ERR_QB_ANSWER_KEY_INVALID'
+    );
+  });
+
+  await test('7.10 fill_blank legacy object correct_text shape still PASS', async () => {
+    const res = mapAnswerKeyToCanonical('fill_blank', [], {
+      correct_answers: { correct_text: 'Thủ đô Hà Nội', accepted_texts: ['Ha Noi', 'Hà Nội'] },
+    });
+    assert.deepEqual(res, {
+      correct_answer: 'Thủ đô Hà Nội',
+      accepted_answers: ['Thủ đô Hà Nội', 'Ha Noi', 'Hà Nội'],
+    });
+  });
+
+  await test('7.11 single_choice object shape unchanged PASS', async () => {
+    const opts = [
+      { key: 'A', text: 'Toán', originalId: 'opt_1' },
+      { key: 'B', text: 'Văn', originalId: 'opt_2' },
+    ];
+    const res = mapAnswerKeyToCanonical('single_choice', opts, {
+      correct_answers: { correct_option_id: 'opt_2' },
+    });
+    assert.deepEqual(res, { correct_answer: 'B' });
+  });
+
+  await test('7.12 multiple_choice supports both array and object shapes without guessing', async () => {
+    const opts = [
+      { key: 'A', text: 'Hà Nội', originalId: 'opt_1' },
+      { key: 'B', text: 'Đà Nẵng', originalId: 'opt_2' },
+      { key: 'C', text: 'TP HCM', originalId: 'opt_3' },
+    ];
+    // Array shape
+    const resArray = mapAnswerKeyToCanonical('multiple_choice', opts, {
+      correct_answers: ['opt_1', 'opt_3'],
+    });
+    assert.deepEqual(resArray, { correct_answer: ['A', 'C'] });
+
+    // Object shape
+    const resObj = mapAnswerKeyToCanonical('multiple_choice', opts, {
+      correct_answers: { correct_option_ids: ['opt_2', 'opt_3'] },
+    });
+    assert.deepEqual(resObj, { correct_answer: ['B', 'C'] });
+  });
+
+  await test('7.13 End-to-end simulation: importing real QB items with array and object answer keys preserves zero leak', async () => {
+    const db = createMockDb();
+
+    // Thêm câu hỏi fill_blank với correct_answers dạng mảng ["6"]
+    db.questionBankItems.push({
+      id: 'qb-item-fill-1',
+      code: 'QB-TOÁ-G1-10-4',
+      title: '10 - 4 = _____',
+      question_type: 'fill_blank',
+      subject: 'Toán',
+      grade_level: 1,
+      difficulty: 'easy',
+      status: 'published',
+      visibility: 'public_template',
+      author_id: db.teacher2Id,
+      current_version_id: 'qb-ver-fill-1',
+    });
+    db.questionBankVersions.push({
+      id: 'qb-ver-fill-1',
+      question_bank_item_id: 'qb-item-fill-1',
+      prompt: '10 - 4 = _____',
+      options: [],
+    });
+    db.questionBankAnswerKeys.push({
+      version_id: 'qb-ver-fill-1',
+      correct_answers: ['6'],
+    });
+
+    const res = simulateImportEndpoint('teacher', db.teacher1Id, {
+      version_id: '33333333-0000-4000-8000-000000000001',
+      question_bank_item_ids: ['qb-item-101', 'qb-item-fill-1'],
+    }, db);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.data.total_imported, 2);
+
+    // Deep scan response for zero leak
+    deepScanNoAnswerKeys(res.data);
+
+    // DB state check
+    const fillQ = db.examQuestions.find(q => q.source_question_bank_item_id === 'qb-item-fill-1');
+    assert.ok(fillQ, 'Câu hỏi fill_blank phải được lưu vào exam_questions');
+    assert.equal(fillQ.question_type, 'fill_blank');
+
+    const fillKey = db.examAnswerKeys.find(k => k.question_id === fillQ.id);
+    assert.ok(fillKey, 'Đáp án fill_blank phải được lưu an toàn vào exam_answer_keys');
+    assert.equal(fillKey.correct_answer, '6');
+    assert.deepEqual(fillKey.accepted_answers, ['6']);
   });
 
   console.log('\n==================================================');

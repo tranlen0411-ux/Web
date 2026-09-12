@@ -1214,7 +1214,15 @@ export async function handleExamManagementRequest(
             return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu đáp án đúng trong ngân hàng câu hỏi.`);
           }
           const correctObj = ansKey.correct_answers;
-          const rawTarget = correctObj.correct_option_id ?? correctObj.correct_answer ?? correctObj.correct_option;
+          let rawTarget: any;
+          if (Array.isArray(correctObj)) {
+            rawTarget = correctObj[0];
+          } else if (correctObj && typeof correctObj === 'object') {
+            rawTarget = (correctObj as any).correct_option_id ?? (correctObj as any).correct_answer ?? (correctObj as any).correct_option;
+          } else {
+            rawTarget = correctObj;
+          }
+
           if (rawTarget === undefined || rawTarget === null || String(rawTarget).trim() === '') {
             return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu cấu hình đáp án đúng.`);
           }
@@ -1251,7 +1259,15 @@ export async function handleExamManagementRequest(
             return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi trắc nghiệm '${item.title || item.id}' thiếu đáp án đúng trong ngân hàng câu hỏi.`);
           }
           const correctObj = ansKey.correct_answers;
-          const rawList = correctObj.correct_option_ids ?? correctObj.correct_answers ?? correctObj.correct_answer;
+          let rawList: any;
+          if (Array.isArray(correctObj)) {
+            rawList = correctObj;
+          } else if (correctObj && typeof correctObj === 'object') {
+            rawList = (correctObj as any).correct_option_ids ?? (correctObj as any).correct_answers ?? (correctObj as any).correct_answer;
+          } else {
+            rawList = correctObj;
+          }
+
           let targets: string[] = [];
           if (Array.isArray(rawList)) {
             targets = rawList.map(s => String(s).trim()).filter(Boolean);
@@ -1293,21 +1309,59 @@ export async function handleExamManagementRequest(
           if (!ansKey || !ansKey.correct_answers) {
             return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' thiếu đáp án đúng.`);
           }
-          const correctObj = ansKey.correct_answers;
-          const rawCorrect = correctObj.correct_text !== undefined ? correctObj.correct_text : (correctObj.correct_answer || '');
-          const correctStr = String(rawCorrect || '').trim();
+          const rawAns = ansKey.correct_answers;
+          let correctStr = '';
+          let acceptedList: string[] = [];
 
-          if (!correctStr) {
-            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' có nội dung đáp án đúng rỗng.`);
+          if (Array.isArray(rawAns)) {
+            const nonEmpties: string[] = [];
+            const seen = new Set<string>();
+            for (const itemAns of rawAns) {
+              const s = itemAns !== undefined && itemAns !== null ? String(itemAns).trim() : '';
+              if (s && !seen.has(s)) {
+                seen.add(s);
+                nonEmpties.push(s);
+              }
+            }
+            if (nonEmpties.length === 0) {
+              return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' có nội dung đáp án đúng rỗng.`);
+            }
+            correctStr = nonEmpties[0];
+            acceptedList = nonEmpties;
+          } else if (rawAns && typeof rawAns === 'object') {
+            const rawCorrect = (rawAns as any).correct_text !== undefined
+              ? (rawAns as any).correct_text
+              : ((rawAns as any).correct_answer !== undefined ? (rawAns as any).correct_answer : '');
+            correctStr = String(rawCorrect || '').trim();
+
+            if (!correctStr) {
+              return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' có nội dung đáp án đúng rỗng.`);
+            }
+
+            const rawAccepted = Array.isArray((rawAns as any).accepted_texts)
+              ? (rawAns as any).accepted_texts
+              : (Array.isArray((rawAns as any).accepted_answers) ? (rawAns as any).accepted_answers : []);
+
+            const acceptedStrings = rawAccepted.map((s: any) => String(s || '').trim()).filter(Boolean);
+            const seen = new Set<string>();
+            seen.add(correctStr);
+            acceptedList.push(correctStr);
+            for (const a of acceptedStrings) {
+              if (!seen.has(a)) {
+                seen.add(a);
+                acceptedList.push(a);
+              }
+            }
+          } else if (typeof rawAns === 'string' && rawAns.trim()) {
+            correctStr = rawAns.trim();
+            acceptedList = [correctStr];
+          } else {
+            return createErrorResponse(400, 'ERR_QB_ANSWER_KEY_INVALID', `Câu hỏi '${item.title || item.id}' có cấu hình đáp án đúng không hợp lệ.`);
           }
-
-          const accepted = Array.isArray(correctObj.accepted_texts)
-            ? correctObj.accepted_texts.map(String)
-            : (Array.isArray(correctObj.accepted_answers) ? correctObj.accepted_answers.map(String) : []);
 
           canonicalAnswerKey = {
             correct_answer: correctStr,
-            accepted_answers: accepted.map(s => s.trim()).filter(Boolean),
+            accepted_answers: acceptedList,
           };
         } else {
           // Manual question types (essay, image_upload, file_upload)
