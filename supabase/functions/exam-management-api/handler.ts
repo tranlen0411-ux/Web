@@ -19,6 +19,8 @@ import {
   validateSaveDraftPayload,
   validatePublishPayload,
   validateCreateAssignmentPayload,
+  validateListExamAttemptsParams,
+  validateGetAttemptDetailParams,
   isValidUUID,
 } from './validation.ts';
 
@@ -506,6 +508,420 @@ export async function handleExamManagementRequest(
       }
 
       return createSuccessResponse(rpcRes.data, 201);
+    }
+
+    // =========================================================================
+    // =========================================================================
+    // ENDPOINT 7: GET /list-exam-attempts
+    // =========================================================================
+    if (req.method === 'GET' && (action === 'list-exam-attempts' || action === 'list-attempts' || action === 'attempts')) {
+      const examId = url.searchParams.get('exam_id');
+      const versionId = url.searchParams.get('version_id');
+      const classId = url.searchParams.get('class_id');
+
+      const valResult = validateListExamAttemptsParams({
+        exam_id: examId,
+        version_id: versionId,
+        class_id: classId,
+      });
+
+      if (!valResult.valid || !valResult.data) {
+        return createErrorResponse(
+          400,
+          valResult.errorCode || 'INVALID_INPUT',
+          valResult.errorMessage || 'Tham số yêu cầu không hợp lệ.'
+        );
+      }
+
+      const params = valResult.data;
+
+      // 1. Resolve target exam_version_ids
+      let versionIds: string[] = [];
+
+      if (params.version_id) {
+        const { data: vRow, error: vErr } = await examClient
+          .from('exam_versions')
+          .select('id, exam_id')
+          .eq('id', params.version_id)
+          .maybeSingle();
+
+        if (vErr || !vRow) {
+          return createErrorResponse(404, 'ERR_VERSION_NOT_FOUND', 'Không tìm thấy phiên bản đề thi.');
+        }
+        versionIds = [vRow.id];
+      } else if (params.exam_id) {
+        const { data: eRow, error: eErr } = await examClient
+          .from('exam_tests')
+          .select('id')
+          .eq('id', params.exam_id)
+          .maybeSingle();
+
+        if (eErr || !eRow) {
+          return createErrorResponse(404, 'ERR_EXAM_NOT_FOUND', 'Không tìm thấy đề thi.');
+        }
+
+        const { data: vRows } = await examClient
+          .from('exam_versions')
+          .select('id')
+          .eq('exam_id', params.exam_id);
+        versionIds = (vRows || []).map((v: any) => v.id);
+      }
+
+      if (versionIds.length === 0) {
+        return createSuccessResponse({ attempts: [] });
+      }
+
+      // 2. Fetch assignments for these versions
+      let assignQuery = examClient
+        .from('exam_assignments')
+        .select('id, exam_version_id, class_id, due_date, assigned_at')
+        .in('exam_version_id', versionIds);
+
+      if (params.class_id) {
+        assignQuery = assignQuery.eq('class_id', params.class_id);
+      }
+
+      const { data: assignments, error: assignErr } = await assignQuery;
+      if (assignErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải thông tin phân công bài thi.');
+      }
+
+      if (!assignments || assignments.length === 0) {
+        return createSuccessResponse({ attempts: [] });
+      }
+
+      // 3. Authorization check and scope narrowing for Teacher (PURE CLASS-OWNERSHIP RULE)
+      let scopedAssignments = assignments;
+      if (actorRole === 'teacher') {
+        // If teacher requested a specific class_id, verify caller is the teacher of that class
+        if (params.class_id) {
+          const { data: requestedClass, error: reqClassErr } = await coreClient
+            .from('classes')
+            .select('id, teacher_id')
+            .eq('id', params.class_id)
+            .maybeSingle();
+
+          if (reqClassErr) {
+            return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi kiểm tra quyền hạn lớp học.');
+          }
+
+          if (!requestedClass || requestedClass.teacher_id !== callerId) {
+            return createErrorResponse(
+              403,
+              'CLASS_ACCESS_DENIED',
+              'Bạn không có quyền xem kết quả của lớp học này.'
+            );
+          }
+        }
+
+        // Narrow assignments strictly to classes managed by this teacher
+        const authorizedAssignments: any[] = [];
+        for (const a of assignments) {
+          const { data: cRow } = await coreClient
+            .from('classes')
+            .select('id, teacher_id')
+            .eq('id', a.class_id)
+            .maybeSingle();
+          if (cRow && cRow.teacher_id === callerId) {
+            authorizedAssignments.push(a);
+          }
+        }
+        scopedAssignments = authorizedAssignments;
+      }
+
+      if (scopedAssignments.length === 0) {
+        return createSuccessResponse({ attempts: [] });
+      }
+
+      const assignmentIds = scopedAssignments.map((a: any) => a.id);
+      const assignmentMap = new Map<string, any>();
+      scopedAssignments.forEach((a: any) => assignmentMap.set(a.id, a));
+
+      // 4. Fetch attempts for these assignments
+      const { data: attempts, error: attErr } = await examClient
+        .from('exam_attempts')
+        .select(`
+          id,
+          assignment_id,
+          exam_version_id,
+          student_id,
+          attempt_number,
+          status,
+          attempt_started_at,
+          expires_at,
+          submitted_at,
+          objective_score,
+          manual_score,
+          total_score,
+          max_score,
+          reward_stars_awarded,
+          graded_at,
+          graded_by,
+          teacher_feedback,
+          version
+        `)
+        .in('assignment_id', assignmentIds)
+        .order('submitted_at', { ascending: false, nullsFirst: false });
+
+      if (attErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải danh sách bài làm của học sinh.');
+      }
+
+      if (!attempts || attempts.length === 0) {
+        return createSuccessResponse({ attempts: [] });
+      }
+
+      // 5. Enrich with CORE profiles and classes
+      const studentIds = Array.from(new Set(attempts.map((att: any) => att.student_id)));
+      const classIds = Array.from(new Set(assignments.map((a: any) => a.class_id)));
+
+      const studentsMap = new Map<string, any>();
+      if (studentIds.length > 0) {
+        try {
+          const { data: profs } = await coreClient
+            .from('profiles')
+            .select('id, full_name, role')
+            .in?.('id', studentIds as string[]) || { data: null };
+          (profs || []).forEach((p: any) => studentsMap.set(p.id, p));
+        } catch (_) {}
+      }
+
+      const classesMap = new Map<string, any>();
+      for (const cId of classIds) {
+        try {
+          const { data: cRow } = await coreClient
+            .from('classes')
+            .select('id, name, grade_level, teacher_id')
+            .eq('id', cId)
+            .maybeSingle();
+          if (cRow) classesMap.set(cId, cRow);
+        } catch (_) {}
+      }
+
+      // 6. Map and sanitize response
+      const mappedAttempts = attempts.map((att: any) => {
+        const assign = assignmentMap.get(att.assignment_id);
+        const student = studentsMap.get(att.student_id);
+        const classInfo = assign ? classesMap.get(assign.class_id) : null;
+
+        return {
+          id: att.id,
+          assignment_id: att.assignment_id,
+          exam_version_id: att.exam_version_id,
+          student_id: att.student_id,
+          student_name: student?.full_name || 'Học sinh',
+          class_id: assign?.class_id || null,
+          class_name: classInfo?.name || 'Lớp học',
+          attempt_number: att.attempt_number,
+          started_at: att.attempt_started_at,
+          submitted_at: att.submitted_at,
+          status: att.status,
+          objective_score: att.objective_score,
+          manual_score: att.manual_score,
+          total_score: att.total_score,
+          max_score: att.max_score,
+          reward_stars_awarded: att.reward_stars_awarded,
+          graded_at: att.graded_at,
+          graded_by: att.graded_by,
+          teacher_feedback: att.teacher_feedback,
+          version: att.version,
+        };
+      });
+
+      return createSuccessResponse({ attempts: mappedAttempts });
+    }
+
+    // =========================================================================
+    // ENDPOINT 8: GET /get-attempt-detail
+    // =========================================================================
+    if (req.method === 'GET' && action === 'get-attempt-detail') {
+      const attemptId = url.searchParams.get('attempt_id');
+      const valResult = validateGetAttemptDetailParams({ attempt_id: attemptId });
+
+      if (!valResult.valid || !valResult.data) {
+        return createErrorResponse(
+          400,
+          valResult.errorCode || 'INVALID_INPUT',
+          valResult.errorMessage || 'Mã attempt_id không hợp lệ.'
+        );
+      }
+
+      // 1. Fetch target attempt
+      const { data: attemptRow, error: attErr } = await examClient
+        .from('exam_attempts')
+        .select(`
+          id,
+          assignment_id,
+          exam_version_id,
+          student_id,
+          attempt_number,
+          status,
+          attempt_started_at,
+          expires_at,
+          submitted_at,
+          objective_score,
+          manual_score,
+          total_score,
+          max_score,
+          question_order,
+          reward_stars_awarded,
+          graded_at,
+          graded_by,
+          teacher_feedback,
+          version
+        `)
+        .eq('id', valResult.data.attempt_id)
+        .maybeSingle();
+
+      if (attErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi truy vấn thông tin lượt thi.');
+      }
+
+      if (!attemptRow) {
+        return createErrorResponse(404, 'ERR_ATTEMPT_NOT_FOUND', 'Không tìm thấy lượt làm bài thi.');
+      }
+
+      // 2. Resolve assignment & class
+      const { data: assignRow, error: assignErr } = await examClient
+        .from('exam_assignments')
+        .select('id, exam_version_id, class_id')
+        .eq('id', attemptRow.assignment_id)
+        .maybeSingle();
+
+      if (assignErr || !assignRow) {
+        return createErrorResponse(404, 'ERR_ASSIGNMENT_NOT_FOUND', 'Không tìm thấy bài giao của lượt thi.');
+      }
+
+      // 3. Authorization check for Teacher (PURE CLASS-OWNERSHIP RULE: Must be teacher of the assigned class)
+      if (actorRole === 'teacher') {
+        const { data: classRow, error: classErr } = await coreClient
+          .from('classes')
+          .select('id, teacher_id')
+          .eq('id', assignRow.class_id)
+          .maybeSingle();
+
+        if (classErr) {
+          return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi kiểm tra quyền hạn lớp học.');
+        }
+
+        if (!classRow || classRow.teacher_id !== callerId) {
+          return createErrorResponse(
+            403,
+            'CLASS_ACCESS_DENIED',
+            'Bạn không có quyền xem chi tiết bài làm của lớp học này.'
+          );
+        }
+      }
+
+      // 5. Fetch questions for this version (SAFE: ZERO ANSWER KEYS EXPOSED)
+      const { data: questions, error: qErr } = await examClient
+        .from('exam_questions')
+        .select('id, question_number, question_type, prompt, points, options_json')
+        .eq('exam_version_id', attemptRow.exam_version_id);
+
+      if (qErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải danh sách câu hỏi.');
+      }
+
+      // 6. Fetch student answers from exam_attempt_answers
+      const { data: answers, error: aErr } = await examClient
+        .from('exam_attempt_answers')
+        .select('exam_question_id, student_answer_json, file_url, points_earned, is_correct, grading_status, teacher_comment')
+        .eq('attempt_id', attemptRow.id);
+
+      if (aErr) {
+        return createErrorResponse(500, 'INTERNAL_ERROR', 'Lỗi khi tải câu trả lời của học sinh.');
+      }
+
+      const answersMap = new Map<string, any>();
+      (answers || []).forEach((ans: any) => answersMap.set(ans.exam_question_id, ans));
+
+      const questionsMap = new Map<string, any>();
+      (questions || []).forEach((q: any) => questionsMap.set(q.id, q));
+
+      // 7. Order questions according to attempt.question_order snapshot
+      let orderedQIds: string[] = [];
+      if (Array.isArray(attemptRow.question_order)) {
+        orderedQIds = attemptRow.question_order;
+      } else {
+        orderedQIds = (questions || [])
+          .sort((a: any, b: any) => a.question_number - b.question_number)
+          .map((q: any) => q.id);
+      }
+
+      const enrichedQuestions = orderedQIds
+        .map((qId: string, idx: number) => {
+          const q = questionsMap.get(qId);
+          if (!q) return null;
+          const ans = answersMap.get(qId);
+          const isManual = ['essay', 'image_upload', 'file_upload'].includes(q.question_type);
+
+          return {
+            exam_question_id: q.id,
+            question_number: idx + 1,
+            original_question_number: q.question_number,
+            question_type: q.question_type,
+            is_manual: isManual,
+            prompt: q.prompt,
+            points_possible: q.points,
+            options_json: q.options_json || [],
+            student_answer: ans?.student_answer_json ?? null,
+            file_url: ans?.file_url ?? null,
+            points_earned: ans?.points_earned ?? null,
+            is_correct: ans?.is_correct ?? null,
+            grading_status: ans?.grading_status || (isManual ? 'pending_manual' : 'pending_auto'),
+            teacher_comment: ans?.teacher_comment ?? null,
+          };
+        })
+        .filter(Boolean);
+
+      // 8. Fetch student profile and class details from CORE
+      let studentName = 'Học sinh';
+      try {
+        const { data: prof } = await coreClient
+          .from('profiles')
+          .select('id, full_name')
+          .eq('id', attemptRow.student_id)
+          .maybeSingle();
+        if (prof?.full_name) studentName = prof.full_name;
+      } catch (_) {}
+
+      let className = 'Lớp học';
+      try {
+        const { data: cRow } = await coreClient
+          .from('classes')
+          .select('id, name')
+          .eq('id', assignRow.class_id)
+          .maybeSingle();
+        if (cRow?.name) className = cRow.name;
+      } catch (_) {}
+
+      return createSuccessResponse({
+        attempt: {
+          id: attemptRow.id,
+          assignment_id: attemptRow.assignment_id,
+          exam_version_id: attemptRow.exam_version_id,
+          student_id: attemptRow.student_id,
+          student_name: studentName,
+          class_id: assignRow.class_id,
+          class_name: className,
+          attempt_number: attemptRow.attempt_number,
+          started_at: attemptRow.attempt_started_at,
+          expires_at: attemptRow.expires_at,
+          submitted_at: attemptRow.submitted_at,
+          status: attemptRow.status,
+          objective_score: attemptRow.objective_score,
+          manual_score: attemptRow.manual_score,
+          total_score: attemptRow.total_score,
+          max_score: attemptRow.max_score,
+          reward_stars_awarded: attemptRow.reward_stars_awarded,
+          graded_at: attemptRow.graded_at,
+          graded_by: attemptRow.graded_by,
+          teacher_feedback: attemptRow.teacher_feedback,
+          version: attemptRow.version,
+        },
+        questions: enrichedQuestions,
+      });
     }
 
     // Nếu không khớp action nào

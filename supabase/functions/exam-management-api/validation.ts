@@ -446,3 +446,96 @@ export function validateCreateAssignmentPayload(raw: unknown): {
     },
   };
 }
+
+export interface ListExamAttemptsParams {
+  exam_id?: string;
+  version_id?: string;
+  class_id?: string;
+}
+
+export function validateListExamAttemptsParams(params: {
+  exam_id?: string | null;
+  version_id?: string | null;
+  class_id?: string | null;
+}): {
+  valid: boolean;
+  data?: ListExamAttemptsParams;
+  errorCode?: string;
+  errorMessage?: string;
+} {
+  const examId = params.exam_id ? params.exam_id.trim() : undefined;
+  const versionId = params.version_id ? params.version_id.trim() : undefined;
+  const classId = params.class_id ? params.class_id.trim() : undefined;
+
+  if (!examId && !versionId) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_INPUT',
+      errorMessage: 'Yêu cầu tham số exam_id hoặc version_id để tải danh sách bài làm.',
+    };
+  }
+
+  if (examId && !isValidUUID(examId)) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_EXAM_ID',
+      errorMessage: 'Mã exam_id không phải UUID hợp lệ.',
+    };
+  }
+
+  if (versionId && !isValidUUID(versionId)) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_VERSION_ID',
+      errorMessage: 'Mã version_id không phải UUID hợp lệ.',
+    };
+  }
+
+  if (classId && !isValidUUID(classId)) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_CLASS_ID',
+      errorMessage: 'Mã class_id không phải UUID hợp lệ.',
+    };
+  }
+
+  return {
+    valid: true,
+    data: {
+      exam_id: examId,
+      version_id: versionId,
+      class_id: classId,
+    },
+  };
+}
+
+export interface GetAttemptDetailParams {
+  attempt_id: string;
+}
+
+export function validateGetAttemptDetailParams(params: {
+  attempt_id?: string | null;
+}): {
+  valid: boolean;
+  data?: GetAttemptDetailParams;
+  errorCode?: string;
+  errorMessage?: string;
+} {
+  const attemptId = params.attempt_id ? params.attempt_id.trim() : '';
+
+  if (!attemptId || !isValidUUID(attemptId)) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_ATTEMPT_ID',
+      errorMessage: 'Mã attempt_id là bắt buộc và phải là một UUID hợp lệ.',
+    };
+  }
+
+  return {
+    valid: true,
+    data: {
+      attempt_id: attemptId,
+    },
+  };
+}
+

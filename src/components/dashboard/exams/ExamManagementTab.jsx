@@ -26,6 +26,7 @@ import {
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { ExamEditorModal } from './ExamEditorModal.jsx';
 import { AssignExamModal } from './AssignExamModal.jsx';
+import { ExamResultsModal } from './ExamResultsModal.jsx';
 import { useSound } from '../../../context/SoundContext.jsx';
 
 export const ExamManagementTab = ({
@@ -52,6 +53,9 @@ export const ExamManagementTab = ({
 
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [examToAssign, setExamToAssign] = useState(null);
+
+  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
+  const [examForResults, setExamForResults] = useState(null);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -106,6 +110,12 @@ export const ExamManagementTab = ({
     }
     setExamToAssign(exam);
     setIsAssignModalOpen(true);
+  };
+
+  const handleOpenResultsModal = (exam) => {
+    triggerSound('click');
+    setExamForResults(exam);
+    setIsResultsModalOpen(true);
   };
 
   const formatScheduleDateTime = (isoStr) => {
@@ -400,13 +410,23 @@ export const ExamManagementTab = ({
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
                           {isPublished ? (
-                            <button
-                              disabled
-                              className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 cursor-not-allowed"
-                              title="Đề thi đã xuất bản ở trạng thái cố định, không thể chỉnh sửa trực tiếp"
-                            >
-                              <Lock className="w-3.5 h-3.5 text-slate-400" /> Đã Xuất Bản
-                            </button>
+                            <>
+                              <button
+                                disabled
+                                className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 cursor-not-allowed"
+                                title="Đề thi đã xuất bản ở trạng thái cố định, không thể chỉnh sửa trực tiếp"
+                              >
+                                <Lock className="w-3.5 h-3.5 text-slate-400" /> Đã Xuất Bản
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenResultsModal(t)}
+                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm active:translate-y-0.5 transition-all"
+                                title="Xem danh sách kết quả bài làm và chấm bài tự luận"
+                              >
+                                <FileText className="w-3.5 h-3.5" /> Xem Kết Quả
+                              </button>
+                            </>
                           ) : (
                             <button
                               onClick={() => handleOpenEditModal(t)}
@@ -468,6 +488,21 @@ export const ExamManagementTab = ({
           classes={classes}
           role={role}
           onAssigned={() => fetchTests()}
+        />
+      )}
+
+      {/* MODAL XEM KẾT QUẢ & CHẤM BÀI */}
+      {isResultsModalOpen && examForResults && (
+        <ExamResultsModal
+          isOpen={isResultsModalOpen}
+          onClose={(msg) => {
+            setIsResultsModalOpen(false);
+            setExamForResults(null);
+            if (msg) showToast(msg);
+          }}
+          exam={examForResults}
+          classes={classes}
+          role={role}
         />
       )}
     </div>
