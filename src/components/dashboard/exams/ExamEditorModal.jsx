@@ -28,8 +28,18 @@ import {
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { deleteSingleChoiceOption } from './examOptionUtils.js';
 import { QuestionBankPickerModal } from './QuestionBankPickerModal.jsx';
+import {
+  isUntouchedDemoQuestion,
+  buildSaveDraftQuestionsPayload,
+  validateDraftQuestions,
+} from './examDraftUtils.js';
 
-export { deleteSingleChoiceOption };
+export {
+  deleteSingleChoiceOption,
+  isUntouchedDemoQuestion,
+  buildSaveDraftQuestionsPayload,
+  validateDraftQuestions,
+};
 
 function generateUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -104,6 +114,7 @@ export const ExamEditorModal = ({
 
   // Question Bank Picker Modal State
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [initializingDraft, setInitializingDraft] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
   const showToast = (msg) => {
@@ -285,6 +296,8 @@ export const ExamEditorModal = ({
               points: Number(q.points) || 1,
               options_json: normalizedOptions,
               answer_key: normalizedAnswerKey,
+              source_question_bank_item_id: q.source_question_bank_item_id || null,
+              source_question_bank_version_id: q.source_question_bank_version_id || null,
             };
           })
         );
@@ -345,6 +358,94 @@ export const ExamEditorModal = ({
     setQuestions([...questions, newQ]);
   };
 
+  // Mở Question Bank Picker: đảm bảo đã lưu toàn bộ bản nháp hiện tại lên cơ sở dữ liệu trước khi chọn câu hỏi
+  const handleOpenQuestionBankPicker = async () => {
+    if (examToEdit?.active_version?.status === 'published') return;
+    if (Boolean(examToEdit) && detailLoadStatus !== 'ready') return;
+
+    setErrorMsg('');
+
+    // 1. Xác định danh sách câu hỏi cần lưu:
+    // - Nếu chỉ có câu hỏi demo mặc định chưa sửa (1 + 1 = ?): lưu [] để QB import thay thế sạch sẽ
+    // - Nếu giáo viên đã sửa câu demo hoặc thêm câu hỏi thủ công: xác thực câu hỏi thủ công trước khi lưu
+    const isUntouchedDemo = isUntouchedDemoQuestion(questions, !examToEdit);
+    const questionsToPersist = isUntouchedDemo ? [] : questions;
+
+    // 2. Kiểm tra tính hợp lệ của câu hỏi thủ công (Fail-closed)
+    if (questionsToPersist.length > 0) {
+      const valResult = validateDraftQuestions(questionsToPersist);
+      if (!valResult.valid) {
+        setErrorMsg(valResult.message || 'Vui lòng hoàn thiện nội dung câu hỏi trước khi mở Ngân hàng câu hỏi.');
+        setActiveTab('questions');
+        return;
+      }
+    }
+
+    setInitializingDraft(true);
+    try {
+      const client = createExamManagementClient();
+      let currentVerId = versionId;
+      let currentExamId = examId;
+
+      // 3. Nếu là đề mới chưa có container trên DB: gọi createTest trước
+      if (!currentExamId || !currentVerId) {
+        const createRes = await client.createTest({
+          title: title.trim() || 'Đề thi mới',
+          subject: subject.trim() || 'Toán',
+          grade_level: Number(gradeLevel) || 1,
+          description: description?.trim() || null,
+        });
+
+        if (!createRes.ok || !createRes.data) {
+          setErrorMsg(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
+          return;
+        }
+
+        currentExamId = createRes.data.exam_id;
+        currentVerId = createRes.data.version_id;
+        setExamId(currentExamId);
+        setVersionId(currentVerId);
+        setVersionNumber(createRes.data.version_number || 1);
+        setVersionStatus('draft');
+      }
+
+      // 4. Gọi saveDraft lưu đầy đủ metadata & câu hỏi hiện tại lên DB
+      const savePayload = {
+        version_id: currentVerId,
+        title: title.trim() || 'Đề thi mới',
+        subject: subject.trim() || 'Toán',
+        grade_level: Number(gradeLevel) || 1,
+        description: description?.trim() || null,
+        duration_minutes: durationMinutes ? Number(durationMinutes) : null,
+        starts_at: startsAt ? new Date(startsAt).toISOString() : null,
+        last_start_at: lastStartAt ? new Date(lastStartAt).toISOString() : null,
+        due_date: dueDate ? new Date(dueDate).toISOString() : null,
+        max_attempts: Number(maxAttempts) || 1,
+        reward_stars: Number(rewardStars) || 0,
+        shuffle_questions: Boolean(shuffleQuestions),
+        shuffle_options: Boolean(shuffleOptions),
+        tab_switch_policy: tabSwitchPolicy,
+        show_score_after_submit: Boolean(showScoreAfterSubmit),
+        show_correct_answers: Boolean(showCorrectAnswers),
+        questions: buildSaveDraftQuestionsPayload(questionsToPersist),
+      };
+
+      const saveRes = await client.saveDraft(savePayload);
+      if (!saveRes.ok) {
+        setErrorMsg(saveRes.error?.message || 'Không thể đồng bộ bản nháp lên máy chủ trước khi mở Ngân hàng câu hỏi.');
+        return;
+      }
+
+      // 5. Chỉ khi lưu bản nháp thành công mới mở QuestionBankPickerModal
+      setIsPickerOpen(true);
+    } catch (err) {
+      console.error('[ExamEditorModal] Lỗi khởi tạo & lưu bản nháp khi mở QB picker:', err);
+      setErrorMsg(err?.message || 'Có lỗi xảy ra khi chuẩn bị bản nháp đề thi.');
+    } finally {
+      setInitializingDraft(false);
+    }
+  };
+
   // Nhập danh sách câu hỏi từ Question Bank Picker
   const handleImportFromQuestionBank = async (selectedItemIds, selectedItems) => {
     if (!Array.isArray(selectedItemIds) || selectedItemIds.length === 0) return;
@@ -358,24 +459,8 @@ export const ExamEditorModal = ({
       let currentVerId = versionId;
       let currentExamId = examId;
 
-      // Nếu chưa có exam_id hoặc version_id trên DB (soạn mới từ đầu): gọi createTest để tạo draft container
       if (!currentExamId || !currentVerId) {
-        const createRes = await client.createTest({
-          title: title.trim() || 'Đề thi mới',
-          subject: subject.trim() || 'Toán',
-          grade_level: Number(gradeLevel) || 1,
-          description: description.trim() || null,
-        });
-
-        if (!createRes.ok || !createRes.data) {
-          throw new Error(createRes.error?.message || 'Không thể khởi tạo bản nháp đề thi.');
-        }
-
-        currentExamId = createRes.data.exam_id;
-        currentVerId = createRes.data.version_id;
-        setExamId(currentExamId);
-        setVersionId(currentVerId);
-        setVersionStatus('draft');
+        throw new Error('Bản nháp đề thi chưa được khởi tạo.');
       }
 
       // Gọi endpoint BFF nhập câu hỏi và lưu Snapshot an toàn trên server
@@ -552,61 +637,12 @@ export const ExamEditorModal = ({
       return;
     }
 
-    // Kiểm tra câu hỏi
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (!q.prompt?.trim()) {
-        setErrorMsg(`Vui lòng nhập nội dung câu hỏi số ${i + 1}.`);
-        setActiveTab('questions');
-        return;
-      }
-      if (q.question_type === 'single_choice') {
-        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
-          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm 1 đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
-          setActiveTab('questions');
-          return;
-        }
-        for (let oi = 0; oi < q.options_json.length; oi++) {
-          const opt = q.options_json[oi];
-          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
-          if (!optText || !optText.trim()) {
-            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
-            setActiveTab('questions');
-            return;
-          }
-        }
-        if (!q.answer_key || !q.answer_key.correct_answer) {
-          setErrorMsg(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
-          setActiveTab('questions');
-          return;
-        }
-      } else if (q.question_type === 'multiple_choice') {
-        if (!Array.isArray(q.options_json) || q.options_json.length < 2) {
-          setErrorMsg(`Câu hỏi số ${i + 1} (Trắc nghiệm nhiều đáp án) phải có ít nhất 2 lựa chọn đáp án.`);
-          setActiveTab('questions');
-          return;
-        }
-        for (let oi = 0; oi < q.options_json.length; oi++) {
-          const opt = q.options_json[oi];
-          const optText = typeof opt === 'object' && opt !== null ? opt.text : String(opt ?? '');
-          if (!optText || !optText.trim()) {
-            setErrorMsg(`Vui lòng nhập nội dung cho lựa chọn ${oi + 1} của câu hỏi số ${i + 1}.`);
-            setActiveTab('questions');
-            return;
-          }
-        }
-        if (!q.answer_key || !Array.isArray(q.answer_key.correct_answer) || q.answer_key.correct_answer.length === 0) {
-          setErrorMsg(`Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi số ${i + 1}.`);
-          setActiveTab('questions');
-          return;
-        }
-      } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-        if (!q.answer_key || q.answer_key.correct_answer === undefined || q.answer_key.correct_answer === '') {
-          setErrorMsg(`Vui lòng cấu hình đáp án đúng cho câu hỏi số ${i + 1} (${QUESTION_TYPE_LABELS[q.question_type]}).`);
-          setActiveTab('questions');
-          return;
-        }
-      }
+    // Kiểm tra câu hỏi bằng Shared Pure Validator
+    const questionsValidation = validateDraftQuestions(questions);
+    if (!questionsValidation.valid) {
+      setErrorMsg(questionsValidation.message);
+      setActiveTab('questions');
+      return;
     }
 
     // Kiểm tra lịch thi
@@ -665,45 +701,7 @@ export const ExamEditorModal = ({
         shuffle_options: Boolean(shuffleOptions),
         tab_switch_policy: tabSwitchPolicy,
         show_score_after_submit: Boolean(showScoreAfterSubmit),
-        show_correct_answers: Boolean(showCorrectAnswers),
-        questions: questions.map((q, idx) => {
-          let canonicalOptions = [];
-          if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
-            canonicalOptions = (Array.isArray(q.options_json) ? q.options_json : []).map((opt, oIdx) => {
-              if (typeof opt === 'object' && opt !== null && opt.key) {
-                return { key: String(opt.key).trim(), text: String(opt.text ?? '').trim() };
-              }
-              return { key: String.fromCharCode(65 + oIdx), text: String(opt ?? '').trim() };
-            });
-          }
-
-          let answerKey = null;
-          if (q.question_type === 'single_choice') {
-            answerKey = {
-              correct_answer: String(q.answer_key?.correct_answer || canonicalOptions[0]?.key || 'A').trim(),
-            };
-          } else if (q.question_type === 'multiple_choice') {
-            const rawAns = q.answer_key?.correct_answer;
-            const ansArray = Array.isArray(rawAns) ? rawAns : [String(rawAns || 'A')];
-            answerKey = {
-              correct_answer: ansArray.map((a) => String(a).trim()),
-            };
-          } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-            answerKey = {
-              correct_answer: String(q.answer_key?.correct_answer || '').trim(),
-            };
-          }
-
-          return {
-            id: q.id || generateUuid(),
-            question_number: idx + 1,
-            question_type: q.question_type,
-            prompt: q.prompt.trim(),
-            points: Number(q.points) || 1,
-            options_json: canonicalOptions,
-            answer_key: answerKey,
-          };
-        }),
+        questions: buildSaveDraftQuestionsPayload(questions),
       };
 
       const saveRes = await client.saveDraft(savePayload);
@@ -1041,13 +1039,13 @@ export const ExamEditorModal = ({
                     <div className="flex items-center gap-2 flex-wrap justify-end">
                       <button
                         type="button"
-                        onClick={() => setIsPickerOpen(true)}
-                        disabled={Boolean(examToEdit) && detailLoadStatus !== 'ready'}
+                        onClick={handleOpenQuestionBankPicker}
+                        disabled={initializingDraft || loading || fetchingDetail || (Boolean(examToEdit) && detailLoadStatus !== 'ready')}
                         className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                         title="Chọn và lấy câu hỏi từ Ngân hàng câu hỏi"
                       >
-                        <Layers className="w-3.5 h-3.5 text-indigo-200" />
-                        <span>Lấy từ Ngân hàng</span>
+                        {initializingDraft ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5 text-indigo-200" />}
+                        <span>{initializingDraft ? 'Đang khởi tạo...' : 'Lấy từ Ngân hàng'}</span>
                       </button>
                       <button
                         type="button"
