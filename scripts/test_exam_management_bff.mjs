@@ -460,9 +460,9 @@ async function handleManagementRequestRunner(req, deps) {
       return {
         id: t.id,
         author_id: t.author_id,
-        title: t.title,
-        subject: t.subject,
-        grade_level: t.grade_level,
+        title: activeVersion?.title || t.title,
+        subject: activeVersion?.subject || t.subject,
+        grade_level: activeVersion?.grade_level || t.grade_level,
         status: t.status,
         current_version_id: t.current_version_id,
         created_at: t.created_at,
@@ -542,10 +542,12 @@ async function handleManagementRequestRunner(req, deps) {
     const valResult = validateCreateTestPayload(rawBody);
     if (!valResult.valid) return createErrorResponse(400, valResult.errorCode, valResult.errorMessage);
 
+    const examId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '99999999-9999-4999-a999-000000000001';
+    const versionId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '99999999-9999-4999-a999-000000000002';
     const rpcRes = await examClient.rpc('rpc_exam_create_test', {
       p_caller_id: callerId,
-      p_exam_id: 'auto-exam-id',
-      p_version_id: 'auto-version-id',
+      p_exam_id: examId,
+      p_version_id: versionId,
       p_title: valResult.data.title,
       p_subject: valResult.data.subject,
       p_grade_level: valResult.data.grade_level,
@@ -867,10 +869,36 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
     },
     rpc: async (name, args) => {
       if (name === 'rpc_exam_create_test') {
+        const examId = args.p_exam_id || '99999999-9999-4999-a999-000000000001';
+        const verId = args.p_version_id || '99999999-9999-4999-a999-000000000002';
+        const newTest = {
+          id: examId,
+          author_id: args.p_caller_id,
+          title: args.p_title,
+          subject: args.p_subject,
+          grade_level: args.p_grade_level,
+          status: 'active',
+          current_version_id: verId,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const newVer = {
+          id: verId,
+          exam_id: examId,
+          version_number: 1,
+          title: args.p_title,
+          subject: args.p_subject,
+          grade_level: args.p_grade_level,
+          description: args.p_description || null,
+          duration_minutes: 45,
+          status: 'draft',
+        };
+        examsDb.set(examId, newTest);
+        versionsDb.set(verId, newVer);
         return {
           data: {
-            exam_id: args.p_exam_id,
-            version_id: args.p_version_id,
+            exam_id: examId,
+            version_id: verId,
             version_number: 1,
             status: 'draft',
             idempotent_replay: false,
@@ -919,6 +947,9 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
         if (v.status !== 'draft') {
           return { data: null, error: { message: 'ERR_VERSION_IMMUTABLE' } };
         }
+        if (args.p_title) v.title = args.p_title;
+        if (args.p_subject) v.subject = args.p_subject;
+        if (args.p_grade_level) v.grade_level = args.p_grade_level;
         return {
           data: {
             version_id: args.p_version_id,
@@ -975,10 +1006,17 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
   };
 }
 
-async function runRequest(action, method = 'GET', body = null, callerId = TEACHER_1_ID) {
-  const env = createMockEnvironment(callerId);
-  const url = `https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/exam-management-api/${action}`;
-  const req = new Request(url, {
+async function runRequest(action, method = 'GET', body = null, callerId = TEACHER_1_ID, queryParams = null, customEnv = null) {
+  const env = customEnv || createMockEnvironment(callerId);
+  const urlObj = new URL(`https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/exam-management-api/${action}`);
+  if (queryParams && typeof queryParams === 'object') {
+    Object.entries(queryParams).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) {
+        urlObj.searchParams.set(k, String(v));
+      }
+    });
+  }
+  const req = new Request(urlObj.toString(), {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -1767,6 +1805,99 @@ async function runAllManagementTests() {
     assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
   });
 
+  await test('53. [REGRESSION] Draft title persistence flow: rename to TEST-DRAFT-TITLE-01, save draft, and verify list/detail persistence', async () => {
+    const env = createMockEnvironment(TEACHER_1_ID);
+
+    // 1. Create a fresh draft exam with initial title = "Đề thi mới"
+    const initialTitle = 'Đề thi mới';
+    const { status: createStatus, json: createJson } = await runRequest('create-test', 'POST', {
+      title: initialTitle,
+      subject: 'Toán',
+      grade_level: 1,
+      description: 'Mô tả nháp ban đầu',
+    }, TEACHER_1_ID, null, env);
+
+    assert.equal(createStatus, 201);
+    assert.equal(createJson.success, true);
+    const newExamId = createJson.data.exam_id;
+    const newVersionId = createJson.data.version_id;
+    assert.ok(newExamId && newVersionId, 'create-test must return exam_id and version_id');
+
+    // 2. Verify list-tests contains initial title
+    const { status: listStatus1, json: listJson1 } = await runRequest('list-tests', 'GET', null, TEACHER_1_ID, null, env);
+    assert.equal(listStatus1, 200);
+    const initialExam = listJson1.data.tests.find((t) => t.id === newExamId);
+    assert.ok(initialExam, 'Newly created exam must appear in list-tests');
+    assert.equal(initialExam.title, initialTitle);
+    assert.equal(initialExam.active_version.title, initialTitle);
+
+    // 3. Perform Save Draft with new Title = "TEST-DRAFT-TITLE-01"
+    const updatedTitle = 'TEST-DRAFT-TITLE-01';
+    const { status: saveStatus, json: saveJson } = await runRequest('save-draft', 'POST', {
+      version_id: newVersionId,
+      title: updatedTitle,
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999991',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '1' },
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID, null, env);
+
+    assert.equal(saveStatus, 200);
+    assert.equal(saveJson.data.status, 'draft');
+
+    // 4. Verify list-tests endpoint returns new title
+    const { status: listStatus2, json: listJson2 } = await runRequest('list-tests', 'GET', null, TEACHER_1_ID, null, env);
+    assert.equal(listStatus2, 200);
+    const updatedExam = listJson2.data.tests.find((t) => t.id === newExamId);
+    assert.ok(updatedExam, 'Updated exam must exist');
+    assert.equal(updatedExam.title, updatedTitle);
+    assert.equal(updatedExam.active_version.title, updatedTitle);
+
+    // 5. Verify get-test-detail endpoint returns new title in version
+    const { status: detailStatus, json: detailJson } = await runRequest('get-test-detail', 'GET', null, TEACHER_1_ID, {
+      exam_id: newExamId,
+      version_id: newVersionId,
+    }, env);
+    assert.equal(detailStatus, 200);
+    assert.equal(detailJson.data.version.title, updatedTitle);
+  });
+
+  await test('54. [CONTRACT] ExamEditorModal prioritizes active_version.title and synchronizes setTitle(v.title) upon getTestDetail', () => {
+    const modalPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamEditorModal.jsx');
+    const code = fs.readFileSync(modalPath, 'utf8');
+
+    // Invariant 1: initExistingExam prioritizes active_version.title
+    assert.equal(code.includes("setTitle(activeV?.title || exam.title || '')"), true);
+    assert.equal(code.includes("setSubject(activeV?.subject || exam.subject || 'Toán')"), true);
+    assert.equal(code.includes("setGradeLevel(activeV?.grade_level || exam.grade_level || 1)"), true);
+
+    // Invariant 2: getTestDetail success updates setTitle from v.title
+    assert.equal(code.includes("setTitle(v.title || t?.title || exam.title || '')"), true);
+    assert.equal(code.includes("setSubject(v.subject || t?.subject || exam.subject || 'Toán')"), true);
+    assert.equal(code.includes("setGradeLevel(v.grade_level || t?.grade_level || exam.grade_level || 1)"), true);
+  });
+
+  await test('55. [CONTRACT] Real handler.ts maps activeVersion.title/subject/grade_level in list-tests', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+
+    assert.equal(code.includes('title: activeVersion?.title || t.title'), true);
+    assert.equal(code.includes('subject: activeVersion?.subject || t.subject'), true);
+    assert.equal(code.includes('grade_level: activeVersion?.grade_level || t.grade_level'), true);
+  });
+
   console.log('\n======================================================================');
   console.log(`TOTAL MANAGEMENT TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('======================================================================\n');
@@ -1777,3 +1908,4 @@ async function runAllManagementTests() {
 }
 
 runAllManagementTests();
+

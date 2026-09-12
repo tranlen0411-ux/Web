@@ -196,11 +196,12 @@ export const ExamEditorModal = ({
   const initExistingExam = async (exam) => {
     setDetailLoadStatus('loading');
     setExamId(exam.id);
-    setTitle(exam.title || '');
-    setSubject(exam.subject || 'Toán');
-    setGradeLevel(exam.grade_level || 1);
 
     const activeV = exam.active_version;
+    setTitle(activeV?.title || exam.title || '');
+    setSubject(activeV?.subject || exam.subject || 'Toán');
+    setGradeLevel(activeV?.grade_level || exam.grade_level || 1);
+
     if (activeV) {
       setVersionId(activeV.id);
       setVersionNumber(activeV.version_number || 1);
@@ -231,10 +232,14 @@ export const ExamEditorModal = ({
       }
 
       const v = res.data.version;
+      const t = res.data.test;
       if (v) {
         setVersionId(v.id);
         setVersionNumber(v.version_number || 1);
         setVersionStatus(v.status || 'draft');
+        setTitle(v.title || t?.title || exam.title || '');
+        setSubject(v.subject || t?.subject || exam.subject || 'Toán');
+        setGradeLevel(v.grade_level || t?.grade_level || exam.grade_level || 1);
         setDescription(v.description || '');
         setDurationMinutes(v.duration_minutes || 45);
         setStartsAt(formatDateTimeLocal(v.starts_at));
@@ -247,6 +252,10 @@ export const ExamEditorModal = ({
         setTabSwitchPolicy(v.tab_switch_policy || 'WARN_AND_LOG');
         setShowScoreAfterSubmit(v.show_score_after_submit !== undefined ? Boolean(v.show_score_after_submit) : true);
         setShowCorrectAnswers(Boolean(v.show_correct_answers));
+      } else if (t) {
+        if (t.title) setTitle(t.title);
+        if (t.subject) setSubject(t.subject);
+        if (t.grade_level) setGradeLevel(t.grade_level);
       }
 
       const rawQuestions = res.data.questions || [];
