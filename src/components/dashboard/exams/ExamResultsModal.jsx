@@ -154,7 +154,7 @@ export const ExamResultsModal = ({
 
   return (
     <div className="fixed inset-0 z-[9990] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-      <div className="bg-white w-[96vw] md:w-[92vw] max-w-6xl h-[90vh] max-h-[90vh] rounded-3xl border-4 border-indigo-400 shadow-2xl p-4 sm:p-6 flex flex-col overflow-hidden animate-fadeIn">
+      <div className="bg-white w-[96vw] md:w-[92vw] max-w-6xl max-h-[calc(100vh-1rem)] sm:max-h-[calc(100vh-2rem)] md:max-h-[90vh] h-[92vh] sm:h-[90vh] my-auto rounded-3xl border-4 border-indigo-400 shadow-2xl p-4 sm:p-6 flex flex-col overflow-hidden animate-fadeIn shrink-0">
         {/* TOAST NOTIFICATION */}
         {toastMsg && (
           <div className="fixed bottom-6 right-6 z-[10001] p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
@@ -286,7 +286,7 @@ export const ExamResultsModal = ({
         </div>
 
         {/* ATTEMPTS TABLE */}
-        <div className="flex-1 overflow-y-auto mt-3 rounded-2xl border-2 border-slate-200 overflow-hidden shadow-inner bg-white">
+        <div className="flex-1 min-h-0 overflow-y-auto mt-3 rounded-2xl border-2 border-slate-200 shadow-inner bg-white">
           {loading ? (
             <div className="text-center py-16">
               <RefreshCw className="w-8 h-8 animate-spin text-indigo-500 mx-auto mb-2" />
