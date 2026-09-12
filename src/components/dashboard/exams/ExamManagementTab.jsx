@@ -136,18 +136,22 @@ export const ExamManagementTab = ({
   };
 
   const filteredTests = tests.filter((t) => {
+    const effectiveTitle = t.active_version?.title || t.title || '';
+    const effectiveSubject = t.active_version?.subject || t.subject || '';
+    const effectiveGrade = t.active_version?.grade_level || t.grade_level;
+
     const matchesSearch =
-      t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      effectiveTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      effectiveSubject.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (t.author_name && t.author_name.toLowerCase().includes(searchTerm.toLowerCase()));
 
     if (!matchesSearch) return false;
 
-    if (selectedSubject !== 'ALL' && t.subject !== selectedSubject) {
+    if (selectedSubject !== 'ALL' && effectiveSubject !== selectedSubject) {
       return false;
     }
 
-    if (selectedGrade !== 'ALL' && String(t.grade_level) !== String(selectedGrade)) {
+    if (selectedGrade !== 'ALL' && String(effectiveGrade) !== String(selectedGrade)) {
       return false;
     }
 
@@ -327,7 +331,7 @@ export const ExamManagementTab = ({
                     <tr key={t.id} className="hover:bg-indigo-50/30 transition-colors">
                       {/* TÊN ĐỀ THI */}
                       <td className="p-4 max-w-xs">
-                        <div className="font-black text-slate-900 text-sm">{t.title}</div>
+                        <div className="font-black text-slate-900 text-sm">{activeV?.title || t.title}</div>
                         {activeV?.total_points !== undefined && (
                           <span className="text-[11px] font-bold text-slate-400">
                             Thang điểm: {Number(activeV.total_points).toFixed(2)} đ
@@ -339,10 +343,10 @@ export const ExamManagementTab = ({
                       <td className="p-4">
                         <div className="flex items-center gap-1.5">
                           <span className="px-2 py-0.5 bg-indigo-50 text-indigo-800 rounded-lg text-xs font-black border border-indigo-200">
-                            {t.subject}
+                            {activeV?.subject || t.subject}
                           </span>
                           <span className="px-2 py-0.5 bg-amber-50 text-amber-800 rounded-lg text-xs font-black border border-amber-200">
-                            Khối {t.grade_level}
+                            Khối {activeV?.grade_level || t.grade_level}
                           </span>
                         </div>
                       </td>
