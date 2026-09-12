@@ -13,6 +13,7 @@ import { ExercisePlayModal } from './ExercisePlayModal';
 import { SubmissionGradingModal } from './SubmissionGradingModal';
 import { SaveExerciseQuestionsModal } from '../question-bank/SaveExerciseQuestionsModal';
 import { ExamTakingModal } from '../exams/ExamTakingModal';
+import { StudentExamResultModal } from '../exams/StudentExamResultModal';
 import { createExamStudentClient } from '../../../services/examStudentClient';
 
 export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
@@ -34,6 +35,8 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const [examAssignmentsError, setExamAssignmentsError] = useState(null);
   const [selectedExamAssignmentId, setSelectedExamAssignmentId] = useState(null);
   const [isExamTakingOpen, setIsExamTakingOpen] = useState(false);
+  const [selectedResultAttemptId, setSelectedResultAttemptId] = useState(null);
+  const [isResultModalOpen, setIsResultModalOpen] = useState(false);
 
   // Modal Nâng Cao
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -102,6 +105,17 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
     setIsExamTakingOpen(false);
     setSelectedExamAssignmentId(null);
     fetchExamAssignments();
+  };
+
+  const handleOpenExamResult = (attemptId) => {
+    if (!attemptId) return;
+    setSelectedResultAttemptId(attemptId);
+    setIsResultModalOpen(true);
+  };
+
+  const handleCloseExamResult = () => {
+    setIsResultModalOpen(false);
+    setSelectedResultAttemptId(null);
   };
 
   const fetchData = async () => {
@@ -495,26 +509,20 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                           <span className="text-xs font-black flex items-center gap-1">
                             <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Đã chấm • Điểm: {asg.latest_score !== null ? asg.latest_score : '-'}/{asg.max_score || asg.total_points}
                           </span>
-                          <span className="px-3 py-1 bg-emerald-100 text-emerald-800 font-black text-xs rounded-xl border border-emerald-300">
-                            Đã chấm
-                          </span>
+                          <button
+                            onClick={() => handleOpenExamResult(asg.attempt_id)}
+                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-sm transition-all active:translate-y-0.5"
+                          >
+                            Xem Kết Quả
+                          </button>
                         </div>
-                      ) : isPendingManual ? (
+                      ) : (isPendingManual || isSubmitted) ? (
                         <div className="w-full flex items-center justify-between bg-amber-50 p-2.5 rounded-2xl border border-amber-200 text-amber-900">
                           <span className="text-xs font-bold flex items-center gap-1">
-                            <Clock className="w-4 h-4 text-amber-600" /> Chờ chấm
+                            <Clock className="w-4 h-4 text-amber-600" /> Đã nộp • Chờ chấm
                           </span>
                           <span className="px-3 py-1 bg-amber-100 text-amber-800 font-black text-xs rounded-xl border border-amber-300">
                             Chờ chấm
-                          </span>
-                        </div>
-                      ) : isSubmitted ? (
-                        <div className="w-full flex items-center justify-between bg-sky-50 p-2.5 rounded-2xl border border-sky-200 text-sky-900">
-                          <span className="text-xs font-bold flex items-center gap-1">
-                            <CheckCircle2 className="w-4 h-4 text-sky-600" /> Đã nộp
-                          </span>
-                          <span className="px-3 py-1 bg-sky-100 text-sky-800 font-black text-xs rounded-xl border border-sky-300">
-                            Đã nộp
                           </span>
                         </div>
                       ) : isDraftExpired ? (
@@ -923,6 +931,15 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
           assignmentId={selectedExamAssignmentId}
           onClose={handleCloseExamTakingModal}
           onFinished={handleExamTakingFinished}
+        />
+      )}
+
+      {/* MODAL XEM KẾT QUẢ BÀI THI (EXAM BUILDER V1 - DÀNH CHO HỌC SINH) */}
+      {role === 'student' && (
+        <StudentExamResultModal
+          isOpen={isResultModalOpen && !!selectedResultAttemptId}
+          attemptId={selectedResultAttemptId}
+          onClose={handleCloseExamResult}
         />
       )}
 

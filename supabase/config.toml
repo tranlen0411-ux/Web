@@ -57,3 +57,7 @@ verify_jwt = false
 
 [functions.exam-management-api]
 verify_jwt = false
+
+[functions.exam-get-student-attempt-result]
+verify_jwt = false
+
