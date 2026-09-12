@@ -129,13 +129,59 @@ export const ExamGradingModal = ({
     }));
   };
 
+  const isAlreadyGraded = attemptData?.status === 'graded';
+
   const handleSaveGrading = async () => {
     if (!attemptData) return;
     setErrorMsg('');
     setSuccessMsg('');
 
-    // Client-side Validation cho từng câu tự luận
     const manualQuestions = questions.filter((q) => q.is_manual);
+
+    // FLOW 1: Bài thi đã chốt điểm (status === 'graded') -> Chỉ cập nhật nhận xét (Điểm số bất biến)
+    if (isAlreadyGraded) {
+      setIsSubmitting(true);
+      triggerSound?.('click');
+
+      try {
+        const client = createExamManagementClient();
+        const payload = {
+          attempt_id: attemptData.id,
+          expected_version: attemptData.version,
+          teacher_feedback: overallFeedback.trim() || null,
+          question_comments: manualQuestions.map((q) => ({
+            exam_question_id: q.exam_question_id,
+            teacher_comment: manualGrades[q.exam_question_id]?.teacher_comment?.trim() || null,
+          })),
+        };
+
+        const res = await client.updateGradedFeedback(payload);
+
+        if (res.ok && res.data) {
+          setSuccessMsg('Đã lưu nhận xét thành công.');
+          triggerSound?.('success');
+
+          setAttemptData((prev) => ({
+            ...prev,
+            teacher_feedback: res.data.teacher_feedback,
+            version: res.data.version,
+          }));
+
+          onGraded?.(res.data);
+        } else {
+          setErrorMsg(res.error?.message || 'Lỗi khi lưu nhận xét bài thi.');
+          triggerSound?.('error');
+        }
+      } catch (err) {
+        setErrorMsg(err?.message || 'Lỗi hệ thống khi gửi yêu cầu lưu nhận xét.');
+        triggerSound?.('error');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    // FLOW 2: Bài thi chưa chốt điểm (status === 'pending_manual_grade') -> Chấm điểm thủ công
     const validatedGrades = [];
 
     for (const q of manualQuestions) {
@@ -216,6 +262,7 @@ export const ExamGradingModal = ({
       setIsSubmitting(false);
     }
   };
+
 
   const formatDateTime = (isoStr) => {
     if (!isoStr) return '---';
@@ -391,9 +438,15 @@ export const ExamGradingModal = ({
                           {getQuestionTypeLabel(q.question_type)}
                         </span>
                         {isManual ? (
-                          <span className="px-2 py-0.5 bg-amber-100 text-amber-900 font-black text-[11px] rounded-lg border border-amber-300 flex items-center gap-1">
-                            <Sparkles className="w-3 h-3 text-amber-600" /> Tự luận - Cần chấm thủ công
-                          </span>
+                          isAlreadyGraded ? (
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 font-black text-[11px] rounded-lg border border-emerald-300 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Tự luận - Đã chốt điểm (Khóa điểm)
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-amber-100 text-amber-900 font-black text-[11px] rounded-lg border border-amber-300 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 text-amber-600" /> Tự luận - Cần chấm thủ công
+                            </span>
+                          )
                         ) : (
                           <span className="px-2 py-0.5 bg-sky-100 text-sky-900 font-black text-[11px] rounded-lg border border-sky-300 flex items-center gap-1">
                             <Lock className="w-3 h-3 text-sky-600" /> Trắc nghiệm tự động (Khóa)
@@ -471,7 +524,7 @@ export const ExamGradingModal = ({
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2">
                             <label className="text-xs font-black text-amber-950">
-                              Điểm chấm thủ công:
+                              {isAlreadyGraded ? 'Điểm đã chốt (Khóa):' : 'Điểm chấm thủ công:'}
                             </label>
                             <div className="relative">
                               <input
@@ -479,14 +532,17 @@ export const ExamGradingModal = ({
                                 min="0"
                                 max={q.points_possible}
                                 step="any"
+                                disabled={isAlreadyGraded}
                                 value={manualGrade.points_earned ?? ''}
                                 onChange={(e) =>
                                   handleScoreChange(q.exam_question_id, q.points_possible, e.target.value)
                                 }
-                                className={`w-28 px-3 py-1.5 bg-white border-2 rounded-xl text-xs font-black text-slate-900 focus:outline-none ${
-                                  hasExceeded
-                                    ? 'border-rose-500 text-rose-700 bg-rose-50'
-                                    : 'border-amber-400 focus:border-indigo-600'
+                                className={`w-28 px-3 py-1.5 border-2 rounded-xl text-xs font-black focus:outline-none ${
+                                  isAlreadyGraded
+                                    ? 'bg-slate-100 text-slate-600 border-slate-300 cursor-not-allowed'
+                                    : hasExceeded
+                                      ? 'bg-rose-50 border-rose-500 text-rose-700'
+                                      : 'bg-white border-amber-400 text-slate-900 focus:border-indigo-600'
                                 }`}
                               />
                               <span className="ml-2 text-xs font-black text-slate-500">
@@ -495,7 +551,7 @@ export const ExamGradingModal = ({
                             </div>
                           </div>
 
-                          {hasExceeded && (
+                          {hasExceeded && !isAlreadyGraded && (
                             <span className="text-[11px] font-black text-rose-600">
                               ⚠️ Điểm phải từ 0 đến {q.points_possible} đ
                             </span>
@@ -568,7 +624,7 @@ export const ExamGradingModal = ({
         {/* MODAL FOOTER */}
         <div className="pt-4 border-t-2 border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
           <div className="text-xs font-bold text-slate-500">
-            Tổng điểm cập nhật:{' '}
+            {isAlreadyGraded ? 'Tổng điểm đã chốt: ' : 'Tổng điểm cập nhật: '}
             <span className="font-black text-indigo-600 text-sm">
               {liveTotalScore.toFixed(2)} / {maxScore.toFixed(2)} đ
             </span>
@@ -586,15 +642,19 @@ export const ExamGradingModal = ({
             <button
               onClick={handleSaveGrading}
               disabled={isSubmitting || loading}
-              className="flex-1 sm:flex-initial px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black text-xs rounded-2xl shadow-lg border-b-4 border-amber-700 flex items-center justify-center gap-2 disabled:opacity-50 active:translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
+              className={`flex-1 sm:flex-initial px-6 py-2.5 text-white font-black text-xs rounded-2xl shadow-lg border-b-4 flex items-center justify-center gap-2 disabled:opacity-50 active:translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 ${
+                isAlreadyGraded
+                  ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 border-indigo-900 focus:ring-indigo-500'
+                  : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 border-amber-700 focus:ring-amber-500'
+              }`}
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Đang Lưu Điểm...
+                  <Loader2 className="w-4 h-4 animate-spin" /> {isAlreadyGraded ? 'Đang Lưu Nhận Xét...' : 'Đang Lưu Điểm...'}
                 </>
               ) : (
                 <>
-                  <Save className="w-4 h-4" /> Lưu Kết Quả Chấm Bài
+                  <Save className="w-4 h-4" /> {isAlreadyGraded ? 'Lưu Nhận Xét' : 'Lưu Kết Quả Chấm Bài'}
                 </>
               )}
             </button>
@@ -604,3 +664,4 @@ export const ExamGradingModal = ({
     </div>
   );
 };
+
