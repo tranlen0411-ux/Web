@@ -13,10 +13,14 @@ async function getDefaultSupabaseClient() {
 export const EXAM_MANAGEMENT_API_BASE_URL =
   'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/exam-management-api';
 
+export const EXAM_GRADE_MANUAL_BASE_URL =
+  'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/exam-grade-manual-attempt';
+
 export class ExamManagementClient {
   constructor(options = {}) {
     this.supabase = options.supabase || null;
     this.baseUrl = options.baseUrl || EXAM_MANAGEMENT_API_BASE_URL;
+    this.gradeManualUrl = options.gradeManualUrl || EXAM_GRADE_MANUAL_BASE_URL;
     this.invokeFunction = options.invokeFunction || null;
   }
 
@@ -166,8 +170,96 @@ export class ExamManagementClient {
   async createAssignment(payload) {
     return await this.dispatch('create-assignment', 'POST', payload);
   }
+
+  /**
+   * Tải danh sách lượt làm bài của đề thi/phiên bản (Admin hoặc Giáo viên có quyền)
+   */
+  async listExamAttempts({ examId, versionId, classId } = {}) {
+    return await this.dispatch('list-exam-attempts', 'GET', null, {
+      exam_id: examId,
+      version_id: versionId,
+      class_id: classId,
+    });
+  }
+
+  /**
+   * Tải chi tiết bài làm của một lượt thi để phục vụ chấm bài / xem chi tiết
+   */
+  async getAttemptDetail({ attemptId } = {}) {
+    return await this.dispatch('get-attempt-detail', 'GET', null, {
+      attempt_id: attemptId,
+    });
+  }
+
+  /**
+   * Chấm điểm thủ công bài thi tự luận thông qua Edge Function exam-grade-manual-attempt
+   */
+  async gradeManualAttempt(payload) {
+    try {
+      if (typeof this.invokeFunction === 'function') {
+        return await this.invokeFunction({
+          action: 'grade-manual-attempt',
+          method: 'POST',
+          payload,
+        });
+      }
+
+      const token = await this.getAccessToken();
+      const url = this.gradeManualUrl || EXAM_GRADE_MANUAL_BASE_URL;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      let jsonResult;
+      try {
+        jsonResult = await response.json();
+      } catch (_) {
+        return {
+          ok: false,
+          error: {
+            status: response.status,
+            errorCode: 'INVALID_JSON_RESPONSE',
+            message: 'Phản hồi từ máy chủ chấm điểm không phải là JSON hợp lệ.',
+          },
+        };
+      }
+
+      if (!response.ok || jsonResult?.success === false) {
+        return {
+          ok: false,
+          error: {
+            status: response.status,
+            errorCode: jsonResult?.error_code || 'REQUEST_FAILED',
+            message: jsonResult?.message || 'Chấm bài không thành công.',
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        data: jsonResult?.data,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          status: 0,
+          errorCode: 'NETWORK_ERROR',
+          message: err?.message || 'Không thể kết nối đến máy chủ chấm điểm.',
+        },
+      };
+    }
+  }
 }
 
 export function createExamManagementClient(options = {}) {
   return new ExamManagementClient(options);
 }
+
