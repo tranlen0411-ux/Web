@@ -389,13 +389,39 @@ export async function handleExamManagementRequest(
                 `Câu hỏi trắc nghiệm số ${q.question_number} không có đủ tối thiểu 2 phương án hợp lệ.`
               );
             }
+            const seenKeys = new Set<string>();
             for (let idx = 0; idx < q.options_json.length; idx++) {
               const opt = q.options_json[idx];
-              if (!opt || typeof opt !== 'object' || Array.isArray(opt) || typeof opt.key !== 'string' || !opt.key.trim()) {
+              if (!opt || typeof opt !== 'object' || Array.isArray(opt)) {
                 return createErrorResponse(
                   422,
                   'ERR_INVALID_OPTION_SCHEMA',
-                  `Câu hỏi trắc nghiệm số ${q.question_number} chứa phương án không đúng định dạng chuẩn {key, text}.`
+                  `Câu hỏi trắc nghiệm số ${q.question_number} chứa phương án không phải là đối tượng {key, text}.`
+                );
+              }
+              const optKey = typeof opt.key === 'string' ? opt.key.trim() : '';
+              if (!optKey) {
+                return createErrorResponse(
+                  422,
+                  'ERR_INVALID_OPTION_SCHEMA',
+                  `Câu hỏi trắc nghiệm số ${q.question_number} chứa phương án có key rỗng.`
+                );
+              }
+              if (seenKeys.has(optKey)) {
+                return createErrorResponse(
+                  422,
+                  'ERR_INVALID_OPTION_SCHEMA',
+                  `Câu hỏi trắc nghiệm số ${q.question_number} có key trùng lặp: '${optKey}'.`
+                );
+              }
+              seenKeys.add(optKey);
+
+              const optText = typeof opt.text === 'string' ? opt.text.trim() : '';
+              if (!optText) {
+                return createErrorResponse(
+                  422,
+                  'ERR_INVALID_OPTION_SCHEMA',
+                  `Câu hỏi trắc nghiệm số ${q.question_number} chứa phương án '${optKey}' có nội dung rỗng.`
                 );
               }
             }

@@ -16,6 +16,7 @@ import {
   createExamManagementClient,
   EXAM_MANAGEMENT_API_BASE_URL,
 } from '../src/services/examManagementClient.js';
+import { deleteSingleChoiceOption } from '../src/components/dashboard/exams/examOptionUtils.js';
 
 // ----------------------------------------------------------------------------
 // Local BFF Implementation Mirror (Pure Logic for Node ESM Execution)
@@ -234,10 +235,26 @@ function validateSaveDraftPayload(raw) {
         }
         seenOptionKeys.add(optKey);
 
-        const optText = typeof opt.text === 'string' ? opt.text : (opt.text !== undefined && opt.text !== null ? String(opt.text) : '');
+        if (typeof opt.text !== 'string') {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} phải là chuỗi văn bản (string).`,
+          };
+        }
+
+        const trimmedText = opt.text.trim();
+        if (!trimmedText) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} không được để trống hoặc chỉ chứa khoảng trắng.`,
+          };
+        }
+
         validatedOptionsJson.push({
           key: optKey,
-          text: optText,
+          text: trimmedText,
         });
       }
 
@@ -1618,6 +1635,136 @@ async function runAllManagementTests() {
     assert.equal(code.includes('ERR_INVALID_OPTION_SCHEMA'), true);
     assert.equal(code.includes('options_json'), true);
     assert.equal(code.includes('rpc_exam_publish_version'), true);
+  });
+
+  // 11. OPTION DELETION REMAPPING & EMPTY TEXT VALIDATION TESTS
+  await test('47. [REINDEX] Delete option BEFORE selected answer remaps correct key to old item content', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete A (index 0)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 0);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '2' },
+      { key: 'B', text: '3' },
+      { key: 'C', text: '4' },
+    ]);
+    assert.equal(result.correctKey, 'B'); // Old C ("3") is now B ("3")
+  });
+
+  await test('48. [REINDEX] Delete selected answer falls back safely to first remaining option', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete C (index 2)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 2);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '4' },
+    ]);
+    assert.equal(result.correctKey, 'A'); // Explicit safe fallback to first option
+  });
+
+  await test('49. [REINDEX] Delete option AFTER selected answer keeps correct answer mapping', () => {
+    const initialOptions = [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' }, // selected correct answer
+      { key: 'D', text: '4' },
+    ];
+    // Delete D (index 3)
+    const result = deleteSingleChoiceOption(initialOptions, 'C', 3);
+    assert.equal(result.options.length, 3);
+    assert.deepEqual(result.options, [
+      { key: 'A', text: '1' },
+      { key: 'B', text: '2' },
+      { key: 'C', text: '3' },
+    ]);
+    assert.equal(result.correctKey, 'C'); // Remains C ("3")
+  });
+
+  await test('50. [VALIDATION] Empty option text "" is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Empty Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-999999999999',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '' }, // empty text
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
+  });
+
+  await test('51. [VALIDATION] Whitespace-only option text "   " is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Whitespace Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-99999999999a',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: '   ' }, // whitespace only
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
+  });
+
+  await test('52. [VALIDATION] Non-string option text is REJECTED with 400 INVALID_OPTION_SCHEMA', async () => {
+    const { status, json } = await runRequest('save-draft', 'POST', {
+      version_id: VERSION_1_T1_DRAFT,
+      title: 'Đề Test Non-String Text',
+      subject: 'Toán',
+      grade_level: 1,
+      questions: [
+        {
+          id: '99999999-9999-4999-a999-99999999999b',
+          question_number: 1,
+          question_type: 'single_choice',
+          prompt: '1 + 1 = ?',
+          points: 10,
+          options_json: [
+            { key: 'A', text: 123 }, // number instead of string
+            { key: 'B', text: '2' },
+          ],
+          answer_key: { correct_answer: 'B' },
+        },
+      ],
+    }, TEACHER_1_ID);
+    assert.equal(status, 400);
+    assert.equal(json.error_code, 'INVALID_OPTION_SCHEMA');
   });
 
   console.log('\n======================================================================');

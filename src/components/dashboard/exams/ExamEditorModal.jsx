@@ -26,6 +26,9 @@ import {
   Info
 } from 'lucide-react';
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
+import { deleteSingleChoiceOption } from './examOptionUtils.js';
+
+export { deleteSingleChoiceOption };
 
 function generateUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -1073,16 +1076,12 @@ export const ExamEditorModal = ({
                                     type="button"
                                     onClick={() => {
                                       if (q.options_json.length <= 2) return;
-                                      const remaining = q.options_json.filter((_, idx) => idx !== optIdx);
-                                      const reindexed = remaining.map((item, i) => ({
-                                        key: String.fromCharCode(65 + i),
-                                        text: typeof item === 'object' && item !== null ? item.text : String(item ?? ''),
-                                      }));
-                                      let newCorrect = q.answer_key?.correct_answer;
-                                      if (!reindexed.some((o) => o.key === newCorrect)) {
-                                        newCorrect = reindexed[0].key;
-                                      }
-                                      handleUpdateQuestion(qIndex, 'options_json', reindexed);
+                                      const { options: newOpts, correctKey: newCorrect } = deleteSingleChoiceOption(
+                                        q.options_json,
+                                        q.answer_key?.correct_answer,
+                                        optIdx
+                                      );
+                                      handleUpdateQuestion(qIndex, 'options_json', newOpts);
                                       handleUpdateQuestion(qIndex, 'answer_key', { correct_answer: newCorrect });
                                     }}
                                     className="p-1 text-slate-400 hover:text-rose-500"

@@ -250,10 +250,26 @@ export function validateSaveDraftPayload(raw: unknown): {
         }
         seenOptionKeys.add(optKey);
 
-        const optText = typeof opt.text === 'string' ? opt.text : (opt.text !== undefined && opt.text !== null ? String(opt.text) : '');
+        if (typeof opt.text !== 'string') {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} phải là chuỗi văn bản (string).`,
+          };
+        }
+
+        const trimmedText = opt.text.trim();
+        if (!trimmedText) {
+          return {
+            valid: false,
+            errorCode: 'INVALID_OPTION_SCHEMA',
+            errorMessage: `Nội dung phương án '${optKey}' của câu ${qNum} không được để trống hoặc chỉ chứa khoảng trắng.`,
+          };
+        }
+
         validatedOptionsJson.push({
           key: optKey,
-          text: optText,
+          text: trimmedText,
         });
       }
 
