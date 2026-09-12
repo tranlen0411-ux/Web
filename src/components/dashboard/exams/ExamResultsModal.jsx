@@ -302,7 +302,7 @@ export const ExamResultsModal = ({
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-bold whitespace-nowrap">
+              <table className="w-full text-left text-xs font-bold whitespace-nowrap min-w-[960px]">
                 <thead className="bg-slate-100 text-slate-700 uppercase border-b-2 border-slate-200 text-[11px] sticky top-0 z-10">
                   <tr>
                     <th className="p-3.5">Học Sinh</th>
@@ -314,7 +314,7 @@ export const ExamResultsModal = ({
                     <th className="p-3.5 text-right">Điểm TN</th>
                     <th className="p-3.5 text-right">Điểm TL</th>
                     <th className="p-3.5 text-right">Tổng Điểm</th>
-                    <th className="p-3.5 text-center">Thao Tác</th>
+                    <th className="p-3.5 text-center min-w-[140px]">Thao Tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -389,11 +389,11 @@ export const ExamResultsModal = ({
                         <td className="p-3.5">
                           {isPendingManual ? (
                             <span className="px-2.5 py-1 bg-amber-100 text-amber-900 rounded-xl text-[11px] font-black border border-amber-300 flex items-center gap-1 w-fit">
-                              <Sparkles className="w-3 h-3 text-amber-600" /> Chờ chấm tự luận
+                              <Sparkles className="w-3 h-3 text-amber-600 shrink-0" /> Chờ chấm tự luận
                             </span>
                           ) : isGraded ? (
                             <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-xl text-[11px] font-black border border-emerald-300 flex items-center gap-1 w-fit">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Đã hoàn tất
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" /> Đã hoàn tất
                             </span>
                           ) : isDraft ? (
                             <span className="px-2.5 py-1 bg-slate-100 text-slate-600 rounded-xl text-[11px] font-black w-fit">
@@ -428,22 +428,22 @@ export const ExamResultsModal = ({
                         </td>
 
                         {/* THAO TÁC */}
-                        <td className="p-3.5 text-center">
+                        <td className="p-3.5 text-center min-w-[140px]">
                           {isPendingManual ? (
                             <button
                               onClick={() => handleOpenGradingModal(att)}
-                              className="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black text-xs rounded-xl shadow-md border-b-2 border-amber-700 flex items-center gap-1.5 mx-auto active:translate-y-0.5 transition-all"
+                              className="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black text-xs rounded-xl shadow-md border-b-2 border-amber-700 inline-flex items-center justify-center gap-1.5 mx-auto active:translate-y-0.5 transition-all shrink-0 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
                               title="Chấm điểm các câu tự luận của bài thi này"
                             >
-                              <Edit3 className="w-3.5 h-3.5" /> Chấm Bài
+                              <Edit3 className="w-3.5 h-3.5 shrink-0" /> <span className="whitespace-nowrap">Chấm Bài</span>
                             </button>
                           ) : (
                             <button
                               onClick={() => handleOpenGradingModal(att)}
-                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl flex items-center gap-1.5 mx-auto transition-all"
+                              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl inline-flex items-center justify-center gap-1.5 mx-auto transition-all shrink-0 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
                               title="Xem chi tiết câu hỏi và bài làm học sinh"
                             >
-                              <Eye className="w-3.5 h-3.5 text-slate-500" /> Xem Chi Tiết
+                              <Eye className="w-3.5 h-3.5 text-slate-500 shrink-0" /> <span className="whitespace-nowrap">Xem Chi Tiết</span>
                             </button>
                           )}
                         </td>
