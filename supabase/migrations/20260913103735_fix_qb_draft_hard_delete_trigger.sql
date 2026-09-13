@@ -123,8 +123,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION app_private.fn_prevent_answer_key_mutation() FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION app_private.fn_prevent_answer_key_mutation() TO postgres, service_role;
+REVOKE ALL ON FUNCTION app_private.fn_prevent_answer_key_mutation() FROM PUBLIC, anon, authenticated, service_role;
 
 -- ------------------------------------------------------------
 -- 2. UPDATE RPC FUNCTION: public.rpc_qb_safe_delete_or_archive_question

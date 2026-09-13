@@ -162,13 +162,30 @@ test('Question Bank Safe Delete RPC & Immutability Trigger Comprehensive Suite',
       'search_path must be empty'
     );
 
-    const triggerFnDef = await db.query(`
-      SELECT p.prosecdef, p.proconfig
+    const triggerFnInfo = await db.query(`
+      SELECT p.prosecdef, p.proconfig, r.rolname AS owner_name
       FROM pg_proc p
+      JOIN pg_roles r ON r.oid = p.proowner
       WHERE p.proname = 'fn_prevent_answer_key_mutation';
     `);
-    assert.equal(triggerFnDef.rows.length, 1);
-    assert.equal(triggerFnDef.rows[0].prosecdef, true, 'Trigger function must be SECURITY DEFINER');
+    assert.equal(triggerFnInfo.rows.length, 1);
+    assert.equal(triggerFnInfo.rows[0].prosecdef, true, 'Trigger function must be SECURITY DEFINER');
+    assert.equal(triggerFnInfo.rows[0].owner_name, 'postgres', 'Trigger function owner must be postgres');
+
+    const triggerGrants = await db.query(`
+      SELECT grantee, privilege_type
+      FROM information_schema.routine_privileges
+      WHERE routine_schema = 'app_private' AND routine_name = 'fn_prevent_answer_key_mutation';
+    `);
+    const triggerHasPublic = triggerGrants.rows.some((g) => g.grantee === 'PUBLIC');
+    const triggerHasAnon = triggerGrants.rows.some((g) => g.grantee === 'anon');
+    const triggerHasAuthenticated = triggerGrants.rows.some((g) => g.grantee === 'authenticated');
+    const triggerHasServiceRole = triggerGrants.rows.some((g) => g.grantee === 'service_role');
+
+    assert.equal(triggerHasPublic, false, 'Trigger function must NOT be granted to PUBLIC');
+    assert.equal(triggerHasAnon, false, 'Trigger function must NOT be granted to anon');
+    assert.equal(triggerHasAuthenticated, false, 'Trigger function must NOT be granted to authenticated');
+    assert.equal(triggerHasServiceRole, false, 'Trigger function must NOT be granted to service_role');
 
     const grants = await db.query(`
       SELECT grantee, privilege_type
@@ -181,8 +198,8 @@ test('Question Bank Safe Delete RPC & Immutability Trigger Comprehensive Suite',
     const publicGrant = grants.rows.some(
       (g) => (g.grantee === 'PUBLIC' || g.grantee === 'anon' || g.grantee === 'authenticated') && g.privilege_type === 'EXECUTE'
     );
-    assert.equal(serviceRoleGrant, true, 'service_role must have EXECUTE');
-    assert.equal(publicGrant, false, 'PUBLIC/anon/authenticated must NOT have EXECUTE');
+    assert.equal(serviceRoleGrant, true, 'service_role must have EXECUTE on RPC');
+    assert.equal(publicGrant, false, 'PUBLIC/anon/authenticated must NOT have EXECUTE on RPC');
   });
 
   await t.test('2. Immutability: Direct UPDATE on answer key is strictly blocked (55000)', async () => {
