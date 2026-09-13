@@ -19,8 +19,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const { profile } = useAuth();
   const bodyScrollRef = useRef(null);
 
-  // 3-STEP WIZARD STATE
-  const [currentStep, setCurrentStep] = useState(1); // 1: Cấu hình, 2: Soạn câu hỏi & Nhập Excel, 3: Xem trước & Hoàn tất
+  const [currentStep, setCurrentStep] = useState(1);
   const [classesList, setClassesList] = useState([]);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedClassIds, setSelectedClassIds] = useState([]);
@@ -67,7 +66,6 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
   const [isLockedByKeyError, setIsLockedByKeyError] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  // 1. Khóa cuộn body khi mở modal và reset scroll
   useEffect(() => {
     if (isOpen) {
       const originalOverflow = document.body.style.overflow;
@@ -279,29 +277,6 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     }
   };
 
-  // Phím ESC đóng an toàn
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && !isImportModalOpen && !isSubmitting) {
-        handleSafeClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isDirty, isImportModalOpen, isSubmitting]);
-
-  // Cuộn mượt đến câu hỏi lỗi
-  const scrollToQuestion = (idx) => {
-    setCurrentStep(2);
-    setTimeout(() => {
-      const el = document.getElementById(`question-card-${idx}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 150);
-  };
-
   const validateStep = (stepNumber) => {
     setErrorMsg('');
     setValidationErrors([]);
@@ -310,17 +285,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         setErrorMsg('Vui lòng nhập Tiêu đề bài tập.');
         return false;
       }
-      if (!isGlobal && profile?.role !== 'admin' && !selectedClassId) {
-        setErrorMsg('Vui lòng chọn Lớp học để giao bài tập.');
-        return false;
-      }
       return true;
     }
     if (stepNumber === 2 || stepNumber === 3) {
       const qErrors = getQuestionValidationErrors(questions, hasSubmissions);
       if (qErrors.length > 0) {
         setValidationErrors(qErrors);
-        setErrorMsg(`Phát hiện ${qErrors.length} lỗi trong danh sách câu hỏi. Vui lòng kiểm tra và sửa lỗi.`);
+        setErrorMsg(`Phát hiện ${qErrors.length} lỗi trong danh sách câu hỏi.`);
         return false;
       }
       return true;
@@ -353,6 +324,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           ? selectedClassIds 
           : (selectedClassId ? [selectedClassId] : []));
 
+    // Nếu bấm "Xuất bản & Giao bài" mà chưa chọn lớp nào (và không phải bài chung toàn trường) -> Yêu cầu chọn lớp
     if (submitAction === 'publish_and_assign' && !isGlobal && targetClassesToAssign.length === 0) {
       setErrorMsg('Vui lòng chọn ít nhất 1 Lớp học để giao bài tập trước khi Giao bài.');
       setCurrentStep(1);
@@ -441,7 +413,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         }
       }
 
-      // Thông báo thành công
+      // Xác định thông báo thành công chuẩn xác theo nghiệp vụ
       let successMsg = '';
       if (submitAction === 'draft') {
         successMsg = 'Đã lưu bản nháp bài tập thành công!';
@@ -466,157 +438,55 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
   if (!isOpen) return null;
 
-  const targetClassName = isGlobal
-    ? 'Chung toàn trường'
-    : (profile?.role === 'admin' && selectedClassIds.length > 0
-        ? classesList.filter(c => selectedClassIds.includes(c.id)).map(c => formatClassLabel(c.name)).join(', ')
-        : (classesList.find(c => c.id === selectedClassId)?.name ? formatClassLabel(classesList.find(c => c.id === selectedClassId)?.name) : 'Chưa chọn lớp'));
-
   return createPortal(
-    <div
-      className="fixed inset-0 z-[9999] bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden animate-fadeIn"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="create-exercise-modal-title"
-    >
-      <div className="bg-white w-full max-w-[1000px] max-h-[92dvh] sm:max-h-[90dvh] rounded-3xl border-4 border-amber-300 shadow-2xl flex flex-col overflow-hidden animate-scaleIn">
+    <div className="fixed inset-0 z-[9999] bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-4 overflow-hidden">
+      <div className="bg-white w-full max-w-[1000px] max-h-[90dvh] rounded-3xl border-4 border-amber-300 shadow-2xl flex flex-col overflow-hidden">
 
-        {/* HEADER CỐ ĐỊNH PHÍA TRÊN */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 py-4 sm:px-7 sm:py-4 border-b-2 border-amber-100 bg-white shrink-0 gap-3">
+        {/* HEADER */}
+        <div className="flex items-center justify-between px-6 py-4 border-b-2 border-amber-100 bg-white shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-amber-100 text-amber-900 rounded-2xl border border-amber-300">
               <FileText className="w-6 h-6" />
             </div>
             <div>
-              <h2 id="create-exercise-modal-title" className="text-base sm:text-lg md:text-xl font-black text-slate-800 leading-tight">
+              <h2 className="text-lg font-black text-slate-800">
                 {exerciseToEdit ? 'Chỉnh Sửa Bài Tập Học Thuật' : 'Tạo Bài Tập Học Thuật Mới'}
               </h2>
-              <p className="text-xs font-bold text-amber-700">
-                Bước {currentStep}/3: {currentStep === 1 ? 'Thông Tin Cấu Hình' : currentStep === 2 ? 'Soạn Đề & Nhập Excel/Word' : 'Xem Trước & Hoàn Tất'}
-              </p>
+              <p className="text-xs font-bold text-amber-700">Bước {currentStep}/3: Cấu Hình & Giao Bài</p>
             </div>
           </div>
-
-          {/* WIZARD STEP INDICATORS */}
-          <div className="flex items-center gap-2">
-            {[
-              { num: 1, label: '1. Thông tin' },
-              { num: 2, label: '2. Câu hỏi' },
-              { num: 3, label: '3. Xem trước' }
-            ].map(s => (
-              <button
-                key={s.num}
-                type="button"
-                onClick={() => {
-                  if (s.num < currentStep || validateStep(currentStep)) {
-                    setCurrentStep(s.num);
-                  }
-                }}
-                className={`px-3 py-1 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
-                  currentStep === s.num
-                    ? 'bg-amber-500 text-white shadow-sm'
-                    : currentStep > s.num
-                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                    : 'bg-slate-100 text-slate-400'
-                }`}
-              >
-                {currentStep > s.num ? <Check className="w-3.5 h-3.5 text-amber-700" /> : null}
-                <span>{s.label}</span>
-              </button>
-            ))}
-
-            <button
-              type="button"
-              onClick={handleSafeClose}
-              aria-label="Đóng"
-              disabled={isSubmitting}
-              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl transition-colors shrink-0 disabled:opacity-50 ml-2"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button onClick={handleSafeClose} disabled={isSubmitting} className="p-2 bg-slate-100 rounded-2xl">
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* BODY CUỘN ĐỘC LẬP */}
-        <div ref={bodyScrollRef} className="flex-1 min-h-0 overflow-y-auto p-5 sm:p-7 space-y-5 custom-scrollbar bg-slate-50/40">
-
-          {hasSubmissions && (
-            <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl text-amber-950 text-xs font-bold flex items-start gap-2.5">
-              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-black text-sm text-amber-900 mb-0.5">🔒 Bài tập đã có {submissionCount} học sinh nộp bài</p>
-                <p className="text-amber-800">Bạn chỉ có thể sửa thông tin chung (tiêu đề, hướng dẫn, hạn nộp, trạng thái); cấu trúc câu hỏi và đáp án đã được khóa để bảo vệ lịch sử bài làm.</p>
-              </div>
-            </div>
-          )}
-
-          {isLoadingDetails && (
-            <div className="p-4 bg-sky-50 border border-sky-200 rounded-2xl text-xs font-bold text-sky-900 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-sky-600" /> Đang tải đáp án đúng bảo mật từ CSDL...
-            </div>
-          )}
+        {/* BODY */}
+        <div ref={bodyScrollRef} className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4 bg-slate-50/40 custom-scrollbar">
 
           {errorMsg && (
-            <div className="p-3.5 bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl text-xs font-bold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+            <div className="p-3 bg-rose-50 border-2 border-rose-300 text-rose-900 rounded-2xl text-xs font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           )}
 
-          {/* DANH SÁCH LỖI VALIDATION CHI TIẾT */}
-          {validationErrors.length > 0 && (
-            <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl space-y-2 text-xs">
-              <p className="font-black text-rose-950 flex items-center gap-1.5">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                Vui lòng chỉnh sửa các lỗi sau trong danh sách câu hỏi:
-              </p>
-              <div className="max-h-40 overflow-y-auto space-y-1.5 pl-2 custom-scrollbar">
-                {validationErrors.map((err, errIdx) => (
-                  <div key={errIdx} className="flex items-center justify-between gap-2 p-2 bg-white rounded-xl border border-rose-200">
-                    <span className="font-bold text-rose-900">• {err.message}</span>
-                    <button
-                      type="button"
-                      onClick={() => scrollToQuestion(err.index)}
-                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] rounded-lg shadow-sm shrink-0 flex items-center gap-1 transition-colors"
-                    >
-                      <Edit3 className="w-3 h-3" /> Sửa ngay
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ========================================================= */}
-          {/* BƯỚC 1: THÔNG TIN BÀI TẬP */}
-          {/* ========================================================= */}
           {currentStep === 1 && (
-            <div className="space-y-4 animate-fadeIn">
-              <div className="p-4 bg-amber-100/50 rounded-2xl border border-amber-200">
-                <h3 className="text-sm font-black text-amber-950 flex items-center gap-2 mb-1">
-                  📌 Bước 1: Thiết lập thông tin chung cho bài tập
-                </h3>
-                <p className="text-xs font-bold text-slate-600">
-                  Điền tên bài tập, gán cho lớp học áp dụng và các tùy chọn thưởng sao hoàn thành.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-5 rounded-3xl border-2 border-amber-200 shadow-sm">
-                <div className="sm:col-span-2">
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-3xl border-2 border-amber-200 shadow-sm space-y-4">
+                <div>
                   <label className="block text-xs font-black text-slate-800 mb-1">
                     Tiêu Đề Bài Tập <span className="text-rose-500">*</span>:
                   </label>
                   <input
                     type="text"
-                    required
-                    placeholder="Ví dụ: Ôn tập Toán Khối 1 — Phép cộng trong phạm vi 10"
+                    placeholder="Ví dụ: Ôn tập Toán Khối 1"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400"
+                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs"
                   />
                 </div>
 
-                <div className="sm:col-span-2">
+                <div>
                   <label className="block text-xs font-black text-slate-800 mb-1">
                     Gán Cho Lớp Học <span className="text-rose-500">*</span>:
                   </label>
@@ -649,20 +519,17 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                     <select
                       value={selectedClassId}
                       onChange={(e) => setSelectedClassId(e.target.value)}
-                      disabled={isGlobal || hasSubmissions}
-                      className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400 disabled:bg-slate-100"
+                      className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs"
                     >
                       {classesList.map(c => (
-                        <option key={c.id} value={c.id}>
-                          🏫 {formatClassLabel(c.name)} (Khối {c.grade_level})
-                        </option>
+                        <option key={c.id} value={c.id}>🏫 {formatClassLabel(c.name)}</option>
                       ))}
                     </select>
                   )}
                 </div>
 
                 {/* CỜ TÍNH XẾP HẠNG HỌC THUẬT */}
-                <div className="sm:col-span-2 p-3 bg-amber-50 rounded-2xl border border-amber-200">
+                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200">
                   <label className="flex items-center gap-2 text-xs font-black text-amber-950 cursor-pointer">
                     <input
                       type="checkbox"
@@ -677,109 +544,62 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-black text-slate-800 mb-1">Môn Học:</label>
-                  <select
-                    value={subject}
-                    disabled={hasSubmissions}
-                    onChange={(e) => setSubject(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400 disabled:bg-slate-100"
-                  >
-                    <option value="Toán">Toán</option>
-                    <option value="Tiếng Việt">Tiếng Việt</option>
-                    <option value="Tự nhiên & Xã hội">Tự nhiên & Xã hội</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-800 mb-1">Trạng Thái Mặc Định:</label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400"
-                  >
-                    <option value="draft">Bản nháp (draft)</option>
-                    <option value="published">Đã xuất bản (published)</option>
-                    <option value="closed">Đóng bài (closed)</option>
-                    <option value="archived">Lưu trữ (archived)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-800 mb-1">Sao Thưởng Hoàn Thành:</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    disabled={hasSubmissions}
-                    value={rewardStars}
-                    onChange={(e) => setRewardStars(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400 disabled:bg-slate-100"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-800 mb-1">Hạn Nộp Bài:</label>
-                  <input
-                    type="datetime-local"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-black text-slate-800 mb-1">Hướng Dẫn Làm Bài Cho Học Sinh:</label>
-                  <textarea
-                    rows="3"
-                    placeholder="Nhập hướng dẫn chi tiết cho các bé trước khi làm bài..."
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs text-slate-800 focus:outline-none focus:border-amber-400"
-                  ></textarea>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-black text-slate-800 mb-1">Môn Học:</label>
+                    <select
+                      value={subject}
+                      onChange={(e) => setSubject(e.target.value)}
+                      className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs"
+                    >
+                      <option value="Toán">Toán</option>
+                      <option value="Tiếng Việt">Tiếng Việt</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-black text-slate-800 mb-1">Trạng Thái:</label>
+                    <select
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value)}
+                      className="w-full p-3 bg-amber-50/50 border-2 border-amber-200 rounded-2xl font-bold text-xs"
+                    >
+                      <option value="draft">Bản nháp (draft)</option>
+                      <option value="published">Đã xuất bản (published)</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
-          {/* ========================================================= */}
-          {/* BƯỚC 2: SOẠN CÂU HỎI HOẶC NHẬP TỰ ĐỘNG TỪ EXCEL/WORD */}
-          {/* ========================================================= */}
           {currentStep === 2 && (
-            <div className="space-y-4 animate-fadeIn">
-              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-white rounded-3xl border-2 border-amber-200 shadow-sm">
-                <div>
-                  <h3 className="text-sm sm:text-base font-black text-slate-800 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-amber-600" />
-                    Danh Sách Câu Hỏi ({questions.length} câu • Tổng {roundedTotalPoints} điểm)
-                  </h3>
-                  <p className="text-xs font-bold text-slate-500">
-                    Thêm câu thủ công hoặc nạp nhanh hàng loạt bằng file Excel/Word
-                  </p>
-                </div>
-
+            <div className="space-y-4 bg-white p-5 rounded-3xl border-2 border-amber-200">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-black text-slate-800">
+                  Danh sách {questions.length} câu hỏi ({roundedTotalPoints} điểm)
+                </h3>
                 {!hasSubmissions && (
                   <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
                       onClick={() => setIsImportModalOpen(true)}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl shadow-sm flex items-center gap-1.5 transition-all active:scale-95"
+                      className="px-3 py-1.5 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 font-extrabold text-xs rounded-xl border border-emerald-300 flex items-center gap-1.5 transition-colors"
                     >
-                      <FileSpreadsheet className="w-4 h-4" /> Nhập Từ Tệp (Excel/Word)
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" /> Nhập Từ Tệp (Excel/Word)
                     </button>
                     <button
                       type="button"
                       onClick={handleAddQuestion}
-                      className="px-4 py-2 bg-sky-100 text-sky-900 hover:bg-sky-200 font-black text-xs rounded-2xl border border-sky-300 flex items-center gap-1.5 transition-all active:scale-95"
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl flex items-center gap-1 transition-colors"
                     >
-                      <Plus className="w-4 h-4" /> Thêm Câu Hỏi
+                      <Plus className="w-3.5 h-3.5" /> Thêm câu hỏi
                     </button>
                   </div>
                 )}
               </div>
 
-              {/* DANH SÁCH CÂU HỎI CHI TIẾT */}
-              <div className="space-y-3.5">
+              {/* DANH SÁCH CÂU HỎI ĐƯỢC NHẬP HOẶC TẠO THỦ CÔNG */}
+              <div className="space-y-3 pt-2">
                 {questions.map((rawQ, idx) => {
                   const q = normalizeImportedQuestion(rawQ, idx);
                   const cardErrors = validationErrors.filter(e => e.index === idx);
@@ -788,33 +608,25 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                   return (
                     <div
                       key={rawQ.id || idx}
-                      id={`question-card-${idx}`}
-                      className={`p-4 sm:p-5 rounded-3xl border-2 bg-white space-y-3.5 transition-all ${
+                      className={`p-4 rounded-2xl border-2 bg-slate-50/50 space-y-3 transition-all ${
                         hasErr
-                          ? 'border-rose-400 bg-rose-50/40 shadow-md ring-2 ring-rose-300/50'
-                          : hasSubmissions
-                          ? 'border-slate-300 opacity-90'
-                          : 'border-amber-200 shadow-sm hover:border-amber-400'
+                          ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-300/50'
+                          : 'border-amber-200 hover:border-amber-400'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <span className="px-3 py-1 bg-slate-800 text-white font-black text-xs rounded-xl flex items-center gap-1">
+                          <span className="px-2.5 py-0.5 bg-slate-800 text-white font-black text-xs rounded-lg">
                             Câu {idx + 1}
                             {q.source_row ? (
-                              <span className="text-[10px] text-amber-300 font-normal">
-                                (dòng Excel {q.source_row})
+                              <span className="text-[10px] text-amber-300 font-normal ml-1">
+                                (dòng {q.source_row})
                               </span>
                             ) : null}
                           </span>
-                          <span className="text-xs font-black text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-lg">
+                          <span className="text-xs font-black text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
                             {q.points || 1} điểm
                           </span>
-                          {hasErr && (
-                            <span className="text-[11px] font-black text-rose-600 bg-rose-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                              <AlertCircle className="w-3.5 h-3.5" /> Có {cardErrors.length} lỗi
-                            </span>
-                          )}
                         </div>
 
                         <div className="flex items-center gap-2">
@@ -840,7 +652,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                               }));
                               setValidationErrors([]);
                             }}
-                            className="px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                            className="px-2 py-1 bg-white border border-amber-200 rounded-lg text-xs font-bold"
                           >
                             <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                             <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
@@ -853,8 +665,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             <button
                               type="button"
                               onClick={() => handleRemoveQuestion(idx)}
-                              aria-label={`Xóa câu hỏi ${idx + 1}`}
-                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                              className="p-1 text-rose-600 hover:bg-rose-50 rounded-lg"
+                              title="Xóa câu hỏi"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -862,18 +674,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                         </div>
                       </div>
 
-                      {/* KHỐI CẢNH BÁO LỖI RIÊNG CHO CÂU NÀY */}
-                      {hasErr && (
-                        <div className="p-3 bg-rose-100/90 border border-rose-300 rounded-2xl text-xs font-bold text-rose-900 space-y-1">
-                          {cardErrors.map((err, errIdx) => (
-                            <p key={errIdx} className="flex items-center gap-1.5">
-                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                              <span>{err.message}</span>
-                            </p>
-                          ))}
-                        </div>
-                      )}
-
+                      {/* ĐỀ BÀI CÂU HỎI */}
                       <div>
                         <input
                           type="text"
@@ -886,14 +687,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, prompt: val }, i) : item));
                             setValidationErrors([]);
                           }}
-                          className={`w-full p-3 bg-amber-50/50 border rounded-2xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400 ${
-                            cardErrors.some(e => e.field === 'prompt') ? 'border-rose-400 bg-rose-50/50' : 'border-amber-200'
-                          }`}
+                          className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold"
                         />
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <label className="text-xs font-bold text-slate-600">Thang điểm:</label>
+                        <label className="text-xs font-bold text-slate-600">Điểm:</label>
                         <input
                           type="number"
                           step="0.5"
@@ -906,22 +705,22 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, points: val } : item));
                             setValidationErrors([]);
                           }}
-                          className="w-20 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 text-center"
+                          className="w-16 px-2 py-1 bg-white border border-amber-200 rounded-lg text-xs font-bold text-center"
                         />
                       </div>
 
-                      {/* LỰA CHỌN TRẮC NGHIỆM ĐƠN HOẶC NHIỀU ĐÁP ÁN */}
+                      {/* LỰA CHỌN CHO TRẮC NGHIỆM */}
                       {['single_choice', 'multiple_choice'].includes(q.question_type) && (
-                        <div className="space-y-2 pt-2 border-t border-amber-100">
-                          <p className="text-xs font-black text-slate-700">
-                            Các Lựa Chọn ({q.question_type === 'single_choice' ? 'Tích tròn để chọn 1 đáp án đúng' : 'Tích vuông để chọn các đáp án đúng'}):
+                        <div className="space-y-1.5 pt-1 border-t border-amber-100">
+                          <p className="text-[11px] font-black text-slate-700">
+                            {q.question_type === 'single_choice' ? 'Chọn đáp án đúng (radio):' : 'Chọn các đáp án đúng (checkbox):'}
                           </p>
                           {q.options_json.map((opt, optIdx) => (
                             <div key={optIdx} className="flex items-center gap-2">
                               {q.question_type === 'single_choice' ? (
                                 <input
                                   type="radio"
-                                  name={`correct_choice_step2_${q.id || idx}`}
+                                  name={`correct_choice_${q.id || idx}`}
                                   checked={q.correct_answer === opt}
                                   disabled={hasSubmissions}
                                   onChange={() => {
@@ -973,7 +772,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                   }));
                                   setValidationErrors([]);
                                 }}
-                                className="flex-1 p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                                className="flex-1 p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
                               />
                               {!hasSubmissions && q.options_json.length > 2 && (
                                 <button
@@ -999,7 +798,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                     }));
                                     setValidationErrors([]);
                                   }}
-                                  className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg"
+                                  className="p-1 text-rose-500 hover:bg-rose-50 rounded"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -1025,8 +824,8 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
                       {/* ĐIỀN TỪ / TRẢ LỜI NGẮN */}
                       {['fill_blank', 'short_answer'].includes(q.question_type) && (
-                        <div className="pt-2 border-t border-amber-100">
-                          <label className="block text-xs font-black text-slate-700 mb-1">Đáp án đúng chính xác:</label>
+                        <div className="pt-1 border-t border-amber-100">
+                          <label className="block text-[11px] font-black text-slate-700 mb-1">Đáp án đúng:</label>
                           <input
                             type="text"
                             disabled={hasSubmissions}
@@ -1037,15 +836,15 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                               setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
                               setValidationErrors([]);
                             }}
-                            className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                            className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
                           />
                         </div>
                       )}
 
                       {/* TỰ LUẬN */}
                       {q.question_type === 'essay' && (
-                        <div className="pt-2 border-t border-amber-100">
-                          <label className="block text-xs font-black text-slate-700 mb-1">Hướng dẫn chấm / Đáp án tham khảo:</label>
+                        <div className="pt-1 border-t border-amber-100">
+                          <label className="block text-[11px] font-black text-slate-700 mb-1">Hướng dẫn chấm / Đáp án tham khảo:</label>
                           <input
                             type="text"
                             disabled={hasSubmissions}
@@ -1056,7 +855,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                               setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
                               setValidationErrors([]);
                             }}
-                            className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold disabled:bg-slate-200 focus:outline-none focus:border-amber-400"
+                            className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
                           />
                         </div>
                       )}
@@ -1067,120 +866,43 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
             </div>
           )}
 
-          {/* ========================================================= */}
-          {/* BƯỚC 3: XEM TRƯỚC VÀ XÁC NHẬN LƯU BÀI TẬP */}
-          {/* ========================================================= */}
           {currentStep === 3 && (
-            <div className="space-y-4 animate-fadeIn">
-              <div className="p-4 bg-emerald-50 rounded-3xl border-2 border-emerald-200">
-                <h3 className="text-sm sm:text-base font-black text-emerald-950 flex items-center gap-2 mb-1">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                  Bước 3: Tóm tắt thông tin & Xem trước câu hỏi
-                </h3>
-                <p className="text-xs font-bold text-emerald-800">
-                  Vui lòng kiểm tra lại toàn bộ thông tin trước khi chọn "Lưu Nháp" hoặc "Xuất Bản Ngay".
-                </p>
-              </div>
-
-              {/* TÓM TẮT CẤU HÌNH */}
-              <div className="bg-white p-5 rounded-3xl border-2 border-amber-200 shadow-sm space-y-3">
-                <h4 className="text-xs font-black text-amber-950 uppercase border-b border-amber-100 pb-2">
-                  1. Thông tin cấu hình bài tập:
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-bold text-slate-700">
-                  <p>📖 Tiêu đề: <span className="text-slate-900 font-black">{title || 'Chưa nhập'}</span></p>
-                  <p>🏫 Lớp áp dụng: <span className="text-sky-700 font-black">{targetClassName}</span></p>
-                  <p>📚 Môn học: <span className="text-slate-900">{subject}</span></p>
-                  <p>🌟 Thưởng: <span className="text-amber-600 font-black">+{rewardStars} sao</span></p>
-                  <p>📌 Trạng thái mặc định: <span className="text-emerald-700 font-black">{status}</span></p>
-                  <p>📊 Quy mô: <span className="text-slate-900 font-black">{questions.length} câu • Tổng {roundedTotalPoints} điểm</span></p>
-                </div>
-              </div>
-
-              {/* TÓM TẮT CÂU HỎI */}
-              <div className="bg-white p-5 rounded-3xl border-2 border-amber-200 shadow-sm space-y-3">
-                <h4 className="text-xs font-black text-amber-950 uppercase border-b border-amber-100 pb-2">
-                  2. Xem trước danh sách câu hỏi ({questions.length} câu):
-                </h4>
-                <div className="space-y-3 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-                  {questions.map((rawQ, idx) => {
-                    const normQ = normalizeImportedQuestion(rawQ, idx);
-                    return (
-                      <div key={idx} className="p-3 bg-amber-50/60 rounded-2xl border border-amber-200 text-xs font-bold text-slate-800 space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-black text-slate-900">
-                            Câu {idx + 1}{normQ.source_row ? ` (dòng Excel ${normQ.source_row})` : ''}: {normQ.prompt}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-amber-700 font-black">({normQ.points}đ)</span>
-                            <button
-                              type="button"
-                              onClick={() => scrollToQuestion(idx)}
-                              className="text-xs text-sky-700 hover:underline font-bold flex items-center gap-0.5"
-                            >
-                              <Edit3 className="w-3 h-3" /> Sửa
-                            </button>
-                          </div>
-                        </div>
-                        {normQ.options_json.length > 0 ? (
-                          <p className="text-[11px] text-slate-600 pl-2">Lựa chọn: {normQ.options_json.join(' | ')}</p>
-                        ) : (
-                          <p className="text-[11px] text-slate-400 italic pl-2">Không có lựa chọn (options = [])</p>
-                        )}
-                        <p className="text-[11px] text-emerald-700 font-black pl-2">
-                          Đáp án đúng: {Array.isArray(normQ.correct_answer) ? normQ.correct_answer.join(', ') : normQ.correct_answer}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-black text-emerald-900">
+              Sẵn sàng xuất bản bài tập với tổng {questions.length} câu hỏi.
             </div>
           )}
 
         </div>
 
-        {/* FOOTER CỐ ĐỊNH PHÍA DƯỚI */}
-        <div className="px-5 py-3.5 sm:px-7 sm:py-4 border-t-2 border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 shrink-0 z-10">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handlePrevStep}
-              disabled={currentStep === 1 || isSubmitting}
-              className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-black text-xs rounded-2xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm"
-            >
-              <ArrowLeft className="w-4 h-4" /> Quay Lại
-            </button>
+        {/* FOOTER */}
+        <div className="px-6 py-4 border-t-2 border-slate-200 bg-slate-50 flex items-center justify-between gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handlePrevStep}
+            disabled={currentStep === 1 || isSubmitting}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 font-black text-xs rounded-2xl disabled:opacity-40"
+          >
+            Quay Lại
+          </button>
 
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={() => handleSubmit('draft')}
               disabled={isSubmitting}
-              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-black text-xs rounded-2xl flex items-center gap-1.5 disabled:opacity-50 transition-colors shadow-sm"
+              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-black text-xs rounded-2xl transition-all"
             >
-              <Save className="w-4 h-4" /> Lưu Nháp
+              Lưu Nháp
             </button>
 
             <button
               type="button"
               onClick={() => handleSubmit('publish_only')}
               disabled={isSubmitting}
-              className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-black text-xs rounded-2xl transition-all shadow-sm"
+              className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-black text-xs rounded-2xl transition-all"
               title="Xuất bản bài tập nhưng chưa giao cho lớp nào"
             >
               Chỉ Xuất Bản
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleSafeClose}
-              disabled={isSubmitting}
-              className="px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-bold text-xs rounded-2xl transition-colors shadow-sm"
-            >
-              Hủy
             </button>
 
             {currentStep < 3 ? (
@@ -1188,19 +910,18 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                 type="button"
                 onClick={handleNextStep}
                 disabled={isSubmitting}
-                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs sm:text-sm rounded-2xl shadow-md flex items-center gap-1.5 transition-all active:scale-95"
+                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-2xl transition-all"
               >
-                <span>Tiếp Tục</span> <ArrowRight className="w-4 h-4" />
+                Tiếp Tục
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => handleSubmit('publish_and_assign')}
                 disabled={isSubmitting}
-                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-2xl shadow-md flex items-center gap-1.5 disabled:opacity-50 transition-all active:scale-95"
+                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl shadow-sm transition-all"
               >
-                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                <span>{isSubmitting ? 'Đang Xử Lý...' : 'Xuất Bản & Giao Cho Lớp'}</span>
+                {isSubmitting ? 'Đang Xử Lý...' : 'Xuất Bản & Giao Cho Lớp'}
               </button>
             )}
           </div>
@@ -1208,7 +929,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
 
       </div>
 
-      {/* MODAL NHẬP CÂU HỎI TỪ TỆP (EXCEL / WORD) */}
+      {/* MODAL NHẬP CÂU HỎI TỪ TỆP */}
       <ImportQuestionsModal
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}

@@ -59,9 +59,12 @@ async function runAllChecks() {
   assert(createModalContent.includes('setIsImportModalOpen(true)'), 'Import button triggers setIsImportModalOpen(true)');
   assert(createModalContent.includes('<ImportQuestionsModal'), 'CreateExerciseModal includes <ImportQuestionsModal component');
   assert(createModalContent.includes('handleImportQuestions'), 'CreateExerciseModal includes handleImportQuestions callback');
-  assert(createModalContent.includes('FileSpreadsheet'), 'CreateExerciseModal imports FileSpreadsheet icon');
-  assert(createModalContent.includes('scrollToQuestion'), 'CreateExerciseModal includes scrollToQuestion error navigation');
   assert(createModalContent.includes('countsTowardRanking'), 'CreateExerciseModal preserves countsTowardRanking feature');
+
+  // Verify minimal scope options match base
+  assert(!createModalContent.includes('<option value="closed">'), 'STATUS_OPTIONS_UNCHANGED_FROM_BASE: closed status is not present');
+  assert(!createModalContent.includes('<option value="archived">'), 'STATUS_OPTIONS_UNCHANGED_FROM_BASE: archived status is not present');
+  assert(!createModalContent.includes('Tự nhiên & Xã hội'), 'SUBJECT_OPTIONS_UNCHANGED_FROM_BASE: extra subjects not added');
 
   // Verify Safe-delete in ExerciseListTab is preserved
   assert(exerciseListContent.includes('handleConfirmDeleteExercise'), 'ExerciseListTab preserves handleConfirmDeleteExercise');
