@@ -4,7 +4,7 @@
 export const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
 };
 
 export type ErrorCode =
@@ -440,7 +440,35 @@ export function mapListVersionsSuccess(
   };
 }
 
+export interface SafeDeleteQuestionSuccessData {
+  item_id: string;
+  action: 'deleted' | 'archived' | 'already_archived';
+  archived_at?: string | null;
+  message?: string;
+}
 
+export function mapSafeDeleteQuestionSuccess(
+  res: Record<string, unknown>
+): SuccessMapResult<SafeDeleteQuestionSuccessData> {
+  if (
+    !isPlainRecord(res) ||
+    !isUuidString(res.item_id) ||
+    typeof res.action !== 'string' ||
+    !['deleted', 'archived', 'already_archived'].includes(res.action)
+  ) {
+    return { ok: false };
+  }
+
+  return {
+    ok: true,
+    data: {
+      item_id: res.item_id,
+      action: res.action as 'deleted' | 'archived' | 'already_archived',
+      archived_at: typeof res.archived_at === 'string' ? res.archived_at : null,
+      message: typeof res.message === 'string' ? res.message : undefined,
+    },
+  };
+}
 
 // ----------------------------------------------------------------------------
 // Sanitized Error Normalization from Database RPC to Public API

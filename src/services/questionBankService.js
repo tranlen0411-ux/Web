@@ -1,7 +1,7 @@
 // src/services/questionBankService.js
 // Question Bank Client Service V2A (Read-Only + Authoring Create Integration)
 
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase.js';
 
 const QUESTION_BANK_BASE_URL = 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
 
@@ -104,6 +104,52 @@ export const createQuestion = async (payload) => {
   if (!response.ok || !jsonResult || jsonResult.success !== true) {
     const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi tạo câu hỏi (${response.status})`;
     throw new Error(errorMsg);
+  }
+
+  return jsonResult.data;
+};
+
+/**
+ * Xóa an toàn hoặc lưu trữ câu hỏi khỏi Ngân hàng câu hỏi (Safe Delete / Archive V2)
+ * Máy chủ sẽ tự động quyết định xóa vĩnh viễn (bản nháp sạch) hoặc chuyển sang lưu trữ an toàn.
+ * @param {string} itemId UUID của câu hỏi cần xóa
+ * @returns {Promise<{ item_id: string, action: 'deleted' | 'archived' | 'already_archived', archived_at?: string, message?: string }>}
+ */
+export const deleteQuestion = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}`;
+
+  const response = await fetch(requestUrl, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi xóa câu hỏi (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi xóa câu hỏi (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
   }
 
   return jsonResult.data;
@@ -430,6 +476,7 @@ export const questionBankService = {
   getOldAccessToken,
   listQuestions,
   createQuestion,
+  deleteQuestion,
   archiveQuestion,
   restoreQuestion,
   publishQuestion,
