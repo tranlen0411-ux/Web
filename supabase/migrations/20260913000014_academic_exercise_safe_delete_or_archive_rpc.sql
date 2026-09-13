@@ -1,5 +1,5 @@
 -- ============================================================
--- ACADEMIC EXERCISE SAFE DELETE & ARCHIVE RPC (HARDENED)
+-- ACADEMIC EXERCISE SAFE DELETE & ARCHIVE RPC (HARDENED & CLEANED)
 -- MIGRATION: 20260913000014_academic_exercise_safe_delete_or_archive_rpc.sql
 -- TARGET SCHEMA: public, app_private
 -- ============================================================
@@ -19,17 +19,19 @@
 --      RAISE EXCEPTION 'ERR_EXERCISE_IN_USE: Bài tập đang trong thời hạn giao cho lớp học. Vui lòng kết thúc thời hạn giao bài trước khi lưu trữ.'
 --
 -- 3. Used / Historical Exercise Archival (Soft Delete):
---    - If the exercise has assignments, submissions, ranking entries (academic_ranking_entries),
---      or was published/closed:
+--    - If the exercise status != 'draft' (e.g. 'published', 'closed') OR has assignments, submissions,
+--      or ranking entries (academic_ranking_entries):
 --      * Set academic_exercises.status = 'archived', updated_at = pg_catalog.now()
 --      * Submissions, answers, files, scores, and ranking entries remain 100% intact.
---      * Student submission files are NEVER queued for deletion or removed on archive.
+--      * Student submission files in bucket 'exercise-submissions' are NEVER touched or deleted.
 --
--- 4. Clean Draft Exercise (never assigned, no submissions, no rankings):
---    - Enqueue any draft teacher attachments into public.exercise_file_cleanup_jobs.
---    - Hard delete in atomic transaction:
---      * Delete public.academic_exercise_questions for this exercise
---      * Delete public.academic_exercises container
+-- 4. Clean Draft Exercise Hard-Delete (Database-Only):
+--    - Hard delete ONLY when: status = 'draft' AND 0 assignments AND 0 submissions AND 0 rankings.
+--    - Delete public.academic_exercise_questions for this exercise.
+--    - Delete public.academic_exercises container.
+--    - ARCHITECTURAL NOTE: Không quét Storage hay chèn job vào exercise_file_cleanup_jobs (bucket exercise-submissions
+--      là của học sinh). Khi tương lai có attachment giáo viên, phải dùng bucket/cột metadata riêng và cleanup worker
+--      riêng; không suy đoán từ nội dung văn bản.
 --
 -- 5. Security & Function Configuration:
 --    - SECURITY DEFINER with SET search_path = '' (empty search path).
@@ -53,7 +55,6 @@ DECLARE
     v_has_assignments BOOLEAN := FALSE;
     v_has_submissions BOOLEAN := FALSE;
     v_has_rankings BOOLEAN := FALSE;
-    v_is_published BOOLEAN := FALSE;
     v_has_draft_submission BOOLEAN := FALSE;
     v_has_active_assignment BOOLEAN := FALSE;
     v_now TIMESTAMPTZ := pg_catalog.now();
@@ -149,10 +150,10 @@ BEGIN
         WHERE exercise_id = p_exercise_id
     ) INTO v_has_rankings;
 
-    v_is_published := (v_exercise.status IN ('published', 'closed'));
-
     -- 8. Branch execution: Soft Archive vs Hard Delete
-    IF v_has_assignments OR v_has_submissions OR v_has_rankings OR v_is_published THEN
+    -- RULE: Hard-delete ONLY when status = 'draft' AND no assignments AND no submissions AND no rankings.
+    -- All other statuses (published, closed) or items with relational history must be preserved via archive.
+    IF v_exercise.status != 'draft' OR v_has_assignments OR v_has_submissions OR v_has_rankings THEN
         -- Case A: SOFT DELETE / ARCHIVE (Preserve 100% of historical data, rankings, files)
         UPDATE public.academic_exercises
         SET status = 'archived',
@@ -167,31 +168,9 @@ BEGIN
             'message', 'Bài tập đã được lưu trữ an toàn; toàn bộ bài nộp, điểm số và bảng xếp hạng vẫn được bảo toàn nguyên vẹn.'
         );
     ELSE
-        -- Case B: HARD DELETE (Clean Draft with no assignments, no submissions, no rankings)
-        -- Enqueue any draft teacher attachments into exercise_file_cleanup_jobs before deletion
-        BEGIN
-            INSERT INTO public.exercise_file_cleanup_jobs (bucket_id, file_path, requested_by, status)
-            SELECT 
-                'exercise-submissions',
-                m[1],
-                v_caller_id,
-                'pending'
-            FROM (
-                SELECT pg_catalog.regexp_matches(
-                    q.prompt || ' ' || COALESCE(q.options_json::text, ''),
-                    'exercise-submissions/([A-Za-z0-9_./-]+)'::text,
-                    'g'::text
-                ) AS m
-                FROM public.academic_exercise_questions q
-                WHERE q.exercise_id = p_exercise_id
-            ) AS extracted
-            WHERE m[1] IS NOT NULL
-            ON CONFLICT (file_path) DO NOTHING;
-        EXCEPTION WHEN OTHERS THEN
-            -- In case cleanup jobs table or trigger structure varies, safely continue
-            NULL;
-        END;
-
+        -- Case B: HARD DELETE (Clean Draft: status = 'draft', 0 assignments, 0 submissions, 0 rankings)
+        -- Database-only deletion. Không quét hay can thiệp Storage (bucket exercise-submissions thuộc về học sinh).
+        -- Khi tương lai có attachment giáo viên, phải dùng bucket/cột metadata riêng và cleanup worker riêng; không suy đoán từ nội dung văn bản.
         DELETE FROM public.academic_exercise_questions
         WHERE exercise_id = p_exercise_id;
 

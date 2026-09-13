@@ -1,7 +1,7 @@
 /**
  * ============================================================================
- * ACADEMIC EXERCISE SAFE DELETE & ARCHIVE TESTS (HARDENED SUITE)
- * - PGlite In-Memory PostgreSQL Runtime Tests (12 Test Cases)
+ * ACADEMIC EXERCISE SAFE DELETE & ARCHIVE TESTS (HARDENED & REFINED SUITE)
+ * - PGlite In-Memory PostgreSQL Runtime Tests (13 Test Cases)
  * - Contract & Static Security ACL Analysis (3 Test Cases)
  * (ZERO PRODUCTION DATABASE ACCESS)
  * ============================================================================
@@ -260,7 +260,7 @@ async function runAllTests() {
     }
   }
 
-  console.log('\n--- SECTION A: PGLITE RUNTIME TESTS (12 SCENARIOS) ---');
+  console.log('\n--- SECTION A: PGLITE RUNTIME TESTS (13 SCENARIOS) ---');
   const db = await initTestDb();
 
   // 1. Hard-delete clean draft
@@ -495,28 +495,69 @@ async function runAllTests() {
     assert.equal(rankCheck.rows[0].points_awarded, 50);
   });
 
-  // 11. Draft with attachment enqueues cleanup job before deletion
-  await testPglite('11. Draft with attachment enqueues cleanup job into exercise_file_cleanup_jobs', async () => {
-    const exId = nextUuid('b');
-    const attachmentPath = 'exercise-submissions/teacher-a/image_sample_123.png';
+  // 11. Non-draft exercise (published / closed) without assignments still archives (never hard-deleted)
+  await testPglite('11. Non-draft exercise (published / closed) without assignments/submissions still archives', async () => {
+    const exIdPublished = nextUuid('b');
     await db.exec(`
       INSERT INTO public.academic_exercises (id, title, grade_level, subject, status, teacher_id)
-      VALUES ('${exId}', 'Draft With Image', 5, 'Math', 'draft', '${TEACHER_A_ID}');
+      VALUES ('${exIdPublished}', 'Published Standalone Ex', 5, 'Math', 'published', '${TEACHER_A_ID}');
+
+      INSERT INTO public.academic_exercise_questions (exercise_id, question_number, question_type, prompt)
+      VALUES ('${exIdPublished}', 1, 'single_choice', 'Prompt');
+    `);
+
+    const resPub = await runRpcAsUser(db, TEACHER_A_ID, exIdPublished);
+    assert.equal(resPub.success, true);
+    assert.equal(resPub.action, 'archived');
+
+    const checkPub = await db.query(`SELECT status FROM public.academic_exercises WHERE id = $1`, [exIdPublished]);
+    assert.equal(checkPub.rows[0].status, 'archived');
+
+    const exIdClosed = nextUuid('9');
+    await db.exec(`
+      INSERT INTO public.academic_exercises (id, title, grade_level, subject, status, teacher_id)
+      VALUES ('${exIdClosed}', 'Closed Standalone Ex', 5, 'Math', 'closed', '${TEACHER_A_ID}');
+    `);
+
+    const resClosed = await runRpcAsUser(db, TEACHER_A_ID, exIdClosed);
+    assert.equal(resClosed.success, true);
+    assert.equal(resClosed.action, 'archived');
+
+    const checkClosed = await db.query(`SELECT status FROM public.academic_exercises WHERE id = $1`, [exIdClosed]);
+    assert.equal(checkClosed.rows[0].status, 'archived');
+  });
+
+  // 12. Storage-like path strings in prompt/options_json do NOT create cleanup jobs and do NOT touch student files
+  await testPglite('12. Storage-like path strings in prompt/options_json do NOT create cleanup jobs or touch student files', async () => {
+    const initialJobs = await db.query(`SELECT COUNT(*) FROM public.exercise_file_cleanup_jobs;`);
+    const initialJobCount = parseInt(initialJobs.rows[0].count, 10);
+
+    const exId = nextUuid('8');
+    await db.exec(`
+      INSERT INTO public.academic_exercises (id, title, grade_level, subject, status, teacher_id)
+      VALUES ('${exId}', 'Draft With Simulated Text', 5, 'Math', 'draft', '${TEACHER_A_ID}');
 
       INSERT INTO public.academic_exercise_questions (exercise_id, question_number, question_type, prompt, options_json)
-      VALUES ('${exId}', 1, 'single_choice', 'Prompt with ${attachmentPath}', '["exercise-submissions/teacher-a/opt1.png"]'::jsonb);
+      VALUES (
+        '${exId}',
+        1,
+        'single_choice',
+        'Check file at exercise-submissions/student-123/attempt-456/homework.png',
+        '["exercise-submissions/option1.png", "exercise-submissions/option2.png"]'::jsonb
+      );
     `);
 
     const res = await runRpcAsUser(db, TEACHER_A_ID, exId);
     assert.equal(res.success, true);
     assert.equal(res.action, 'deleted');
 
-    const jobCheck = await db.query(`SELECT * FROM public.exercise_file_cleanup_jobs WHERE file_path LIKE '%teacher-a%'`);
-    assert(jobCheck.rows.length >= 1, 'Cleanup jobs must be enqueued for draft attachments');
+    const afterJobs = await db.query(`SELECT COUNT(*) FROM public.exercise_file_cleanup_jobs;`);
+    const afterJobCount = parseInt(afterJobs.rows[0].count, 10);
+    assert.equal(afterJobCount, initialJobCount, 'Zero cleanup jobs must be created on hard-delete');
   });
 
-  // 12. Idempotency on repeated calls
-  await testPglite('12. Idempotency returns already_archived on repeated calls', async () => {
+  // 13. Idempotency on repeated calls
+  await testPglite('13. Idempotency returns already_archived on repeated calls', async () => {
     const exId = nextUuid('a');
     await db.exec(`
       INSERT INTO public.academic_exercises (id, title, grade_level, subject, status, teacher_id)
@@ -531,20 +572,20 @@ async function runAllTests() {
   console.log('\n--- SECTION B: CONTRACT & STATIC SECURITY ACL TESTS (3 CHECKS) ---');
 
   // Static 1: search_path = ''
-  testStatic('13. RPC enforces empty search_path (SET search_path = \'\')', () => {
+  testStatic('14. RPC enforces empty search_path (SET search_path = \'\')', () => {
     const match = /SET\s+search_path\s*=\s*''/i.test(migrationContent);
     assert(match, 'Migration must set search_path = \'\'');
   });
 
   // Static 2: Revoke PUBLIC / anon
-  testStatic('14. Permissions revoked from PUBLIC and anon', () => {
+  testStatic('15. Permissions revoked from PUBLIC and anon', () => {
     const revokePublic = /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.rpc_academic_delete_or_archive_exercise.*FROM\s+PUBLIC/i.test(migrationContent);
     const revokeAnon = /anon/i.test(migrationContent);
     assert(revokePublic && revokeAnon, 'Permissions must be revoked from PUBLIC and anon');
   });
 
   // Static 3: Grant only authenticated and service_role
-  testStatic('15. Permissions granted strictly to authenticated and service_role', () => {
+  testStatic('16. Permissions granted strictly to authenticated and service_role', () => {
     const grantAuth = /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.rpc_academic_delete_or_archive_exercise.*TO\s+authenticated/i.test(migrationContent);
     const grantService = /service_role/i.test(migrationContent);
     assert(grantAuth && grantService, 'Execute permission must only be granted to authenticated and service_role');
