@@ -389,6 +389,17 @@ function validateCreateAssignmentPayload(raw) {
   };
 }
 
+function validateDeleteTestPayload(raw) {
+  if (!isPlainObject(raw)) {
+    return { valid: false, errorCode: 'INVALID_INPUT', errorMessage: 'Dữ liệu yêu cầu phải là một JSON object.' };
+  }
+  const rawExamId = raw.exam_id ?? raw.examId ?? raw.id;
+  if (!rawExamId || typeof rawExamId !== 'string' || !isValidUUID(rawExamId)) {
+    return { valid: false, errorCode: 'INVALID_EXAM_ID', errorMessage: 'Mã exam_id bắt buộc và phải đúng định dạng UUID.' };
+  }
+  return { valid: true, data: { exam_id: rawExamId.trim() } };
+}
+
 async function handleManagementRequestRunner(req, deps) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -434,7 +445,7 @@ async function handleManagementRequestRunner(req, deps) {
 
   // 1. GET /list-tests
   if (req.method === 'GET' && (action === 'list-tests' || action === 'tests' || action === 'exam-management-api')) {
-    let query = examClient.from('exam_tests').select('*');
+    let query = examClient.from('exam_tests').select('*').neq('status', 'archived');
     if (actorRole === 'teacher') {
       query = query.eq('author_id', callerId);
     }
@@ -651,6 +662,25 @@ async function handleManagementRequestRunner(req, deps) {
     return createSuccessResponse(rpcRes.data, 201);
   }
 
+  // 9. POST /delete-test
+  if (req.method === 'POST' && (action === 'delete-test' || action === 'delete')) {
+    let rawBody;
+    try { rawBody = await req.json(); } catch (_) { return createErrorResponse(400, 'INVALID_INPUT', 'JSON không hợp lệ.'); }
+    const valResult = validateDeleteTestPayload(rawBody);
+    if (!valResult.valid) return createErrorResponse(400, valResult.errorCode, valResult.errorMessage);
+
+    const rpcRes = await examClient.rpc('rpc_exam_delete_or_archive_test', {
+      p_caller_id: callerId,
+      p_exam_id: valResult.data.exam_id,
+      p_is_admin: actorRole === 'admin',
+    });
+    if (rpcRes.error) {
+      const norm = normalizeRpcError(rpcRes.error);
+      return createErrorResponse(norm.status, norm.errorCode, norm.message);
+    }
+    return createSuccessResponse(rpcRes.data, 200);
+  }
+
   return createErrorResponse(404, 'NOT_FOUND', 'Endpoint không tồn tại.');
 }
 
@@ -839,6 +869,10 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
                 filtered = filtered.filter((t) => t[col] === val);
                 return builder;
               },
+              neq: (col, val) => {
+                filtered = filtered.filter((t) => t[col] !== val);
+                return builder;
+              },
               then: (resolve) => resolve({ data: filtered, error: null }),
             };
             return builder;
@@ -994,6 +1028,56 @@ function createMockEnvironment(currentUserCallerId = TEACHER_1_ID) {
           },
           error: null,
         };
+      }
+      if (name === 'rpc_exam_delete_or_archive_test') {
+        const test = examsDb.get(args.p_exam_id);
+        if (!test) return { data: null, error: { message: 'ERR_EXAM_NOT_FOUND' } };
+        if (!args.p_is_admin && test.author_id !== args.p_caller_id) {
+          return { data: null, error: { message: 'ERR_UNAUTHORIZED' } };
+        }
+        if (test.status === 'archived') {
+          return {
+            data: {
+              success: true,
+              action: 'already_archived',
+              exam_id: args.p_exam_id,
+              message: 'Đề thi đã ở trạng thái lưu trữ từ trước.',
+            },
+            error: null,
+          };
+        }
+
+        const examVersions = Array.from(versionsDb.values()).filter((v) => v.exam_id === args.p_exam_id);
+        const hasPublished = examVersions.some((v) => v.status === 'published' || v.status === 'superseded');
+
+        if (hasPublished) {
+          test.status = 'archived';
+          test.archived_at = new Date().toISOString();
+          examVersions.filter((v) => v.status === 'draft').forEach((v) => { v.status = 'archived'; });
+          return {
+            data: {
+              success: true,
+              action: 'archived',
+              exam_id: args.p_exam_id,
+              message: 'Đề thi đã được lưu trữ an toàn; toàn bộ lịch sử giao bài và kết quả học sinh vẫn được bảo toàn nguyên vẹn.',
+            },
+            error: null,
+          };
+        } else {
+          examVersions.forEach((v) => {
+            versionsDb.delete(v.id);
+          });
+          examsDb.delete(args.p_exam_id);
+          return {
+            data: {
+              success: true,
+              action: 'deleted',
+              exam_id: args.p_exam_id,
+              message: 'Đề thi nháp đã được xóa vĩnh viễn thành công.',
+            },
+            error: null,
+          };
+        }
       }
       return { data: null, error: { message: 'UNKNOWN_RPC' } };
     },
@@ -1898,6 +1982,199 @@ async function runAllManagementTests() {
     assert.equal(code.includes('grade_level: activeVersion?.grade_level || t.grade_level'), true);
   });
 
+  // --------------------------------------------------------------------------
+  // SAFE DELETE EXAM TESTS (56-66)
+  // --------------------------------------------------------------------------
+  await test('56. Teacher can permanently delete (hard-delete) own clean draft exam', async () => {
+    const env = createMockEnvironment(TEACHER_2_ID);
+    // EXAM_2_T2 is a clean draft (never published) created by TEACHER_2_ID
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: EXAM_2_T2,
+    }, TEACHER_2_ID, null, env);
+
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+    assert.equal(json.data.action, 'deleted');
+
+    // Verify exam is completely removed from DB
+    const { status: listStatus, json: listJson } = await runRequest('list-tests', 'GET', null, TEACHER_2_ID, null, env);
+    assert.equal(listStatus, 200);
+    const found = listJson.data.tests.find((t) => t.id === EXAM_2_T2);
+    assert.equal(found, undefined, 'Hard-deleted draft must not exist in list-tests');
+  });
+
+  await test('57. Teacher 1 attempting to delete Teacher 2 exam is REJECTED with 403 ERR_UNAUTHORIZED', async () => {
+    const env = createMockEnvironment(TEACHER_1_ID);
+    // Teacher 1 tries to delete EXAM_2_T2 (authored by Teacher 2)
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: EXAM_2_T2,
+    }, TEACHER_1_ID, null, env);
+
+    assert.equal(status, 403);
+    assert.equal(json.error_code, 'ERR_UNAUTHORIZED');
+  });
+
+  await test('58. Student role calling delete-test is BLOCKED with 403 FORBIDDEN_ROLE', async () => {
+    const env = createMockEnvironment(STUDENT_ID);
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: EXAM_1_T1,
+    }, STUDENT_ID, null, env);
+
+    assert.equal(status, 403);
+    assert.equal(json.error_code, 'FORBIDDEN_ROLE');
+  });
+
+  await test('59. Admin can delete any teacher clean draft exam', async () => {
+    const env = createMockEnvironment(ADMIN_ID);
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: EXAM_2_T2,
+    }, ADMIN_ID, null, env);
+
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+    assert.equal(json.data.action, 'deleted');
+  });
+
+  await test('60. Exam with published versions/attempts is SOFT-DELETED (Archived), preserving all historical records', async () => {
+    const env = createMockEnvironment(TEACHER_1_ID);
+    // EXAM_1_T1 has a published version (VERSION_1_T1_PUB)
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: EXAM_1_T1,
+    }, TEACHER_1_ID, null, env);
+
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+    assert.equal(json.data.action, 'archived');
+
+    // Default GET list-tests must exclude archived exam
+    const { status: listStatus, json: listJson } = await runRequest('list-tests', 'GET', null, TEACHER_1_ID, null, env);
+    assert.equal(listStatus, 200);
+    const foundInActiveList = listJson.data.tests.find((t) => t.id === EXAM_1_T1);
+    assert.equal(foundInActiveList, undefined, 'Archived exam must be filtered out from default list-tests');
+  });
+
+  await test('61. Repeated delete call on already-archived exam is idempotent and returns already_archived', async () => {
+    const env = createMockEnvironment(TEACHER_1_ID);
+    // First call archives
+    await runRequest('delete-test', 'POST', { exam_id: EXAM_1_T1 }, TEACHER_1_ID, null, env);
+
+    // Second call
+    const { status, json } = await runRequest('delete-test', 'POST', { exam_id: EXAM_1_T1 }, TEACHER_1_ID, null, env);
+    assert.equal(status, 200);
+    assert.equal(json.success, true);
+    assert.equal(json.data.action, 'already_archived');
+  });
+
+  await test('62. Delete non-existent exam returns 404 ERR_NOT_FOUND', async () => {
+    const env = createMockEnvironment(TEACHER_1_ID);
+    const { status, json } = await runRequest('delete-test', 'POST', {
+      exam_id: '99999999-9999-4999-a999-999999999999',
+    }, TEACHER_1_ID, null, env);
+
+    assert.equal(status, 404);
+    assert.equal(json.error_code, 'ERR_NOT_FOUND');
+  });
+
+  await test('63. Client SDK deleteTest method dispatches POST /delete-test with sanitized payload', async () => {
+    let interceptedReq = null;
+    const mockClient = createExamManagementClient({
+      invokeFunction: async (params) => {
+        interceptedReq = params;
+        return {
+          ok: true,
+          data: { action: 'deleted', exam_id: EXAM_1_T1 },
+        };
+      },
+    });
+
+    const res = await mockClient.deleteTest({ examId: EXAM_1_T1 });
+    assert.equal(res.ok, true);
+    assert.equal(res.data.action, 'deleted');
+    assert.equal(interceptedReq.action, 'delete-test');
+    assert.equal(interceptedReq.method, 'POST');
+    assert.deepEqual(interceptedReq.payload, { exam_id: EXAM_1_T1 });
+  });
+
+  await test('64. [CONTRACT] Migration 20260913000013 defines rpc_exam_delete_or_archive_test with safe FK breakdown & search_path', () => {
+    const migPath = path.resolve(__dirname, '../supabase/migrations/20260913000013_exam_builder_v1_safe_delete_or_archive_rpc.sql');
+    assert.equal(fs.existsSync(migPath), true, 'Migration 20260913000013 must exist');
+    const sql = fs.readFileSync(migPath, 'utf8');
+
+    assert.equal(sql.includes('CREATE OR REPLACE FUNCTION public.rpc_exam_delete_or_archive_test'), true);
+    assert.equal(sql.includes('SET search_path = public, app_private'), true);
+    assert.equal(sql.includes('SECURITY DEFINER'), true);
+    // Break circular FK
+    assert.equal(sql.includes('UPDATE public.exam_tests\n        SET current_version_id = NULL'), true);
+    // Delete answer keys & questions
+    assert.equal(sql.includes('DELETE FROM app_private.exam_answer_keys'), true);
+    assert.equal(sql.includes('DELETE FROM public.exam_questions'), true);
+    assert.equal(sql.includes('DELETE FROM public.exam_versions'), true);
+    assert.equal(sql.includes('DELETE FROM public.exam_tests'), true);
+    // Soft delete / archive
+    assert.equal(sql.includes("UPDATE public.exam_tests\n        SET status = 'archived'"), true);
+    // Security grants
+    assert.equal(sql.includes('REVOKE ALL ON FUNCTION public.rpc_exam_delete_or_archive_test'), true);
+    assert.equal(sql.includes('GRANT EXECUTE ON FUNCTION public.rpc_exam_delete_or_archive_test'), true);
+  });
+
+  await test('65. [CONTRACT] Real handler.ts handles POST /delete-test and filters out archived exams from GET /list-tests', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+
+    assert.equal(code.includes("action === 'delete-test' || action === 'delete'"), true);
+    assert.equal(code.includes('rpc_exam_delete_or_archive_test'), true);
+    assert.equal(code.includes(".neq('status', 'archived')"), true);
+  });
+
+  await test('66. [UX CONTRACT] ExamManagementTab renders Delete action button and neutral safety confirmation modal', () => {
+    const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
+    const code = fs.readFileSync(tabPath, 'utf8');
+
+    // Delete button presence in table
+    assert.equal(code.includes('handleOpenDeleteModal(t)'), true);
+    assert.equal(code.includes('Trash2'), true);
+
+    // Modal neutral safety messages & double click protection
+    assert.equal(code.includes('Xác Nhận Xóa / Lưu Trữ Đề Thi'), true);
+    assert.equal(code.includes('Bản nháp sạch:'), true);
+    assert.equal(code.includes('Đề đã sử dụng:'), true);
+    assert.equal(code.includes('bảo toàn 100%'), true);
+    assert.equal(code.includes('isDeleting'), true);
+    assert.equal(code.includes('Loader2'), true);
+  });
+
+  await test('67. [CONTRACT] errors.ts maps ERR_EXAM_IN_USE & SQLSTATE 55000 to HTTP 409 Conflict', () => {
+    const errorsPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/errors.ts');
+    const code = fs.readFileSync(errorsPath, 'utf8');
+
+    assert.equal(code.includes('ERR_EXAM_IN_USE'), true);
+    assert.equal(code.includes("msg.includes('55000')"), true);
+    assert.equal(code.includes('status: 409'), true);
+    assert.equal(code.includes('Đề đang trong thời gian thi hoặc có học sinh đang làm bài'), true);
+  });
+
+  await test('68. [CONTRACT] handler.ts respects status=archived and include_archived=true parameters', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+
+    assert.equal(code.includes("statusParam === 'archived'"), true);
+    assert.equal(code.includes("includeArchivedParam === 'true'"), true);
+    assert.equal(code.includes("query = query.neq('status', 'archived')"), true);
+  });
+
+  await test('69. [UX CONTRACT] ExamManagementTab provides Archived status filter and restricts actions on archived exams', () => {
+    const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
+    const code = fs.readFileSync(tabPath, 'utf8');
+
+    // Archived option in dropdown filter
+    assert.equal(code.includes('Đã lưu trữ (Archived)'), true);
+    // Badge for archived test
+    assert.equal(code.includes('(Đã lưu trữ)'), true);
+    // Shows only View Results button for archived tests
+    assert.equal(code.includes('isArchived ? ('), true);
+    assert.equal(code.includes('handleOpenResultsModal(t)'), true);
+  });
+
   console.log('\n======================================================================');
   console.log(`TOTAL MANAGEMENT TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${failedTests}`);
   console.log('======================================================================\n');
@@ -1908,4 +2185,5 @@ async function runAllManagementTests() {
 }
 
 runAllManagementTests();
+
 

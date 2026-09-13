@@ -133,9 +133,17 @@ export class ExamManagementClient {
 
   /**
    * Lấy danh sách đề thi (Admin: toàn trường; Teacher: đề do mình tạo)
+   * @param {{ status?: string, includeArchived?: boolean }} options
    */
-  async listTests() {
-    return await this.dispatch('list-tests', 'GET');
+  async listTests(options = {}) {
+    const queryParams = {};
+    if (options?.status) {
+      queryParams.status = options.status;
+    }
+    if (options?.includeArchived) {
+      queryParams.include_archived = 'true';
+    }
+    return await this.dispatch('list-tests', 'GET', null, queryParams);
   }
 
   /**
@@ -153,6 +161,16 @@ export class ExamManagementClient {
    */
   async createTest(payload) {
     return await this.dispatch('create-test', 'POST', payload);
+  }
+
+  /**
+   * Xóa vĩnh viễn đề thi nháp hoặc Lưu trữ (Archive) an toàn đề thi đã dùng/xuất bản
+   * @param {{ examId: string }} params
+   */
+  async deleteTest({ examId }) {
+    return await this.dispatch('delete-test', 'POST', {
+      exam_id: examId,
+    });
   }
 
   /**

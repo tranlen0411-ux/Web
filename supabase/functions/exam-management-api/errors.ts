@@ -116,6 +116,14 @@ export function normalizeRpcError(err: unknown): {
     };
   }
 
+  if (msg.includes('ERR_EXAM_IN_USE') || msg.includes('55000')) {
+    return {
+      status: 409,
+      errorCode: 'ERR_EXAM_IN_USE',
+      message: 'Đề đang trong thời gian thi hoặc có học sinh đang làm bài. Chỉ có thể lưu trữ sau khi kỳ thi kết thúc.',
+    };
+  }
+
   if (msg.includes('ERR_ASSIGNMENT_ALREADY_EXISTS') || msg.includes('23505') || msg.includes('ERR_IDEMPOTENCY_CONFLICT')) {
     return {
       status: 409,
