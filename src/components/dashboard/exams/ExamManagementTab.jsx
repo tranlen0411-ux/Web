@@ -75,14 +75,17 @@ export const ExamManagementTab = ({
 
   useEffect(() => {
     fetchTests();
-  }, [role]);
+  }, [role, selectedStatus]);
 
   const fetchTests = async () => {
     setLoading(true);
     setErrorMsg('');
     try {
       const client = createExamManagementClient();
-      const res = await client.listTests();
+      const res = await client.listTests({
+        status: selectedStatus === 'archived' ? 'archived' : undefined,
+        includeArchived: selectedStatus === 'archived',
+      });
       if (res.ok && res.data && Array.isArray(res.data.tests)) {
         setTests(res.data.tests);
       } else {
@@ -155,8 +158,10 @@ export const ExamManagementTab = ({
         const action = res.data?.action;
         if (action === 'deleted') {
           showToast('🗑️ Đã xóa vĩnh viễn đề thi nháp thành công.');
-        } else {
+        } else if (action === 'archived') {
           showToast('📦 Đã lưu trữ đề thi an toàn; toàn bộ lịch sử và kết quả học sinh được bảo toàn.');
+        } else {
+          showToast('ℹ️ ' + (res.data?.message || 'Đề thi đã được xử lý an toàn.'));
         }
         setIsDeleteModalOpen(false);
         setExamToDelete(null);
@@ -210,7 +215,9 @@ export const ExamManagementTab = ({
       return false;
     }
 
-    if (selectedStatus !== 'ALL') {
+    if (selectedStatus === 'archived') {
+      if (t.status !== 'archived') return false;
+    } else if (selectedStatus !== 'ALL') {
       const vStatus = t.active_version?.status || t.status;
       if (selectedStatus === 'published' && vStatus !== 'published') return false;
       if (selectedStatus === 'draft' && vStatus !== 'draft') return false;
@@ -318,11 +325,12 @@ export const ExamManagementTab = ({
           <select
             value={selectedStatus}
             onChange={(e) => setSelectedStatus(e.target.value)}
-            className="w-full sm:w-36 p-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-xs text-slate-700"
+            className="w-full sm:w-44 p-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-xs text-slate-700"
           >
-            <option value="ALL">Tất cả trạng thái</option>
+            <option value="ALL">Tất cả đề đang hoạt động</option>
             <option value="published">Đã xuất bản</option>
             <option value="draft">Bản nháp</option>
+            <option value="archived">📦 Đã lưu trữ (Archived)</option>
           </select>
 
           {/* REFRESH BUTTON */}
@@ -350,15 +358,17 @@ export const ExamManagementTab = ({
             <h4 className="text-sm font-black text-slate-700">Chưa có đề thi nào trong danh sách</h4>
             <p className="text-xs font-bold text-slate-400 mt-1 mb-4">
               {role === 'admin'
-                ? 'Hệ thống chưa có đề thi nào được tạo.'
-                : 'Thầy/Cô chưa tạo đề thi nào. Bấm vào nút bên dưới để bắt đầu soạn đề nhé!'}
+                ? 'Hệ thống chưa có đề thi nào phù hợp với bộ lọc.'
+                : 'Thầy/Cô chưa có đề thi nào phù hợp với bộ lọc hiện tại.'}
             </p>
-            <button
-              onClick={handleOpenCreateModal}
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl shadow-md transition-all inline-flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" /> Soạn Đề Thi Mới
-            </button>
+            {selectedStatus !== 'archived' && (
+              <button
+                onClick={handleOpenCreateModal}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl shadow-md transition-all inline-flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" /> Soạn Đề Thi Mới
+              </button>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -377,6 +387,7 @@ export const ExamManagementTab = ({
               <tbody className="divide-y divide-slate-100 text-slate-800">
                 {filteredTests.map((t) => {
                   const activeV = t.active_version;
+                  const isArchived = t.status === 'archived';
                   const isPublished = activeV?.status === 'published';
                   const startsAtFormatted = formatScheduleDateTime(activeV?.starts_at);
                   const lastStartAtFormatted = formatScheduleDateTime(activeV?.last_start_at);
@@ -418,7 +429,12 @@ export const ExamManagementTab = ({
 
                       {/* TRẠNG THÁI */}
                       <td className="p-4">
-                        {isPublished ? (
+                        {isArchived ? (
+                          <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-xl text-[11px] font-black border border-slate-300 flex items-center gap-1 w-fit">
+                            <Archive className="w-3 h-3 text-slate-500" />
+                            Đã Lưu Trữ
+                          </span>
+                        ) : isPublished ? (
                           <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-xl text-[11px] font-black border border-emerald-300 flex items-center gap-1 w-fit">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             Đã Xuất Bản (v{activeV?.version_number || 1})
@@ -468,7 +484,20 @@ export const ExamManagementTab = ({
                       {/* THAO TÁC */}
                       <td className="p-4 text-center min-w-[280px]">
                         <div className="flex items-center justify-center flex-wrap gap-1.5 sm:gap-2 max-w-[340px] mx-auto">
-                          {isPublished ? (
+                          {isArchived ? (
+                            <>
+                              <span className="px-2.5 py-1 text-[11px] font-bold text-slate-400 italic">
+                                (Đã lưu trữ)
+                              </span>
+                              <button
+                                onClick={() => handleOpenResultsModal(t)}
+                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 shadow-sm active:translate-y-0.5 transition-all shrink-0 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                                title="Xem danh sách kết quả bài làm học sinh của đề thi đã lưu trữ"
+                              >
+                                <FileText className="w-3.5 h-3.5" /> Xem Kết Quả
+                              </button>
+                            </>
+                          ) : isPublished ? (
                             <>
                               <button
                                 disabled
@@ -485,37 +514,50 @@ export const ExamManagementTab = ({
                               >
                                 <FileText className="w-3.5 h-3.5" /> Xem Kết Quả
                               </button>
+
+                              <button
+                                onClick={() => handleOpenAssignModal(t)}
+                                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shadow-sm active:translate-y-0.5 shrink-0 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
+                                title="Giao đề thi cho lớp học"
+                              >
+                                <Send className="w-3.5 h-3.5" /> Giao Cho Lớp
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenDeleteModal(t)}
+                                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-1 shrink-0"
+                                title="Lưu trữ (ẩn) đề thi này sau khi kỳ thi kết thúc"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Xóa
+                              </button>
                             </>
                           ) : (
-                            <button
-                              onClick={() => handleOpenEditModal(t)}
-                              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shrink-0 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
-                              title="Chỉnh sửa bản nháp đề thi"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" /> Chỉnh Sửa
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handleOpenEditModal(t)}
+                                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shrink-0 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
+                                title="Chỉnh sửa bản nháp đề thi"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" /> Chỉnh Sửa
+                              </button>
+
+                              <button
+                                disabled
+                                className="px-3.5 py-1.5 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shadow-sm shrink-0 bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+                                title="Xuất bản đề thi trước khi giao"
+                              >
+                                <Send className="w-3.5 h-3.5" /> Giao Cho Lớp
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenDeleteModal(t)}
+                                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-1 shrink-0"
+                                title="Xóa vĩnh viễn bản nháp đề thi"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Xóa
+                              </button>
+                            </>
                           )}
-
-                          <button
-                            onClick={() => handleOpenAssignModal(t)}
-                            disabled={!isPublished}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all shadow-sm shrink-0 focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-                              isPublished
-                                ? 'bg-indigo-600 hover:bg-indigo-700 text-white active:translate-y-0.5 focus:ring-indigo-500'
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
-                            }`}
-                            title={isPublished ? 'Giao đề thi cho lớp học' : 'Xuất bản đề thi trước khi giao'}
-                          >
-                            <Send className="w-3.5 h-3.5" /> Giao Cho Lớp
-                          </button>
-
-                          <button
-                            onClick={() => handleOpenDeleteModal(t)}
-                            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-1 shrink-0"
-                            title={isPublished ? 'Lưu trữ (ẩn) đề thi này' : 'Xóa vĩnh viễn bản nháp đề thi'}
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Xóa
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -578,37 +620,17 @@ export const ExamManagementTab = ({
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
           <div className="bg-white rounded-3xl border-4 border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-scaleIn">
             {/* MODAL HEADER */}
-            <div
-              className={`p-5 flex items-center justify-between border-b ${
-                examToDelete.active_version?.status === 'published'
-                  ? 'bg-amber-50/80 border-amber-100 text-amber-900'
-                  : 'bg-rose-50/80 border-rose-100 text-rose-900'
-              }`}
-            >
+            <div className="p-5 flex items-center justify-between border-b bg-rose-50/80 border-rose-100 text-rose-900">
               <div className="flex items-center gap-3">
-                <div
-                  className={`p-2.5 rounded-2xl ${
-                    examToDelete.active_version?.status === 'published'
-                      ? 'bg-amber-500 text-white shadow-md shadow-amber-200'
-                      : 'bg-rose-600 text-white shadow-md shadow-rose-200'
-                  }`}
-                >
-                  {examToDelete.active_version?.status === 'published' ? (
-                    <Archive className="w-5 h-5" />
-                  ) : (
-                    <Trash2 className="w-5 h-5" />
-                  )}
+                <div className="p-2.5 rounded-2xl bg-rose-600 text-white shadow-md shadow-rose-200">
+                  <Trash2 className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-black">
-                    {examToDelete.active_version?.status === 'published'
-                      ? 'Lưu Trữ Đề Kiểm Tra (Archive)'
-                      : 'Xóa Vĩnh Viễn Bản Nháp'}
+                    Xác Nhận Xóa / Lưu Trữ Đề Thi
                   </h3>
                   <p className="text-xs font-bold opacity-75">
-                    {examToDelete.active_version?.status === 'published'
-                      ? 'Bảo toàn kết quả và lịch sử bài làm học sinh'
-                      : 'Thao tác không thể hoàn tác sau khi xác nhận'}
+                    Hệ thống tự động áp dụng quy tắc bảo toàn dữ liệu
                   </p>
                 </div>
               </div>
@@ -650,34 +672,27 @@ export const ExamManagementTab = ({
                 </div>
               </div>
 
-              {/* CẢNH BÁO QUY TẮC AN TOÀN */}
-              {examToDelete.active_version?.status === 'published' ? (
-                <div className="p-4 bg-amber-50 rounded-2xl border-2 border-amber-200 text-amber-900 text-xs space-y-1.5">
-                  <div className="flex items-center gap-2 font-black text-amber-800">
-                    <Info className="w-4 h-4 shrink-0 text-amber-600" />
-                    <span>Quy tắc bảo toàn dữ liệu học sinh</span>
-                  </div>
-                  <p className="font-bold leading-relaxed">
-                    Đề thi này đã xuất bản hoặc đã được giao lớp. Đề sẽ được chuyển sang trạng thái <strong>Lưu trữ (Archived)</strong> và ẩn khỏi danh sách quản lý mặc định.
-                  </p>
-                  <p className="font-bold leading-relaxed text-amber-800">
-                    ✨ <strong>Toàn bộ bài nộp, điểm số và lịch sử làm bài của học sinh vẫn được bảo toàn 100%.</strong>
-                  </p>
+              {/* QUY TẮC XỬ LÝ AN TOÀN */}
+              <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 text-slate-700 text-xs space-y-2.5">
+                <div className="flex items-center gap-2 font-black text-slate-800 text-[13px]">
+                  <Info className="w-4 h-4 shrink-0 text-indigo-600" />
+                  <span>Quy tắc bảo vệ dữ liệu tự động:</span>
                 </div>
-              ) : (
-                <div className="p-4 bg-rose-50 rounded-2xl border-2 border-rose-200 text-rose-900 text-xs space-y-1.5">
-                  <div className="flex items-center gap-2 font-black text-rose-800">
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-                    <span>Cảnh báo xóa vĩnh viễn</span>
-                  </div>
-                  <p className="font-bold leading-relaxed">
-                    Bản nháp này chưa từng giao cho lớp học nào. Hành động này sẽ <strong>xóa vĩnh viễn</strong> toàn bộ thông tin đề thi và câu hỏi liên quan khỏi hệ thống.
-                  </p>
-                  <p className="font-bold text-rose-700">
-                    ⚠️ Thao tác này không thể hoàn tác sau khi bấm xác nhận.
-                  </p>
-                </div>
-              )}
+                <ul className="space-y-2 text-[12px] font-semibold text-slate-600 pl-1 leading-relaxed">
+                  <li className="flex items-start gap-2">
+                    <span className="text-rose-600 font-bold shrink-0">🗑️ Bản nháp sạch:</span>
+                    <span>Đề chưa từng xuất bản, chưa giao lớp và chưa có bài làm sẽ được <strong>xóa vĩnh viễn</strong>.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-600 font-bold shrink-0">📦 Đề đã sử dụng:</span>
+                    <span>Đề đã xuất bản hoặc đã giao sẽ được <strong>chuyển sang Lưu trữ (Archived)</strong> sau khi kỳ thi kết thúc. Toàn bộ bài làm, điểm số học sinh được <strong>bảo toàn 100%</strong>.</span>
+                  </li>
+                  <li className="flex items-start gap-2 text-rose-700">
+                    <span className="font-bold shrink-0">⚠️ Đang diễn ra:</span>
+                    <span>Nếu đề thi đang trong thời gian mở hoặc có học sinh đang làm bài dở dang, hệ thống sẽ <strong>từ chối thao tác</strong> để bảo vệ bài thi học sinh.</span>
+                  </li>
+                </ul>
+              </div>
 
               {/* THÔNG BÁO LỖI NẾU CÓ */}
               {deleteError && (
@@ -703,26 +718,17 @@ export const ExamManagementTab = ({
                 type="button"
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
-                className={`px-5 py-2.5 font-black text-xs rounded-xl text-white shadow-md flex items-center gap-2 transition-all active:translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed ${
-                  examToDelete.active_version?.status === 'published'
-                    ? 'bg-amber-600 hover:bg-amber-700 border-b-2 border-amber-800'
-                    : 'bg-rose-600 hover:bg-rose-700 border-b-2 border-rose-800'
-                }`}
+                className="px-5 py-2.5 font-black text-xs rounded-xl text-white shadow-md flex items-center gap-2 transition-all active:translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed bg-rose-600 hover:bg-rose-700 border-b-2 border-rose-800"
               >
                 {isDeleting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>Đang xử lý...</span>
                   </>
-                ) : examToDelete.active_version?.status === 'published' ? (
-                  <>
-                    <Archive className="w-4 h-4" />
-                    <span>Xác Nhận Lưu Trữ</span>
-                  </>
                 ) : (
                   <>
                     <Trash2 className="w-4 h-4" />
-                    <span>Xác Nhận Xóa Vĩnh Viễn</span>
+                    <span>Xác Nhận Xóa / Lưu Trữ</span>
                   </>
                 )}
               </button>

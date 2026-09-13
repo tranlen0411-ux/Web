@@ -2126,7 +2126,7 @@ async function runAllManagementTests() {
     assert.equal(code.includes(".neq('status', 'archived')"), true);
   });
 
-  await test('66. [UX CONTRACT] ExamManagementTab renders Delete action button and confirmation modal with safety warnings', () => {
+  await test('66. [UX CONTRACT] ExamManagementTab renders Delete action button and neutral safety confirmation modal', () => {
     const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
     const code = fs.readFileSync(tabPath, 'utf8');
 
@@ -2134,12 +2134,45 @@ async function runAllManagementTests() {
     assert.equal(code.includes('handleOpenDeleteModal(t)'), true);
     assert.equal(code.includes('Trash2'), true);
 
-    // Modal safety messages & double click protection
-    assert.equal(code.includes('Xác Nhận Xóa Vĩnh Viễn'), true);
-    assert.equal(code.includes('Lưu Trữ Đề Kiểm Tra (Archive)'), true);
-    assert.equal(code.includes('Bảo toàn kết quả và lịch sử bài làm học sinh'), true);
+    // Modal neutral safety messages & double click protection
+    assert.equal(code.includes('Xác Nhận Xóa / Lưu Trữ Đề Thi'), true);
+    assert.equal(code.includes('Bản nháp sạch:'), true);
+    assert.equal(code.includes('Đề đã sử dụng:'), true);
+    assert.equal(code.includes('bảo toàn 100%'), true);
     assert.equal(code.includes('isDeleting'), true);
     assert.equal(code.includes('Loader2'), true);
+  });
+
+  await test('67. [CONTRACT] errors.ts maps ERR_EXAM_IN_USE & SQLSTATE 55000 to HTTP 409 Conflict', () => {
+    const errorsPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/errors.ts');
+    const code = fs.readFileSync(errorsPath, 'utf8');
+
+    assert.equal(code.includes('ERR_EXAM_IN_USE'), true);
+    assert.equal(code.includes("msg.includes('55000')"), true);
+    assert.equal(code.includes('status: 409'), true);
+    assert.equal(code.includes('Đề đang trong thời gian thi hoặc có học sinh đang làm bài'), true);
+  });
+
+  await test('68. [CONTRACT] handler.ts respects status=archived and include_archived=true parameters', () => {
+    const handlerPath = path.resolve(__dirname, '../supabase/functions/exam-management-api/handler.ts');
+    const code = fs.readFileSync(handlerPath, 'utf8');
+
+    assert.equal(code.includes("statusParam === 'archived'"), true);
+    assert.equal(code.includes("includeArchivedParam === 'true'"), true);
+    assert.equal(code.includes("query = query.neq('status', 'archived')"), true);
+  });
+
+  await test('69. [UX CONTRACT] ExamManagementTab provides Archived status filter and restricts actions on archived exams', () => {
+    const tabPath = path.resolve(__dirname, '../src/components/dashboard/exams/ExamManagementTab.jsx');
+    const code = fs.readFileSync(tabPath, 'utf8');
+
+    // Archived option in dropdown filter
+    assert.equal(code.includes('Đã lưu trữ (Archived)'), true);
+    // Badge for archived test
+    assert.equal(code.includes('(Đã lưu trữ)'), true);
+    // Shows only View Results button for archived tests
+    assert.equal(code.includes('isArchived ? ('), true);
+    assert.equal(code.includes('handleOpenResultsModal(t)'), true);
   });
 
   console.log('\n======================================================================');

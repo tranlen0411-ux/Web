@@ -92,6 +92,10 @@ export async function handleExamManagementRequest(
     // ENDPOINT 1: GET /list-tests
     // =========================================================================
     if (req.method === 'GET' && (action === 'list-tests' || action === 'tests' || action === 'exam-management-api')) {
+      const statusParam = url.searchParams.get('status');
+      const includeArchivedParam = url.searchParams.get('include_archived');
+      const shouldIncludeAll = includeArchivedParam === 'true' || statusParam === 'all';
+
       let query = examClient
         .from('exam_tests')
         .select(`
@@ -104,9 +108,16 @@ export async function handleExamManagementRequest(
           current_version_id,
           created_at,
           updated_at
-        `)
-        .neq('status', 'archived')
-        .order('created_at', { ascending: false });
+        `);
+
+      if (statusParam === 'archived') {
+        query = query.eq('status', 'archived');
+      } else if (!shouldIncludeAll) {
+        // Mặc định: Chỉ lấy các đề thi đang hoạt động (không lấy đề đã lưu trữ)
+        query = query.neq('status', 'archived');
+      }
+
+      query = query.order('created_at', { ascending: false });
 
       // Phân quyền Teacher: chỉ lấy đề thi do chính mình tạo
       if (actorRole === 'teacher') {

@@ -1,29 +1,37 @@
 -- ============================================================
 -- TEST / EXAM BUILDER V1
--- SAFE DELETE OR ARCHIVE EXAM RPC
+-- SAFE DELETE OR ARCHIVE EXAM RPC (HARDENED: BLOCK ACTIVE EXAMS)
 -- MIGRATION: 20260913000013_exam_builder_v1_safe_delete_or_archive_rpc.sql
 -- TARGET_PROJECT_REF: szptvqkoiphrhlionfoh
 -- FORBIDDEN_CORE_REF: nddimmxpymipalpxlops
 -- ============================================================
 --
 -- BUSINESS RULES:
--- 1. Clean Draft Exams (never assigned, no student attempts, no published versions):
+-- 1. Active Exam Blocking (ERR_EXAM_IN_USE):
+--    - If any assignment is active (due_date IS NULL OR due_date > NOW()):
+--      RAISE EXCEPTION 'ERR_EXAM_IN_USE: Đề đang trong thời gian thi hoặc có học sinh đang làm bài. Chỉ có thể lưu trữ sau khi kỳ thi kết thúc.'
+--    - If any student attempt is in progress (status = 'draft'):
+--      RAISE EXCEPTION 'ERR_EXAM_IN_USE: Đề đang trong thời gian thi hoặc có học sinh đang làm bài. Chỉ có thể lưu trữ sau khi kỳ thi kết thúc.'
+--
+-- 2. Used / Expired Exams Archival (Soft Delete):
+--    - Only allowed when:
+--      * No in-progress draft attempts exist.
+--      * All assignments have expired (due_date IS NOT NULL AND due_date <= NOW()).
+--    - Soft delete / Archive:
+--      * Set exam_tests.status = 'archived', archived_at = NOW(), updated_at = NOW()
+--      * Set any draft exam_versions.status = 'archived'
+--      * Published exam_versions, assignments, attempts, answers, and scores remain 100% intact.
+--
+-- 3. Clean Draft Exams (never assigned, no student attempts, no published versions):
 --    - Hard delete in atomic transaction.
---    - Safe deletion order:
+--    - Order of deletion:
 --      a. Break circular composite FK: UPDATE exam_tests SET current_version_id = NULL
 --      b. Delete app_private.exam_answer_keys for all related questions
 --      c. Delete public.exam_questions for all versions of this exam
 --      d. Delete public.exam_versions for this exam
 --      e. Delete public.exam_tests container
 --
--- 2. Active / Published / Assigned / Attempted Exams:
---    - NEVER delete assignments, attempts, attempt answers, or grading records.
---    - Soft delete / Archive:
---      a. Set exam_tests.status = 'archived', archived_at = NOW(), updated_at = NOW()
---      b. Set any draft exam_versions.status = 'archived'
---      c. Published exam_versions remain intact for historical & attempt review integrity.
---
--- 3. Authorization (RBAC):
+-- 4. Authorization (RBAC):
 --    - Teachers can only delete/archive exams they authored (author_id = p_caller_id).
 --    - Admins can delete/archive any exam.
 --    - Students and unauthenticated callers are rejected.
@@ -45,6 +53,8 @@ DECLARE
     v_has_assignments BOOLEAN := FALSE;
     v_has_attempts BOOLEAN := FALSE;
     v_has_published BOOLEAN := FALSE;
+    v_has_draft_attempt BOOLEAN := FALSE;
+    v_has_active_assignment BOOLEAN := FALSE;
 BEGIN
     -- 1. Input sanitization & validation
     IF p_caller_id IS NULL THEN
@@ -106,10 +116,37 @@ BEGIN
           AND status IN ('published', 'superseded')
     ) INTO v_has_published;
 
-    -- 6. Branch execution: Archive vs Hard Delete
+    -- 6. HARDENED ACTIVE CHECKS (Block if exam is currently in use)
+    -- 6.1. Check for any in-progress / draft student attempts
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.exam_attempts att
+        JOIN public.exam_versions v ON att.exam_version_id = v.id
+        WHERE v.exam_id = p_exam_id
+          AND att.status = 'draft'
+    ) INTO v_has_draft_attempt;
+
+    IF v_has_draft_attempt THEN
+        RAISE EXCEPTION 'ERR_EXAM_IN_USE: Đề đang trong thời gian thi hoặc có học sinh đang làm bài. Chỉ có thể lưu trữ sau khi kỳ thi kết thúc.' USING ERRCODE = '55000';
+    END IF;
+
+    -- 6.2. Check for active / open assignments (due_date IS NULL OR due_date > NOW())
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.exam_assignments a
+        JOIN public.exam_versions v ON a.exam_version_id = v.id
+        WHERE v.exam_id = p_exam_id
+          AND (a.due_date IS NULL OR a.due_date > NOW())
+    ) INTO v_has_active_assignment;
+
+    IF v_has_active_assignment THEN
+        RAISE EXCEPTION 'ERR_EXAM_IN_USE: Đề đang trong thời gian thi hoặc có học sinh đang làm bài. Chỉ có thể lưu trữ sau khi kỳ thi kết thúc.' USING ERRCODE = '55000';
+    END IF;
+
+    -- 7. Branch execution: Archive vs Hard Delete
     IF v_has_assignments OR v_has_attempts OR v_has_published THEN
         -- Case A: SOFT DELETE / ARCHIVE
-        -- Protect all student attempts, submissions, answers, scores, and class assignment history
+        -- All assignments have expired and no active draft attempts exist
         UPDATE public.exam_tests
         SET status = 'archived',
             archived_at = NOW(),
@@ -126,6 +163,7 @@ BEGIN
             'success', true,
             'action', 'archived',
             'exam_id', p_exam_id,
+            'archived_at', NOW(),
             'message', 'Đề thi đã được lưu trữ an toàn; toàn bộ lịch sử giao bài và kết quả học sinh vẫn được bảo toàn nguyên vẹn.'
         );
     ELSE
