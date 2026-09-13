@@ -21,7 +21,12 @@ import {
   Info,
   ShieldCheck,
   Eye,
-  FileText
+  FileText,
+  Trash2,
+  AlertTriangle,
+  Loader2,
+  Archive,
+  X
 } from 'lucide-react';
 import { createExamManagementClient } from '../../../services/examManagementClient.js';
 import { ExamEditorModal } from './ExamEditorModal.jsx';
@@ -56,6 +61,12 @@ export const ExamManagementTab = ({
 
   const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
   const [examForResults, setExamForResults] = useState(null);
+
+  // Safe Delete Modal state
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [examToDelete, setExamToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -116,6 +127,50 @@ export const ExamManagementTab = ({
     triggerSound('click');
     setExamForResults(exam);
     setIsResultsModalOpen(true);
+  };
+
+  const handleOpenDeleteModal = (exam) => {
+    triggerSound('click');
+    setExamToDelete(exam);
+    setDeleteError('');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (isDeleting) return;
+    setIsDeleteModalOpen(false);
+    setExamToDelete(null);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!examToDelete || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      const client = createExamManagementClient();
+      const res = await client.deleteTest({ examId: examToDelete.id });
+      if (res.ok) {
+        triggerSound('success');
+        const action = res.data?.action;
+        if (action === 'deleted') {
+          showToast('🗑️ Đã xóa vĩnh viễn đề thi nháp thành công.');
+        } else {
+          showToast('📦 Đã lưu trữ đề thi an toàn; toàn bộ lịch sử và kết quả học sinh được bảo toàn.');
+        }
+        setIsDeleteModalOpen(false);
+        setExamToDelete(null);
+        await fetchTests();
+      } else {
+        triggerSound('error');
+        setDeleteError(res.error?.message || 'Không thể xóa hoặc lưu trữ đề thi.');
+      }
+    } catch (err) {
+      triggerSound('error');
+      setDeleteError(err?.message || 'Lỗi hệ thống khi xóa đề thi.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const formatScheduleDateTime = (isoStr) => {
@@ -453,6 +508,14 @@ export const ExamManagementTab = ({
                           >
                             <Send className="w-3.5 h-3.5" /> Giao Cho Lớp
                           </button>
+
+                          <button
+                            onClick={() => handleOpenDeleteModal(t)}
+                            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded-xl text-xs font-black inline-flex items-center gap-1.5 transition-all border border-rose-200 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:ring-offset-1 shrink-0"
+                            title={isPublished ? 'Lưu trữ (ẩn) đề thi này' : 'Xóa vĩnh viễn bản nháp đề thi'}
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Xóa
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -509,6 +572,165 @@ export const ExamManagementTab = ({
           role={role}
         />
       )}
+
+      {/* MODAL XÁC NHẬN XÓA / LƯU TRỮ AN TOÀN */}
+      {isDeleteModalOpen && examToDelete && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl border-4 border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-scaleIn">
+            {/* MODAL HEADER */}
+            <div
+              className={`p-5 flex items-center justify-between border-b ${
+                examToDelete.active_version?.status === 'published'
+                  ? 'bg-amber-50/80 border-amber-100 text-amber-900'
+                  : 'bg-rose-50/80 border-rose-100 text-rose-900'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2.5 rounded-2xl ${
+                    examToDelete.active_version?.status === 'published'
+                      ? 'bg-amber-500 text-white shadow-md shadow-amber-200'
+                      : 'bg-rose-600 text-white shadow-md shadow-rose-200'
+                  }`}
+                >
+                  {examToDelete.active_version?.status === 'published' ? (
+                    <Archive className="w-5 h-5" />
+                  ) : (
+                    <Trash2 className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-black">
+                    {examToDelete.active_version?.status === 'published'
+                      ? 'Lưu Trữ Đề Kiểm Tra (Archive)'
+                      : 'Xóa Vĩnh Viễn Bản Nháp'}
+                  </h3>
+                  <p className="text-xs font-bold opacity-75">
+                    {examToDelete.active_version?.status === 'published'
+                      ? 'Bảo toàn kết quả và lịch sử bài làm học sinh'
+                      : 'Thao tác không thể hoàn tác sau khi xác nhận'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleCloseDeleteModal}
+                disabled={isDeleting}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-all disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* MODAL BODY */}
+            <div className="p-6 space-y-4">
+              {/* TÊN ĐỀ THI & THÔNG TIN */}
+              <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 space-y-2">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Đề kiểm tra được chọn
+                </div>
+                <div className="text-sm font-black text-slate-900">
+                  {examToDelete.active_version?.title || examToDelete.title || 'Chưa đặt tiêu đề'}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-black border border-indigo-100">
+                    {examToDelete.active_version?.subject || examToDelete.subject}
+                  </span>
+                  <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-lg text-xs font-black border border-amber-100">
+                    Khối {examToDelete.active_version?.grade_level || examToDelete.grade_level}
+                  </span>
+                  {examToDelete.active_version?.status === 'published' ? (
+                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-black border border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Đã Xuất Bản
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-black">
+                      Bản Nháp
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* CẢNH BÁO QUY TẮC AN TOÀN */}
+              {examToDelete.active_version?.status === 'published' ? (
+                <div className="p-4 bg-amber-50 rounded-2xl border-2 border-amber-200 text-amber-900 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2 font-black text-amber-800">
+                    <Info className="w-4 h-4 shrink-0 text-amber-600" />
+                    <span>Quy tắc bảo toàn dữ liệu học sinh</span>
+                  </div>
+                  <p className="font-bold leading-relaxed">
+                    Đề thi này đã xuất bản hoặc đã được giao lớp. Đề sẽ được chuyển sang trạng thái <strong>Lưu trữ (Archived)</strong> và ẩn khỏi danh sách quản lý mặc định.
+                  </p>
+                  <p className="font-bold leading-relaxed text-amber-800">
+                    ✨ <strong>Toàn bộ bài nộp, điểm số và lịch sử làm bài của học sinh vẫn được bảo toàn 100%.</strong>
+                  </p>
+                </div>
+              ) : (
+                <div className="p-4 bg-rose-50 rounded-2xl border-2 border-rose-200 text-rose-900 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2 font-black text-rose-800">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>Cảnh báo xóa vĩnh viễn</span>
+                  </div>
+                  <p className="font-bold leading-relaxed">
+                    Bản nháp này chưa từng giao cho lớp học nào. Hành động này sẽ <strong>xóa vĩnh viễn</strong> toàn bộ thông tin đề thi và câu hỏi liên quan khỏi hệ thống.
+                  </p>
+                  <p className="font-bold text-rose-700">
+                    ⚠️ Thao tác này không thể hoàn tác sau khi bấm xác nhận.
+                  </p>
+                </div>
+              )}
+
+              {/* THÔNG BÁO LỖI NẾU CÓ */}
+              {deleteError && (
+                <div className="p-3.5 bg-rose-100 border border-rose-300 text-rose-800 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* MODAL FOOTER */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={handleCloseDeleteModal}
+                disabled={isDeleting}
+                className="px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition-all disabled:opacity-50"
+              >
+                Hủy Bỏ
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className={`px-5 py-2.5 font-black text-xs rounded-xl text-white shadow-md flex items-center gap-2 transition-all active:translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed ${
+                  examToDelete.active_version?.status === 'published'
+                    ? 'bg-amber-600 hover:bg-amber-700 border-b-2 border-amber-800'
+                    : 'bg-rose-600 hover:bg-rose-700 border-b-2 border-rose-800'
+                }`}
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : examToDelete.active_version?.status === 'published' ? (
+                  <>
+                    <Archive className="w-4 h-4" />
+                    <span>Xác Nhận Lưu Trữ</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Xác Nhận Xóa Vĩnh Viễn</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

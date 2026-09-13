@@ -22,6 +22,7 @@ import {
   validateListExamAttemptsParams,
   validateGetAttemptDetailParams,
   validateImportQuestionBankPayload,
+  validateDeleteTestPayload,
   isValidUUID,
 } from './validation.ts';
 
@@ -104,6 +105,7 @@ export async function handleExamManagementRequest(
           created_at,
           updated_at
         `)
+        .neq('status', 'archived')
         .order('created_at', { ascending: false });
 
       // Phân quyền Teacher: chỉ lấy đề thi do chính mình tạo
@@ -1463,6 +1465,42 @@ export async function handleExamManagementRequest(
         total_imported: safeProjectedQuestions.length,
         imported_questions: safeProjectedQuestions,
       }, 200);
+    }
+
+    // =========================================================================
+    // ENDPOINT 9: POST /delete-test (hoặc ?action=delete-test)
+    // =========================================================================
+    if (req.method === 'POST' && (action === 'delete-test' || action === 'delete')) {
+      let bodyRaw: any;
+      try {
+        bodyRaw = await req.json();
+      } catch (_) {
+        return createErrorResponse(400, 'INVALID_JSON', 'Request body must be valid JSON');
+      }
+
+      const val = validateDeleteTestPayload(bodyRaw);
+      if (!val.valid || !val.data) {
+        return createErrorResponse(400, val.errorCode || 'INVALID_INPUT', val.errorMessage || 'Dữ liệu không hợp lệ');
+      }
+
+      const { exam_id } = val.data;
+      const isAdmin = actorRole === 'admin';
+
+      const { data: rpcData, error: rpcErr } = await examClient.rpc(
+        'rpc_exam_delete_or_archive_test',
+        {
+          p_caller_id: callerId,
+          p_exam_id: exam_id,
+          p_is_admin: isAdmin,
+        }
+      );
+
+      if (rpcErr) {
+        const norm = normalizeRpcError(rpcErr);
+        return createErrorResponse(norm.status, norm.errorCode, norm.message);
+      }
+
+      return createSuccessResponse(rpcData || { success: true, exam_id });
     }
 
     // Nếu không khớp action nào

@@ -156,6 +156,16 @@ export class ExamManagementClient {
   }
 
   /**
+   * Xóa vĩnh viễn đề thi nháp hoặc Lưu trữ (Archive) an toàn đề thi đã dùng/xuất bản
+   * @param {{ examId: string }} params
+   */
+  async deleteTest({ examId }) {
+    return await this.dispatch('delete-test', 'POST', {
+      exam_id: examId,
+    });
+  }
+
+  /**
    * Lưu bản nháp đề thi kèm câu hỏi & lịch thi linh hoạt
    */
   async saveDraft(payload) {

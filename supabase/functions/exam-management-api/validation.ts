@@ -601,4 +601,32 @@ export function validateImportQuestionBankPayload(raw: unknown): {
   };
 }
 
+export interface DeleteTestPayload {
+  exam_id: string;
+}
+
+export function validateDeleteTestPayload(raw: unknown): {
+  valid: boolean;
+  data?: DeleteTestPayload;
+  errorCode?: string;
+  errorMessage?: string;
+} {
+  if (!isPlainObject(raw)) {
+    return { valid: false, errorCode: 'INVALID_INPUT', errorMessage: 'Dữ liệu yêu cầu phải là một JSON object.' };
+  }
+
+  const rawExamId = (raw as any).exam_id ?? (raw as any).examId ?? (raw as any).id;
+  if (!rawExamId || typeof rawExamId !== 'string' || !isValidUUID(rawExamId)) {
+    return { valid: false, errorCode: 'INVALID_EXAM_ID', errorMessage: 'Mã exam_id bắt buộc và phải đúng định dạng UUID.' };
+  }
+
+  return {
+    valid: true,
+    data: {
+      exam_id: rawExamId.trim(),
+    },
+  };
+}
+
+
 
