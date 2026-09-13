@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * ACADEMIC EXERCISE SAFE DELETE & ARCHIVE TESTS (HARDENED & REFINED SUITE)
+ * ACADEMIC EXERCISE SAFE DELETE & ARCHIVE TESTS (REFINED SUITE - NO DUMMY TABLES)
  * - PGlite In-Memory PostgreSQL Runtime Tests (13 Test Cases)
  * - Contract & Static Security ACL Analysis (3 Test Cases)
  * (ZERO PRODUCTION DATABASE ACCESS)
@@ -159,15 +159,6 @@ async function initTestDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS public.academic_ranking_entries (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      exercise_id UUID REFERENCES public.academic_exercises(id),
-      student_id UUID NOT NULL REFERENCES public.profiles(id),
-      class_id UUID NOT NULL REFERENCES public.classes(id),
-      points_awarded INT NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-
     CREATE TABLE IF NOT EXISTS public.exercise_file_cleanup_jobs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       bucket_id TEXT NOT NULL DEFAULT 'exercise-submissions',
@@ -311,8 +302,8 @@ async function runAllTests() {
     assert.equal(asgCheck.rows.length, 1);
   });
 
-  // 3. Preserve submissions, answers, scores and rankings
-  await testPglite('3. Preserve submissions, answers, scores, and rankings upon archive', async () => {
+  // 3. Preserve submissions, answers, scores upon archive
+  await testPglite('3. Preserve submissions, answers, and scores upon archive', async () => {
     const exId = nextUuid('3');
     const subId = nextUuid('4');
     const qId = nextUuid('5');
@@ -333,9 +324,6 @@ async function runAllTests() {
 
       INSERT INTO public.academic_submission_answers (submission_id, question_id, student_answer_json, is_correct, points_earned, file_url)
       VALUES ('${subId}', '${qId}', '"A"'::jsonb, true, 10, 'exercise-submissions/student/essay.pdf');
-
-      INSERT INTO public.academic_ranking_entries (exercise_id, student_id, class_id, points_awarded)
-      VALUES ('${exId}', '${STUDENT_ID}', '${CLASS_ID}', 10);
     `);
 
     const res = await runRpcAsUser(db, TEACHER_A_ID, exId);
@@ -349,9 +337,6 @@ async function runAllTests() {
 
     const ansCheck = await db.query(`SELECT * FROM public.academic_submission_answers WHERE submission_id = $1`, [subId]);
     assert.equal(ansCheck.rows[0].file_url, 'exercise-submissions/student/essay.pdf');
-
-    const rankCheck = await db.query(`SELECT * FROM public.academic_ranking_entries WHERE exercise_id = $1`, [exId]);
-    assert.equal(rankCheck.rows.length, 1);
   });
 
   // 4. Block draft submission
@@ -475,24 +460,28 @@ async function runAllTests() {
     );
   });
 
-  // 10. Exercise with ranking entry is archived, not hard-deleted
-  await testPglite('10. Exercise with ranking entry transitions to archived (history preserved)', async () => {
+  // 10. Draft exercise with graded submission must archive and preserve scores/answers (dynamic ranking integrity)
+  await testPglite('10. Draft exercise with graded submission must archive and preserve scores/answers', async () => {
     const exId = nextUuid('c');
+    const subId = nextUuid('5');
     await db.exec(`
       INSERT INTO public.academic_exercises (id, title, grade_level, subject, status, teacher_id)
-      VALUES ('${exId}', 'Ranking Preserved Ex', 5, 'Math', 'draft', '${TEACHER_A_ID}');
+      VALUES ('${exId}', 'Draft With Submitted Work', 5, 'Math', 'draft', '${TEACHER_A_ID}');
 
-      INSERT INTO public.academic_ranking_entries (exercise_id, student_id, class_id, points_awarded)
-      VALUES ('${exId}', '${STUDENT_ID}', '${CLASS_ID}', 50);
+      INSERT INTO public.academic_submissions (id, exercise_id, student_id, status, total_score, max_score)
+      VALUES ('${subId}', '${exId}', '${STUDENT_ID}', 'graded', 85, 100);
     `);
 
     const res = await runRpcAsUser(db, TEACHER_A_ID, exId);
     assert.equal(res.success, true);
     assert.equal(res.action, 'archived');
 
-    const rankCheck = await db.query(`SELECT * FROM public.academic_ranking_entries WHERE exercise_id = $1`, [exId]);
-    assert.equal(rankCheck.rows.length, 1);
-    assert.equal(rankCheck.rows[0].points_awarded, 50);
+    const exCheck = await db.query(`SELECT status FROM public.academic_exercises WHERE id = $1`, [exId]);
+    assert.equal(exCheck.rows[0].status, 'archived');
+
+    const subCheck = await db.query(`SELECT total_score, status FROM public.academic_submissions WHERE id = $1`, [subId]);
+    assert.equal(subCheck.rows[0].status, 'graded');
+    assert.equal(subCheck.rows[0].total_score, 85);
   });
 
   // 11. Non-draft exercise (published / closed) without assignments still archives (never hard-deleted)

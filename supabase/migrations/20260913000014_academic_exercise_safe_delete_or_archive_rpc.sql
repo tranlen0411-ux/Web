@@ -19,14 +19,14 @@
 --      RAISE EXCEPTION 'ERR_EXERCISE_IN_USE: Bài tập đang trong thời hạn giao cho lớp học. Vui lòng kết thúc thời hạn giao bài trước khi lưu trữ.'
 --
 -- 3. Used / Historical Exercise Archival (Soft Delete):
---    - If the exercise status != 'draft' (e.g. 'published', 'closed') OR has assignments, submissions,
---      or ranking entries (academic_ranking_entries):
+--    - If the exercise status != 'draft' (e.g. 'published', 'closed') OR has assignments or submissions:
 --      * Set academic_exercises.status = 'archived', updated_at = pg_catalog.now()
---      * Submissions, answers, files, scores, and ranking entries remain 100% intact.
+--      * Submissions, answers, files, and scores remain 100% intact.
 --      * Student submission files in bucket 'exercise-submissions' are NEVER touched or deleted.
+--      * Academic ranking is computed dynamically from submissions/assignments and is preserved.
 --
 -- 4. Clean Draft Exercise Hard-Delete (Database-Only):
---    - Hard delete ONLY when: status = 'draft' AND 0 assignments AND 0 submissions AND 0 rankings.
+--    - Hard delete ONLY when: status = 'draft' AND 0 assignments AND 0 submissions.
 --    - Delete public.academic_exercise_questions for this exercise.
 --    - Delete public.academic_exercises container.
 --    - ARCHITECTURAL NOTE: Không quét Storage hay chèn job vào exercise_file_cleanup_jobs (bucket exercise-submissions
@@ -54,7 +54,6 @@ DECLARE
     v_exercise RECORD;
     v_has_assignments BOOLEAN := FALSE;
     v_has_submissions BOOLEAN := FALSE;
-    v_has_rankings BOOLEAN := FALSE;
     v_has_draft_submission BOOLEAN := FALSE;
     v_has_active_assignment BOOLEAN := FALSE;
     v_now TIMESTAMPTZ := pg_catalog.now();
@@ -144,17 +143,11 @@ BEGIN
         WHERE exercise_id = p_exercise_id
     ) INTO v_has_submissions;
 
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.academic_ranking_entries
-        WHERE exercise_id = p_exercise_id
-    ) INTO v_has_rankings;
-
     -- 8. Branch execution: Soft Archive vs Hard Delete
-    -- RULE: Hard-delete ONLY when status = 'draft' AND no assignments AND no submissions AND no rankings.
+    -- RULE: Hard-delete ONLY when status = 'draft' AND no assignments AND no submissions.
     -- All other statuses (published, closed) or items with relational history must be preserved via archive.
-    IF v_exercise.status != 'draft' OR v_has_assignments OR v_has_submissions OR v_has_rankings THEN
-        -- Case A: SOFT DELETE / ARCHIVE (Preserve 100% of historical data, rankings, files)
+    IF v_exercise.status != 'draft' OR v_has_assignments OR v_has_submissions THEN
+        -- Case A: SOFT DELETE / ARCHIVE (Preserve 100% of historical data, submissions, scores)
         UPDATE public.academic_exercises
         SET status = 'archived',
             updated_at = v_now
@@ -165,12 +158,11 @@ BEGIN
             'action', 'archived',
             'exercise_id', p_exercise_id,
             'archived_at', v_now,
-            'message', 'Bài tập đã được lưu trữ an toàn; toàn bộ bài nộp, điểm số và bảng xếp hạng vẫn được bảo toàn nguyên vẹn.'
+            'message', 'Bài tập đã được lưu trữ an toàn; toàn bộ bài nộp và điểm số vẫn được bảo toàn nguyên vẹn.'
         );
     ELSE
-        -- Case B: HARD DELETE (Clean Draft: status = 'draft', 0 assignments, 0 submissions, 0 rankings)
-        -- Database-only deletion. Không quét hay can thiệp Storage (bucket exercise-submissions thuộc về học sinh).
-        -- Khi tương lai có attachment giáo viên, phải dùng bucket/cột metadata riêng và cleanup worker riêng; không suy đoán từ nội dung văn bản.
+        -- Case B: HARD DELETE (Clean Draft: status = 'draft', 0 assignments, 0 submissions)
+        -- Database-only deletion. Không can thiệp bucket exercise-submissions của học sinh.
         DELETE FROM public.academic_exercise_questions
         WHERE exercise_id = p_exercise_id;
 
