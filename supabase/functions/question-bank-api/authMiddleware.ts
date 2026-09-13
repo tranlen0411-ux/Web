@@ -20,7 +20,8 @@ export type UserFacingQuestionBankRpc =
   | 'rpc_qb_list_questions'
   | 'rpc_qb_fork_question'
   | 'rpc_qb_update_item_metadata'
-  | 'rpc_qb_list_versions';
+  | 'rpc_qb_list_versions'
+  | 'rpc_qb_safe_delete_or_archive_question';
 
 export interface CallerAuthClient {
   auth: {
