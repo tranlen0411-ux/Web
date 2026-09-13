@@ -20,10 +20,10 @@ import {
   normalizeRpcError,
 } from './errors.ts';
 import {
-  AuthDependencies,
-  InjectedAuthDependencies,
-  RpcClient,
-  UserFacingQuestionBankRpc,
+  type AuthDependencies,
+  type InjectedAuthDependencies,
+  type RpcClient,
+  type UserFacingQuestionBankRpc,
   verifyAuthAndDeriveContext,
 } from './authMiddleware.ts';
 import {

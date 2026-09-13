@@ -1,16 +1,30 @@
 // scripts/test_question_bank_api_safe_delete_edge.mjs
 // Comprehensive Test Suite for Question Bank Safe Delete Edge Function BFF & Client Service
+// Tests REAL handleQuestionBankRequest router dispatcher with injected dependencies mode.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+import { register } from 'node:module';
+
+// Register ESM loader hook to resolve Deno https: imports in Node runtime
+const hook = `
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith('https://esm.sh/@supabase/supabase-js')) {
+    return nextResolve('@supabase/supabase-js', context);
+  }
+  return nextResolve(specifier, context);
+}
+`;
+register('data:text/javascript,' + encodeURIComponent(hook), import.meta.url);
+
+// Import real router and error mappers
+const { handleQuestionBankRequest } = await import('../supabase/functions/question-bank-api/router.ts');
+const {
   corsHeaders,
   mapSafeDeleteQuestionSuccess,
   normalizeRpcError,
-  createErrorResponse,
-  createSuccessResponse
-} from '../supabase/functions/question-bank-api/errors.ts';
-import { isValidUUID, isPlainObject } from '../supabase/functions/question-bank-api/validation.ts';
+} = await import('../supabase/functions/question-bank-api/errors.ts');
+const { isValidUUID } = await import('../supabase/functions/question-bank-api/validation.ts');
 
 test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
   await t.test('1. CORS: Access-Control-Allow-Methods includes DELETE', () => {
@@ -70,8 +84,8 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(mapped4.ok, false);
   });
 
-  await t.test('3. RPC Error Normalization: Real PostgREST / Postgres Exceptions to HTTP Status', () => {
-    // 3.1. 404 on Item Not Found (Postgres P0002 / ERR_ITEM_NOT_FOUND)
+  await t.test('3. Strict RPC Error Normalization (Fail-Closed: SQLSTATE & Controlled Codes)', () => {
+    // 3.1. 404 on Item Not Found (Postgres P0002 or ERR_ITEM_NOT_FOUND)
     const err404 = normalizeRpcError({
       code: 'P0002',
       message: 'ERR_ITEM_NOT_FOUND: Không tìm thấy câu hỏi yêu cầu'
@@ -80,7 +94,7 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(err404.errorCode, 'NOT_FOUND');
     assert.equal(err404.message, 'Không tìm thấy câu hỏi yêu cầu.');
 
-    // 3.2. 403 on Teacher Ownership Mismatch (Postgres 42501 / ERR_UNAUTHORIZED)
+    // 3.2. 403 on Teacher Ownership Mismatch (Postgres 42501 or ERR_UNAUTHORIZED)
     const err403Ownership = normalizeRpcError({
       code: '42501',
       message: 'ERR_UNAUTHORIZED: Bạn không có quyền xóa hoặc lưu trữ câu hỏi của người khác'
@@ -89,7 +103,7 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(err403Ownership.errorCode, 'FORBIDDEN');
     assert.equal(err403Ownership.message, 'Bạn không có quyền thực hiện thao tác này trên câu hỏi.');
 
-    // 3.3. 403 on Invalid Role (Postgres 42501 / ERR_UNAUTHORIZED)
+    // 3.3. 403 on Unauthorized Role (Postgres 42501 or ERR_UNAUTHORIZED)
     const err403Role = normalizeRpcError({
       code: '42501',
       message: 'ERR_UNAUTHORIZED: Chỉ giáo viên hoặc quản trị viên mới có quyền thao tác'
@@ -97,7 +111,7 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(err403Role.status, 403);
     assert.equal(err403Role.errorCode, 'FORBIDDEN');
 
-    // 3.4. 400 on Missing / Invalid Input (Postgres 22000 / ERR_REQUIRED_PARAMS)
+    // 3.4. 400 on Missing / Invalid Input (Postgres 22000 / 22P02 or ERR_REQUIRED_PARAMS)
     const err400 = normalizeRpcError({
       code: '22000',
       message: 'ERR_REQUIRED_PARAMS: Item ID is required'
@@ -113,149 +127,190 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(err500.status, 500);
     assert.equal(err500.errorCode, 'INTERNAL_ERROR');
     assert.equal(err500.message, 'Đã xảy ra lỗi máy chủ nội bộ khi thực thi thao tác.');
-    assert.ok(!err500.message.includes('disk failure'), 'Internal details must be sanitized');
+    assert.ok(!err500.message.includes('disk failure'), 'Internal database details must NOT be leaked');
+
+    // 3.6. Generic strings without SQLSTATE/controlled code must FAIL-CLOSED to 500
+    const errGeneric = normalizeRpcError({
+      message: 'Some random message mentioning not found or is required'
+    }, null);
+    assert.equal(errGeneric.status, 500, 'Generic uncontrolled string must fail-closed to 500');
   });
 
-  await t.test('4. Route 11 Dispatcher Simulation (200, 400, 403, 404, 500)', async () => {
-    // Simulate Router Dispatch Logic for DELETE /qb/questions/:id
-    async function simulateRoute11Dispatch(reqUrl, reqMethod, context, mockRpc) {
-      const url = new URL(reqUrl, 'https://test-host');
-      const pathname = url.pathname;
-      const deleteMatch = pathname.match(/\/qb\/questions\/([^\/]+)$/);
+  await t.test('4. Real Router handleQuestionBankRequest: Injected Dependencies Mode (200, 400, 403, 404, 500)', async () => {
+    const teacherId = '11111111-1111-1111-1111-111111111111';
+    const studentId = '33333333-3333-3333-3333-333333333333';
+    const targetItemId = '00000000-0000-0000-0000-000000000001';
 
-      if (reqMethod === 'DELETE' && deleteMatch) {
-        if (context.actorRole !== 'admin' && context.actorRole !== 'teacher') {
-          return createErrorResponse(403, 'FORBIDDEN', 'Chỉ giáo viên và quản trị viên mới có quyền xóa câu hỏi.');
-        }
-
-        const itemId = deleteMatch[1];
-        if (!isValidUUID(itemId)) {
-          return createErrorResponse(400, 'INVALID_INPUT', 'ID câu hỏi không đúng định dạng UUID.');
-        }
-
-        const { data: rpcRes, error: rpcError } = await mockRpc(
-          'rpc_qb_safe_delete_or_archive_question',
-          {
-            p_caller_id: context.callerId,
-            p_actor_role: context.actorRole,
-            p_item_id: itemId
+    function createInjectedDeps(callerId, actorRole, mockRpc) {
+      return {
+        mode: 'injected',
+        authDeps: {
+          mode: 'injected',
+          callerAuthClient: {
+            auth: {
+              getUser: async () => ({
+                data: { user: { id: callerId } },
+                error: null
+              })
+            }
+          },
+          profileQueryClient: {
+            from: () => ({
+              select: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({
+                    data: { id: callerId, role: actorRole, is_disabled: false },
+                    error: null
+                  })
+                })
+              })
+            })
           }
-        );
-
-        const rpcPayload = isPlainObject(rpcRes) ? rpcRes : null;
-        if (rpcError || !rpcPayload || rpcPayload.success !== true) {
-          const err = normalizeRpcError(rpcError, rpcPayload);
-          return createErrorResponse(err.status, err.errorCode, err.message);
+        },
+        rpcClient: {
+          rpc: mockRpc
         }
-
-        const mapped = mapSafeDeleteQuestionSuccess(rpcPayload);
-        if (!mapped.ok) {
-          return createErrorResponse(500, 'INTERNAL_ERROR', 'Phản hồi máy chủ không hợp lệ.');
-        }
-
-        return createSuccessResponse(mapped.data, 200);
-      }
-
-      return createErrorResponse(404, 'NOT_FOUND', 'Đường dẫn API không tồn tại.');
+      };
     }
 
-    const teacherContext = {
-      callerId: '11111111-1111-1111-1111-111111111111',
-      actorRole: 'teacher',
-      schoolId: null
-    };
-
-    const studentContext = {
-      callerId: '33333333-3333-3333-3333-333333333333',
-      actorRole: 'student',
-      schoolId: null
-    };
-
-    // 4.1. Success: Hard Delete
-    const res200Delete = await simulateRoute11Dispatch(
-      '/qb/questions/00000000-0000-0000-0000-000000000001',
-      'DELETE',
-      teacherContext,
-      async () => ({
-        data: { success: true, action: 'deleted', item_id: '00000000-0000-0000-0000-000000000001', version_count: 1 },
+    // 4.1. 200 OK: DELETE Draft Question (Deleted Action & verify exact parameters passed to RPC)
+    let capturedRpcName = '';
+    let capturedRpcArgs = null;
+    const req200 = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: 'Bearer valid-jwt-token'
+      }
+    });
+    const deps200 = createInjectedDeps(teacherId, 'teacher', async (name, args) => {
+      capturedRpcName = name;
+      capturedRpcArgs = args;
+      return {
+        data: {
+          success: true,
+          action: 'deleted',
+          item_id: targetItemId,
+          version_count: 1,
+          message: 'Câu hỏi bản nháp đã được xóa vĩnh viễn.'
+        },
         error: null
-      })
-    );
-    assert.equal(res200Delete.status, 200);
-    const body200 = await res200Delete.json();
+      };
+    });
+
+    const res200 = await handleQuestionBankRequest(req200, deps200);
+    assert.equal(res200.status, 200);
+    const body200 = await res200.json();
     assert.equal(body200.success, true);
     assert.equal(body200.data.action, 'deleted');
+    assert.equal(body200.data.item_id, targetItemId);
 
-    // 4.2. 400 Bad UUID
-    const res400 = await simulateRoute11Dispatch(
-      '/qb/questions/invalid-not-uuid',
-      'DELETE',
-      teacherContext,
-      async () => ({ data: null, error: null })
-    );
+    // Verify Router correctly forwarded TrustedContext parameters to RPC
+    assert.equal(capturedRpcName, 'rpc_qb_safe_delete_or_archive_question');
+    assert.equal(capturedRpcArgs.p_caller_id, teacherId);
+    assert.equal(capturedRpcArgs.p_actor_role, 'teacher');
+    assert.equal(capturedRpcArgs.p_item_id, targetItemId);
+
+    // 4.2. 200 OK: Archive Published Question
+    const req200Archive = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps200Archive = createInjectedDeps(teacherId, 'teacher', async () => ({
+      data: {
+        success: true,
+        action: 'archived',
+        item_id: targetItemId,
+        archived_at: '2026-09-13T10:00:00Z',
+        message: 'Câu hỏi đã được chuyển vào lưu trữ an toàn.'
+      },
+      error: null
+    }));
+    const res200Archive = await handleQuestionBankRequest(req200Archive, deps200Archive);
+    assert.equal(res200Archive.status, 200);
+    const body200Archive = await res200Archive.json();
+    assert.equal(body200Archive.data.action, 'archived');
+
+    // 4.3. 400 Bad Request: Invalid UUID format in URL path
+    const req400 = new Request('https://test-host/qb/questions/not-a-valid-uuid', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps400 = createInjectedDeps(teacherId, 'teacher', async () => ({ data: null, error: null }));
+    const res400 = await handleQuestionBankRequest(req400, deps400);
     assert.equal(res400.status, 400);
     const body400 = await res400.json();
     assert.equal(body400.error_code, 'INVALID_INPUT');
 
-    // 4.3. 403 Student Caller
-    const res403Student = await simulateRoute11Dispatch(
-      '/qb/questions/00000000-0000-0000-0000-000000000001',
-      'DELETE',
-      studentContext,
-      async () => ({ data: null, error: null })
-    );
+    // 4.4. 403 Forbidden: Student caller blocked at Router Gateway
+    const req403Student = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps403Student = createInjectedDeps(studentId, 'student', async () => ({ data: null, error: null }));
+    const res403Student = await handleQuestionBankRequest(req403Student, deps403Student);
     assert.equal(res403Student.status, 403);
-    const body403 = await res403Student.json();
-    assert.equal(body403.error_code, 'FORBIDDEN');
+    const body403Student = await res403Student.json();
+    assert.equal(body403Student.error_code, 'FORBIDDEN');
 
-    // 4.4. 403 Teacher calling item of another author (via RPC exception)
-    const res403Ownership = await simulateRoute11Dispatch(
-      '/qb/questions/00000000-0000-0000-0000-000000000001',
-      'DELETE',
-      teacherContext,
-      async () => ({
-        data: null,
-        error: { code: '42501', message: 'ERR_UNAUTHORIZED: Bạn không có quyền xóa hoặc lưu trữ câu hỏi của người khác' }
-      })
-    );
+    // 4.5. 403 Forbidden: Teacher attempting to delete another teacher question (RPC 42501 exception)
+    const req403Ownership = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps403Ownership = createInjectedDeps(teacherId, 'teacher', async () => ({
+      data: null,
+      error: {
+        code: '42501',
+        message: 'ERR_UNAUTHORIZED: Bạn không có quyền xóa hoặc lưu trữ câu hỏi của người khác'
+      }
+    }));
+    const res403Ownership = await handleQuestionBankRequest(req403Ownership, deps403Ownership);
     assert.equal(res403Ownership.status, 403);
-    const body403Own = await res403Ownership.json();
-    assert.equal(body403Own.error_code, 'FORBIDDEN');
+    const body403Ownership = await res403Ownership.json();
+    assert.equal(body403Ownership.error_code, 'FORBIDDEN');
 
-    // 4.5. 404 Item Not Found (via RPC exception)
-    const res404 = await simulateRoute11Dispatch(
-      '/qb/questions/00000000-0000-0000-0000-000000000099',
-      'DELETE',
-      teacherContext,
-      async () => ({
-        data: null,
-        error: { code: 'P0002', message: 'ERR_ITEM_NOT_FOUND: Không tìm thấy câu hỏi yêu cầu' }
-      })
-    );
+    // 4.6. 404 Not Found: Non-existent question (RPC P0002 exception)
+    const req404 = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps404 = createInjectedDeps(teacherId, 'teacher', async () => ({
+      data: null,
+      error: {
+        code: 'P0002',
+        message: 'ERR_ITEM_NOT_FOUND: Không tìm thấy câu hỏi yêu cầu'
+      }
+    }));
+    const res404 = await handleQuestionBankRequest(req404, deps404);
     assert.equal(res404.status, 404);
     const body404 = await res404.json();
     assert.equal(body404.error_code, 'NOT_FOUND');
 
-    // 4.6. 500 Unexpected DB Error (via RPC exception)
-    const res500 = await simulateRoute11Dispatch(
-      '/qb/questions/00000000-0000-0000-0000-000000000001',
-      'DELETE',
-      teacherContext,
-      async () => ({
-        data: null,
-        error: { code: '40001', message: 'could not serialize access due to concurrent update' }
-      })
-    );
+    // 4.7. 500 Internal Server Error: Database unexpected failure (Sanitized)
+    const req500 = new Request(`https://test-host/qb/questions/${targetItemId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer valid-jwt-token' }
+    });
+    const deps500 = createInjectedDeps(teacherId, 'teacher', async () => ({
+      data: null,
+      error: {
+        code: '40001',
+        message: 'could not serialize access due to concurrent update'
+      }
+    }));
+    const res500 = await handleQuestionBankRequest(req500, deps500);
     assert.equal(res500.status, 500);
     const body500 = await res500.json();
     assert.equal(body500.error_code, 'INTERNAL_ERROR');
+    assert.equal(body500.message, 'Đã xảy ra lỗi máy chủ nội bộ khi thực thi thao tác.');
   });
 
-  await t.test('5. Frontend Service: deleteQuestion contract validation', async () => {
+  await t.test('5. Frontend Service: deleteQuestion contract & UUID validation', async () => {
     // Pure unit test of deleteQuestion logic without requiring Vite runtime
+    const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
     const mockDeleteQuestion = async (itemId, mockFetch, mockGetToken) => {
-      if (!itemId || typeof itemId !== 'string') {
-        const err = new Error('ID câu hỏi không hợp lệ.');
+      if (!itemId || typeof itemId !== 'string' || !UUID_REGEX.test(itemId.trim())) {
+        const err = new Error('ID câu hỏi không đúng định dạng UUID.');
         err.status = 400;
         err.errorCode = 'INVALID_INPUT';
         throw err;
@@ -280,7 +335,7 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
       return json.data;
     };
 
-    // Valid call
+    // Valid call with UUID
     let calledUrl = '';
     let calledMethod = '';
     let calledHeaders = {};
@@ -304,9 +359,15 @@ test('Question Bank Safe Delete BFF & Client Service Suite', async (t) => {
     assert.equal(calledHeaders.Authorization, 'Bearer fake-token');
     assert.equal(resData.action, 'deleted');
 
-    // Invalid input
+    // Invalid input: null
     await assert.rejects(
       async () => mockDeleteQuestion(null, () => {}, () => {}),
+      (err) => err.status === 400 && err.errorCode === 'INVALID_INPUT'
+    );
+
+    // Invalid input: Non-UUID string
+    await assert.rejects(
+      async () => mockDeleteQuestion('not-a-valid-uuid', () => {}, () => {}),
       (err) => err.status === 400 && err.errorCode === 'INVALID_INPUT'
     );
   });

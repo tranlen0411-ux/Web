@@ -426,6 +426,8 @@ export const forkQuestion = async (sourceVersionId, overrides = {}) => {
   return jsonResult.data;
 };
 
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 /**
  * Xóa an toàn hoặc lưu trữ câu hỏi (Safe Delete or Archive)
  * Máy chủ sẽ tự động xóa vĩnh viễn nếu là bản nháp sạch chưa sử dụng,
@@ -434,8 +436,8 @@ export const forkQuestion = async (sourceVersionId, overrides = {}) => {
  * @returns {Promise<{ item_id: string, action: 'deleted' | 'archived' | 'already_archived', archived_at?: string, message?: string }>}
  */
 export const deleteQuestion = async (itemId) => {
-  if (!itemId || typeof itemId !== 'string') {
-    const err = new Error('ID câu hỏi không hợp lệ.');
+  if (!itemId || typeof itemId !== 'string' || !UUID_REGEX.test(itemId.trim())) {
+    const err = new Error('ID câu hỏi không đúng định dạng UUID.');
     err.status = 400;
     err.errorCode = 'INVALID_INPUT';
     throw err;

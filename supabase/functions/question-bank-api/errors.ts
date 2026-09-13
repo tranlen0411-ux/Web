@@ -500,10 +500,7 @@ export function normalizeRpcError(
 
     if (
       errCode === 'P0002' ||
-      errMsg.includes('ERR_ITEM_NOT_FOUND') ||
-      errMsg.includes('ITEM_NOT_FOUND') ||
-      errMsg.includes('not found') ||
-      errMsg.includes('Không tìm thấy')
+      errMsg.includes('ERR_ITEM_NOT_FOUND')
     ) {
       return {
         status: 404,
@@ -514,10 +511,7 @@ export function normalizeRpcError(
 
     if (
       errCode === '42501' ||
-      errMsg.includes('ERR_UNAUTHORIZED') ||
-      errMsg.includes('FORBIDDEN') ||
-      errMsg.includes('UNAUTHORIZED') ||
-      errMsg.includes('không có quyền')
+      errMsg.includes('ERR_UNAUTHORIZED')
     ) {
       return {
         status: 403,
@@ -529,10 +523,7 @@ export function normalizeRpcError(
     if (
       errCode === '22000' ||
       errCode === '22P02' ||
-      errMsg.includes('ERR_REQUIRED_PARAMS') ||
-      errMsg.includes('INVALID_INPUT') ||
-      errMsg.includes('Invalid parameters') ||
-      errMsg.includes('is required')
+      errMsg.includes('ERR_REQUIRED_PARAMS')
     ) {
       return {
         status: 400,
