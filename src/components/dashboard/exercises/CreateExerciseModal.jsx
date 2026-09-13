@@ -573,12 +573,295 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           )}
 
           {currentStep === 2 && (
-            <div className="space-y-3 bg-white p-5 rounded-3xl border-2 border-amber-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-black text-slate-800">Danh sách {questions.length} câu hỏi</h3>
-                <button type="button" onClick={handleAddQuestion} className="px-3 py-1.5 bg-amber-500 text-white font-black text-xs rounded-xl">
-                  + Thêm câu hỏi
-                </button>
+            <div className="space-y-4 bg-white p-5 rounded-3xl border-2 border-amber-200">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-black text-slate-800">
+                  Danh sách {questions.length} câu hỏi ({roundedTotalPoints} điểm)
+                </h3>
+                {!hasSubmissions && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIsImportModalOpen(true)}
+                      className="px-3 py-1.5 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 font-extrabold text-xs rounded-xl border border-emerald-300 flex items-center gap-1.5 transition-colors"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" /> Nhập Từ Tệp (Excel/Word)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddQuestion}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Thêm câu hỏi
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* DANH SÁCH CÂU HỎI ĐƯỢC NHẬP HOẶC TẠO THỦ CÔNG */}
+              <div className="space-y-3 pt-2">
+                {questions.map((rawQ, idx) => {
+                  const q = normalizeImportedQuestion(rawQ, idx);
+                  const cardErrors = validationErrors.filter(e => e.index === idx);
+                  const hasErr = cardErrors.length > 0;
+
+                  return (
+                    <div
+                      key={rawQ.id || idx}
+                      className={`p-4 rounded-2xl border-2 bg-slate-50/50 space-y-3 transition-all ${
+                        hasErr
+                          ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-300/50'
+                          : 'border-amber-200 hover:border-amber-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 bg-slate-800 text-white font-black text-xs rounded-lg">
+                            Câu {idx + 1}
+                            {q.source_row ? (
+                              <span className="text-[10px] text-amber-300 font-normal ml-1">
+                                (dòng {q.source_row})
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="text-xs font-black text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                            {q.points || 1} điểm
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={q.question_type}
+                            disabled={hasSubmissions}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => {
+                                if (i === idx) {
+                                  let initCorrect = 'Lựa chọn A';
+                                  if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
+                                  const initOpts = ['single_choice', 'multiple_choice'].includes(val) ? ['Lựa chọn A', 'Lựa chọn B'] : [];
+                                  return normalizeImportedQuestion({
+                                    ...item,
+                                    question_type: val,
+                                    options: initOpts,
+                                    options_json: initOpts,
+                                    correct_answer: initCorrect
+                                  }, i);
+                                }
+                                return item;
+                              }));
+                              setValidationErrors([]);
+                            }}
+                            className="px-2 py-1 bg-white border border-amber-200 rounded-lg text-xs font-bold"
+                          >
+                            <option value="single_choice">Trắc nghiệm 1 đáp án</option>
+                            <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+                            <option value="fill_blank">Điền từ / điền số</option>
+                            <option value="short_answer">Trả lời ngắn</option>
+                            <option value="essay">Tự luận</option>
+                          </select>
+
+                          {!hasSubmissions && questions.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveQuestion(idx)}
+                              className="p-1 text-rose-600 hover:bg-rose-50 rounded-lg"
+                              title="Xóa câu hỏi"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* ĐỀ BÀI CÂU HỎI */}
+                      <div>
+                        <input
+                          type="text"
+                          required
+                          disabled={hasSubmissions}
+                          placeholder="Nhập nội dung đề bài câu hỏi..."
+                          value={q.prompt}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, prompt: val }, i) : item));
+                            setValidationErrors([]);
+                          }}
+                          className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-600">Điểm:</label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0.5"
+                          max="100"
+                          disabled={hasSubmissions}
+                          value={q.points}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, points: val } : item));
+                            setValidationErrors([]);
+                          }}
+                          className="w-16 px-2 py-1 bg-white border border-amber-200 rounded-lg text-xs font-bold text-center"
+                        />
+                      </div>
+
+                      {/* LỰA CHỌN CHO TRẮC NGHIỆM */}
+                      {['single_choice', 'multiple_choice'].includes(q.question_type) && (
+                        <div className="space-y-1.5 pt-1 border-t border-amber-100">
+                          <p className="text-[11px] font-black text-slate-700">
+                            {q.question_type === 'single_choice' ? 'Chọn đáp án đúng (radio):' : 'Chọn các đáp án đúng (checkbox):'}
+                          </p>
+                          {q.options_json.map((opt, optIdx) => (
+                            <div key={optIdx} className="flex items-center gap-2">
+                              {q.question_type === 'single_choice' ? (
+                                <input
+                                  type="radio"
+                                  name={`correct_choice_${q.id || idx}`}
+                                  checked={q.correct_answer === opt}
+                                  disabled={hasSubmissions}
+                                  onChange={() => {
+                                    setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: opt }, i) : item));
+                                    setValidationErrors([]);
+                                  }}
+                                  className="w-4 h-4 text-amber-500 cursor-pointer"
+                                />
+                              ) : (
+                                <input
+                                  type="checkbox"
+                                  checked={Array.isArray(q.correct_answer) && q.correct_answer.includes(opt)}
+                                  disabled={hasSubmissions}
+                                  onChange={(e) => {
+                                    const currArr = Array.isArray(q.correct_answer) ? q.correct_answer : [q.correct_answer];
+                                    const nextArr = e.target.checked
+                                      ? [...currArr, opt]
+                                      : currArr.filter(a => a !== opt);
+                                    setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: nextArr }, i) : item));
+                                    setValidationErrors([]);
+                                  }}
+                                  className="w-4 h-4 text-amber-500 rounded cursor-pointer"
+                                />
+                              )}
+                              <input
+                                type="text"
+                                disabled={hasSubmissions}
+                                value={opt}
+                                onChange={(e) => {
+                                  const newOptions = [...q.options_json];
+                                  const oldVal = newOptions[optIdx];
+                                  newOptions[optIdx] = e.target.value;
+                                  setQuestions(prev => prev.map((item, i) => {
+                                    if (i === idx) {
+                                      let nextCorrect = item.correct_answer;
+                                      if (Array.isArray(item.correct_answer)) {
+                                        nextCorrect = item.correct_answer.map(a => a === oldVal ? e.target.value : a);
+                                      } else if (item.correct_answer === oldVal) {
+                                        nextCorrect = e.target.value;
+                                      }
+                                      return normalizeImportedQuestion({
+                                        ...item,
+                                        options: newOptions,
+                                        options_json: newOptions,
+                                        correct_answer: nextCorrect
+                                      }, i);
+                                    }
+                                    return item;
+                                  }));
+                                  setValidationErrors([]);
+                                }}
+                                className="flex-1 p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
+                              />
+                              {!hasSubmissions && q.options_json.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newOptions = q.options_json.filter((_, oI) => oI !== optIdx);
+                                    setQuestions(prev => prev.map((item, i) => {
+                                      if (i === idx) {
+                                        let nextCorrect = item.correct_answer;
+                                        if (Array.isArray(item.correct_answer)) {
+                                          nextCorrect = item.correct_answer.filter(a => a !== opt);
+                                        } else if (item.correct_answer === opt) {
+                                          nextCorrect = newOptions[0];
+                                        }
+                                        return normalizeImportedQuestion({
+                                          ...item,
+                                          options: newOptions,
+                                          options_json: newOptions,
+                                          correct_answer: nextCorrect
+                                        }, i);
+                                      }
+                                      return item;
+                                    }));
+                                    setValidationErrors([]);
+                                  }}
+                                  className="p-1 text-rose-500 hover:bg-rose-50 rounded"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+
+                          {!hasSubmissions && q.options_json.length < 6 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newOptions = [...q.options_json, `Lựa chọn ${String.fromCharCode(65 + q.options_json.length)}`];
+                                setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, options: newOptions, options_json: newOptions }, i) : item));
+                                setValidationErrors([]);
+                              }}
+                              className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Thêm lựa chọn
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ĐIỀN TỪ / TRẢ LỜI NGẮN */}
+                      {['fill_blank', 'short_answer'].includes(q.question_type) && (
+                        <div className="pt-1 border-t border-amber-100">
+                          <label className="block text-[11px] font-black text-slate-700 mb-1">Đáp án đúng:</label>
+                          <input
+                            type="text"
+                            disabled={hasSubmissions}
+                            placeholder="Nhập từ hoặc số đáp án đúng..."
+                            value={q.correct_answer}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
+                              setValidationErrors([]);
+                            }}
+                            className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
+                          />
+                        </div>
+                      )}
+
+                      {/* TỰ LUẬN */}
+                      {q.question_type === 'essay' && (
+                        <div className="pt-1 border-t border-amber-100">
+                          <label className="block text-[11px] font-black text-slate-700 mb-1">Hướng dẫn chấm / Đáp án tham khảo:</label>
+                          <input
+                            type="text"
+                            disabled={hasSubmissions}
+                            placeholder="Nhập hướng dẫn chấm bài cho giáo viên..."
+                            value={q.correct_answer}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
+                              setValidationErrors([]);
+                            }}
+                            className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -645,6 +928,13 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
         </div>
 
       </div>
+
+      {/* MODAL NHẬP CÂU HỎI TỪ TỆP */}
+      <ImportQuestionsModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportQuestions={handleImportQuestions}
+      />
     </div>,
     document.body
   );
