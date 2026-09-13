@@ -30,12 +30,12 @@ import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel, deriveGradeFromClass } from '../../../utils/helpers';
 import {
   listQuestions,
-  deleteQuestion,
   archiveQuestion,
   restoreQuestion,
   publishQuestion,
   updateQuestionVisibility,
-  forkQuestion
+  forkQuestion,
+  deleteQuestion
 } from '../../../services/questionBankService';
 import { CreateQuestionBankModal } from './CreateQuestionBankModal';
 import { ImportQuestionBankModal } from './ImportQuestionBankModal';
@@ -128,13 +128,13 @@ export const QuestionBankListTab = ({
   const [unshareModalItem, setUnshareModalItem] = useState(null);
   const [isUnsharing, setIsUnsharing] = useState(false);
 
-  // Delete modal state
-  const [deleteModalItem, setDeleteModalItem] = useState(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-
   // Clone / Fork modal state for shared questions (Teacher Fork / Clone UI V1)
   const [cloneModalItem, setCloneModalItem] = useState(null);
   const [isCloning, setIsCloning] = useState(false);
+
+  // Safe delete modal state
+  const [deleteModalItem, setDeleteModalItem] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Assign to class modal state (Teacher Assign to Class V1)
   const [assignModalItem, setAssignModalItem] = useState(null);
@@ -358,40 +358,6 @@ export const QuestionBankListTab = ({
     fetchQuestions();
   };
 
-  const handleConfirmDelete = async () => {
-    if (!deleteModalItem || isDeleting) return;
-    const targetId = deleteModalItem.id || deleteModalItem.item_id;
-    if (!targetId) return;
-
-    setIsDeleting(true);
-    try {
-      const res = await deleteQuestion(targetId);
-      setDeleteModalItem(null);
-
-      if (res?.action === 'deleted') {
-        showToast('Đã xóa vĩnh viễn câu hỏi thành công.');
-      } else if (res?.action === 'archived') {
-        showToast('Câu hỏi đã có dữ liệu sử dụng/lịch sử, đã chuyển sang lưu trữ an toàn.');
-      } else if (res?.action === 'already_archived') {
-        showToast('Câu hỏi đã ở trạng thái lưu trữ từ trước.');
-      } else {
-        showToast('Thao tác xóa/lưu trữ câu hỏi thành công.');
-      }
-
-      // Nếu trang hiện tại chỉ có 1 phần tử và page > 1, tự động quay về trang trước
-      if (questions.length <= 1 && page > 1) {
-        setPage((p) => Math.max(1, p - 1));
-      } else {
-        fetchQuestions();
-      }
-    } catch (err) {
-      console.error('Lỗi khi xóa câu hỏi:', err);
-      showToast(err?.message || 'Không thể xóa câu hỏi. Vui lòng thử lại.');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
   const handleConfirmArchive = async () => {
     if (!archiveModalItem || isArchiving) return;
     const targetId = archiveModalItem.id || archiveModalItem.item_id;
@@ -439,6 +405,39 @@ export const QuestionBankListTab = ({
       showToast(err?.message || 'Không thể khôi phục câu hỏi. Vui lòng thử lại.');
     } finally {
       setIsRestoring(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteModalItem || isDeleting) return;
+    const targetId = deleteModalItem.id || deleteModalItem.item_id;
+    if (!targetId) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await deleteQuestion(targetId);
+      setDeleteModalItem(null);
+
+      if (res?.action === 'deleted') {
+        showToast('Đã xóa vĩnh viễn câu hỏi bản nháp.');
+      } else if (res?.action === 'archived') {
+        showToast('Câu hỏi đã được chuyển vào mục lưu trữ an toàn.');
+      } else if (res?.action === 'already_archived') {
+        showToast('Câu hỏi đã nằm trong mục lưu trữ từ trước.');
+      } else {
+        showToast('Thao tác xóa/lưu trữ câu hỏi thành công.');
+      }
+
+      if (questions.length <= 1 && page > 1) {
+        setPage((p) => Math.max(1, p - 1));
+      } else {
+        fetchQuestions();
+      }
+    } catch (err) {
+      console.error('Lỗi khi xóa câu hỏi:', err);
+      showToast(err?.message || 'Không thể xóa câu hỏi. Vui lòng thử lại.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -923,7 +922,7 @@ export const QuestionBankListTab = ({
                   const canUnshare = item.status === 'published' && item.visibility === 'public_template' && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
-                  const canDelete = role === 'admin' || (role === 'teacher' && isAuthor);
+                  const canDelete = (role === 'admin' || (role === 'teacher' && isAuthor)) && !isSharedFromOtherTeacher;
                   const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
                   const canClone = isSharedFromOtherTeacher;
                   const canAssignToClass = isOwnQuestion && item.status === 'published' && (role === 'admin' || role === 'teacher');
@@ -1081,8 +1080,8 @@ export const QuestionBankListTab = ({
                           {canDelete && (
                             <button
                               onClick={() => setDeleteModalItem(item)}
-                              className="px-2 py-1 text-slate-500 hover:text-rose-700 hover:bg-rose-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
-                              title="Xóa hoặc lưu trữ câu hỏi"
+                              className="px-2 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Xóa câu hỏi"
                             >
                               <Trash2 className="w-3.5 h-3.5 text-rose-600" />
                               <span>Xóa</span>
@@ -1155,58 +1154,6 @@ export const QuestionBankListTab = ({
         onSuccess={handleImportSuccess}
         role={role}
       />
-
-      {/* CONFIRM DELETE MODAL */}
-      {deleteModalItem && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-rose-200 animate-scaleUp">
-            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
-              <div className="w-10 h-10 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
-                <Trash2 className="w-5 h-5 text-rose-700" />
-              </div>
-              <span>Xóa câu hỏi khỏi Ngân hàng?</span>
-            </div>
-
-            <p className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
-              Máy chủ sẽ tự động kiểm tra an toàn: nếu là bản nháp sạch chưa từng sử dụng trong đề thi hoặc sao chép, câu hỏi sẽ được <strong>xóa vĩnh viễn</strong>. Nếu câu hỏi đã từng được sử dụng hoặc xuất bản, hệ thống sẽ tự động chuyển sang <strong>lưu trữ an toàn (ẩn)</strong> để bảo toàn tính toàn vẹn dữ liệu.
-            </p>
-
-            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-rose-50/50 p-2.5 rounded-xl border border-rose-100">
-              <span className="font-bold text-slate-700">Câu hỏi: </span>
-              {deleteModalItem.title || deleteModalItem.prompt || '(Không có tiêu đề)'}
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => !isDeleting && setDeleteModalItem(null)}
-                disabled={isDeleting}
-                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                className="px-4 py-2 text-xs font-black rounded-xl bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isDeleting ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Đang xử lý...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Xác nhận xóa</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* CONFIRM ARCHIVE MODAL */}
       {archiveModalItem && (
@@ -1596,6 +1543,63 @@ export const QuestionBankListTab = ({
           item={assignModalItem}
           classes={activeClasses}
         />
+      )}
+
+      {/* CONFIRM DELETE MODAL (Safe Delete or Archive) */}
+      {deleteModalItem && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-4 border-rose-200 animate-scaleUp">
+            <div className="flex items-center gap-3 text-slate-900 font-black text-base sm:text-lg mb-2">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <span>Xác nhận xóa câu hỏi này?</span>
+            </div>
+
+            <div className="text-xs sm:text-sm text-slate-600 font-medium my-4 leading-relaxed bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 space-y-2">
+              <p>
+                Máy chủ sẽ tự động kiểm tra: Nếu là bản nháp chưa từng xuất bản hoặc liên kết thi cử, câu hỏi sẽ được <strong>xóa vĩnh viễn</strong>.
+              </p>
+              <p>
+                Nếu câu hỏi đã xuất bản hoặc có lịch sử liên kết, hệ thống sẽ tự động chuyển sang <strong>lưu trữ an toàn</strong> để bảo toàn toàn vẹn dữ liệu. Các bài tập học thuật đã tạo sử dụng cơ chế snapshot độc lập nên không bị ảnh hưởng. Tệp đa phương tiện không bị xóa.
+              </p>
+            </div>
+
+            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-rose-50/50 p-2.5 rounded-xl border border-rose-100">
+              <span className="font-bold text-slate-700">Câu hỏi: </span>
+              {deleteModalItem.title || deleteModalItem.prompt || '(Không có tiêu đề)'}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => !isDeleting && setDeleteModalItem(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors disabled:opacity-50"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xử lý...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Xác nhận xóa</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -741,7 +741,7 @@ export async function handleQuestionBankRequest(
         return createErrorResponse(
           403,
           'FORBIDDEN',
-          'Chỉ giáo viên và quản trị viên mới có quyền xóa hoặc lưu trữ câu hỏi.'
+          'Chỉ giáo viên và quản trị viên mới có quyền xóa câu hỏi.'
         );
       }
 
@@ -754,7 +754,7 @@ export async function handleQuestionBankRequest(
         );
       }
 
-      // Gọi RPC với context tin cậy từ server (BFF)
+      // Gọi RPC rpc_qb_safe_delete_or_archive_question
       const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
         'rpc_qb_safe_delete_or_archive_question',
         {

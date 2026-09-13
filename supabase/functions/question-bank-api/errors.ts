@@ -448,7 +448,7 @@ export interface SafeDeleteQuestionSuccessData {
 }
 
 export function mapSafeDeleteQuestionSuccess(
-  res: Record<string, unknown>
+  res: unknown
 ): SuccessMapResult<SafeDeleteQuestionSuccessData> {
   if (
     !isPlainRecord(res) ||
@@ -484,6 +484,63 @@ export function normalizeRpcError(
   rpcRes: Record<string, unknown> | null | undefined
 ): NormalizedError {
   if (rpcError) {
+    let errCode = '';
+    let errMsg = '';
+
+    if (typeof rpcError === 'string') {
+      errMsg = rpcError;
+    } else if (rpcError && typeof rpcError === 'object') {
+      if ('code' in rpcError && typeof (rpcError as Record<string, unknown>).code === 'string') {
+        errCode = (rpcError as Record<string, unknown>).code as string;
+      }
+      if ('message' in rpcError && typeof (rpcError as Record<string, unknown>).message === 'string') {
+        errMsg = (rpcError as Record<string, unknown>).message as string;
+      }
+    }
+
+    if (
+      errCode === 'P0002' ||
+      errMsg.includes('ERR_ITEM_NOT_FOUND') ||
+      errMsg.includes('ITEM_NOT_FOUND') ||
+      errMsg.includes('not found') ||
+      errMsg.includes('Không tìm thấy')
+    ) {
+      return {
+        status: 404,
+        errorCode: 'NOT_FOUND',
+        message: 'Không tìm thấy câu hỏi yêu cầu.',
+      };
+    }
+
+    if (
+      errCode === '42501' ||
+      errMsg.includes('ERR_UNAUTHORIZED') ||
+      errMsg.includes('FORBIDDEN') ||
+      errMsg.includes('UNAUTHORIZED') ||
+      errMsg.includes('không có quyền')
+    ) {
+      return {
+        status: 403,
+        errorCode: 'FORBIDDEN',
+        message: 'Bạn không có quyền thực hiện thao tác này trên câu hỏi.',
+      };
+    }
+
+    if (
+      errCode === '22000' ||
+      errCode === '22P02' ||
+      errMsg.includes('ERR_REQUIRED_PARAMS') ||
+      errMsg.includes('INVALID_INPUT') ||
+      errMsg.includes('Invalid parameters') ||
+      errMsg.includes('is required')
+    ) {
+      return {
+        status: 400,
+        errorCode: 'INVALID_INPUT',
+        message: 'Tham số yêu cầu không hợp lệ hoặc bị thiếu.',
+      };
+    }
+
     return {
       status: 500,
       errorCode: 'INTERNAL_ERROR',

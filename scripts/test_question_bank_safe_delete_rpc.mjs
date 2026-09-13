@@ -145,7 +145,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(publicGrant, false, 'PUBLIC/anon/authenticated must NOT have EXECUTE');
   });
 
-  await t.test('2. Hard-Delete: Clean draft with 1 version is hard-deleted and cleans answer keys/versions', async () => {
+  await t.test('2. Hard-Delete: Clean draft with exactly 1 actual version is hard-deleted', async () => {
     const itemId = '00000000-0000-0000-0000-000000000001';
     const versionId = '00000000-0000-0000-0000-000000000011';
 
@@ -164,6 +164,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(result.success, true);
     assert.equal(result.action, 'deleted');
     assert.equal(result.item_id, itemId);
+    assert.equal(result.version_count, 1);
 
     // Verify item deleted
     const checkItem = await db.query(`SELECT COUNT(*) FROM public.question_bank_items WHERE id = $1;`, [itemId]);
@@ -178,7 +179,27 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(Number(checkKey.rows[0].count), 0);
   });
 
-  await t.test('3. Archive: Published question is archived (Soft Delete)', async () => {
+  await t.test('3. Zero-Version Fail-Closed: Draft with 0 actual version records is archived, NEVER hard-deleted', async () => {
+    const itemId = '00000000-0000-0000-0000-000000000000';
+
+    // Seed draft item with 0 versions (data inconsistency / orphan draft container)
+    await db.query(`INSERT INTO public.question_bank_items (id, title, author_id, status, version_count) VALUES ($1, 'Câu hỏi nháp 0 version', $2, 'draft', 0);`, [itemId, teacher1]);
+
+    const res = await db.query(`
+      SELECT public.rpc_qb_safe_delete_or_archive_question($1, 'teacher', $2) AS result;
+    `, [teacher1, itemId]);
+
+    const result = res.rows[0].result;
+    assert.equal(result.success, true);
+    assert.equal(result.action, 'archived', 'Zero version draft must fail-closed to archive');
+    assert.equal(result.version_count, 0);
+
+    // Verify item still exists with status archived
+    const checkItem = await db.query(`SELECT status FROM public.question_bank_items WHERE id = $1;`, [itemId]);
+    assert.equal(checkItem.rows[0].status, 'archived');
+  });
+
+  await t.test('4. Archive: Published question is archived (Soft Delete)', async () => {
     const itemId = '00000000-0000-0000-0000-000000000002';
     const versionId = '00000000-0000-0000-0000-000000000021';
 
@@ -205,7 +226,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(Number(checkVer.rows[0].count), 1);
   });
 
-  await t.test('4. Archive: Draft with multiple versions (version_count > 1) is archived', async () => {
+  await t.test('5. Archive: Draft with multiple versions (version_count > 1) is archived', async () => {
     const itemId = '00000000-0000-0000-0000-000000000003';
     const v1 = '00000000-0000-0000-0000-000000000031';
     const v2 = '00000000-0000-0000-0000-000000000032';
@@ -222,12 +243,13 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     const result = res.rows[0].result;
     assert.equal(result.success, true);
     assert.equal(result.action, 'archived');
+    assert.equal(result.version_count, 2);
 
     const checkItem = await db.query(`SELECT status FROM public.question_bank_items WHERE id = $1;`, [itemId]);
     assert.equal(checkItem.rows[0].status, 'archived');
   });
 
-  await t.test('5. Archive: Draft with Exam Builder Lineage is archived', async () => {
+  await t.test('6. Archive: Draft with Exam Builder Lineage is archived', async () => {
     const itemId = '00000000-0000-0000-0000-000000000004';
     const versionId = '00000000-0000-0000-0000-000000000041';
     const examVersionId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
@@ -249,7 +271,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(checkItem.rows[0].status, 'archived');
   });
 
-  await t.test('6. Archive: Draft with Fork Lineage is archived', async () => {
+  await t.test('7. Archive: Draft with Fork Lineage is archived', async () => {
     const sourceItemId = '00000000-0000-0000-0000-000000000005';
     const sourceVersionId = '00000000-0000-0000-0000-000000000051';
     const forkedItemId = '00000000-0000-0000-0000-000000000006';
@@ -275,7 +297,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(result.action, 'archived');
   });
 
-  await t.test('7. Idempotency: Already archived question returns already_archived', async () => {
+  await t.test('8. Idempotency: Already archived question returns already_archived', async () => {
     const itemId = '00000000-0000-0000-0000-000000000007';
     const versionId = '00000000-0000-0000-0000-000000000071';
 
@@ -292,7 +314,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     assert.equal(result.action, 'already_archived');
   });
 
-  await t.test('8. Ownership: Teacher cannot delete someone else question (Forbidden 42501)', async () => {
+  await t.test('9. Ownership: Teacher cannot delete someone else question (Forbidden 42501)', async () => {
     const itemId = '00000000-0000-0000-0000-000000000008';
     const versionId = '00000000-0000-0000-0000-000000000081';
 
@@ -313,7 +335,21 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     );
   });
 
-  await t.test('9. Role check: Student role is rejected (Forbidden 42501)', async () => {
+  await t.test('10. Not Found: Deleting non-existent question throws P0002 / ERR_ITEM_NOT_FOUND', async () => {
+    const nonExistentId = '00000000-0000-0000-0000-000000000099';
+    await assert.rejects(
+      async () => {
+        await db.query(`
+          SELECT public.rpc_qb_safe_delete_or_archive_question($1, 'teacher', $2);
+        `, [teacher1, nonExistentId]);
+      },
+      (err) => {
+        return err.message.includes('ERR_ITEM_NOT_FOUND') || err.message.includes('Không tìm thấy');
+      }
+    );
+  });
+
+  await t.test('11. Role check: Student role is rejected (Forbidden 42501)', async () => {
     const itemId = '00000000-0000-0000-0000-000000000008';
     await assert.rejects(
       async () => {
@@ -327,7 +363,7 @@ test('Question Bank Safe Delete RPC Test Suite', async (t) => {
     );
   });
 
-  await t.test('10. Admin: Admin can delete clean draft of any teacher', async () => {
+  await t.test('12. Admin: Admin can delete clean draft of any teacher', async () => {
     const itemId = '00000000-0000-0000-0000-000000000009';
     const versionId = '00000000-0000-0000-0000-000000000091';
 

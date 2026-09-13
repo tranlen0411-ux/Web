@@ -16,8 +16,9 @@
 --    - Admin can delete/archive any question item.
 --    - Teacher can ONLY delete/archive question items where author_id = p_caller_id.
 --
--- 3. Hard-Delete Policy (Clean Drafts):
---    - Criteria: status = 'draft' AND version_count <= 1 AND no exam lineage AND no fork lineage.
+-- 3. Hard-Delete Policy (Clean Drafts with exactly 1 version):
+--    - Criteria: status = 'draft' AND actual version_count = 1 AND no exam lineage AND no fork lineage.
+--    - Zero-version or multi-version items FAIL-CLOSED to archive, NEVER hard-delete.
 --    - Safe Circular FK Deletion Sequence:
 --      a. UPDATE public.question_bank_items SET current_version_id = NULL WHERE id = p_item_id;
 --      b. DELETE FROM app_private.question_bank_answer_keys WHERE version_id IN (...);
@@ -26,7 +27,7 @@
 --    - Storage files are NOT deleted in V1.
 --
 -- 4. Archive Policy (Used / Historical / Published Questions):
---    - Criteria: status IN ('published', 'archived') OR version_count > 1 OR has exam lineage OR has fork lineage.
+--    - Criteria: status IN ('published', 'archived') OR version_count <> 1 OR has exam lineage OR has fork lineage.
 --    - If already archived: returns action = 'already_archived' without mutation.
 --    - Otherwise: UPDATE status = 'archived', updated_at = NOW(), returns action = 'archived'.
 --
@@ -47,6 +48,7 @@ SET search_path = ''
 AS $$
 DECLARE
     v_item RECORD;
+    v_actual_version_count pg_catalog.int4 := 0;
     v_has_exam_lineage pg_catalog.bool := false;
     v_has_fork_lineage pg_catalog.bool := false;
     v_now pg_catalog.timestamptz := pg_catalog.now();
@@ -65,7 +67,7 @@ BEGIN
     END IF;
 
     -- 2. Lock & Retrieve Question Item
-    SELECT id, author_id, status, version_count, current_version_id
+    SELECT id, author_id, status, current_version_id
     INTO v_item
     FROM public.question_bank_items
     WHERE id = p_item_id
@@ -90,15 +92,21 @@ BEGIN
         );
     END IF;
 
-    -- 5. Lineage Checks (Using EXISTS to safely determine relational presence)
-    -- 5.1. Exam Builder Lineage (Used in exam_questions)
+    -- 5. Count Actual Versions in public.question_bank_versions (Fail-closed on 0 or > 1)
+    SELECT pg_catalog.count(*)::pg_catalog.int4
+    INTO v_actual_version_count
+    FROM public.question_bank_versions
+    WHERE question_bank_item_id = p_item_id;
+
+    -- 6. Lineage Checks (Using EXISTS to safely determine relational presence)
+    -- 6.1. Exam Builder Lineage (Used in exam_questions)
     SELECT EXISTS (
         SELECT 1
         FROM public.exam_questions
         WHERE source_question_bank_item_id = p_item_id
     ) INTO v_has_exam_lineage;
 
-    -- 5.2. Fork Lineage (Another question version was forked from any version of this item)
+    -- 6.2. Fork Lineage (Another question version was forked from any version of this item)
     SELECT EXISTS (
         SELECT 1
         FROM public.question_bank_versions
@@ -107,13 +115,14 @@ BEGIN
         )
     ) INTO v_has_fork_lineage;
 
-    -- 6. Decision Branch: Hard-Delete vs Archive
+    -- 7. Decision Branch: Hard-Delete vs Archive
+    -- Hard-delete ONLY when status is draft AND actual versions count is EXACTLY 1 AND no lineage exists
     IF v_item.status = 'draft'
-       AND (v_item.version_count IS NULL OR v_item.version_count <= 1)
+       AND v_actual_version_count = 1
        AND NOT v_has_exam_lineage
        AND NOT v_has_fork_lineage
     THEN
-        -- Case A: HARD DELETE (Clean Draft with no history / lineage)
+        -- Case A: HARD DELETE (Clean Draft with exactly 1 version and no history / lineage)
         -- Step 1: Break circular FK
         UPDATE public.question_bank_items
         SET current_version_id = NULL
@@ -137,10 +146,11 @@ BEGIN
             'success', true,
             'action', 'deleted',
             'item_id', p_item_id,
-            'message', 'Câu hỏi đã được xóa vĩnh viễn.'
+            'version_count', v_actual_version_count,
+            'message', 'Câu hỏi bản nháp đã được xóa vĩnh viễn.'
         );
     ELSE
-        -- Case B: SOFT DELETE / ARCHIVE (Published, multiple versions, or referenced in lineage)
+        -- Case B: SOFT DELETE / ARCHIVE (Published, version_count <> 1, zero version, or referenced in lineage)
         UPDATE public.question_bank_items
         SET status = 'archived',
             updated_at = v_now
@@ -150,6 +160,7 @@ BEGIN
             'success', true,
             'action', 'archived',
             'item_id', p_item_id,
+            'version_count', v_actual_version_count,
             'archived_at', v_now,
             'message', 'Câu hỏi đã được chuyển vào lưu trữ an toàn.'
         );
