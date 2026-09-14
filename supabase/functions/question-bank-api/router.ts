@@ -16,13 +16,14 @@ import {
   mapRestoreQuestionSuccess,
   mapPublishQuestionSuccess,
   mapListVersionsSuccess,
+  mapSafeDeleteQuestionSuccess,
   normalizeRpcError,
 } from './errors.ts';
 import {
-  AuthDependencies,
-  InjectedAuthDependencies,
-  RpcClient,
-  UserFacingQuestionBankRpc,
+  type AuthDependencies,
+  type InjectedAuthDependencies,
+  type RpcClient,
+  type UserFacingQuestionBankRpc,
   verifyAuthAndDeriveContext,
 } from './authMiddleware.ts';
 import {
@@ -720,6 +721,56 @@ export async function handleQuestionBankRequest(
       }
 
       const mapped = mapPublishQuestionSuccess(rpcPayload);
+      if (!mapped.ok) {
+        return createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          'Phản hồi máy chủ không hợp lệ.'
+        );
+      }
+
+      return createSuccessResponse(mapped.data, 200);
+    }
+
+    // ------------------------------------------------------------------------
+    // ROUTE 11: DELETE /qb/questions/:id -> rpc_qb_safe_delete_or_archive_question
+    // ------------------------------------------------------------------------
+    const deleteMatch = pathname.match(/\/qb\/questions\/([^\/]+)$/);
+    if (method === 'DELETE' && deleteMatch) {
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(
+          403,
+          'FORBIDDEN',
+          'Chỉ giáo viên và quản trị viên mới có quyền xóa câu hỏi.'
+        );
+      }
+
+      const itemId = deleteMatch[1];
+      if (!isValidUUID(itemId)) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'ID câu hỏi không đúng định dạng UUID.'
+        );
+      }
+
+      // Gọi RPC rpc_qb_safe_delete_or_archive_question
+      const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
+        'rpc_qb_safe_delete_or_archive_question',
+        {
+          p_caller_id: callerId,
+          p_actor_role: actorRole,
+          p_item_id: itemId,
+        }
+      );
+
+      const rpcPayload = isPlainObject(rpcRes) ? rpcRes : null;
+      if (rpcError || !rpcPayload || rpcPayload.success !== true) {
+        const err = normalizeRpcError(rpcError, rpcPayload);
+        return createErrorResponse(err.status, err.errorCode, err.message);
+      }
+
+      const mapped = mapSafeDeleteQuestionSuccess(rpcPayload);
       if (!mapped.ok) {
         return createErrorResponse(
           500,

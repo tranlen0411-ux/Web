@@ -426,6 +426,55 @@ export const forkQuestion = async (sourceVersionId, overrides = {}) => {
   return jsonResult.data;
 };
 
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Xóa an toàn hoặc lưu trữ câu hỏi (Safe Delete or Archive)
+ * Máy chủ sẽ tự động xóa vĩnh viễn nếu là bản nháp sạch chưa sử dụng,
+ * hoặc chuyển sang lưu trữ nếu đã phát hành/có liên kết.
+ * @param {string} itemId UUID của câu hỏi
+ * @returns {Promise<{ item_id: string, action: 'deleted' | 'archived' | 'already_archived', archived_at?: string, message?: string }>}
+ */
+export const deleteQuestion = async (itemId) => {
+  if (!itemId || typeof itemId !== 'string' || !UUID_REGEX.test(itemId.trim())) {
+    const err = new Error('ID câu hỏi không đúng định dạng UUID.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}`;
+
+  const response = await fetch(requestUrl, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi xóa câu hỏi (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi xóa câu hỏi (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
 export const questionBankService = {
   getOldAccessToken,
   listQuestions,
@@ -436,7 +485,8 @@ export const questionBankService = {
   updateQuestionVisibility,
   listQuestionVersions,
   getQuestionAuthoringDetail,
-  forkQuestion
+  forkQuestion,
+  deleteQuestion
 };
 
 export default questionBankService;
