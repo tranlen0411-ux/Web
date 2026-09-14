@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ShieldCheck,
@@ -65,6 +65,8 @@ export const AdminDashboard = () => {
   const [usersList, setUsersList] = useState([]);
   const [gamesList, setGamesList] = useState([]);
   const [classesListState, setClassesListState] = useState([]);
+  const [classMembersList, setClassMembersList] = useState([]);
+  const [classMembersError, setClassMembersError] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -105,7 +107,21 @@ export const AdminDashboard = () => {
       setStats({ users: uCount || 0, games: gCount || 0, classes: cCount || 0 });
       setClassesListState(cData || []);
 
-      // 2. Lấy danh sách người dùng
+      // 2. Lấy danh sách thành viên lớp (class_members) cho cột Lớp
+      const { data: cmData, error: cmErr } = await supabase
+        .from('class_members')
+        .select('student_id, class_id');
+
+      if (cmErr) {
+        console.error('Fetch class_members error:', cmErr.message || cmErr);
+        setClassMembersError(true);
+        setClassMembersList([]);
+      } else {
+        setClassMembersError(false);
+        setClassMembersList(cmData || []);
+      }
+
+      // 3. Lấy danh sách người dùng
       const { data: uData } = await supabase
         .from('profiles')
         .select('*')
@@ -129,7 +145,7 @@ export const AdminDashboard = () => {
       );
       setPinStatusMap(pMap);
 
-      // 3. Lấy danh sách trò chơi
+      // 4. Lấy danh sách trò chơi
       const { data: gData } = await supabase
         .from('games')
         .select('*')
@@ -142,6 +158,59 @@ export const AdminDashboard = () => {
       setLoading(false);
     }
   };
+
+  // Dựng Map tra cứu lớp học cho Học sinh và Giáo viên
+  const { studentClassesById, teacherClassesById } = useMemo(() => {
+    const classById = new Map();
+    (classesListState || []).forEach(c => {
+      if (c && c.id) {
+        classById.set(c.id, c);
+      }
+    });
+
+    const sortClasses = (arr) => {
+      return [...arr].sort((a, b) => {
+        if ((a.grade_level || 0) !== (b.grade_level || 0)) {
+          return (a.grade_level || 0) - (b.grade_level || 0);
+        }
+        return (a.name || '').localeCompare(b.name || '', 'vi');
+      });
+    };
+
+    // Map student_id -> danh sách lớp (loại bỏ trùng lặp theo class.id)
+    const studentMap = new Map();
+    (classMembersList || []).forEach(cm => {
+      if (!cm || !cm.student_id || !cm.class_id) return;
+      const cls = classById.get(cm.class_id);
+      if (!cls) return; // Bỏ qua nếu class không tồn tại trong danh sách lớp
+      if (!studentMap.has(cm.student_id)) {
+        studentMap.set(cm.student_id, new Map());
+      }
+      studentMap.get(cm.student_id).set(cls.id, cls);
+    });
+
+    const studentClassesById = new Map();
+    studentMap.forEach((classesMap, studentId) => {
+      studentClassesById.set(studentId, sortClasses(Array.from(classesMap.values())));
+    });
+
+    // Map teacher_id -> danh sách lớp phụ trách (loại bỏ trùng lặp theo class.id)
+    const teacherMap = new Map();
+    (classesListState || []).forEach(cls => {
+      if (!cls || !cls.teacher_id) return;
+      if (!teacherMap.has(cls.teacher_id)) {
+        teacherMap.set(cls.teacher_id, new Map());
+      }
+      teacherMap.get(cls.teacher_id).set(cls.id, cls);
+    });
+
+    const teacherClassesById = new Map();
+    teacherMap.forEach((classesMap, teacherId) => {
+      teacherClassesById.set(teacherId, sortClasses(Array.from(classesMap.values())));
+    });
+
+    return { studentClassesById, teacherClassesById };
+  }, [classesListState, classMembersList]);
 
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
@@ -345,6 +414,7 @@ export const AdminDashboard = () => {
                   <th className="p-3">Mã Học Sinh</th>
                   <th className="p-3">Email</th>
                   <th className="p-3">Vai Trò</th>
+                  <th className="p-3">Lớp</th>
                   <th className="p-3">Mã Tra Cứu PH</th>
                   <th className="p-3">Khối</th>
                   <th className="p-3">Tổng Sao</th>
@@ -380,6 +450,62 @@ export const AdminDashboard = () => {
                           <span className="px-2 py-0.5 bg-sky-100 text-sky-700 font-black rounded-lg">👩‍🏫 Teacher</span>
                         ) : (
                           <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-black rounded-lg">🎓 Student</span>
+                        )}
+                      </td>
+
+                      <td className="p-3">
+                        {classMembersError ? (
+                          <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
+                            Không tải được
+                          </span>
+                        ) : u.role === 'student' ? (
+                          (() => {
+                            const studentClasses = studentClassesById.get(u.id) || [];
+                            if (studentClasses.length === 0) {
+                              return (
+                                <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
+                                  Chưa xếp lớp
+                                </span>
+                              );
+                            }
+                            return (
+                              <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                {studentClasses.map(cls => (
+                                  <span
+                                    key={cls.id}
+                                    className="px-2 py-0.5 bg-sky-100 text-sky-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
+                                  >
+                                    {cls.name}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })()
+                        ) : u.role === 'teacher' ? (
+                          (() => {
+                            const teacherClasses = teacherClassesById.get(u.id) || [];
+                            if (teacherClasses.length === 0) {
+                              return (
+                                <span className="text-slate-400 italic font-normal text-[11px]">
+                                  Chưa phân công
+                                </span>
+                              );
+                            }
+                            return (
+                              <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                {teacherClasses.map(cls => (
+                                  <span
+                                    key={cls.id}
+                                    className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
+                                  >
+                                    {cls.name}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-slate-300 font-normal">—</span>
                         )}
                       </td>
 
