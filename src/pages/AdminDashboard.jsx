@@ -399,6 +399,30 @@ export const AdminDashboard = () => {
     usersError
   ]);
 
+  // Thống kê số lượng người dùng theo từng vai trò dựa trên danh sách đã lọc (filteredUsers)
+  const userRoleCounts = useMemo(() => {
+    if (filterStateStatus === 'LOADING') {
+      return { students: '…', teachers: '…', admins: '…', total: '…' };
+    }
+    if (filterStateStatus !== 'OK') {
+      return { students: '—', teachers: '—', admins: '—', total: '—' };
+    }
+    let students = 0;
+    let teachers = 0;
+    let admins = 0;
+    for (const u of filteredUsers) {
+      if (u.role === 'student') students++;
+      else if (u.role === 'teacher') teachers++;
+      else if (u.role === 'admin') admins++;
+    }
+    return {
+      students,
+      teachers,
+      admins,
+      total: filteredUsers.length
+    };
+  }, [filteredUsers, filterStateStatus]);
+
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
 
@@ -547,8 +571,22 @@ export const AdminDashboard = () => {
           <div className="flex items-center justify-between gap-4 mb-4">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus === 'OK' ? filteredUsers.length : 0})
+                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng
               </h3>
+              <div className="flex flex-wrap items-center gap-1.5 ml-1">
+                <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                  🎒 Học sinh: <strong className="font-black">{userRoleCounts.students}</strong>
+                </span>
+                <span className="px-2.5 py-0.5 bg-sky-100 text-sky-900 border border-sky-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                  👩‍🏫 Giáo viên: <strong className="font-black">{userRoleCounts.teachers}</strong>
+                </span>
+                <span className="px-2.5 py-0.5 bg-purple-100 text-purple-900 border border-purple-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                  🛡️ Admin: <strong className="font-black">{userRoleCounts.admins}</strong>
+                </span>
+                <span className="px-2.5 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                  👥 Tổng: <strong className="font-black">{userRoleCounts.total}</strong>
+                </span>
+              </div>
               {filterNote && filterStateStatus === 'OK' && (
                 <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold">
                   📌 {filterNote}
@@ -604,6 +642,7 @@ export const AdminDashboard = () => {
             <table className="w-full text-left text-xs font-bold whitespace-nowrap">
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
                 <tr>
+                  <th className="p-3 text-center w-12">STT</th>
                   <th className="p-3">Họ và Tên</th>
                   <th className="p-3">Mã Học Sinh</th>
                   <th className="p-3">Email</th>
@@ -619,7 +658,7 @@ export const AdminDashboard = () => {
               <tbody className="divide-y divide-amber-100 text-slate-700">
                 {filterStateStatus === 'LOADING' ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-slate-500 bg-amber-50/20">
+                    <td colSpan={11} className="p-8 text-center text-slate-500 bg-amber-50/20">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
                         <span className="font-bold text-xs text-slate-600">Đang tải danh sách người dùng và dữ liệu lớp…</span>
@@ -628,7 +667,7 @@ export const AdminDashboard = () => {
                   </tr>
                 ) : filterStateStatus === 'USER_ERROR' ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
+                    <td colSpan={11} className="p-8 text-center text-rose-600 bg-rose-50/50">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <span className="font-extrabold text-sm">⚠️ Không tải được danh sách người dùng</span>
                         <p className="text-xs text-rose-500">Đã xảy ra lỗi khi tải dữ liệu tài khoản từ hệ thống.</p>
@@ -646,7 +685,7 @@ export const AdminDashboard = () => {
                   </tr>
                 ) : filterStateStatus === 'ERROR' ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
+                    <td colSpan={11} className="p-8 text-center text-rose-600 bg-rose-50/50">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <span className="font-extrabold text-sm">⚠️ Không tải được dữ liệu để lọc theo lớp</span>
                         <p className="text-xs text-rose-500">Đã xảy ra lỗi khi tải danh sách lớp học hoặc thành viên lớp.</p>
@@ -666,7 +705,7 @@ export const AdminDashboard = () => {
                   </tr>
                 ) : filterStateStatus === 'INVALID_CLASS' ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-amber-800 bg-amber-50/50">
+                    <td colSpan={11} className="p-8 text-center text-amber-800 bg-amber-50/50">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <span className="font-extrabold text-sm">🏫 Lớp đã chọn không tồn tại hoặc không còn khả dụng</span>
                         <p className="text-xs text-amber-700">Vui lòng chọn lớp học khác từ thanh điều hướng.</p>
@@ -686,7 +725,7 @@ export const AdminDashboard = () => {
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-slate-500 bg-slate-50/50">
+                    <td colSpan={11} className="p-8 text-center text-slate-500 bg-slate-50/50">
                       <div className="flex flex-col items-center justify-center gap-1.5">
                         <span className="font-bold text-sm">Không có người dùng phù hợp với bộ lọc lớp hiện tại.</span>
                         {globalClassFilter !== 'ALL' && setGlobalClassFilter && (
@@ -704,13 +743,16 @@ export const AdminDashboard = () => {
                     </td>
                   </tr>
                 ) : (
-                  filteredUsers.map((u) => {
+                  filteredUsers.map((u, index) => {
                     const isSelf = u.id === profile?.id;
                     const isStudent = u.role === 'student';
                     const hasPin = pinStatusMap[u.id] === true;
 
                     return (
                       <tr key={u.id} className="hover:bg-amber-50">
+                        <td className="p-3 text-center font-bold text-slate-500 w-12">
+                          {index + 1}
+                        </td>
                         <td className="p-3 font-black text-slate-800">
                           <div className="flex items-center gap-2">
                             <img src={u.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
