@@ -1,20 +1,32 @@
 -- ====================================================================
--- 📦 MIGRATION: ADD_SCORM_CMI_PERSISTENCE.sql (SECURITY HARDENED)
+-- 📦 MIGRATION: 20260914152658_scorm_cmi_persistence_baseline.sql
 -- ====================================================================
 -- Mục đích: Cung cấp bảng lưu trữ RPC-ONLY và các RPC an toàn cho trạng thái
 -- học tập SCORM 1.2 & 2004 (CMI Data Persistence - Phase 2B-2).
 -- Ranh giới an ninh:
--- 1. RPC-ONLY table: Direct table INSERT/UPDATE/DELETE/SELECT bị khóa hoàn toàn.
--- 2. Chống Score Tampering: Validate min <= raw <= max, chặn NaN/Infinity/text.
--- 3. Chống Double Total Time: Ngăn chặn cộng dồn session_time trùng lặp khi double commit.
--- 4. Chống Concurrent Race: Row-level locking (FOR UPDATE) ngăn lost update.
--- 5. Session-Package Binding: Xác thực ràng buộc session token với package/user.
--- 6. Payload Limit: 128KB JSON payload & 64KB UTF-8 suspend_data.
--- 7. Leaderboard Boundary: Tuyệt đối không can thiệp Leaderboard / Xu thưởng.
+-- 1. Precondition Guard: Ngăn chặn chạy DDL đè lên database đã tồn tại baseline objects.
+-- 2. RPC-ONLY table: Direct table INSERT/UPDATE/DELETE/SELECT bị khóa hoàn toàn.
+-- 3. Chống Score Tampering: Validate min <= raw <= max, chặn NaN/Infinity/text.
+-- 4. Chống Double Total Time: Ngăn chặn cộng dồn session_time trùng lặp khi double commit.
+-- 5. Chống Concurrent Race: Row-level locking (FOR UPDATE) ngăn lost update.
+-- 6. Session-Package Binding: Xác thực ràng buộc session token với package/user.
+-- 7. Payload Limit: 128KB JSON payload & 64KB UTF-8 suspend_data.
+-- 8. Leaderboard Boundary: Tuyệt đối không can thiệp Leaderboard / Xu thưởng.
 -- ====================================================================
 
+-- 0. PRECONDITION GUARD: FAIL-FAST NẾU SCHEMA BASELINE ĐÃ TỒN TẠI
+DO $$
+BEGIN
+  IF to_regclass('public.scorm_tracking_data') IS NOT NULL
+     OR to_regprocedure('public.load_scorm_cmi_state(uuid,text)') IS NOT NULL
+     OR to_regprocedure('public.save_scorm_cmi_state(uuid,jsonb,text)') IS NOT NULL
+  THEN
+    RAISE EXCEPTION 'SCORM CMI baseline objects already exist. Validate hosted catalog and use migration repair; do not execute this migration on an existing database.';
+  END IF;
+END $$;
+
 -- 1. BẢNG SCORM_TRACKING_DATA
-CREATE TABLE IF NOT EXISTS public.scorm_tracking_data (
+CREATE TABLE public.scorm_tracking_data (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   package_id UUID NOT NULL REFERENCES public.scorm_packages(id) ON DELETE CASCADE,
   material_id UUID NOT NULL REFERENCES public.learning_materials(id) ON DELETE CASCADE,
@@ -51,20 +63,12 @@ CREATE TABLE IF NOT EXISTS public.scorm_tracking_data (
 );
 
 -- Chỉ mục tối ưu truy vấn
-CREATE INDEX IF NOT EXISTS idx_scorm_tracking_user_package ON public.scorm_tracking_data(user_id, package_id);
-CREATE INDEX IF NOT EXISTS idx_scorm_tracking_material_user ON public.scorm_tracking_data(material_id, user_id);
+CREATE INDEX idx_scorm_tracking_user_package ON public.scorm_tracking_data(user_id, package_id);
+CREATE INDEX idx_scorm_tracking_material_user ON public.scorm_tracking_data(material_id, user_id);
 
 -- 2. KHÓA DIRECT TABLE ACCESS (RPC-ONLY CONTRACT)
 -- Bật RLS
 ALTER TABLE public.scorm_tracking_data ENABLE ROW LEVEL SECURITY;
-
--- Dọn dẹp policies cũ nếu có
-DROP POLICY IF EXISTS "scorm_tracking_student_select" ON public.scorm_tracking_data;
-DROP POLICY IF EXISTS "scorm_tracking_student_insert" ON public.scorm_tracking_data;
-DROP POLICY IF EXISTS "scorm_tracking_student_update" ON public.scorm_tracking_data;
-DROP POLICY IF EXISTS "scorm_tracking_teacher_select" ON public.scorm_tracking_data;
-DROP POLICY IF EXISTS "scorm_tracking_admin_all" ON public.scorm_tracking_data;
-DROP POLICY IF EXISTS "scorm_tracking_service_role_all" ON public.scorm_tracking_data;
 
 -- Thu hồi TOÀN BỘ quyền truy cập trực tiếp từ client roles (PUBLIC, anon, authenticated)
 REVOKE ALL ON TABLE public.scorm_tracking_data FROM PUBLIC;
@@ -219,9 +223,6 @@ $$;
 -- ====================================================================
 -- 4. RPC LOAD TRẠNG THÁI HỌC TẬP (LOAD_SCORM_CMI_STATE)
 -- ====================================================================
-
-DROP FUNCTION IF EXISTS public.load_scorm_cmi_state(UUID);
-DROP FUNCTION IF EXISTS public.load_scorm_cmi_state(UUID, TEXT);
 
 CREATE OR REPLACE FUNCTION public.load_scorm_cmi_state(
   p_package_id UUID,
@@ -397,9 +398,6 @@ $$;
 -- 5. RPC LƯU TRẠNG THÁI HỌC TẬP (SAVE_SCORM_CMI_STATE)
 -- ====================================================================
 
-DROP FUNCTION IF EXISTS public.save_scorm_cmi_state(UUID, JSONB);
-DROP FUNCTION IF EXISTS public.save_scorm_cmi_state(UUID, JSONB, TEXT);
-
 CREATE OR REPLACE FUNCTION public.save_scorm_cmi_state(
   p_package_id UUID,
   p_cmi_payload JSONB,
@@ -559,10 +557,10 @@ BEGIN
   END IF;
 
   IF NOT v_has_access THEN
-    RETURN jsonb_build_object('success', false, 'code', 'FORBIDDEN', 'message', 'Bạn không có quyền lưu trạng thái học liệu này.');
+    RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'FORBIDDEN', 'message', 'Bạn không có quyền lưu trạng thái học liệu này.');
   END IF;
 
-  -- 6. Trích xuất & Validate CMI fields theo phiên bản SCORM
+  -- 7. Trích xuất & Validate CMI fields theo phiên bản SCORM
   IF v_scorm_version = '1.2' THEN
     v_lesson_status := p_cmi_payload->>'cmi.core.lesson_status';
     v_lesson_location := p_cmi_payload->>'cmi.core.lesson_location';
@@ -571,7 +569,7 @@ BEGIN
     v_raw_str := p_cmi_payload->>'cmi.core.score.raw';
     v_min_str := p_cmi_payload->>'cmi.core.score.min';
     v_max_str := p_cmi_payload->>'cmi.core.score.max';
-  ELSE -- SCORM 2004
+  ELSE
     v_completion_status := p_cmi_payload->>'cmi.completion_status';
     v_success_status := p_cmi_payload->>'cmi.success_status';
     v_lesson_location := p_cmi_payload->>'cmi.location';
@@ -582,97 +580,93 @@ BEGIN
     v_max_str := p_cmi_payload->>'cmi.score.max';
   END IF;
 
-  -- 7. Validate Điểm số (Score Validation & Anti-Tampering)
-  IF v_raw_str IS NOT NULL AND trim(v_raw_str) <> '' THEN
-    IF NOT (trim(v_raw_str) ~ '^-?[0-9]+(\.[0-9]+)?$') THEN
-      RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không đúng định dạng số hợp lệ.');
-    END IF;
-    v_score_raw := trim(v_raw_str)::numeric;
+  -- 8. Chống Score Tampering: Validate Numeric Score Fields
+  IF v_raw_str IS NOT NULL AND pg_catalog.btrim(v_raw_str) <> '' THEN
+    BEGIN
+      v_score_raw := v_raw_str::numeric;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không đúng định dạng số hợp lệ.');
+    END;
   END IF;
 
-  IF v_min_str IS NOT NULL AND trim(v_min_str) <> '' THEN
-    IF NOT (trim(v_min_str) ~ '^-?[0-9]+(\.[0-9]+)?$') THEN
-      RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.min không đúng định dạng số hợp lệ.');
-    END IF;
-    v_score_min := trim(v_min_str)::numeric;
+  IF v_min_str IS NOT NULL AND pg_catalog.btrim(v_min_str) <> '' THEN
+    BEGIN
+      v_score_min := v_min_str::numeric;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.min không đúng định dạng số hợp lệ.');
+    END;
   END IF;
 
-  IF v_max_str IS NOT NULL AND trim(v_max_str) <> '' THEN
-    IF NOT (trim(v_max_str) ~ '^-?[0-9]+(\.[0-9]+)?$') THEN
-      RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.max không đúng định dạng số hợp lệ.');
-    END IF;
-    v_score_max := trim(v_max_str)::numeric;
+  IF v_max_str IS NOT NULL AND pg_catalog.btrim(v_max_str) <> '' THEN
+    BEGIN
+      v_score_max := v_max_str::numeric;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.max không đúng định dạng số hợp lệ.');
+    END;
   END IF;
 
-  -- Kiểm tra logic phạm vi điểm: min <= raw <= max
-  IF v_score_min IS NOT NULL AND v_score_max IS NOT NULL AND v_score_min > v_score_max THEN
-    RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.min không được lớn hơn score.max.');
+  -- Validate Logical Score Boundaries: min <= raw <= max
+  IF v_score_min IS NOT NULL AND v_score_max IS NOT NULL THEN
+    IF v_score_min > v_score_max THEN
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.min không được lớn hơn score.max.');
+    END IF;
   END IF;
 
   IF v_score_raw IS NOT NULL THEN
     IF v_score_min IS NOT NULL AND v_score_raw < v_score_min THEN
-      RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không được nhỏ hơn score.min.');
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không được nhỏ hơn score.min.');
     END IF;
     IF v_score_max IS NOT NULL AND v_score_raw > v_score_max THEN
-      RETURN jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không được lớn hơn score.max.');
+      RETURN pg_catalog.jsonb_build_object('success', false, 'code', 'INVALID_SCORE', 'message', 'score.raw không được lớn hơn score.max.');
     END IF;
   END IF;
 
-  -- 8. Row Locking (FOR UPDATE) ngăn Concurrent Race & Tích lũy Total Time chống Double Count
-  SELECT * INTO v_existing
+  -- 9. Row-Level Locking (FOR UPDATE) ngăn Concurrent Lost Updates
+  SELECT *
+  INTO v_existing
   FROM public.scorm_tracking_data
   WHERE user_id = v_user_id AND package_id = p_package_id
   FOR UPDATE;
 
+  -- 10. Chống Double Total Time Accumulation
   IF v_scorm_version = '1.2' THEN
     v_session_sec := public._scorm12_time_to_seconds(v_session_time);
-    IF v_existing.id IS NOT NULL THEN
-      v_cur_total_sec := public._scorm12_time_to_seconds(v_existing.total_time);
-      v_last_session_sec := COALESCE(v_existing.last_session_seconds, 0);
-
-      -- Kiểm tra session token hash hoặc snapshot session_time
-      IF v_token_hash IS NOT NULL AND v_existing.last_session_token_hash = v_token_hash THEN
-        -- Cùng 1 session: thay thế phần session đóng góp trước đó bằng session_sec mới (tránh double count)
-        v_new_total_sec := (v_cur_total_sec - v_last_session_sec) + v_session_sec;
-      ELSIF v_token_hash IS NULL AND v_existing.session_time = v_session_time THEN
-        -- Cùng payload / double commit không truyền token: giữ nguyên total_time
-        v_new_total_sec := v_cur_total_sec;
-      ELSIF v_token_hash IS NULL AND v_session_sec >= v_last_session_sec AND v_last_session_sec > 0 THEN
-        -- Session tiến triển tăng dần
-        v_new_total_sec := (v_cur_total_sec - v_last_session_sec) + v_session_sec;
-      ELSE
-        -- Phiên học mới bắt đầu
-        v_new_total_sec := v_cur_total_sec + v_session_sec;
-      END IF;
-    ELSE
-      v_new_total_sec := v_session_sec;
-    END IF;
-    v_total_time := public._seconds_to_scorm12_time(v_new_total_sec);
-
-  ELSE -- SCORM 2004
+  ELSE
     v_session_sec := public._scorm2004_time_to_seconds(v_session_time);
-    IF v_existing.id IS NOT NULL THEN
-      v_cur_total_sec := public._scorm2004_time_to_seconds(v_existing.total_time);
-      v_last_session_sec := COALESCE(v_existing.last_session_seconds, 0);
+  END IF;
 
-      IF v_token_hash IS NOT NULL AND v_existing.last_session_token_hash = v_token_hash THEN
-        v_new_total_sec := (v_cur_total_sec - v_last_session_sec) + v_session_sec;
-      ELSIF v_token_hash IS NULL AND v_existing.session_time = v_session_time THEN
-        v_new_total_sec := v_cur_total_sec;
-      ELSIF v_token_hash IS NULL AND v_session_sec >= v_last_session_sec AND v_last_session_sec > 0 THEN
-        v_new_total_sec := (v_cur_total_sec - v_last_session_sec) + v_session_sec;
+  IF v_existing IS NOT NULL THEN
+    IF v_scorm_version = '1.2' THEN
+      v_cur_total_sec := public._scorm12_time_to_seconds(v_existing.total_time);
+    ELSE
+      v_cur_total_sec := public._scorm2004_time_to_seconds(v_existing.total_time);
+    END IF;
+
+    -- Kiểm tra nếu cùng một session token commit nhiều lần
+    IF v_existing.last_session_token_hash = v_token_hash THEN
+      v_last_session_sec := COALESCE(v_existing.last_session_seconds, 0);
+      IF v_session_sec >= v_last_session_sec THEN
+        v_new_total_sec := v_cur_total_sec + (v_session_sec - v_last_session_sec);
       ELSE
-        v_new_total_sec := v_cur_total_sec + v_session_sec;
+        v_new_total_sec := v_cur_total_sec;
       END IF;
     ELSE
-      v_new_total_sec := v_session_sec;
+      -- Phiên học mới hoàn toàn -> Cộng dồn toàn bộ session_time mới
+      v_new_total_sec := v_cur_total_sec + v_session_sec;
     END IF;
+  ELSE
+    v_new_total_sec := v_session_sec;
+  END IF;
+
+  IF v_scorm_version = '1.2' THEN
+    v_total_time := public._seconds_to_scorm12_time(v_new_total_sec);
+  ELSE
     v_total_time := public._seconds_to_scorm2004_time(v_new_total_sec);
   END IF;
 
   v_updated_at := pg_catalog.now();
 
-  -- 9. Lưu / Cập nhật bản ghi vào cơ sở dữ liệu (Upsert)
+  -- 11. Upsert an toàn vào bảng tracking
   INSERT INTO public.scorm_tracking_data (
     package_id,
     material_id,
@@ -691,6 +685,7 @@ BEGIN
     last_session_token_hash,
     last_session_seconds,
     cmi_data,
+    created_at,
     updated_at
   )
   VALUES (
@@ -711,10 +706,10 @@ BEGIN
     v_token_hash,
     v_session_sec,
     p_cmi_payload,
+    v_updated_at,
     v_updated_at
   )
-  ON CONFLICT (user_id, package_id)
-  DO UPDATE SET
+  ON CONFLICT (user_id, package_id) DO UPDATE SET
     lesson_status = COALESCE(EXCLUDED.lesson_status, scorm_tracking_data.lesson_status),
     completion_status = COALESCE(EXCLUDED.completion_status, scorm_tracking_data.completion_status),
     success_status = COALESCE(EXCLUDED.success_status, scorm_tracking_data.success_status),
@@ -728,9 +723,9 @@ BEGIN
     last_session_token_hash = COALESCE(EXCLUDED.last_session_token_hash, scorm_tracking_data.last_session_token_hash),
     last_session_seconds = EXCLUDED.last_session_seconds,
     cmi_data = EXCLUDED.cmi_data,
-    updated_at = v_updated_at;
+    updated_at = EXCLUDED.updated_at;
 
-  RETURN jsonb_build_object(
+  RETURN pg_catalog.jsonb_build_object(
     'success', true,
     'package_id', p_package_id,
     'total_time', v_total_time,
@@ -739,17 +734,17 @@ BEGIN
 END;
 $$;
 
--- 10. THU HỒI & CẤP QUYỀN RPC CHO AN TOÀN TỐI ĐA
+-- Cấp quyền thực thi RPC cho authenticated và service_role
 REVOKE ALL ON FUNCTION public.load_scorm_cmi_state(UUID, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.load_scorm_cmi_state(UUID, TEXT) FROM anon;
-GRANT EXECUTE ON FUNCTION public.load_scorm_cmi_state(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.load_scorm_cmi_state(UUID, TEXT) TO authenticated, service_role, postgres;
 
 REVOKE ALL ON FUNCTION public.save_scorm_cmi_state(UUID, JSONB, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_scorm_cmi_state(UUID, JSONB, TEXT) FROM anon;
-GRANT EXECUTE ON FUNCTION public.save_scorm_cmi_state(UUID, JSONB, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.save_scorm_cmi_state(UUID, JSONB, TEXT) TO authenticated, service_role, postgres;
 
 -- ====================================================================
--- 11. NÂNG CẤP RESOLVE_SCORM_SESSION_ASSET CHO TRUSTED GATEWAY
+-- 6. NÂNG CẤP RESOLVE_SCORM_SESSION_ASSET CHO TRUSTED GATEWAY
 -- Trả kèm tracking data (nếu có) mà không để lộ DB identifiers / secrets
 -- ====================================================================
 CREATE OR REPLACE FUNCTION public.resolve_scorm_session_asset(
@@ -767,8 +762,8 @@ DECLARE
   v_tracking RECORD;
   v_tracking_json JSONB := NULL;
 BEGIN
-  IF p_session_token_hash IS NULL OR trim(p_session_token_hash) = '' THEN
-    RETURN json_build_object('valid', false, 'reason', 'EMPTY_TOKEN_HASH');
+  IF p_session_token_hash IS NULL OR pg_catalog.btrim(p_session_token_hash) = '' THEN
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'EMPTY_TOKEN_HASH');
   END IF;
 
   -- 1. Tra cứu session
@@ -778,17 +773,17 @@ BEGIN
   WHERE session_token_hash = p_session_token_hash;
 
   IF NOT FOUND THEN
-    RETURN json_build_object('valid', false, 'reason', 'SESSION_NOT_FOUND');
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'SESSION_NOT_FOUND');
   END IF;
 
   -- 2. Kiểm tra thu hồi (Revocation)
   IF v_session.revoked_at IS NOT NULL THEN
-    RETURN json_build_object('valid', false, 'reason', 'SESSION_REVOKED');
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'SESSION_REVOKED');
   END IF;
 
   -- 3. Kiểm tra hết hạn (Expiration)
   IF v_session.expires_at <= pg_catalog.now() THEN
-    RETURN json_build_object('valid', false, 'reason', 'SESSION_EXPIRED');
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'SESSION_EXPIRED');
   END IF;
 
   -- 4. Defense-in-depth: Dynamic Recheck cho Public Session khi Visibility thay đổi
@@ -798,7 +793,7 @@ BEGIN
     WHERE id = v_session.material_id;
 
     IF v_material_visibility IS DISTINCT FROM 'public' THEN
-      RETURN json_build_object('valid', false, 'reason', 'PUBLIC_ACCESS_REVOKED');
+      RETURN pg_catalog.json_build_object('valid', false, 'reason', 'PUBLIC_ACCESS_REVOKED');
     END IF;
   END IF;
 
@@ -809,11 +804,11 @@ BEGIN
   WHERE id = v_session.package_id;
 
   IF NOT FOUND THEN
-    RETURN json_build_object('valid', false, 'reason', 'PACKAGE_NOT_FOUND');
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'PACKAGE_NOT_FOUND');
   END IF;
 
   IF v_package.status <> 'ready' THEN
-    RETURN json_build_object('valid', false, 'reason', 'PACKAGE_NOT_READY');
+    RETURN pg_catalog.json_build_object('valid', false, 'reason', 'PACKAGE_NOT_READY');
   END IF;
 
   -- 6. Cập nhật last_accessed_at
@@ -828,7 +823,7 @@ BEGIN
     WHERE user_id = v_session.user_id AND package_id = v_session.package_id;
 
     IF FOUND THEN
-      v_tracking_json := jsonb_build_object(
+      v_tracking_json := pg_catalog.jsonb_build_object(
         'lesson_status', v_tracking.lesson_status,
         'completion_status', v_tracking.completion_status,
         'success_status', v_tracking.success_status,
@@ -846,7 +841,7 @@ BEGIN
   END IF;
 
   -- 8. Trả về metadata nội bộ cho Trusted Gateway backend (bao gồm tracking)
-  RETURN json_build_object(
+  RETURN pg_catalog.json_build_object(
     'valid', true,
     'session_id', v_session.id,
     'package_id', v_package.id,
