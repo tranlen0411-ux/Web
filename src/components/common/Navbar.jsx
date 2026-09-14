@@ -206,7 +206,7 @@ export const Navbar = () => {
                 className="bg-transparent text-xs font-bold text-amber-900 focus:outline-none cursor-pointer max-w-[140px] truncate"
               >
                 <option value="ALL">🌐 Tất cả các lớp</option>
-                <option value="NO_CLASS">📌 Bài giảng chung</option>
+                <option value="NO_CLASS">📌 Không thuộc lớp cụ thể</option>
                 {headerClasses.map(c => (
                   <option key={c.id} value={c.id}>
                     🏫 {formatClassLabel(c.name)}
@@ -410,7 +410,7 @@ export const Navbar = () => {
               className="w-full bg-white border-2 border-amber-300 rounded-xl px-2.5 py-1 text-xs font-bold text-amber-950 focus:outline-none focus:border-amber-500 shadow-sm truncate"
             >
               <option value="ALL">🌐 Tất cả các lớp</option>
-              <option value="NO_CLASS">📌 Bài giảng chung</option>
+              <option value="NO_CLASS">📌 Không thuộc lớp cụ thể</option>
               {headerClasses.map(c => (
                 <option key={c.id} value={c.id}>
                   🏫 Lớp {c.name}
