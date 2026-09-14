@@ -36,7 +36,7 @@ import { QuestionBankListTab } from '../components/dashboard/question-bank/Quest
 import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
 
 export const AdminDashboard = () => {
-  const { profile, globalClassFilter } = useAuth();
+  const { profile, globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
   const [searchParams] = useSearchParams();
 
@@ -63,11 +63,14 @@ export const AdminDashboard = () => {
 
   const [stats, setStats] = useState({ users: 0, games: 0, classes: 0 });
   const [usersList, setUsersList] = useState([]);
+  const [usersDataReady, setUsersDataReady] = useState(false);
+  const [usersError, setUsersError] = useState(false);
   const [gamesList, setGamesList] = useState([]);
   const [classesListState, setClassesListState] = useState([]);
   const [classesError, setClassesError] = useState(false);
   const [classMembersList, setClassMembersList] = useState([]);
   const [classMembersError, setClassMembersError] = useState(false);
+  const [classFilterDataReady, setClassFilterDataReady] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -99,6 +102,12 @@ export const AdminDashboard = () => {
 
   const fetchAdminData = async () => {
     setLoading(true);
+    setUsersDataReady(false);
+    setClassFilterDataReady(false);
+    setUsersError(false);
+    setClassesError(false);
+    setClassMembersError(false);
+
     try {
       // 1. Thống kê tổng số
       const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
@@ -130,16 +139,42 @@ export const AdminDashboard = () => {
         setClassMembersList(cmData || []);
       }
 
+      // Đánh dấu cả hai truy vấn classes và class_members đã hoàn tất (settled)
+      setClassFilterDataReady(true);
+    } catch (err) {
+      console.error('Fetch classes/class_members error:', err);
+      setClassesError(true);
+      setClassMembersError(true);
+      setClassFilterDataReady(true);
+    }
+
+    let sortedUsers = [];
+    try {
       // 3. Lấy danh sách người dùng
-      const { data: uData } = await supabase
+      const { data: uData, error: uErr } = await supabase
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false });
 
-      const sortedUsers = uData || [];
-      setUsersList(sortedUsers);
+      if (uErr) {
+        console.error('Fetch profiles error:', uErr.message || uErr);
+        setUsersError(true);
+        setUsersList([]);
+      } else {
+        setUsersError(false);
+        sortedUsers = uData || [];
+        setUsersList(sortedUsers);
+      }
+      setUsersDataReady(true);
+    } catch (err) {
+      console.error('Fetch profiles error:', err);
+      setUsersError(true);
+      setUsersList([]);
+      setUsersDataReady(true);
+    }
 
-      // Kiểm tra trạng thái PIN học sinh qua RPC has_student_pin
+    try {
+      // Kiểm tra trạng thái PIN học sinh qua RPC has_student_pin (không ảnh hưởng readiness bảng người dùng)
       const studentUsers = sortedUsers.filter(u => u.role === 'student');
       const pMap = {};
       await Promise.all(
@@ -162,14 +197,20 @@ export const AdminDashboard = () => {
 
       setGamesList(gData || []);
     } catch (err) {
-      console.error('Fetch admin data error:', err);
+      console.error('Fetch games/pin error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Dựng Map tra cứu lớp học cho Học sinh và Giáo viên
-  const { studentClassesById, teacherClassesById } = useMemo(() => {
+  // Dựng Map tra cứu lớp học cho Học sinh, Giáo viên và tính toán danh sách lọc theo globalClassFilter
+  const {
+    studentClassesById,
+    teacherClassesById,
+    filteredUsers,
+    filterStateStatus,
+    filterNote
+  } = useMemo(() => {
     const classById = new Map();
     (classesListState || []).forEach(c => {
       if (c && c.id) {
@@ -191,7 +232,7 @@ export const AdminDashboard = () => {
     (classMembersList || []).forEach(cm => {
       if (!cm || !cm.student_id || !cm.class_id) return;
       const cls = classById.get(cm.class_id);
-      if (!cls) return; // Bỏ qua nếu class không tồn tại trong danh sách lớp
+      if (!cls) return; // Bỏ qua nếu class không tồn tại trong danh sách lớp (orphan)
       if (!studentMap.has(cm.student_id)) {
         studentMap.set(cm.student_id, new Map());
       }
@@ -218,8 +259,145 @@ export const AdminDashboard = () => {
       teacherClassesById.set(teacherId, sortClasses(Array.from(classesMap.values())));
     });
 
-    return { studentClassesById, teacherClassesById };
-  }, [classesListState, classMembersList]);
+    // Tính toán danh sách người dùng đã lọc (filteredUsers)
+    // 1. ALL: Hiển thị toàn bộ Admin, Giáo viên, Học sinh (không phụ thuộc classFilterDataReady)
+    if (!globalClassFilter || globalClassFilter === 'ALL') {
+      if (!usersDataReady) {
+        return {
+          studentClassesById,
+          teacherClassesById,
+          filteredUsers: [],
+          filterStateStatus: 'LOADING',
+          filterNote: null
+        };
+      }
+      if (usersError) {
+        return {
+          studentClassesById,
+          teacherClassesById,
+          filteredUsers: [],
+          filterStateStatus: 'USER_ERROR',
+          filterNote: 'Không tải được danh sách người dùng'
+        };
+      }
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: usersList || [],
+        filterStateStatus: 'OK',
+        filterNote: null
+      };
+    }
+
+    // 2. Bộ lọc UUID hoặc NO_CLASS: Cần cả usersDataReady và classFilterDataReady
+    if (!usersDataReady || !classFilterDataReady) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'LOADING',
+        filterNote: null
+      };
+    }
+
+    // 3. Lỗi người dùng sau khi settled
+    if (usersError) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'USER_ERROR',
+        filterNote: 'Không tải được danh sách người dùng'
+      };
+    }
+
+    // 4. Lỗi classes hoặc class_members sau khi đã settled
+    if (classesError || classMembersError) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'ERROR',
+        filterNote: 'Không tải được dữ liệu để lọc theo lớp'
+      };
+    }
+
+    // 5. NO_CLASS: Người dùng chưa được xếp/phân công lớp
+    if (globalClassFilter === 'NO_CLASS') {
+      const filtered = (usersList || []).filter(u => {
+        if (!u) return false;
+        if (u.role === 'admin') return false;
+        if (u.role === 'teacher') {
+          const tClasses = teacherClassesById.get(u.id) || [];
+          return tClasses.length === 0;
+        }
+        if (u.role === 'student') {
+          const sClasses = studentClassesById.get(u.id) || [];
+          return sClasses.length === 0;
+        }
+        return false;
+      });
+
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: filtered,
+        filterStateStatus: 'OK',
+        filterNote: 'Người dùng chưa được xếp/phân công lớp'
+      };
+    }
+
+    // 6. UUID lớp cụ thể (chỉ kiểm tra INVALID_CLASS sau khi đã ready và không có lỗi)
+    const selectedCls = classById.get(globalClassFilter);
+    if (!selectedCls) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'INVALID_CLASS',
+        filterNote: 'Lớp đã chọn không tồn tại hoặc không còn khả dụng'
+      };
+    }
+
+    const targetStudentIds = new Set();
+    (classMembersList || []).forEach(cm => {
+      if (cm && cm.class_id === selectedCls.id && cm.student_id) {
+        targetStudentIds.add(cm.student_id);
+      }
+    });
+
+    const targetTeacherId = selectedCls.teacher_id || null;
+
+    const filtered = (usersList || []).filter(u => {
+      if (!u) return false;
+      if (u.role === 'admin') return false;
+      if (u.role === 'teacher') {
+        return targetTeacherId && u.id === targetTeacherId;
+      }
+      if (u.role === 'student') {
+        return targetStudentIds.has(u.id);
+      }
+      return false;
+    });
+
+    return {
+      studentClassesById,
+      teacherClassesById,
+      filteredUsers: filtered,
+      filterStateStatus: 'OK',
+      filterNote: null
+    };
+  }, [
+    classesListState,
+    classMembersList,
+    usersList,
+    globalClassFilter,
+    classesError,
+    classMembersError,
+    classFilterDataReady,
+    usersDataReady,
+    usersError
+  ]);
 
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
@@ -367,9 +545,16 @@ export const AdminDashboard = () => {
       {activeAdminTab === 'users' && (
         <div className="mb-10 animate-fadeIn">
           <div className="flex items-center justify-between gap-4 mb-4">
-            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({usersList.length})
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus === 'OK' ? filteredUsers.length : 0})
+              </h3>
+              {filterNote && filterStateStatus === 'OK' && (
+                <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold">
+                  📌 {filterNote}
+                </span>
+              )}
+            </div>
 
             <div className="flex items-center gap-2">
               <button
@@ -432,205 +617,293 @@ export const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-amber-100 text-slate-700">
-                {usersList.map((u) => {
-                  const isSelf = u.id === profile?.id;
-                  const isStudent = u.role === 'student';
-                  const hasPin = pinStatusMap[u.id] === true;
+                {filterStateStatus === 'LOADING' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-slate-500 bg-amber-50/20">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="font-bold text-xs text-slate-600">Đang tải danh sách người dùng và dữ liệu lớp…</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filterStateStatus === 'USER_ERROR' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <span className="font-extrabold text-sm">⚠️ Không tải được danh sách người dùng</span>
+                        <p className="text-xs text-rose-500">Đã xảy ra lỗi khi tải dữ liệu tài khoản từ hệ thống.</p>
+                        <button
+                          onClick={() => {
+                            fetchAdminData();
+                            triggerSound('click');
+                          }}
+                          className="mt-2 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
+                        >
+                          🔄 Thử lại
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filterStateStatus === 'ERROR' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <span className="font-extrabold text-sm">⚠️ Không tải được dữ liệu để lọc theo lớp</span>
+                        <p className="text-xs text-rose-500">Đã xảy ra lỗi khi tải danh sách lớp học hoặc thành viên lớp.</p>
+                        {setGlobalClassFilter && (
+                          <button
+                            onClick={() => {
+                              setGlobalClassFilter('ALL');
+                              triggerSound('click');
+                            }}
+                            className="mt-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
+                          >
+                            🌐 Xem tất cả người dùng
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : filterStateStatus === 'INVALID_CLASS' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-amber-800 bg-amber-50/50">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <span className="font-extrabold text-sm">🏫 Lớp đã chọn không tồn tại hoặc không còn khả dụng</span>
+                        <p className="text-xs text-amber-700">Vui lòng chọn lớp học khác từ thanh điều hướng.</p>
+                        {setGlobalClassFilter && (
+                          <button
+                            onClick={() => {
+                              setGlobalClassFilter('ALL');
+                              triggerSound('click');
+                            }}
+                            className="mt-2 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
+                          >
+                            🌐 Quay lại tất cả các lớp
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-slate-500 bg-slate-50/50">
+                      <div className="flex flex-col items-center justify-center gap-1.5">
+                        <span className="font-bold text-sm">Không có người dùng phù hợp với bộ lọc lớp hiện tại.</span>
+                        {globalClassFilter !== 'ALL' && setGlobalClassFilter && (
+                          <button
+                            onClick={() => {
+                              setGlobalClassFilter('ALL');
+                              triggerSound('click');
+                            }}
+                            className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                          >
+                            Hiển thị tất cả người dùng
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredUsers.map((u) => {
+                    const isSelf = u.id === profile?.id;
+                    const isStudent = u.role === 'student';
+                    const hasPin = pinStatusMap[u.id] === true;
 
-                  return (
-                    <tr key={u.id} className="hover:bg-amber-50">
-                      <td className="p-3 font-black text-slate-800">
-                        <div className="flex items-center gap-2">
-                          <img src={u.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
-                          <span>{u.full_name}</span>
-                          {isSelf && (
-                            <span className="px-1.5 py-0.5 bg-amber-400 text-amber-950 text-[9px] font-black rounded uppercase">Bạn</span>
+                    return (
+                      <tr key={u.id} className="hover:bg-amber-50">
+                        <td className="p-3 font-black text-slate-800">
+                          <div className="flex items-center gap-2">
+                            <img src={u.avatar_url || 'https://api.dicebear.com/7.x/bottts/svg?seed=Pikachu'} alt="" className="w-7 h-7 rounded-full bg-slate-100 border border-amber-300" />
+                            <span>{u.full_name}</span>
+                            {isSelf && (
+                              <span className="px-1.5 py-0.5 bg-amber-400 text-amber-950 text-[9px] font-black rounded uppercase">Bạn</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 font-mono font-black text-sky-700">
+                          {u.student_code || '—'}
+                        </td>
+                        <td className="p-3 text-slate-500 font-mono">{u.email}</td>
+                        <td className="p-3 uppercase">
+                          {u.role === 'admin' ? (
+                            <span className="px-2 py-0.5 bg-purple-100 text-purple-700 font-black rounded-lg">🛡️ Admin</span>
+                          ) : u.role === 'teacher' ? (
+                            <span className="px-2 py-0.5 bg-sky-100 text-sky-700 font-black rounded-lg">👩‍🏫 Teacher</span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-black rounded-lg">🎓 Student</span>
                           )}
-                        </div>
-                      </td>
-                      <td className="p-3 font-mono font-black text-sky-700">
-                        {u.student_code || '—'}
-                      </td>
-                      <td className="p-3 text-slate-500 font-mono">{u.email}</td>
-                      <td className="p-3 uppercase">
-                        {u.role === 'admin' ? (
-                          <span className="px-2 py-0.5 bg-purple-100 text-purple-700 font-black rounded-lg">🛡️ Admin</span>
-                        ) : u.role === 'teacher' ? (
-                          <span className="px-2 py-0.5 bg-sky-100 text-sky-700 font-black rounded-lg">👩‍🏫 Teacher</span>
-                        ) : (
-                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-black rounded-lg">🎓 Student</span>
-                        )}
-                      </td>
+                        </td>
 
-                      <td className="p-3">
-                        {u.role === 'admin' ? (
-                          <span className="text-slate-300 font-normal">—</span>
-                        ) : u.role === 'teacher' ? (
-                          classesError ? (
-                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
-                              Không tải được
-                            </span>
-                          ) : (() => {
-                            const teacherClasses = teacherClassesById.get(u.id) || [];
-                            if (teacherClasses.length === 0) {
-                              return (
-                                <span className="text-slate-400 italic font-normal text-[11px]">
-                                  Chưa phân công
-                                </span>
-                              );
-                            }
-                            return (
-                              <div className="flex flex-wrap gap-1 max-w-[220px]">
-                                {teacherClasses.map(cls => (
-                                  <span
-                                    key={cls.id}
-                                    className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
-                                  >
-                                    {cls.name}
+                        <td className="p-3">
+                          {u.role === 'admin' ? (
+                            <span className="text-slate-300 font-normal">—</span>
+                          ) : u.role === 'teacher' ? (
+                            classesError ? (
+                              <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
+                                Không tải được
+                              </span>
+                            ) : (() => {
+                              const teacherClasses = teacherClassesById.get(u.id) || [];
+                              if (teacherClasses.length === 0) {
+                                return (
+                                  <span className="text-slate-400 italic font-normal text-[11px]">
+                                    Chưa phân công
                                   </span>
-                                ))}
-                              </div>
-                            );
-                          })()
-                        ) : u.role === 'student' ? (
-                          (classesError || classMembersError) ? (
-                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
-                              Không tải được
-                            </span>
-                          ) : (() => {
-                            const studentClasses = studentClassesById.get(u.id) || [];
-                            if (studentClasses.length === 0) {
+                                );
+                              }
                               return (
-                                <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
-                                  Chưa xếp lớp
-                                </span>
+                                <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                  {teacherClasses.map(cls => (
+                                    <span
+                                      key={cls.id}
+                                      className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
+                                    >
+                                      {cls.name}
+                                    </span>
+                                  ))}
+                                </div>
                               );
-                            }
-                            return (
-                              <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                {studentClasses.map(cls => (
-                                  <span
-                                    key={cls.id}
-                                    className="px-2 py-0.5 bg-sky-100 text-sky-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
-                                  >
-                                    {cls.name}
+                            })()
+                          ) : u.role === 'student' ? (
+                            (classesError || classMembersError) ? (
+                              <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
+                                Không tải được
+                              </span>
+                            ) : (() => {
+                              const studentClasses = studentClassesById.get(u.id) || [];
+                              if (studentClasses.length === 0) {
+                                return (
+                                  <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
+                                    Chưa xếp lớp
                                   </span>
-                                ))}
-                              </div>
-                            );
-                          })()
-                        ) : (
-                          <span className="text-slate-300 font-normal">—</span>
-                        )}
-                      </td>
-
-                      <td className="p-3">
-                        {isStudent ? (
-                          <ParentCodeCell code={u.parent_access_code} />
-                        ) : (
-                          <span className="text-slate-300 font-normal">—</span>
-                        )}
-                      </td>
-
-                      <td className="p-3">Khối {u.grade_level || 1}</td>
-                      <td className="p-3 text-amber-600 font-extrabold">{u.total_stars || 0} 🌟</td>
-                      <td className="p-3">
-                        {u.is_disabled ? (
-                          <span className="px-2 py-0.5 bg-rose-100 text-rose-700 font-extrabold rounded-lg flex items-center gap-1 w-max">
-                            <Lock className="w-3 h-3" /> Đã khóa
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-extrabold rounded-lg w-max inline-block">
-                            🟢 Hoạt động
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {isStudent && (
-                            <>
-                              <button
-                                onClick={() => {
-                                  setUserForQr(u);
-                                  setIsQrModalOpen(true);
-                                  triggerSound('click');
-                                }}
-                                className="p-1.5 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 transition-colors"
-                                title="Quản lý Thẻ QR Đăng Nhập"
-                              >
-                                <QrCode className="w-4 h-4" />
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  setUserForPin(u);
-                                  setIsPinModalOpen(true);
-                                  triggerSound('click');
-                                }}
-                                className={`p-1.5 rounded-lg transition-colors ${
-                                  hasPin
-                                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
-                                    : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
-                                }`}
-                                title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
-                              >
-                                <KeyRound className="w-4 h-4" />
-                              </button>
-                            </>
+                                );
+                              }
+                              return (
+                                <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                  {studentClasses.map(cls => (
+                                    <span
+                                      key={cls.id}
+                                      className="px-2 py-0.5 bg-sky-100 text-sky-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
+                                    >
+                                      {cls.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <span className="text-slate-300 font-normal">—</span>
                           )}
+                        </td>
 
-                          <button
-                            onClick={() => {
-                              setUserToEdit(u);
-                              setIsFormModalOpen(true);
-                              triggerSound('click');
-                            }}
-                            className="p-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-lg transition-colors"
-                            title="Sửa thông tin"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
+                        <td className="p-3">
+                          {isStudent ? (
+                            <ParentCodeCell code={u.parent_access_code} />
+                          ) : (
+                            <span className="text-slate-300 font-normal">—</span>
+                          )}
+                        </td>
 
-                          <button
-                            disabled={isSelf}
-                            onClick={() => {
-                              setUserToDelete(u);
-                              setIsDeleteModalOpen(true);
-                              triggerSound('click');
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              isSelf
-                                ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400'
-                                : u.is_disabled
-                                ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700'
-                                : 'bg-amber-100 hover:bg-amber-200 text-amber-700'
-                            }`}
-                            title={isSelf ? 'Không thể tự khóa tài khoản của bạn' : u.is_disabled ? 'Mở khóa tài khoản' : 'Khóa tài khoản'}
-                          >
-                            <Lock className="w-4 h-4" />
-                          </button>
+                        <td className="p-3">Khối {u.grade_level || 1}</td>
+                        <td className="p-3 text-amber-600 font-extrabold">{u.total_stars || 0} 🌟</td>
+                        <td className="p-3">
+                          {u.is_disabled ? (
+                            <span className="px-2 py-0.5 bg-rose-100 text-rose-700 font-extrabold rounded-lg flex items-center gap-1 w-max">
+                              <Lock className="w-3 h-3" /> Đã khóa
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-extrabold rounded-lg w-max inline-block">
+                              🟢 Hoạt động
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {isStudent && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setUserForQr(u);
+                                    setIsQrModalOpen(true);
+                                    triggerSound('click');
+                                  }}
+                                  className="p-1.5 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 transition-colors"
+                                  title="Quản lý Thẻ QR Đăng Nhập"
+                                >
+                                  <QrCode className="w-4 h-4" />
+                                </button>
 
-                          <button
-                            disabled={isSelf}
-                            onClick={() => {
-                              setUserToDelete(u);
-                              setIsDeleteModalOpen(true);
-                              triggerSound('click');
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              isSelf
-                                ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400'
-                                : 'bg-rose-100 hover:bg-rose-200 text-rose-700'
-                            }`}
-                            title={isSelf ? 'Không thể tự xóa tài khoản của bạn' : 'Xóa tài khoản'}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                                <button
+                                  onClick={() => {
+                                    setUserForPin(u);
+                                    setIsPinModalOpen(true);
+                                    triggerSound('click');
+                                  }}
+                                  className={`p-1.5 rounded-lg transition-colors ${
+                                    hasPin
+                                      ? 'bg-amber-100 hover:bg-amber-200 text-amber-800'
+                                      : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-800 animate-pulse'
+                                  }`}
+                                  title={hasPin ? 'Reset mã PIN' : 'Đặt mã PIN'}
+                                >
+                                  <KeyRound className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+
+                            <button
+                              onClick={() => {
+                                setUserToEdit(u);
+                                setIsFormModalOpen(true);
+                                triggerSound('click');
+                              }}
+                              className="p-1.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-lg transition-colors"
+                              title="Sửa thông tin"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              disabled={isSelf}
+                              onClick={() => {
+                                setUserToDelete(u);
+                                setIsDeleteModalOpen(true);
+                                triggerSound('click');
+                              }}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isSelf
+                                  ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400'
+                                  : u.is_disabled
+                                  ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-700'
+                                  : 'bg-amber-100 hover:bg-amber-200 text-amber-700'
+                              }`}
+                              title={isSelf ? 'Không thể tự khóa tài khoản của bạn' : u.is_disabled ? 'Mở khóa tài khoản' : 'Khóa tài khoản'}
+                            >
+                              <Lock className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              disabled={isSelf}
+                              onClick={() => {
+                                setUserToDelete(u);
+                                setIsDeleteModalOpen(true);
+                                triggerSound('click');
+                              }}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isSelf
+                                  ? 'opacity-30 cursor-not-allowed bg-slate-100 text-slate-400'
+                                  : 'bg-rose-100 hover:bg-rose-200 text-rose-700'
+                              }`}
+                              title={isSelf ? 'Không thể tự xóa tài khoản của bạn' : 'Xóa tài khoản'}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
