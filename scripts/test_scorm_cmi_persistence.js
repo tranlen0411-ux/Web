@@ -583,21 +583,24 @@ async function runScormCmiPersistenceTestSuite() {
     assert.equal(hugePayloadRes.rows[0].result.code, 'PAYLOAD_TOO_LARGE');
     recordPass('CMI12', 'Chặn đứng payload vượt hạn mức 128KB và suspend_data > 64KB');
 
-    // --- CMI13: Invalid non-numeric score and out-of-bounds score blocked ---
-    const invalidScore1 = await db.query(
-      `SELECT public.save_scorm_cmi_state($1, $2, $3) AS result`,
-      [
-        package12Id,
-        JSON.stringify({
-          'cmi.core.score.raw': 'HACKED_STRING_100',
-          'cmi.core.score.min': '0',
-          'cmi.core.score.max': '100',
-        }),
-        token1_12,
-      ]
-    );
-    assert.equal(invalidScore1.rows[0].result.success, false);
-    assert.equal(invalidScore1.rows[0].result.code, 'INVALID_SCORE');
+    // --- CMI13: Invalid non-numeric score, non-decimal format, and out-of-bounds score blocked ---
+    const invalidInputs = ['HACKED_STRING_100', 'NaN', 'Infinity', '-Infinity', '1e3', '1E-3', '+1', '.5', '1.'];
+    for (const inv of invalidInputs) {
+      const invRes = await db.query(
+        `SELECT public.save_scorm_cmi_state($1, $2, $3) AS result`,
+        [
+          package12Id,
+          JSON.stringify({
+            'cmi.core.score.raw': inv,
+            'cmi.core.score.min': '0',
+            'cmi.core.score.max': '100',
+          }),
+          token1_12,
+        ]
+      );
+      assert.equal(invRes.rows[0].result.success, false, `Score '${inv}' must be rejected`);
+      assert.equal(invRes.rows[0].result.code, 'INVALID_SCORE', `Score '${inv}' must return code INVALID_SCORE`);
+    }
 
     const invalidScore2 = await db.query(
       `SELECT public.save_scorm_cmi_state($1, $2, $3) AS result`,
@@ -613,7 +616,7 @@ async function runScormCmiPersistenceTestSuite() {
     );
     assert.equal(invalidScore2.rows[0].result.success, false);
     assert.equal(invalidScore2.rows[0].result.code, 'INVALID_SCORE');
-    recordPass('CMI13', 'Chặn đứng điểm số không hợp lệ hoặc vượt ngưỡng min/max (Score Tampering)');
+    recordPass('CMI13', 'Chặn đứng điểm số không hợp lệ, phi chuẩn (NaN/Infinity/1e3) hoặc vượt ngưỡng min/max');
 
     // --- CMI14: LMSCommit triggers background persistence callback ---
     let commitTriggered = false;
