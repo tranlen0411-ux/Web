@@ -63,6 +63,8 @@ export const AdminDashboard = () => {
 
   const [stats, setStats] = useState({ users: 0, games: 0, classes: 0 });
   const [usersList, setUsersList] = useState([]);
+  const [usersDataReady, setUsersDataReady] = useState(false);
+  const [usersError, setUsersError] = useState(false);
   const [gamesList, setGamesList] = useState([]);
   const [classesListState, setClassesListState] = useState([]);
   const [classesError, setClassesError] = useState(false);
@@ -100,7 +102,12 @@ export const AdminDashboard = () => {
 
   const fetchAdminData = async () => {
     setLoading(true);
+    setUsersDataReady(false);
     setClassFilterDataReady(false);
+    setUsersError(false);
+    setClassesError(false);
+    setClassMembersError(false);
+
     try {
       // 1. Thống kê tổng số
       const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
@@ -134,17 +141,40 @@ export const AdminDashboard = () => {
 
       // Đánh dấu cả hai truy vấn classes và class_members đã hoàn tất (settled)
       setClassFilterDataReady(true);
+    } catch (err) {
+      console.error('Fetch classes/class_members error:', err);
+      setClassesError(true);
+      setClassMembersError(true);
+      setClassFilterDataReady(true);
+    }
 
+    let sortedUsers = [];
+    try {
       // 3. Lấy danh sách người dùng
-      const { data: uData } = await supabase
+      const { data: uData, error: uErr } = await supabase
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false });
 
-      const sortedUsers = uData || [];
-      setUsersList(sortedUsers);
+      if (uErr) {
+        console.error('Fetch profiles error:', uErr.message || uErr);
+        setUsersError(true);
+        setUsersList([]);
+      } else {
+        setUsersError(false);
+        sortedUsers = uData || [];
+        setUsersList(sortedUsers);
+      }
+      setUsersDataReady(true);
+    } catch (err) {
+      console.error('Fetch profiles error:', err);
+      setUsersError(true);
+      setUsersList([]);
+      setUsersDataReady(true);
+    }
 
-      // Kiểm tra trạng thái PIN học sinh qua RPC has_student_pin
+    try {
+      // Kiểm tra trạng thái PIN học sinh qua RPC has_student_pin (không ảnh hưởng readiness bảng người dùng)
       const studentUsers = sortedUsers.filter(u => u.role === 'student');
       const pMap = {};
       await Promise.all(
@@ -167,8 +197,7 @@ export const AdminDashboard = () => {
 
       setGamesList(gData || []);
     } catch (err) {
-      console.error('Fetch admin data error:', err);
-      setClassFilterDataReady(true);
+      console.error('Fetch games/pin error:', err);
     } finally {
       setLoading(false);
     }
@@ -233,6 +262,24 @@ export const AdminDashboard = () => {
     // Tính toán danh sách người dùng đã lọc (filteredUsers)
     // 1. ALL: Hiển thị toàn bộ Admin, Giáo viên, Học sinh (không phụ thuộc classFilterDataReady)
     if (!globalClassFilter || globalClassFilter === 'ALL') {
+      if (!usersDataReady) {
+        return {
+          studentClassesById,
+          teacherClassesById,
+          filteredUsers: [],
+          filterStateStatus: 'LOADING',
+          filterNote: null
+        };
+      }
+      if (usersError) {
+        return {
+          studentClassesById,
+          teacherClassesById,
+          filteredUsers: [],
+          filterStateStatus: 'USER_ERROR',
+          filterNote: 'Không tải được danh sách người dùng'
+        };
+      }
       return {
         studentClassesById,
         teacherClassesById,
@@ -242,8 +289,8 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 2. Dữ liệu phục vụ bộ lọc chưa settled -> LOADING (tránh false INVALID_CLASS hoặc false NO_CLASS)
-    if (!classFilterDataReady) {
+    // 2. Bộ lọc UUID hoặc NO_CLASS: Cần cả usersDataReady và classFilterDataReady
+    if (!usersDataReady || !classFilterDataReady) {
       return {
         studentClassesById,
         teacherClassesById,
@@ -253,7 +300,18 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 3. Lỗi classes hoặc class_members sau khi đã settled -> ERROR
+    // 3. Lỗi người dùng sau khi settled
+    if (usersError) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'USER_ERROR',
+        filterNote: 'Không tải được danh sách người dùng'
+      };
+    }
+
+    // 4. Lỗi classes hoặc class_members sau khi đã settled
     if (classesError || classMembersError) {
       return {
         studentClassesById,
@@ -264,7 +322,7 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 4. NO_CLASS: Người dùng chưa được xếp/phân công lớp
+    // 5. NO_CLASS: Người dùng chưa được xếp/phân công lớp
     if (globalClassFilter === 'NO_CLASS') {
       const filtered = (usersList || []).filter(u => {
         if (!u) return false;
@@ -289,7 +347,7 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 5. UUID lớp cụ thể (chỉ kiểm tra INVALID_CLASS sau khi đã ready và không có lỗi)
+    // 6. UUID lớp cụ thể (chỉ kiểm tra INVALID_CLASS sau khi đã ready và không có lỗi)
     const selectedCls = classById.get(globalClassFilter);
     if (!selectedCls) {
       return {
@@ -336,7 +394,9 @@ export const AdminDashboard = () => {
     globalClassFilter,
     classesError,
     classMembersError,
-    classFilterDataReady
+    classFilterDataReady,
+    usersDataReady,
+    usersError
   ]);
 
   const handleDeleteGame = async (gameId) => {
@@ -562,7 +622,25 @@ export const AdminDashboard = () => {
                     <td colSpan={10} className="p-8 text-center text-slate-500 bg-amber-50/20">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="font-bold text-xs text-slate-600">Đang tải dữ liệu lớp…</span>
+                        <span className="font-bold text-xs text-slate-600">Đang tải danh sách người dùng và dữ liệu lớp…</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filterStateStatus === 'USER_ERROR' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <span className="font-extrabold text-sm">⚠️ Không tải được danh sách người dùng</span>
+                        <p className="text-xs text-rose-500">Đã xảy ra lỗi khi tải dữ liệu tài khoản từ hệ thống.</p>
+                        <button
+                          onClick={() => {
+                            fetchAdminData();
+                            triggerSound('click');
+                          }}
+                          className="mt-2 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
+                        >
+                          🔄 Thử lại
+                        </button>
                       </div>
                     </td>
                   </tr>
