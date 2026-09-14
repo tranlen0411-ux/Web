@@ -65,6 +65,7 @@ export const AdminDashboard = () => {
   const [usersList, setUsersList] = useState([]);
   const [gamesList, setGamesList] = useState([]);
   const [classesListState, setClassesListState] = useState([]);
+  const [classesError, setClassesError] = useState(false);
   const [classMembersList, setClassMembersList] = useState([]);
   const [classMembersError, setClassMembersError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -102,10 +103,18 @@ export const AdminDashboard = () => {
       // 1. Thống kê tổng số
       const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
       const { count: gCount } = await supabase.from('games').select('id', { count: 'exact', head: true });
-      const { count: cCount, data: cData } = await supabase.from('classes').select('*', { count: 'exact' }).order('grade_level');
+      const { count: cCount, data: cData, error: cErr } = await supabase.from('classes').select('*', { count: 'exact' }).order('grade_level');
+
+      if (cErr) {
+        console.error('Fetch classes error:', cErr.message || cErr);
+        setClassesError(true);
+        setClassesListState([]);
+      } else {
+        setClassesError(false);
+        setClassesListState(cData || []);
+      }
 
       setStats({ users: uCount || 0, games: gCount || 0, classes: cCount || 0 });
-      setClassesListState(cData || []);
 
       // 2. Lấy danh sách thành viên lớp (class_members) cho cột Lớp
       const { data: cmData, error: cmErr } = await supabase
@@ -454,35 +463,14 @@ export const AdminDashboard = () => {
                       </td>
 
                       <td className="p-3">
-                        {classMembersError ? (
-                          <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
-                            Không tải được
-                          </span>
-                        ) : u.role === 'student' ? (
-                          (() => {
-                            const studentClasses = studentClassesById.get(u.id) || [];
-                            if (studentClasses.length === 0) {
-                              return (
-                                <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
-                                  Chưa xếp lớp
-                                </span>
-                              );
-                            }
-                            return (
-                              <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                {studentClasses.map(cls => (
-                                  <span
-                                    key={cls.id}
-                                    className="px-2 py-0.5 bg-sky-100 text-sky-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
-                                  >
-                                    {cls.name}
-                                  </span>
-                                ))}
-                              </div>
-                            );
-                          })()
+                        {u.role === 'admin' ? (
+                          <span className="text-slate-300 font-normal">—</span>
                         ) : u.role === 'teacher' ? (
-                          (() => {
+                          classesError ? (
+                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
+                              Không tải được
+                            </span>
+                          ) : (() => {
                             const teacherClasses = teacherClassesById.get(u.id) || [];
                             if (teacherClasses.length === 0) {
                               return (
@@ -497,6 +485,33 @@ export const AdminDashboard = () => {
                                   <span
                                     key={cls.id}
                                     className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
+                                  >
+                                    {cls.name}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })()
+                        ) : u.role === 'student' ? (
+                          (classesError || classMembersError) ? (
+                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold rounded-lg text-[11px] border border-rose-200">
+                              Không tải được
+                            </span>
+                          ) : (() => {
+                            const studentClasses = studentClassesById.get(u.id) || [];
+                            if (studentClasses.length === 0) {
+                              return (
+                                <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
+                                  Chưa xếp lớp
+                                </span>
+                              );
+                            }
+                            return (
+                              <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                {studentClasses.map(cls => (
+                                  <span
+                                    key={cls.id}
+                                    className="px-2 py-0.5 bg-sky-100 text-sky-800 font-extrabold rounded-lg text-[11px] whitespace-nowrap"
                                   >
                                     {cls.name}
                                   </span>
