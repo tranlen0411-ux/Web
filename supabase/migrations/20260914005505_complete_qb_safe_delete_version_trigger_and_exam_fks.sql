@@ -20,14 +20,19 @@
 --      g. No exam_questions reference OLD.id or any version of the item (source_question_bank_version_id).
 --      h. No fork lineage references OLD.id or any version of the item (forked_from_version_id).
 --
--- 2. Foreign Key Protection against Concurrency Race Conditions:
+-- 2. Foreign Key Protection against Concurrency Race Conditions (Fail-Closed):
 --    - Adds Foreign Key from public.exam_questions(source_question_bank_item_id)
 --      to public.question_bank_items(id) ON DELETE RESTRICT.
 --    - Adds Foreign Key from public.exam_questions(source_question_bank_version_id)
 --      to public.question_bank_versions(id) ON DELETE RESTRICT.
---    - Eliminates race conditions between Question Bank safe-delete and Exam Builder authoring.
+--    - Direct fail-closed DDL statements without exception-swallowing DO blocks.
 --
--- 3. Security Hardening:
+-- 3. Partial Performance Indexes:
+--    - Adds partial indexes on exam_questions for source_question_bank_item_id and
+--      source_question_bank_version_id (WHERE column IS NOT NULL) to accelerate
+--      referential checks and provenance lookups without locking issues.
+--
+-- 4. Security Hardening:
 --    - SECURITY DEFINER with SET search_path = ''
 --    - Full schema qualification (pg_catalog.*, public.*)
 --    - Permissions revoked from PUBLIC, anon, authenticated, and service_role.
@@ -159,29 +164,25 @@ REVOKE ALL ON FUNCTION public.fn_prevent_question_bank_version_mutation() FROM P
 -- ------------------------------------------------------------
 -- 2. ADD FOREIGN KEYS ON public.exam_questions (ON DELETE RESTRICT)
 -- ------------------------------------------------------------
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'fk_exam_questions_source_qb_item'
-    ) THEN
-        ALTER TABLE public.exam_questions
-            ADD CONSTRAINT fk_exam_questions_source_qb_item
-            FOREIGN KEY (source_question_bank_item_id)
-            REFERENCES public.question_bank_items(id)
-            ON DELETE RESTRICT;
-    END IF;
+ALTER TABLE public.exam_questions
+    ADD CONSTRAINT fk_exam_questions_source_qb_item
+    FOREIGN KEY (source_question_bank_item_id)
+    REFERENCES public.question_bank_items(id)
+    ON DELETE RESTRICT;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'fk_exam_questions_source_qb_version'
-    ) THEN
-        ALTER TABLE public.exam_questions
-            ADD CONSTRAINT fk_exam_questions_source_qb_version
-            FOREIGN KEY (source_question_bank_version_id)
-            REFERENCES public.question_bank_versions(id)
-            ON DELETE RESTRICT;
-    END IF;
-END $$;
+ALTER TABLE public.exam_questions
+    ADD CONSTRAINT fk_exam_questions_source_qb_version
+    FOREIGN KEY (source_question_bank_version_id)
+    REFERENCES public.question_bank_versions(id)
+    ON DELETE RESTRICT;
+
+-- ------------------------------------------------------------
+-- 3. CREATE PARTIAL INDEXES ON public.exam_questions (PROVENANCE FKs)
+-- ------------------------------------------------------------
+CREATE INDEX idx_exam_questions_source_qb_item
+ON public.exam_questions (source_question_bank_item_id)
+WHERE source_question_bank_item_id IS NOT NULL;
+
+CREATE INDEX idx_exam_questions_source_qb_version
+ON public.exam_questions (source_question_bank_version_id)
+WHERE source_question_bank_version_id IS NOT NULL;

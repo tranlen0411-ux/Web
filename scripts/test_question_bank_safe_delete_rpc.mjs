@@ -551,28 +551,81 @@ test('PR #80: Question Bank Safe Delete RPC, Immutability Triggers & FK Comprehe
     );
   });
 
-  await t.test('13. Foreign Key: Constraint metadata validation (convalidated = true, confdeltype = r)', async () => {
+  await t.test('13. Foreign Key & Partial Indexes: Metadata, columns, targets, and fail-closed validation', async () => {
+    // 13.1 Verify Foreign Keys
     const constraints = await db.query(`
       SELECT
-        conname,
-        contype,
-        convalidated,
-        confdeltype
-      FROM pg_constraint
-      WHERE conname IN ('fk_exam_questions_source_qb_item', 'fk_exam_questions_source_qb_version');
+        c.conname,
+        c.conrelid::regclass::text AS source_table,
+        c.confrelid::regclass::text AS target_table,
+        c.contype,
+        c.convalidated,
+        c.confdeltype,
+        a.attname AS source_column,
+        fa.attname AS target_column
+      FROM pg_constraint c
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+      JOIN pg_attribute fa ON fa.attrelid = c.confrelid AND fa.attnum = ANY(c.confkey)
+      WHERE c.conname IN ('fk_exam_questions_source_qb_item', 'fk_exam_questions_source_qb_version');
     `);
 
     assert.equal(constraints.rows.length, 2, 'Both FK constraints must exist');
 
     const itemFk = constraints.rows.find((c) => c.conname === 'fk_exam_questions_source_qb_item');
     assert.ok(itemFk, 'fk_exam_questions_source_qb_item must exist');
+    assert.equal(itemFk.source_table, 'exam_questions');
+    assert.equal(itemFk.target_table, 'question_bank_items');
+    assert.equal(itemFk.source_column, 'source_question_bank_item_id');
+    assert.equal(itemFk.target_column, 'id');
     assert.equal(itemFk.convalidated, true, 'Item FK constraint must be validated');
     assert.equal(itemFk.confdeltype, 'r', 'Item FK ON DELETE must be RESTRICT (r)');
 
     const verFk = constraints.rows.find((c) => c.conname === 'fk_exam_questions_source_qb_version');
     assert.ok(verFk, 'fk_exam_questions_source_qb_version must exist');
+    assert.equal(verFk.source_table, 'exam_questions');
+    assert.equal(verFk.target_table, 'question_bank_versions');
+    assert.equal(verFk.source_column, 'source_question_bank_version_id');
+    assert.equal(verFk.target_column, 'id');
     assert.equal(verFk.convalidated, true, 'Version FK constraint must be validated');
     assert.equal(verFk.confdeltype, 'r', 'Version FK ON DELETE must be RESTRICT (r)');
+
+    // 13.2 Verify Partial Indexes
+    const indexes = await db.query(`
+      SELECT indexname, tablename, indexdef
+      FROM pg_indexes
+      WHERE tablename = 'exam_questions' AND indexname IN ('idx_exam_questions_source_qb_item', 'idx_exam_questions_source_qb_version');
+    `);
+
+    assert.equal(indexes.rows.length, 2, 'Both partial indexes must exist on exam_questions');
+
+    const itemIdx = indexes.rows.find((i) => i.indexname === 'idx_exam_questions_source_qb_item');
+    assert.ok(itemIdx, 'idx_exam_questions_source_qb_item must exist');
+    assert.ok(itemIdx.indexdef.includes('source_question_bank_item_id'), 'Index must index source_question_bank_item_id');
+    assert.ok(itemIdx.indexdef.includes('WHERE (source_question_bank_item_id IS NOT NULL)') || itemIdx.indexdef.includes('WHERE source_question_bank_item_id IS NOT NULL'), 'Index must have partial WHERE predicate');
+
+    const verIdx = indexes.rows.find((i) => i.indexname === 'idx_exam_questions_source_qb_version');
+    assert.ok(verIdx, 'idx_exam_questions_source_qb_version must exist');
+    assert.ok(verIdx.indexdef.includes('source_question_bank_version_id'), 'Index must index source_question_bank_version_id');
+    assert.ok(verIdx.indexdef.includes('WHERE (source_question_bank_version_id IS NOT NULL)') || verIdx.indexdef.includes('WHERE source_question_bank_version_id IS NOT NULL'), 'Index must have partial WHERE predicate');
+
+    // 13.3 Verify Migration SQL Static Structure (Fail-closed: No name-only DO blocks, no IF NOT EXISTS swallowing)
+    assert.equal(migration3Sql.includes('DO $$'), false, 'Migration must NOT use DO block with name-only check');
+    assert.equal(migration3Sql.includes('IF NOT EXISTS'), false, 'Migration must NOT use IF NOT EXISTS for constraints');
+
+    // 13.4 Verify Fail-Closed Behavior on Schema Drift (Duplicate constraint raises error 42710)
+    await assert.rejects(
+      async () => {
+        await db.query(`
+          ALTER TABLE public.exam_questions
+            ADD CONSTRAINT fk_exam_questions_source_qb_item
+            FOREIGN KEY (source_question_bank_item_id)
+            REFERENCES public.question_bank_items(id)
+            ON DELETE RESTRICT;
+        `);
+      },
+      (err) => err.code === '42710',
+      'Direct DDL must fail immediately with 42710 on schema drift instead of swallowing errors'
+    );
   });
 
   await t.test('14. Foreign Key: Prevents deleting parent QB item when exam reference exists (23001 / 23503)', async () => {
