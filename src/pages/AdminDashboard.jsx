@@ -68,6 +68,7 @@ export const AdminDashboard = () => {
   const [classesError, setClassesError] = useState(false);
   const [classMembersList, setClassMembersList] = useState([]);
   const [classMembersError, setClassMembersError] = useState(false);
+  const [classFilterDataReady, setClassFilterDataReady] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -99,6 +100,7 @@ export const AdminDashboard = () => {
 
   const fetchAdminData = async () => {
     setLoading(true);
+    setClassFilterDataReady(false);
     try {
       // 1. Thống kê tổng số
       const { count: uCount } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
@@ -129,6 +131,9 @@ export const AdminDashboard = () => {
         setClassMembersError(false);
         setClassMembersList(cmData || []);
       }
+
+      // Đánh dấu cả hai truy vấn classes và class_members đã hoàn tất (settled)
+      setClassFilterDataReady(true);
 
       // 3. Lấy danh sách người dùng
       const { data: uData } = await supabase
@@ -163,6 +168,7 @@ export const AdminDashboard = () => {
       setGamesList(gData || []);
     } catch (err) {
       console.error('Fetch admin data error:', err);
+      setClassFilterDataReady(true);
     } finally {
       setLoading(false);
     }
@@ -225,7 +231,7 @@ export const AdminDashboard = () => {
     });
 
     // Tính toán danh sách người dùng đã lọc (filteredUsers)
-    // 1. ALL: Hiển thị toàn bộ Admin, Giáo viên, Học sinh
+    // 1. ALL: Hiển thị toàn bộ Admin, Giáo viên, Học sinh (không phụ thuộc classFilterDataReady)
     if (!globalClassFilter || globalClassFilter === 'ALL') {
       return {
         studentClassesById,
@@ -236,7 +242,18 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 2. Lỗi classes hoặc class_members khi đang áp dụng bộ lọc lớp
+    // 2. Dữ liệu phục vụ bộ lọc chưa settled -> LOADING (tránh false INVALID_CLASS hoặc false NO_CLASS)
+    if (!classFilterDataReady) {
+      return {
+        studentClassesById,
+        teacherClassesById,
+        filteredUsers: [],
+        filterStateStatus: 'LOADING',
+        filterNote: null
+      };
+    }
+
+    // 3. Lỗi classes hoặc class_members sau khi đã settled -> ERROR
     if (classesError || classMembersError) {
       return {
         studentClassesById,
@@ -247,7 +264,7 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 3. NO_CLASS: Người dùng chưa được xếp/phân công lớp
+    // 4. NO_CLASS: Người dùng chưa được xếp/phân công lớp
     if (globalClassFilter === 'NO_CLASS') {
       const filtered = (usersList || []).filter(u => {
         if (!u) return false;
@@ -272,7 +289,7 @@ export const AdminDashboard = () => {
       };
     }
 
-    // 4. UUID lớp cụ thể
+    // 5. UUID lớp cụ thể (chỉ kiểm tra INVALID_CLASS sau khi đã ready và không có lỗi)
     const selectedCls = classById.get(globalClassFilter);
     if (!selectedCls) {
       return {
@@ -318,7 +335,8 @@ export const AdminDashboard = () => {
     usersList,
     globalClassFilter,
     classesError,
-    classMembersError
+    classMembersError,
+    classFilterDataReady
   ]);
 
   const handleDeleteGame = async (gameId) => {
@@ -469,7 +487,7 @@ export const AdminDashboard = () => {
           <div className="flex items-center justify-between gap-4 mb-4">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'OK' ? filteredUsers.length : 0})
+                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus === 'OK' ? filteredUsers.length : 0})
               </h3>
               {filterNote && filterStateStatus === 'OK' && (
                 <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold">
@@ -539,7 +557,16 @@ export const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-amber-100 text-slate-700">
-                {filterStateStatus === 'ERROR' ? (
+                {filterStateStatus === 'LOADING' ? (
+                  <tr>
+                    <td colSpan={10} className="p-8 text-center text-slate-500 bg-amber-50/20">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="font-bold text-xs text-slate-600">Đang tải dữ liệu lớp…</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filterStateStatus === 'ERROR' ? (
                   <tr>
                     <td colSpan={10} className="p-8 text-center text-rose-600 bg-rose-50/50">
                       <div className="flex flex-col items-center justify-center gap-2">
