@@ -71,6 +71,7 @@ export const AdminDashboard = () => {
   const [classMembersList, setClassMembersList] = useState([]);
   const [classMembersError, setClassMembersError] = useState(false);
   const [classFilterDataReady, setClassFilterDataReady] = useState(false);
+  const [userRoleFilter, setUserRoleFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -207,7 +208,7 @@ export const AdminDashboard = () => {
   const {
     studentClassesById,
     teacherClassesById,
-    filteredUsers,
+    classFilteredUsers,
     filterStateStatus,
     filterNote
   } = useMemo(() => {
@@ -259,14 +260,14 @@ export const AdminDashboard = () => {
       teacherClassesById.set(teacherId, sortClasses(Array.from(classesMap.values())));
     });
 
-    // Tính toán danh sách người dùng đã lọc (filteredUsers)
+    // Tính toán danh sách người dùng theo phạm vi lớp (classFilteredUsers)
     // 1. ALL: Hiển thị toàn bộ Admin, Giáo viên, Học sinh (không phụ thuộc classFilterDataReady)
     if (!globalClassFilter || globalClassFilter === 'ALL') {
       if (!usersDataReady) {
         return {
           studentClassesById,
           teacherClassesById,
-          filteredUsers: [],
+          classFilteredUsers: [],
           filterStateStatus: 'LOADING',
           filterNote: null
         };
@@ -275,7 +276,7 @@ export const AdminDashboard = () => {
         return {
           studentClassesById,
           teacherClassesById,
-          filteredUsers: [],
+          classFilteredUsers: [],
           filterStateStatus: 'USER_ERROR',
           filterNote: 'Không tải được danh sách người dùng'
         };
@@ -283,7 +284,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: usersList || [],
+        classFilteredUsers: usersList || [],
         filterStateStatus: 'OK',
         filterNote: null
       };
@@ -294,7 +295,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: [],
+        classFilteredUsers: [],
         filterStateStatus: 'LOADING',
         filterNote: null
       };
@@ -305,7 +306,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: [],
+        classFilteredUsers: [],
         filterStateStatus: 'USER_ERROR',
         filterNote: 'Không tải được danh sách người dùng'
       };
@@ -316,7 +317,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: [],
+        classFilteredUsers: [],
         filterStateStatus: 'ERROR',
         filterNote: 'Không tải được dữ liệu để lọc theo lớp'
       };
@@ -341,7 +342,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: filtered,
+        classFilteredUsers: filtered,
         filterStateStatus: 'OK',
         filterNote: 'Người dùng chưa được xếp/phân công lớp'
       };
@@ -353,7 +354,7 @@ export const AdminDashboard = () => {
       return {
         studentClassesById,
         teacherClassesById,
-        filteredUsers: [],
+        classFilteredUsers: [],
         filterStateStatus: 'INVALID_CLASS',
         filterNote: 'Lớp đã chọn không tồn tại hoặc không còn khả dụng'
       };
@@ -383,7 +384,7 @@ export const AdminDashboard = () => {
     return {
       studentClassesById,
       teacherClassesById,
-      filteredUsers: filtered,
+      classFilteredUsers: filtered,
       filterStateStatus: 'OK',
       filterNote: null
     };
@@ -399,29 +400,42 @@ export const AdminDashboard = () => {
     usersError
   ]);
 
-  // Thống kê số lượng người dùng theo từng vai trò dựa trên danh sách đã lọc (filteredUsers)
+  // Thống kê số lượng người dùng theo từng vai trò dựa trên danh sách theo phạm vi lớp (classFilteredUsers)
   const userRoleCounts = useMemo(() => {
     if (filterStateStatus === 'LOADING') {
-      return { students: '…', teachers: '…', admins: '…', total: '…' };
+      return { all: '…', students: '…', teachers: '…', admins: '…', total: '…' };
     }
     if (filterStateStatus !== 'OK') {
-      return { students: '—', teachers: '—', admins: '—', total: '—' };
+      return { all: '—', students: '—', teachers: '—', admins: '—', total: '—' };
     }
     let students = 0;
     let teachers = 0;
     let admins = 0;
-    for (const u of filteredUsers) {
+    for (const u of classFilteredUsers) {
       if (u.role === 'student') students++;
       else if (u.role === 'teacher') teachers++;
       else if (u.role === 'admin') admins++;
     }
+    const total = classFilteredUsers.length;
     return {
+      all: total,
       students,
       teachers,
       admins,
-      total: filteredUsers.length
+      total
     };
-  }, [filteredUsers, filterStateStatus]);
+  }, [classFilteredUsers, filterStateStatus]);
+
+  // Danh sách người dùng sau khi áp dụng cả globalClassFilter và userRoleFilter
+  const filteredUsers = useMemo(() => {
+    if (filterStateStatus !== 'OK') {
+      return [];
+    }
+    if (!userRoleFilter || userRoleFilter === 'ALL') {
+      return classFilteredUsers;
+    }
+    return classFilteredUsers.filter(u => u && u.role === userRoleFilter);
+  }, [classFilteredUsers, filterStateStatus, userRoleFilter]);
 
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
@@ -571,18 +585,69 @@ export const AdminDashboard = () => {
           <div className="flex items-center justify-between gap-4 mb-4">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng
+                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus !== 'OK' ? '—' : filteredUsers.length})
               </h3>
               <div className="flex flex-wrap items-center gap-1.5 ml-1">
-                <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('ALL');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'ALL'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 ${
+                    userRoleFilter === 'ALL'
+                      ? 'bg-slate-800 text-white border-slate-900 shadow-sm ring-2 ring-slate-400'
+                      : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                  }`}
+                >
+                  🌐 Tất cả: <strong className="font-black">{userRoleCounts.all}</strong>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('student');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'student'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                    userRoleFilter === 'student'
+                      ? 'bg-emerald-700 text-white border-emerald-800 shadow-sm ring-2 ring-emerald-400'
+                      : 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100'
+                  }`}
+                >
                   🎒 Học sinh: <strong className="font-black">{userRoleCounts.students}</strong>
-                </span>
-                <span className="px-2.5 py-0.5 bg-sky-100 text-sky-900 border border-sky-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('teacher');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'teacher'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                    userRoleFilter === 'teacher'
+                      ? 'bg-sky-700 text-white border-sky-800 shadow-sm ring-2 ring-sky-400'
+                      : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
+                  }`}
+                >
                   👩‍🏫 Giáo viên: <strong className="font-black">{userRoleCounts.teachers}</strong>
-                </span>
-                <span className="px-2.5 py-0.5 bg-purple-100 text-purple-900 border border-purple-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('admin');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'admin'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 ${
+                    userRoleFilter === 'admin'
+                      ? 'bg-purple-700 text-white border-purple-800 shadow-sm ring-2 ring-purple-400'
+                      : 'bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100'
+                  }`}
+                >
                   🛡️ Admin: <strong className="font-black">{userRoleCounts.admins}</strong>
-                </span>
+                </button>
                 <span className="px-2.5 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1">
                   👥 Tổng: <strong className="font-black">{userRoleCounts.total}</strong>
                 </span>
@@ -727,17 +792,35 @@ export const AdminDashboard = () => {
                   <tr>
                     <td colSpan={11} className="p-8 text-center text-slate-500 bg-slate-50/50">
                       <div className="flex flex-col items-center justify-center gap-1.5">
-                        <span className="font-bold text-sm">Không có người dùng phù hợp với bộ lọc lớp hiện tại.</span>
-                        {globalClassFilter !== 'ALL' && setGlobalClassFilter && (
+                        <span className="font-bold text-sm">
+                          {userRoleFilter !== 'ALL'
+                            ? 'Không có người dùng thuộc vai trò này trong phạm vi lớp hiện tại.'
+                            : 'Không có người dùng phù hợp với bộ lọc lớp hiện tại.'}
+                        </span>
+                        {userRoleFilter !== 'ALL' ? (
                           <button
+                            type="button"
                             onClick={() => {
-                              setGlobalClassFilter('ALL');
+                              setUserRoleFilter('ALL');
                               triggerSound('click');
                             }}
                             className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
                           >
-                            Hiển thị tất cả người dùng
+                            Hiển thị tất cả vai trò
                           </button>
+                        ) : (
+                          globalClassFilter !== 'ALL' && setGlobalClassFilter && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setGlobalClassFilter('ALL');
+                                triggerSound('click');
+                              }}
+                              className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                            >
+                              Hiển thị tất cả người dùng
+                            </button>
+                          )
                         )}
                       </div>
                     </td>
