@@ -591,6 +591,7 @@ export const AdminDashboard = () => {
           <QuestionBankListTab
             role="admin"
             globalClassFilter={globalClassFilter}
+            classes={classesListState}
           />
         </div>
       )}

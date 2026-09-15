@@ -178,7 +178,7 @@ export const QuestionBankListTab = ({
       try {
         const { data, error: queryError } = await supabase
           .from('classes')
-          .select('id, name, grade_level, grade')
+          .select('id, name, grade_level')
           .eq('id', activeGlobalClassFilter)
           .maybeSingle();
 
