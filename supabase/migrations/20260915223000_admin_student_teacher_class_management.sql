@@ -24,16 +24,17 @@ BEGIN
     RAISE EXCEPTION 'Cột teacher_id không tồn tại trong bảng public.classes!';
   END IF;
 
-  -- Đếm và tìm chính xác foreign key constraint gắn với cột teacher_id tham chiếu profiles
+  -- Đếm và tìm chính xác single-column foreign key constraint gắn với cột teacher_id tham chiếu profiles
   SELECT COUNT(*), MAX(conname) INTO v_con_count, v_con_name
   FROM pg_constraint
   WHERE conrelid = 'public.classes'::regclass
     AND confrelid = 'public.profiles'::regclass
     AND contype = 'f'
-    AND v_teacher_attnum = ANY(conkey);
+    AND array_length(conkey, 1) = 1
+    AND conkey[1] = v_teacher_attnum;
 
   IF v_con_count > 1 THEN
-    RAISE EXCEPTION 'Phát hiện % foreign key constraints gắn với classes.teacher_id. Dừng fail-closed!', v_con_count;
+    RAISE EXCEPTION 'Phát hiện % single-column foreign key constraints gắn với classes.teacher_id. Dừng fail-closed!', v_con_count;
   ELSIF v_con_count = 1 THEN
     EXECUTE format('ALTER TABLE public.classes DROP CONSTRAINT %I', v_con_name);
   END IF;
@@ -50,23 +51,22 @@ BEGIN
   END IF;
 END $$;
 
--- 2. TẠO BẢNG LỊCH SỬ XẾP/CHUYỂN/GỠ LỚP APPEND-ONLY (BẢO TOÀN LỊCH SỬ TUYỆT ĐỐI)
+-- 2. TẠO BẢNG LỊCH SỬ XẾP/CHUYỂN/GỠ LỚP APPEND-ONLY (EVENT LOG MÔ HÌNH BẢO TOÀN LỊCH SỬ TUYỆT ĐỐI)
 CREATE TABLE IF NOT EXISTS public.class_membership_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  class_id UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
-  action TEXT NOT NULL, -- 'ASSIGN', 'TRANSFER_IN', 'TRANSFER_OUT', 'REMOVE'
-  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at TIMESTAMPTZ DEFAULT NULL,
+  student_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  class_id UUID REFERENCES public.classes(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
   assigned_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-  ended_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   change_reason TEXT DEFAULT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_class_membership_history_action CHECK (action IN ('ASSIGN', 'TRANSFER_IN', 'TRANSFER_OUT', 'REMOVE'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_student ON public.class_membership_history (student_id);
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_class ON public.class_membership_history (class_id);
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_student_class ON public.class_membership_history (student_id, class_id);
+CREATE INDEX IF NOT EXISTS idx_class_membership_history_created_at ON public.class_membership_history (created_at);
 
 -- 3. MỞ RỘNG PUBLIC.CLASS_MEMBERS
 ALTER TABLE public.class_members ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
@@ -172,33 +172,40 @@ RETURNS BOOLEAN LANGUAGE sql SECURITY DEFINER SET search_path = '' STABLE AS $$
   );
 $$;
 
--- 7. SIẾT CHẶT RLS TRÊN BẢNG PUBLIC.CLASS_MEMBERS VÀ PUBLIC.CLASS_MEMBERSHIP_HISTORY
+-- 7. SIẾT CHẶT RLS VÀ THU HỒI TOÀN BỘ QUYỀN GHI TRỰC TIẾP TRÊN CLASS_MEMBERS VÀ CLASS_MEMBERSHIP_HISTORY
 ALTER TABLE public.class_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.class_membership_history ENABLE ROW LEVEL SECURITY;
 
+-- Thu hồi quyền DML trực tiếp từ client (Chỉ cho phép mutation qua RPC Security Definer)
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_members FROM PUBLIC;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_membership_history FROM PUBLIC;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_members FROM anon;';
+    EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_membership_history FROM anon;';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_members FROM authenticated;';
+    EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON TABLE public.class_membership_history FROM authenticated;';
+    EXECUTE 'GRANT SELECT ON TABLE public.class_members TO authenticated;';
+    EXECUTE 'GRANT SELECT ON TABLE public.class_membership_history TO authenticated;';
+  END IF;
+END $$;
+
+-- Drop mọi policy cũ
 DROP POLICY IF EXISTS "class_members_select" ON public.class_members;
 DROP POLICY IF EXISTS "class_members_insert" ON public.class_members;
 DROP POLICY IF EXISTS "class_members_update" ON public.class_members;
 DROP POLICY IF EXISTS "class_members_delete" ON public.class_members;
 
+-- CHỈ TẠO POLICY SELECT CHO CLIENT. TUYỆT ĐỐI KHÔNG TẠO POLICY INSERT/UPDATE/DELETE.
 CREATE POLICY "class_members_select" ON public.class_members FOR SELECT USING (
   app_private.is_admin()
   OR (student_id = (SELECT auth.uid()) AND is_active = true)
   OR (app_private.teacher_owns_class(class_id) AND is_active = true)
-);
-
-CREATE POLICY "class_members_insert" ON public.class_members FOR INSERT WITH CHECK (
-  app_private.is_admin()
-);
-
-CREATE POLICY "class_members_update" ON public.class_members FOR UPDATE USING (
-  app_private.is_admin()
-) WITH CHECK (
-  app_private.is_admin()
-);
-
-CREATE POLICY "class_members_delete" ON public.class_members FOR DELETE USING (
-  app_private.is_admin()
 );
 
 DROP POLICY IF EXISTS "class_membership_history_select" ON public.class_membership_history;
@@ -206,24 +213,11 @@ DROP POLICY IF EXISTS "class_membership_history_insert" ON public.class_membersh
 DROP POLICY IF EXISTS "class_membership_history_update" ON public.class_membership_history;
 DROP POLICY IF EXISTS "class_membership_history_delete" ON public.class_membership_history;
 
+-- CHỈ TẠO POLICY SELECT CHO CLIENT TRÊN CLASS_MEMBERSHIP_HISTORY.
 CREATE POLICY "class_membership_history_select" ON public.class_membership_history FOR SELECT USING (
   app_private.is_admin()
   OR (student_id = (SELECT auth.uid()))
   OR (app_private.teacher_owns_class(class_id))
-);
-
-CREATE POLICY "class_membership_history_insert" ON public.class_membership_history FOR INSERT WITH CHECK (
-  app_private.is_admin()
-);
-
-CREATE POLICY "class_membership_history_update" ON public.class_membership_history FOR UPDATE USING (
-  app_private.is_admin()
-) WITH CHECK (
-  app_private.is_admin()
-);
-
-CREATE POLICY "class_membership_history_delete" ON public.class_membership_history FOR DELETE USING (
-  app_private.is_admin()
 );
 
 -- 8. VÔ HIỆU HÓA HÀM TỰ GIA NHẬP LỚP (JOIN_CLASS_BY_CODE)
@@ -326,7 +320,7 @@ BEGIN
     );
   END IF;
 
-  -- 5. Tạo bản ghi active trong class_members
+  -- 5. Tạo/cập nhật bản ghi active trong class_members
   INSERT INTO public.class_members (
     class_id, student_id, is_active, is_primary, started_at, assigned_by, change_reason
   ) VALUES (
@@ -341,11 +335,11 @@ BEGIN
       ended_by = NULL,
       change_reason = p_reason;
 
-  -- 6. Ghi bản ghi mới vào lịch sử append-only
+  -- 6. Ghi bản ghi mới vào lịch sử append-only (INSERT ONLY, ZERO UPDATES)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, started_at, assigned_by, change_reason
+    student_id, class_id, action, assigned_by, change_reason, created_at
   ) VALUES (
-    p_student_id, p_class_id, 'ASSIGN', now(), v_caller_id, p_reason
+    p_student_id, p_class_id, 'ASSIGN', v_caller_id, p_reason, now()
   );
 
   RETURN jsonb_build_object(
@@ -359,7 +353,7 @@ BEGIN
 END;
 $$;
 
--- RPC 2: ADMIN CHUYỂN LỚP CHO HỌC SINH (VALIDATE SOURCE CLASS CHẶT CHẼ)
+-- RPC 2: ADMIN CHUYỂN LỚP CHO HỌC SINH (VALIDATE SOURCE CLASS CHẶT CHẼ, FAIL-CLOSED)
 CREATE OR REPLACE FUNCTION public.transfer_student_class(
   p_student_id UUID,
   p_from_class_id UUID,
@@ -393,12 +387,17 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'status', 'FORBIDDEN', 'message', 'Chỉ Quản trị viên mới có quyền chuyển lớp.');
   END IF;
 
-  -- 2. Kiểm tra lớp nguồn và đích phải khác nhau
+  -- 2. Bắt buộc kiểm tra mã lớp nguồn không được NULL
+  IF p_from_class_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'status', 'SOURCE_CLASS_REQUIRED', 'message', 'Mã lớp nguồn (from_class_id) là bắt buộc khi chuyển lớp.');
+  END IF;
+
+  -- 3. Kiểm tra lớp nguồn và đích phải khác nhau
   IF p_from_class_id = p_to_class_id THEN
     RETURN jsonb_build_object('success', false, 'status', 'SAME_CLASS', 'message', 'Lớp chuyển đến phải khác lớp hiện tại.');
   END IF;
 
-  -- 3. Khóa dòng và kiểm tra Học sinh tồn tại
+  -- 4. Khóa dòng và kiểm tra Học sinh tồn tại
   SELECT id, full_name, role, COALESCE(is_disabled, false) AS is_disabled
   INTO v_target_student
   FROM public.profiles WHERE id = p_student_id FOR UPDATE;
@@ -415,20 +414,18 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'status', 'ACCOUNT_DISABLED', 'message', 'Tài khoản học sinh hiện đang bị khóa.');
   END IF;
 
-  -- 4. Kiểm tra Lớp nguồn & Lớp đích tồn tại
+  -- 5. Kiểm tra Lớp nguồn & Lớp đích tồn tại
+  SELECT id, name INTO v_from_class FROM public.classes WHERE id = p_from_class_id;
+  IF v_from_class.id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'status', 'SOURCE_CLASS_NOT_FOUND', 'message', 'Lớp học nguồn không tồn tại.');
+  END IF;
+
   SELECT id, name INTO v_to_class FROM public.classes WHERE id = p_to_class_id;
   IF v_to_class.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'status', 'CLASS_NOT_FOUND', 'message', 'Lớp học đích không tồn tại.');
   END IF;
 
-  IF p_from_class_id IS NOT NULL THEN
-    SELECT id, name INTO v_from_class FROM public.classes WHERE id = p_from_class_id;
-    IF v_from_class.id IS NULL THEN
-      RETURN jsonb_build_object('success', false, 'status', 'CLASS_NOT_FOUND', 'message', 'Lớp học nguồn không tồn tại.');
-    END IF;
-  END IF;
-
-  -- 5. Khóa và kiểm tra membership active hiện tại của học sinh
+  -- 6. Khóa và kiểm tra membership active hiện tại của học sinh
   SELECT id, class_id INTO v_current_membership
   FROM public.class_members
   WHERE student_id = p_student_id AND is_active = true
@@ -442,8 +439,8 @@ BEGIN
     );
   END IF;
 
-  -- XÁC MINH LỚP NGUỒN PHẢI KHỚP CHÍNH XÁC
-  IF p_from_class_id IS NOT NULL AND v_current_membership.class_id <> p_from_class_id THEN
+  -- XÁC MINH LỚP NGUỒN PHẢI KHỚP CHÍNH XÁC MEMBERSHIP ACTIVE ĐÃ KHÓA
+  IF v_current_membership.class_id <> p_from_class_id THEN
     RETURN jsonb_build_object(
       'success', false,
       'status', 'SOURCE_CLASS_MISMATCH',
@@ -452,7 +449,7 @@ BEGIN
     );
   END IF;
 
-  -- 6. Đóng membership cũ trong class_members và lịch sử
+  -- 7. Đóng membership cũ trong class_members
   UPDATE public.class_members
   SET is_active = false,
       is_primary = false,
@@ -461,15 +458,14 @@ BEGIN
       change_reason = COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name)
   WHERE id = v_current_membership.id;
 
-  UPDATE public.class_membership_history
-  SET ended_at = now(),
-      ended_by = v_caller_id,
-      change_reason = COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name)
-  WHERE student_id = p_student_id
-    AND class_id = v_current_membership.class_id
-    AND ended_at IS NULL;
+  -- 8. Ghi log sự kiện TRANSFER_OUT vào lịch sử append-only (INSERT ONLY)
+  INSERT INTO public.class_membership_history (
+    student_id, class_id, action, assigned_by, change_reason, created_at
+  ) VALUES (
+    p_student_id, v_current_membership.class_id, 'TRANSFER_OUT', v_caller_id, COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name), now()
+  );
 
-  -- 7. Kích hoạt hoặc tạo membership đích trong class_members
+  -- 9. Kích hoạt hoặc tạo membership đích trong class_members
   INSERT INTO public.class_members (
     class_id, student_id, is_active, is_primary, started_at, assigned_by, change_reason
   ) VALUES (
@@ -484,11 +480,11 @@ BEGIN
       ended_by = NULL,
       change_reason = p_reason;
 
-  -- 8. Ghi bản ghi mới vào lịch sử append-only
+  -- 10. Ghi log sự kiện TRANSFER_IN vào lịch sử append-only (INSERT ONLY)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, started_at, assigned_by, change_reason
+    student_id, class_id, action, assigned_by, change_reason, created_at
   ) VALUES (
-    p_student_id, p_to_class_id, 'TRANSFER_IN', now(), v_caller_id, p_reason
+    p_student_id, p_to_class_id, 'TRANSFER_IN', v_caller_id, p_reason, now()
   );
 
   RETURN jsonb_build_object(
@@ -562,15 +558,12 @@ BEGIN
       change_reason = COALESCE(p_reason, 'Admin gỡ khỏi lớp')
   WHERE id = v_membership.id;
 
-  -- 5. Cập nhật lịch sử append-only
-  UPDATE public.class_membership_history
-  SET ended_at = now(),
-      ended_by = v_caller_id,
-      action = 'REMOVE',
-      change_reason = COALESCE(p_reason, 'Admin gỡ khỏi lớp')
-  WHERE student_id = p_student_id
-    AND class_id = p_class_id
-    AND ended_at IS NULL;
+  -- 5. Ghi sự kiện REMOVE vào lịch sử append-only (INSERT ONLY, ZERO UPDATES)
+  INSERT INTO public.class_membership_history (
+    student_id, class_id, action, assigned_by, change_reason, created_at
+  ) VALUES (
+    p_student_id, p_class_id, 'REMOVE', v_caller_id, COALESCE(p_reason, 'Admin gỡ khỏi lớp'), now()
+  );
 
   RETURN jsonb_build_object(
     'success', true,

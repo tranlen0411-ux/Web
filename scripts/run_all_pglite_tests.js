@@ -28,7 +28,7 @@ if (!process.execArgv.includes('--liftoff-only')) {
 
 async function truncateAll(db) {
   await db.exec(`
-    TRUNCATE TABLE 
+    TRUNCATE TABLE
       public.academic_submissions,
       public.academic_exercise_questions,
       public.academic_exercise_assignments,
@@ -722,6 +722,17 @@ async function runSuite8(db) {
   console.log('✅ PGLITE RPC DELETE DRAFT PERIOD PASS');
 }
 
+// 9. Suite: tests/admin_class_management.test.mjs
+async function runSuite9() {
+  console.log(`\n------------------------------------------------------------`);
+  console.log(`▶ RUNNING: Suite 9: tests/admin_class_management.test.mjs (Admin Class & Teacher Assignment Management)`);
+  console.log(`------------------------------------------------------------`);
+  const { runAdminClassManagementTestSuite, runFreshMigrationTest } = await import('../tests/admin_class_management.test.mjs');
+  await runAdminClassManagementTestSuite();
+  await runFreshMigrationTest();
+  console.log('✅ PGLITE ADMIN CLASS & TEACHER ASSIGNMENT SUITE PASS');
+}
+
 async function main() {
   const startTime = Date.now();
   let sharedDb;
@@ -745,10 +756,13 @@ async function main() {
     await runSuite8(sharedDb);
     await sharedDb.close();
 
+    // 9. Suite 9 (Admin Class & Teacher Management - Upgrade & Fresh Migration)
+    await runSuite9();
+
     const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`\n============================================================`);
     console.log(`⏱ Tổng thời gian chạy: ${elapsedSeconds}s`);
-    console.log(`✅ ALL PGLITE ACADEMIC LEADERBOARD & PERIOD TESTS PASS (8/8 Suites)`);
+    console.log(`✅ ALL PGLITE TESTS PASS (9/9 Suites: Leaderboard, Period & Admin Class Management)`);
     console.log(`============================================================\n`);
   } catch (err) {
     if (sharedDb) {
