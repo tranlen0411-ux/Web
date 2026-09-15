@@ -125,7 +125,8 @@ export const TeacherDashboard = () => {
             classes:class_id(name, grade_level),
             profiles:student_id(id, full_name, email, grade_level, total_stars, parent_access_code, student_code)
           `)
-          .in('class_id', classIds);
+          .in('class_id', classIds)
+          .eq('is_active', true);
 
         studentsInMyClasses = (memberData || [])
           .map(m => ({

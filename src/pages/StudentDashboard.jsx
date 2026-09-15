@@ -63,9 +63,6 @@ export const StudentDashboard = () => {
   const [badges, setBadges] = useState([]);
   const [studentBadges, setStudentBadges] = useState([]);
   const [history, setHistory] = useState([]);
-
-  const [classCodeInput, setClassCodeInput] = useState('');
-  const [joinMsg, setJoinMsg] = useState('');
   const [loading, setLoading] = useState(true);
 
   // Lắng nghe thay đổi profile?.id để gọi fetchInitialData chính xác khi học sinh đăng nhập
@@ -88,11 +85,12 @@ export const StudentDashboard = () => {
       setGames(gamesData || []);
 
       if (profile?.id) {
-        // 2. Fetch Assignments theo đúng các Lớp Học mà Học Sinh này đang tham gia
+        // 2. Fetch Assignments theo đúng các Lớp Học active mà Học Sinh này đang tham gia
         const { data: myClassMembers, error: memberErr } = await supabase
           .from('class_members')
           .select('class_id')
-          .eq('student_id', profile.id);
+          .eq('student_id', profile.id)
+          .eq('is_active', true);
 
         if (memberErr) {
           console.error('Error fetching student class memberships:', memberErr);
@@ -188,66 +186,6 @@ export const StudentDashboard = () => {
     }
   };
 
-  // Gia nhập Lớp học bằng mã Code từ Giáo viên
-  const handleJoinClass = async (e) => {
-    e.preventDefault();
-    if (!classCodeInput || !profile?.id) return;
-
-    triggerSound('click');
-    setJoinMsg('');
-    try {
-      // 1. Thử gọi RPC join_class_by_code an toàn tuyệt đối
-      const { data: rpcRes, error: rpcErr } = await supabase.rpc('join_class_by_code', {
-        p_code: classCodeInput.trim()
-      });
-
-      if (!rpcErr && rpcRes) {
-        if (rpcRes.success) {
-          triggerSound('victory');
-          setJoinMsg(`🎉 ${rpcRes.message}`);
-          setClassCodeInput('');
-          fetchInitialData();
-        } else {
-          setJoinMsg(`❌ ${rpcRes.message}`);
-        }
-        return;
-      }
-
-      // 2. Dự phòng truy vấn bảng trực tiếp nếu RPC chưa được khởi tạo
-      const { data: classData, error: classErr } = await supabase
-        .from('classes')
-        .select('id, name')
-        .eq('code', classCodeInput.trim().toUpperCase())
-        .single();
-
-      if (classErr || !classData) {
-        setJoinMsg('❌ Mã lớp không tồn tại. Bé kiểm tra lại nhé!');
-        return;
-      }
-
-      const { error: joinErr } = await supabase
-        .from('class_members')
-        .insert({
-          class_id: classData.id,
-          student_id: profile.id
-        });
-
-      if (joinErr && joinErr.code === '23505') {
-        setJoinMsg(`ℹ️ Bé đã gia nhập lớp ${classData.name} trước đó rồi!`);
-      } else if (joinErr) {
-        throw joinErr;
-      } else {
-        triggerSound('victory');
-        setJoinMsg(`🎉 Chúc mừng bé đã gia nhập lớp ${classData.name} thành công!`);
-        setClassCodeInput('');
-        fetchInitialData();
-      }
-    } catch (err) {
-      console.error('Join class error:', err);
-      setJoinMsg('Lỗi khi gia nhập lớp học.');
-    }
-  };
-
   const handlePlayGame = (game, assignmentId = null) => {
     triggerSound('click');
     navigate(`/play/${game.id}`, { state: { assignmentId } });
@@ -308,39 +246,6 @@ export const StudentDashboard = () => {
         </div>
 
       </div>
-
-      {/* FORM GIA NHẬP LỚP HỌC */}
-      <div className="bg-amber-50 rounded-2xl border-2 border-amber-200 p-4 mb-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <GraduationCap className="w-6 h-6 text-amber-600" />
-          <div>
-            <h4 className="text-sm font-black text-amber-950">Gia Nhập Lớp Học Của Thầy/Cô</h4>
-            <p className="text-xs text-amber-800 font-semibold">Nhập Mã Lớp được Thầy/Cô cấp để nhận bài tập trò chơi.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleJoinClass} className="flex gap-2 w-full sm:w-auto">
-          <input
-            type="text"
-            placeholder="Mã Lớp (VD: LOP1A)"
-            value={classCodeInput}
-            onChange={(e) => setClassCodeInput(e.target.value)}
-            className="p-2.5 bg-white border-2 border-amber-300 rounded-xl font-black text-xs uppercase w-full sm:w-40 text-slate-800"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white font-black text-xs rounded-xl shadow-md whitespace-nowrap"
-          >
-            Vào Lớp
-          </button>
-        </form>
-      </div>
-
-      {joinMsg && (
-        <div className="mb-6 p-3 bg-white border-2 border-amber-300 text-xs font-bold rounded-xl text-amber-900">
-          {joinMsg}
-        </div>
-      )}
 
       {/* TABS ĐIỀU HƯỚNG BẢNG ĐIỀU KHIỂN */}
       <div className="flex flex-wrap bg-white p-2 rounded-2xl border-4 border-amber-200 mb-6 gap-2">

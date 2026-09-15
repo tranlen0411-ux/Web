@@ -32,7 +32,7 @@ const normalizeGameSource = (val) => VALID_GAME_SOURCES.includes(val) ? val : 'A
 export const LeaderboardView = () => {
   const { globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
-  
+
   // Refs chống race condition khi chuyển lớp nhanh liên tục
   const latestGameReqIdRef = useRef(0);
   const latestAcademicReqIdRef = useRef(0);
@@ -50,7 +50,7 @@ export const LeaderboardView = () => {
   const [classPeriods, setClassPeriods] = useState([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState('');
   const [isPeriodModalOpen, setIsPeriodModalOpen] = useState(false);
-  
+
   // --- STATE TỔNG KẾT HỌC SINH (STUDENT PERIOD SUMMARY MODAL) ---
   const [summaryStudentId, setSummaryStudentId] = useState(null);
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
@@ -146,7 +146,8 @@ export const LeaderboardView = () => {
         const { data: cm } = await supabase
           .from('class_members')
           .select('class_id, classes(*)')
-          .eq('student_id', user.id);
+          .eq('student_id', user.id)
+          .eq('is_active', true);
 
         const myClasses = (cm || []).map(item => item.classes).filter(Boolean);
         setUserMyClasses(myClasses);
@@ -325,6 +326,7 @@ export const LeaderboardView = () => {
           .from('class_members')
           .select('student_id, class_id, profiles!inner(*), classes!inner(name, grade_level)')
           .eq('class_id', gameClassFilter)
+          .eq('is_active', true)
           .eq('profiles.role', 'student');
 
         if (currentReqId !== latestGameReqIdRef.current) return;
@@ -354,7 +356,8 @@ export const LeaderboardView = () => {
           const { data: members } = await supabase
             .from('class_members')
             .select('student_id, classes(name)')
-            .in('student_id', studentIds);
+            .in('student_id', studentIds)
+            .eq('is_active', true);
 
           if (currentReqId !== latestGameReqIdRef.current) return;
 
@@ -752,7 +755,7 @@ export const LeaderboardView = () => {
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
+
       {/* HEADER BẢNG XẾP HẠNG VỚI TAB CHUYỂN ĐỔI CHẾ ĐỘ */}
       <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 rounded-3xl border-4 border-amber-600 p-6 sm:p-8 text-center text-amber-950 shadow-xl mb-6">
         <Trophy className="w-16 h-16 text-amber-900 mx-auto mb-2 animate-bounce" />
@@ -774,7 +777,7 @@ export const LeaderboardView = () => {
           >
             <Gamepad2 className="w-4 h-4" /> 🎮 Xếp Hạng Trò Chơi
           </button>
-          
+
           <button
             type="button"
             onClick={() => { setActiveTab('academic'); triggerSound('click'); }}
@@ -831,7 +834,7 @@ export const LeaderboardView = () => {
       {/* ========================================================================= */}
       {activeTab === 'game' && (
         <div className="space-y-6">
-          
+
           {/* BỘ LỌC 5 TẦNG TRÒ CHƠI KHUNG NĂM HỌC 2026-2027 */}
           <div className="bg-amber-50/80 p-5 rounded-3xl border-2 border-amber-200 space-y-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-amber-200/60 pb-3">
@@ -844,7 +847,7 @@ export const LeaderboardView = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              
+
               {/* 1. BỘ LỌC KHỐI */}
               <div>
                 <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1">
@@ -1016,7 +1019,7 @@ export const LeaderboardView = () => {
                   >
                     <div className="flex items-center gap-3">
                       <div className="shrink-0">{getRankBadge(rank, st.is_tied)}</div>
-                      
+
                       <div className="w-10 h-10 rounded-2xl bg-amber-200 border-2 border-amber-400 overflow-hidden shrink-0">
                         {st.avatar_url ? (
                           <img src={st.avatar_url} alt={st.full_name} className="w-full h-full object-cover" />
@@ -1067,7 +1070,7 @@ export const LeaderboardView = () => {
       {/* ========================================================================= */}
       {activeTab === 'academic' && (
         <div className="space-y-6">
-          
+
           <div className="bg-indigo-50/80 p-5 rounded-3xl border-2 border-indigo-200 space-y-4 shadow-sm">
             <div className="flex items-center justify-between border-b border-indigo-200/60 pb-3">
               <h3 className="text-sm font-black text-indigo-950 flex items-center gap-1.5">
@@ -1079,7 +1082,7 @@ export const LeaderboardView = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              
+
               <div>
                 <label className="block text-xs font-black text-indigo-950 mb-1 flex items-center gap-1">
                   <Users className="w-3.5 h-3.5 text-indigo-600" /> Chọn Lớp Học:
@@ -1186,7 +1189,7 @@ export const LeaderboardView = () => {
             </div>
           ) : academicData && academicData.leaderboard && academicData.leaderboard.length > 0 ? (
             <div className="space-y-4">
-              
+
               <div className="flex items-center justify-between px-2 text-xs font-black text-indigo-950">
                 <span>🏫 {formatClassLabel(academicData.class_info?.class_name)} ({academicData.leaderboard.length} Học sinh)</span>
                 <span className="bg-indigo-100 text-indigo-900 px-3 py-1 rounded-xl">
@@ -1210,7 +1213,7 @@ export const LeaderboardView = () => {
                     >
                       <div className="flex items-center gap-3">
                         <div className="shrink-0">{getRankBadge(rank, st.is_tied)}</div>
-                        
+
                         <div className="w-10 h-10 rounded-2xl bg-indigo-200 border-2 border-indigo-400 overflow-hidden shrink-0">
                           {st.avatar_url ? (
                             <img src={st.avatar_url} alt={st.full_name} className="w-full h-full object-cover" />
