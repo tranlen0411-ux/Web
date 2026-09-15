@@ -727,7 +727,8 @@ async function runSuite9() {
   console.log(`\n------------------------------------------------------------`);
   console.log(`▶ RUNNING: Suite 9: tests/admin_class_management.test.mjs (Admin Class & Teacher Assignment Management)`);
   console.log(`------------------------------------------------------------`);
-  const { runAdminClassManagementTestSuite, runFreshMigrationTest } = await import('../tests/admin_class_management.test.mjs');
+  const { runFkDiscoveryFailClosedTestSuite, runAdminClassManagementTestSuite, runFreshMigrationTest } = await import('../tests/admin_class_management.test.mjs');
+  await runFkDiscoveryFailClosedTestSuite();
   await runAdminClassManagementTestSuite();
   await runFreshMigrationTest();
   console.log('✅ PGLITE ADMIN CLASS & TEACHER ASSIGNMENT SUITE PASS');

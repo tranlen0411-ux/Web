@@ -33,21 +33,15 @@ BEGIN
     AND array_length(conkey, 1) = 1
     AND conkey[1] = v_teacher_attnum;
 
-  IF v_con_count > 1 THEN
-    RAISE EXCEPTION 'Phát hiện % single-column foreign key constraints gắn với classes.teacher_id. Dừng fail-closed!', v_con_count;
-  ELSIF v_con_count = 1 THEN
+  IF v_con_count = 1 THEN
     EXECUTE format('ALTER TABLE public.classes DROP CONSTRAINT %I', v_con_name);
-  END IF;
-
-  -- Tạo lại constraint với ON DELETE SET NULL nếu chưa có
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.classes'::regclass
-      AND conname = 'classes_teacher_id_fkey'
-  ) THEN
     ALTER TABLE public.classes
     ADD CONSTRAINT classes_teacher_id_fkey
     FOREIGN KEY (teacher_id) REFERENCES public.profiles(id) ON DELETE SET NULL;
+  ELSIF v_con_count = 0 THEN
+    RAISE EXCEPTION 'Không tìm thấy single-column foreign key constraint hợp lệ từ classes(teacher_id) tham chiếu profiles. Dừng fail-closed!';
+  ELSE
+    RAISE EXCEPTION 'Phát hiện % single-column foreign key constraints gắn với classes.teacher_id. Dừng fail-closed!', v_con_count;
   END IF;
 END $$;
 
@@ -60,12 +54,25 @@ CREATE TABLE IF NOT EXISTS public.class_membership_history (
   assigned_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   change_reason TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  student_id_snapshot UUID NOT NULL,
+  student_name_snapshot TEXT NOT NULL,
+  class_id_snapshot UUID NOT NULL,
+  class_name_snapshot TEXT NOT NULL,
+  assigned_by_snapshot UUID,
   CONSTRAINT chk_class_membership_history_action CHECK (action IN ('ASSIGN', 'TRANSFER_IN', 'TRANSFER_OUT', 'REMOVE'))
 );
+
+ALTER TABLE public.class_membership_history ADD COLUMN IF NOT EXISTS student_id_snapshot UUID;
+ALTER TABLE public.class_membership_history ADD COLUMN IF NOT EXISTS student_name_snapshot TEXT;
+ALTER TABLE public.class_membership_history ADD COLUMN IF NOT EXISTS class_id_snapshot UUID;
+ALTER TABLE public.class_membership_history ADD COLUMN IF NOT EXISTS class_name_snapshot TEXT;
+ALTER TABLE public.class_membership_history ADD COLUMN IF NOT EXISTS assigned_by_snapshot UUID;
 
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_student ON public.class_membership_history (student_id);
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_class ON public.class_membership_history (class_id);
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_student_class ON public.class_membership_history (student_id, class_id);
+CREATE INDEX IF NOT EXISTS idx_class_membership_history_student_snapshot ON public.class_membership_history (student_id_snapshot);
+CREATE INDEX IF NOT EXISTS idx_class_membership_history_class_snapshot ON public.class_membership_history (class_id_snapshot);
 CREATE INDEX IF NOT EXISTS idx_class_membership_history_created_at ON public.class_membership_history (created_at);
 
 -- 3. MỞ RỘNG PUBLIC.CLASS_MEMBERS
@@ -335,11 +342,13 @@ BEGIN
       ended_by = NULL,
       change_reason = p_reason;
 
-  -- 6. Ghi bản ghi mới vào lịch sử append-only (INSERT ONLY, ZERO UPDATES)
+  -- 6. Ghi bản ghi mới vào lịch sử append-only (INSERT ONLY, ZERO UPDATES, SNAPSHOT BẤT BIẾN)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, assigned_by, change_reason, created_at
+    student_id, class_id, action, assigned_by, change_reason, created_at,
+    student_id_snapshot, student_name_snapshot, class_id_snapshot, class_name_snapshot, assigned_by_snapshot
   ) VALUES (
-    p_student_id, p_class_id, 'ASSIGN', v_caller_id, p_reason, now()
+    p_student_id, p_class_id, 'ASSIGN', v_caller_id, p_reason, now(),
+    p_student_id, v_target_student.full_name, p_class_id, v_target_class.name, v_caller_id
   );
 
   RETURN jsonb_build_object(
@@ -458,11 +467,13 @@ BEGIN
       change_reason = COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name)
   WHERE id = v_current_membership.id;
 
-  -- 8. Ghi log sự kiện TRANSFER_OUT vào lịch sử append-only (INSERT ONLY)
+  -- 8. Ghi log sự kiện TRANSFER_OUT vào lịch sử append-only (INSERT ONLY, SNAPSHOT BẤT BIẾN)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, assigned_by, change_reason, created_at
+    student_id, class_id, action, assigned_by, change_reason, created_at,
+    student_id_snapshot, student_name_snapshot, class_id_snapshot, class_name_snapshot, assigned_by_snapshot
   ) VALUES (
-    p_student_id, v_current_membership.class_id, 'TRANSFER_OUT', v_caller_id, COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name), now()
+    p_student_id, v_current_membership.class_id, 'TRANSFER_OUT', v_caller_id, COALESCE(p_reason, 'Chuyển sang lớp ' || v_to_class.name), now(),
+    p_student_id, v_target_student.full_name, v_current_membership.class_id, v_from_class.name, v_caller_id
   );
 
   -- 9. Kích hoạt hoặc tạo membership đích trong class_members
@@ -480,11 +491,13 @@ BEGIN
       ended_by = NULL,
       change_reason = p_reason;
 
-  -- 10. Ghi log sự kiện TRANSFER_IN vào lịch sử append-only (INSERT ONLY)
+  -- 10. Ghi log sự kiện TRANSFER_IN vào lịch sử append-only (INSERT ONLY, SNAPSHOT BẤT BIẾN)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, assigned_by, change_reason, created_at
+    student_id, class_id, action, assigned_by, change_reason, created_at,
+    student_id_snapshot, student_name_snapshot, class_id_snapshot, class_name_snapshot, assigned_by_snapshot
   ) VALUES (
-    p_student_id, p_to_class_id, 'TRANSFER_IN', v_caller_id, p_reason, now()
+    p_student_id, p_to_class_id, 'TRANSFER_IN', v_caller_id, p_reason, now(),
+    p_student_id, v_target_student.full_name, p_to_class_id, v_to_class.name, v_caller_id
   );
 
   RETURN jsonb_build_object(
@@ -558,11 +571,13 @@ BEGIN
       change_reason = COALESCE(p_reason, 'Admin gỡ khỏi lớp')
   WHERE id = v_membership.id;
 
-  -- 5. Ghi sự kiện REMOVE vào lịch sử append-only (INSERT ONLY, ZERO UPDATES)
+  -- 5. Ghi sự kiện REMOVE vào lịch sử append-only (INSERT ONLY, ZERO UPDATES, SNAPSHOT BẤT BIẾN)
   INSERT INTO public.class_membership_history (
-    student_id, class_id, action, assigned_by, change_reason, created_at
+    student_id, class_id, action, assigned_by, change_reason, created_at,
+    student_id_snapshot, student_name_snapshot, class_id_snapshot, class_name_snapshot, assigned_by_snapshot
   ) VALUES (
-    p_student_id, p_class_id, 'REMOVE', v_caller_id, COALESCE(p_reason, 'Admin gỡ khỏi lớp'), now()
+    p_student_id, p_class_id, 'REMOVE', v_caller_id, COALESCE(p_reason, 'Admin gỡ khỏi lớp'), now(),
+    p_student_id, COALESCE(v_target_student.full_name, 'học sinh'), p_class_id, COALESCE(v_target_class.name, 'lớp học'), v_caller_id
   );
 
   RETURN jsonb_build_object(
