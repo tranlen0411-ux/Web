@@ -607,156 +607,154 @@ export const AdminDashboard = () => {
       {/* TAB 1: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG */}
       {activeAdminTab === 'users' && (
         <div className="mb-10 animate-fadeIn">
-          <div className="flex flex-col gap-3 mb-4">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                  <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus !== 'OK' ? '—' : filteredUsers.length})
-                </h3>
-                <div className="flex flex-wrap items-center gap-1.5 ml-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserRoleFilter('ALL');
-                      triggerSound('click');
-                    }}
-                    aria-pressed={userRoleFilter === 'ALL'}
-                    className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 ${
-                      userRoleFilter === 'ALL'
-                        ? 'bg-slate-800 text-white border-slate-900 shadow-sm ring-2 ring-slate-400'
-                        : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
-                    }`}
-                  >
-                    🌐 Tất cả: <strong className="font-black">{userRoleCounts.all}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserRoleFilter('student');
-                      triggerSound('click');
-                    }}
-                    aria-pressed={userRoleFilter === 'student'}
-                    className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                      userRoleFilter === 'student'
-                        ? 'bg-emerald-700 text-white border-emerald-800 shadow-sm ring-2 ring-emerald-400'
-                        : 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100'
-                    }`}
-                  >
-                    🎒 Học sinh: <strong className="font-black">{userRoleCounts.students}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserRoleFilter('teacher');
-                      triggerSound('click');
-                    }}
-                    aria-pressed={userRoleFilter === 'teacher'}
-                    className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                      userRoleFilter === 'teacher'
-                        ? 'bg-sky-700 text-white border-sky-800 shadow-sm ring-2 ring-sky-400'
-                        : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
-                    }`}
-                  >
-                    👩‍🏫 Giáo viên: <strong className="font-black">{userRoleCounts.teachers}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserRoleFilter('admin');
-                      triggerSound('click');
-                    }}
-                    aria-pressed={userRoleFilter === 'admin'}
-                    className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 ${
-                      userRoleFilter === 'admin'
-                        ? 'bg-purple-700 text-white border-purple-800 shadow-sm ring-2 ring-purple-400'
-                        : 'bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100'
-                    }`}
-                  >
-                    🛡️ Admin: <strong className="font-black">{userRoleCounts.admins}</strong>
-                  </button>
-                  <span className="px-2.5 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1">
-                    👥 Tổng: <strong className="font-black">{userRoleCounts.total}</strong>
-                  </span>
-                </div>
-                {filterNote && filterStateStatus === 'OK' && (
-                  <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold">
-                    📌 {filterNote}
-                  </span>
-                )}
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                <Users className="w-6 h-6 text-amber-600" /> Danh Sách Tài Khoản Người Dùng ({filterStateStatus === 'LOADING' ? '…' : filterStateStatus !== 'OK' ? '—' : filteredUsers.length})
+              </h3>
+              <div className="flex flex-wrap items-center gap-1.5 ml-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('ALL');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'ALL'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 ${
+                    userRoleFilter === 'ALL'
+                      ? 'bg-slate-800 text-white border-slate-900 shadow-sm ring-2 ring-slate-400'
+                      : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                  }`}
+                >
+                  🌐 Tất cả: <strong className="font-black">{userRoleCounts.all}</strong>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('student');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'student'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                    userRoleFilter === 'student'
+                      ? 'bg-emerald-700 text-white border-emerald-800 shadow-sm ring-2 ring-emerald-400'
+                      : 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100'
+                  }`}
+                >
+                  🎒 Học sinh: <strong className="font-black">{userRoleCounts.students}</strong>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('teacher');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'teacher'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                    userRoleFilter === 'teacher'
+                      ? 'bg-sky-700 text-white border-sky-800 shadow-sm ring-2 ring-sky-400'
+                      : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
+                  }`}
+                >
+                  👩‍🏫 Giáo viên: <strong className="font-black">{userRoleCounts.teachers}</strong>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserRoleFilter('admin');
+                    triggerSound('click');
+                  }}
+                  aria-pressed={userRoleFilter === 'admin'}
+                  className={`px-2.5 py-0.5 border rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 ${
+                    userRoleFilter === 'admin'
+                      ? 'bg-purple-700 text-white border-purple-800 shadow-sm ring-2 ring-purple-400'
+                      : 'bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100'
+                  }`}
+                >
+                  🛡️ Admin: <strong className="font-black">{userRoleCounts.admins}</strong>
+                </button>
+                <span className="px-2.5 py-0.5 bg-slate-100 text-slate-900 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1">
+                  👥 Tổng: <strong className="font-black">{userRoleCounts.total}</strong>
+                </span>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => {
-                    setIsImportStudentsOpen(true);
-                    triggerSound('click');
-                  }}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 active:translate-y-0.5 cursor-pointer"
-                >
-                  <FileSpreadsheet className="w-4 h-4 text-amber-300" /> 📥 Nhập Danh Sách Học Sinh
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsAssignTeacherOpen(true);
-                    triggerSound('click');
-                  }}
-                  className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-800 shadow-md flex items-center gap-2 active:translate-y-0.5 cursor-pointer"
-                >
-                  <UserCheck className="w-4 h-4 text-sky-200" /> 👩‍🏫 Phân Công Giáo Viên
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsResetScoresOpen(true);
-                    triggerSound('click');
-                  }}
-                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center gap-2 active:translate-y-0.5 cursor-pointer"
-                >
-                  <RotateCcw className="w-4 h-4 text-amber-200" /> 🔄 Reset Điểm / Mốc Mới
-                </button>
-
-                <button
-                  onClick={() => {
-                    setUserToEdit(null);
-                    setIsFormModalOpen(true);
-                    triggerSound('click');
-                  }}
-                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center gap-2 active:translate-y-0.5 cursor-pointer"
-                >
-                  <UserPlus className="w-4 h-4" /> + Tạo Tài Khoản Mới
-                </button>
-              </div>
+              {filterNote && filterStateStatus === 'OK' && (
+                <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold">
+                  📌 {filterNote}
+                </span>
+              )}
             </div>
 
-            {/* THANH TÌM KIẾM NGƯỜI DÙNG */}
-            <div className="flex items-center gap-3">
-              <div className="relative w-full sm:w-80 md:w-96">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Search className="w-4 h-4" />
-                </div>
-                <input
-                  type="text"
-                  value={userSearchQuery}
-                  onChange={(e) => setUserSearchQuery(e.target.value)}
-                  placeholder="Tìm theo họ tên, mã học sinh hoặc email…"
-                  aria-label="Tìm theo họ tên, mã học sinh hoặc email"
-                  className="w-full pl-9 pr-8 py-2 bg-white border-2 border-amber-200 focus:border-amber-500 rounded-2xl text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 shadow-inner transition-all"
-                />
-                {userSearchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserSearchQuery('');
-                      triggerSound('click');
-                    }}
-                    aria-label="Xóa từ khóa"
-                    className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded-r-2xl cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setIsImportStudentsOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-indigo-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-amber-300" /> 📥 Nhập Danh Sách Học Sinh
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsAssignTeacherOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-800 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <UserCheck className="w-4 h-4 text-sky-200" /> 👩‍🏫 Phân Công Giáo Viên
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsResetScoresOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <RotateCcw className="w-4 h-4 text-amber-200" /> 🔄 Reset Điểm / Mốc Mới
+              </button>
+
+              <button
+                onClick={() => {
+                  setUserToEdit(null);
+                  setIsFormModalOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <UserPlus className="w-4 h-4" /> + Tạo Tài Khoản Mới
+              </button>
+            </div>
+          </div>
+
+          {/* Ô TÌM KIẾM NGƯỜI DÙNG */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative w-full sm:w-80 md:w-96">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
               </div>
+              <input
+                type="text"
+                value={userSearchQuery}
+                onChange={(e) => setUserSearchQuery(e.target.value)}
+                placeholder="Tìm theo họ tên, mã học sinh hoặc email…"
+                aria-label="Tìm theo họ tên, mã học sinh hoặc email"
+                className="w-full pl-9 pr-8 py-2 bg-white border-2 border-amber-200 focus:border-amber-500 rounded-2xl text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 shadow-inner transition-all"
+              />
+              {userSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserSearchQuery('');
+                    triggerSound('click');
+                  }}
+                  aria-label="Xóa từ khóa"
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded-r-2xl cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
