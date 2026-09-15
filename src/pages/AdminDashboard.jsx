@@ -16,7 +16,9 @@ import {
   UserCheck,
   RotateCcw,
   QrCode,
-  Layers
+  Layers,
+  Search,
+  X
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -34,6 +36,17 @@ import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
+
+export const normalizeSearchText = (value) => {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .trim();
+};
 
 export const AdminDashboard = () => {
   const { profile, globalClassFilter, setGlobalClassFilter } = useAuth();
@@ -72,6 +85,7 @@ export const AdminDashboard = () => {
   const [classMembersError, setClassMembersError] = useState(false);
   const [classFilterDataReady, setClassFilterDataReady] = useState(false);
   const [userRoleFilter, setUserRoleFilter] = useState('ALL');
+  const [userSearchQuery, setUserSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
   // Trạng thái PIN học sinh (cache boolean true/false theo student.id)
@@ -426,16 +440,27 @@ export const AdminDashboard = () => {
     };
   }, [classFilteredUsers, filterStateStatus]);
 
-  // Danh sách người dùng sau khi áp dụng cả globalClassFilter và userRoleFilter
+  // Danh sách người dùng sau khi áp dụng cả globalClassFilter, userRoleFilter và userSearchQuery
   const filteredUsers = useMemo(() => {
     if (filterStateStatus !== 'OK') {
       return [];
     }
-    if (!userRoleFilter || userRoleFilter === 'ALL') {
-      return classFilteredUsers;
+    let list = classFilteredUsers;
+    if (userRoleFilter && userRoleFilter !== 'ALL') {
+      list = list.filter(u => u && u.role === userRoleFilter);
     }
-    return classFilteredUsers.filter(u => u && u.role === userRoleFilter);
-  }, [classFilteredUsers, filterStateStatus, userRoleFilter]);
+    const cleanQuery = normalizeSearchText(userSearchQuery);
+    if (!cleanQuery) {
+      return list;
+    }
+    return list.filter(u => {
+      if (!u) return false;
+      const matchName = normalizeSearchText(u.full_name).includes(cleanQuery);
+      const matchCode = normalizeSearchText(u.student_code).includes(cleanQuery);
+      const matchEmail = normalizeSearchText(u.email).includes(cleanQuery);
+      return matchName || matchCode || matchEmail;
+    });
+  }, [classFilteredUsers, filterStateStatus, userRoleFilter, userSearchQuery]);
 
   const handleDeleteGame = async (gameId) => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa trò chơi này khỏi kho?')) return;
@@ -703,6 +728,36 @@ export const AdminDashboard = () => {
             </div>
           </div>
 
+          {/* Ô TÌM KIẾM NGƯỜI DÙNG */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative w-full sm:w-80 md:w-96">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={userSearchQuery}
+                onChange={(e) => setUserSearchQuery(e.target.value)}
+                placeholder="Tìm theo họ tên, mã học sinh hoặc email…"
+                aria-label="Tìm theo họ tên, mã học sinh hoặc email"
+                className="w-full pl-9 pr-8 py-2 bg-white border-2 border-amber-200 focus:border-amber-500 rounded-2xl text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 shadow-inner transition-all"
+              />
+              {userSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserSearchQuery('');
+                    triggerSound('click');
+                  }}
+                  aria-label="Xóa từ khóa"
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded-r-2xl cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden shadow-sm overflow-x-auto">
             <table className="w-full text-left text-xs font-bold whitespace-nowrap">
               <thead className="bg-amber-100 text-amber-950 uppercase border-b-2 border-amber-200">
@@ -792,35 +847,55 @@ export const AdminDashboard = () => {
                   <tr>
                     <td colSpan={11} className="p-8 text-center text-slate-500 bg-slate-50/50">
                       <div className="flex flex-col items-center justify-center gap-1.5">
-                        <span className="font-bold text-sm">
-                          {userRoleFilter !== 'ALL'
-                            ? 'Không có người dùng thuộc vai trò này trong phạm vi lớp hiện tại.'
-                            : 'Không có người dùng phù hợp với bộ lọc lớp hiện tại.'}
-                        </span>
-                        {userRoleFilter !== 'ALL' ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setUserRoleFilter('ALL');
-                              triggerSound('click');
-                            }}
-                            className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
-                          >
-                            Hiển thị tất cả vai trò
-                          </button>
-                        ) : (
-                          globalClassFilter !== 'ALL' && setGlobalClassFilter && (
+                        {normalizeSearchText(userSearchQuery) ? (
+                          <>
+                            <span className="font-bold text-sm text-slate-700">
+                              Không tìm thấy người dùng phù hợp với từ khóa trong phạm vi bộ lọc hiện tại.
+                            </span>
                             <button
                               type="button"
                               onClick={() => {
-                                setGlobalClassFilter('ALL');
+                                setUserSearchQuery('');
                                 triggerSound('click');
                               }}
-                              className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                              className="mt-2 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg text-xs transition-colors cursor-pointer shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                             >
-                              Hiển thị tất cả người dùng
+                              ✕ Xóa từ khóa
                             </button>
-                          )
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-bold text-sm">
+                              {userRoleFilter !== 'ALL'
+                                ? 'Không có người dùng thuộc vai trò này trong phạm vi lớp hiện tại.'
+                                : 'Không có người dùng phù hợp với bộ lọc lớp hiện tại.'}
+                            </span>
+                            {userRoleFilter !== 'ALL' ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setUserRoleFilter('ALL');
+                                  triggerSound('click');
+                                }}
+                                className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                              >
+                                Hiển thị tất cả vai trò
+                              </button>
+                            ) : (
+                              globalClassFilter !== 'ALL' && setGlobalClassFilter && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setGlobalClassFilter('ALL');
+                                    triggerSound('click');
+                                  }}
+                                  className="mt-2 px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                                >
+                                  Hiển thị tất cả người dùng
+                                </button>
+                              )
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
