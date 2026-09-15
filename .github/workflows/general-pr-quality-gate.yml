@@ -1,0 +1,51 @@
+name: General PR Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: General PR Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Validate learning games data & assets
+        run: npm run validate:games
+
+      - name: Validate academic exercises architecture
+        run: npm run validate:exercises
+
+      - name: Run PGlite test suite
+        run: npm run test:pglite
+
+      - name: Build main web application
+        run: npm run build
+
+      - name: Build SCORM isolated player
+        run: npm --prefix scorm-player run build
