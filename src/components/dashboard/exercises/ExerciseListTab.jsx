@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BookOpen, Plus, FileText, CheckCircle2, Clock, AlertCircle, 
+import {
+  BookOpen, Plus, FileText, CheckCircle2, Clock, AlertCircle,
   Search, Filter, ChevronRight, Star, Send, RotateCcw, Award, Check, Edit3,
   Share2, Users, Layers, AlertTriangle, X, CheckSquare, Square,
   GraduationCap, PlayCircle, Trash2, Archive, RefreshCw
@@ -18,7 +18,7 @@ import { createExamStudentClient } from '../../../services/examStudentClient';
 
 export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const { profile } = useAuth();
-  
+
   const [exercises, setExercises] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [assignmentsMap, setAssignmentsMap] = useState({}); // { [exercise_id]: [ { class_id, class_name } ] }
@@ -133,7 +133,8 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
           const { data: memberData } = await supabase
             .from('class_members')
             .select('class_id')
-            .eq('student_id', profile.id);
+            .eq('student_id', profile.id)
+            .eq('is_active', true);
 
           myClassIds = (memberData || []).map(m => m.class_id).filter(Boolean);
         }
@@ -409,9 +410,9 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   };
 
   const filteredExercises = exercises.filter(ex => {
-    const matchesSearch = ex.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = ex.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           ex.subject.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     if (!matchesSearch) return false;
 
     if (role === 'student') {
@@ -439,7 +440,7 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
 
   return (
     <div className="space-y-6">
-      
+
       {/* TOAST FEEDBACK NOTIFICATION */}
       {toastMsg && (
         <div className="fixed bottom-6 right-6 z-[10000] p-4 bg-emerald-600 text-white font-black text-xs rounded-2xl shadow-2xl animate-bounce flex items-center gap-2">
@@ -892,13 +893,13 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
         <CreateExerciseModal
           isOpen={isCreateModalOpen || !!selectedExerciseToEdit}
           exerciseToEdit={selectedExerciseToEdit}
-          onClose={(msg) => { 
-            setIsCreateModalOpen(false); 
-            setSelectedExerciseToEdit(null); 
+          onClose={(msg) => {
+            setIsCreateModalOpen(false);
+            setSelectedExerciseToEdit(null);
             if (msg && typeof msg === 'string') {
               showToast(msg);
             }
-            fetchData(); 
+            fetchData();
           }}
         />
       )}
@@ -943,7 +944,7 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                     <label
                       key={c.id}
                       onClick={() => {
-                        setSelectedClassIdsToAssign(prev => 
+                        setSelectedClassIdsToAssign(prev =>
                           prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id]
                         );
                       }}

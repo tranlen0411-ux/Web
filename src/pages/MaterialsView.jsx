@@ -99,7 +99,8 @@ export const MaterialsView = () => {
         const { data: memberData } = await supabase
           .from('class_members')
           .select('classes:class_id(id, name, grade_level)')
-          .eq('student_id', profile.id);
+          .eq('student_id', profile.id)
+          .eq('is_active', true);
         fetchedClasses = (memberData || []).map(m => m.classes).filter(Boolean);
       }
       setClasses(fetchedClasses);
