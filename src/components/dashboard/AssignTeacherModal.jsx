@@ -218,39 +218,22 @@ export function AssignTeacherModal({
 
       const classIdsArray = Array.from(selectedClassIds);
 
-      // 1. Phân công các lớp đã chọn cho giáo viên này (nếu có lớp được chọn)
-      if (classIdsArray.length > 0) {
-        const { data: assignRes, error: assignErr } = await supabase.rpc('assign_teacher_to_classes', {
-          p_teacher_id: selectedTeacherId,
-          p_class_ids: classIdsArray
-        });
-
-        if (assignErr) throw assignErr;
-        if (assignRes && !assignRes.success) {
-          throw new Error(assignRes.message || 'Phân công không thành công.');
-        }
-      }
-
-      // 2. Gỡ phân công các lớp trước đó thuộc giáo viên này nhưng hiện đã bị bỏ tick
-      const unassignedClassIds = [];
-      initialTeacherClassIds.forEach(id => {
-        if (!selectedClassIds.has(id)) {
-          unassignedClassIds.push(id);
-        }
+      // Gọi duy nhất 1 RPC đồng bộ toàn bộ danh sách lớp của giáo viên (Atomic 100%)
+      const { data: assignRes, error: assignErr } = await supabase.rpc('assign_teacher_to_classes', {
+        p_teacher_id: selectedTeacherId,
+        p_class_ids: classIdsArray
       });
 
-      for (const unassignedId of unassignedClassIds) {
-        await supabase.rpc('remove_teacher_from_class', {
-          p_teacher_id: selectedTeacherId,
-          p_class_id: unassignedId
-        });
+      if (assignErr) throw assignErr;
+      if (assignRes && !assignRes.success) {
+        throw new Error(assignRes.message || 'Phân công không thành công.');
       }
 
-      // 3. Cập nhật state nội bộ
+      // Cập nhật state nội bộ sau khi RPC thành công
       const updatedClasses = classesList.map(c => {
         if (selectedClassIds.has(c.id)) {
           return { ...c, teacher_id: selectedTeacherId };
-        } else if (unassignedClassIds.includes(c.id)) {
+        } else if (c.teacher_id === selectedTeacherId) {
           return { ...c, teacher_id: null };
         }
         return c;
