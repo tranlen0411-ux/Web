@@ -389,6 +389,8 @@ async function runPostgresConcurrencyTests() {
       assert.strictEqual(anonCallThrew, true, 'TEST C: Role anon gọi join_class_by_code bị từ chối quyền EXECUTE (42501)');
 
       // 3. Role authenticated gọi nhận phản hồi DISABLED và không thay đổi dữ liệu
+      const historyCountBeforeStub = (await verifyClient.query(`SELECT COUNT(*)::int AS cnt FROM public.class_membership_history;`)).rows[0].cnt;
+
       const authTestClient = new Client({ connectionString, statement_timeout: 5000 });
       await authTestClient.connect();
       let stubResult = null;
@@ -407,8 +409,8 @@ async function runPostgresConcurrencyTests() {
       assert.strictEqual(stubResult.status, 'DISABLED', 'TEST C: stub status là DISABLED');
 
       // 4. Kiểm tra zero mutations
-      const historyCountAfterStub = await verifyClient.query(`SELECT COUNT(*)::int AS cnt FROM public.class_membership_history;`);
-      assert.strictEqual(historyCountAfterStub.rows[0].cnt, 3, 'TEST C: Lịch sử membership không bị can thiệp bởi join_class_by_code stub');
+      const historyCountAfterStub = (await verifyClient.query(`SELECT COUNT(*)::int AS cnt FROM public.class_membership_history;`)).rows[0].cnt;
+      assert.strictEqual(historyCountAfterStub, historyCountBeforeStub, 'TEST C: Lịch sử membership không bị can thiệp bởi join_class_by_code stub');
 
       report.testC = {
         result: 'PASS',
