@@ -11,7 +11,7 @@
     "validate:games": "node scripts/validateLearningGames.mjs",
     "validate:exercises": "node scripts/validateAcademicExercises.mjs",
     "test:pglite": "node scripts/run_all_pglite_tests.js",
-    "test:postgres-concurrency": "node tests/admin_class_management.postgres_concurrency.test.mjs"
+    "test:postgres-concurrency": "node tests/admin_class_management.postgres_concurrency.test.mjs && node tests/admin_only_class_governance.postgres.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.46.1",

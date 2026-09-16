@@ -734,6 +734,16 @@ async function runSuite9() {
   console.log('✅ PGLITE ADMIN CLASS & TEACHER ASSIGNMENT SUITE PASS');
 }
 
+// 10. Suite: tests/admin_only_class_governance.test.mjs
+async function runSuite10() {
+  console.log(`\n------------------------------------------------------------`);
+  console.log(`▶ RUNNING: Suite 10: tests/admin_only_class_governance.test.mjs (Admin-only Class Governance & Safe Teacher Unassignment)`);
+  console.log(`------------------------------------------------------------`);
+  const { runAdminOnlyClassGovernanceTestSuite } = await import('../tests/admin_only_class_governance.test.mjs');
+  await runAdminOnlyClassGovernanceTestSuite();
+  console.log('✅ PGLITE ADMIN-ONLY CLASS GOVERNANCE SUITE PASS');
+}
+
 async function main() {
   const startTime = Date.now();
   let sharedDb;
@@ -760,10 +770,13 @@ async function main() {
     // 9. Suite 9 (Admin Class & Teacher Management - Upgrade & Fresh Migration)
     await runSuite9();
 
+    // 10. Suite 10 (Admin-only Class Governance & Safe Teacher Unassignment)
+    await runSuite10();
+
     const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`\n============================================================`);
     console.log(`⏱ Tổng thời gian chạy: ${elapsedSeconds}s`);
-    console.log(`✅ ALL PGLITE TESTS PASS (9/9 Suites: Leaderboard, Period & Admin Class Management)`);
+    console.log(`✅ ALL PGLITE TESTS PASS (10/10 Suites: Leaderboard, Period, Admin Class & RLS Governance)`);
     console.log(`============================================================\n`);
   } catch (err) {
     if (sharedDb) {

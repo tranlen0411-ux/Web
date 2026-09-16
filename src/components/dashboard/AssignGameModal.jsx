@@ -107,7 +107,7 @@ export const AssignGameModal = ({ isOpen, onClose, game }) => {
                 </select>
               ) : (
                 <p className="text-xs font-bold text-rose-500 p-3 bg-rose-50 rounded-xl border border-rose-200">
-                  ⚠️ Thầy/Cô chưa có lớp học nào. Vui lòng tạo Lớp Học mới trong Bảng Quản Lý trước khi giao bài!
+                  ⚠️ Thầy/Cô chưa được phân công lớp học nào. Vui lòng liên hệ Quản trị viên để được phân công lớp phụ trách trước khi giao bài!
                 </p>
               )}
             </div>
