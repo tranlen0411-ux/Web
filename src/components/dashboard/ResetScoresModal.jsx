@@ -116,7 +116,8 @@ export function ResetScoresModal({ isOpen, onClose, onApplied, initialClassId = 
       const { data, error } = await supabase
         .from('class_members')
         .select('student_id, profiles:student_id (id, full_name, avatar_url, role)')
-        .eq('class_id', classId);
+        .eq('class_id', classId)
+        .eq('is_active', true);
 
       if (error) throw error;
 

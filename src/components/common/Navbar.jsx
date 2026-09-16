@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   Gamepad2,
@@ -77,7 +77,8 @@ export const Navbar = () => {
           const { data: memberData, error } = await supabase
             .from('class_members')
             .select('classes:class_id(id, name, grade_level)')
-            .eq('student_id', profile.id);
+            .eq('student_id', profile.id)
+            .eq('is_active', true);
 
           if (error) {
             console.error('❌ Lỗi truy vấn danh sách lớp Học sinh:', error.message);
