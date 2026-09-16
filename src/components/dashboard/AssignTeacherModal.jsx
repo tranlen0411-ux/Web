@@ -11,7 +11,8 @@ import {
   RefreshCw,
   UserMinus,
   CheckSquare,
-  Square
+  Square,
+  AlertTriangle
 } from 'lucide-react';
 import { useSound } from '../../context/SoundContext';
 
@@ -37,6 +38,11 @@ export function AssignTeacherModal({
   const [showConfirmReassign, setShowConfirmReassign] = useState(false);
   const [reassignedClassesList, setReassignedClassesList] = useState([]);
 
+  // State cho hộp thoại xác nhận gỡ giáo viên an toàn
+  const [classToUnassign, setClassToUnassign] = useState(null);
+  const [isUnassigning, setIsUnassigning] = useState(false);
+  const [unassignError, setUnassignError] = useState('');
+
   useEffect(() => {
     if (isOpen) {
       fetchInitialData();
@@ -48,6 +54,9 @@ export function AssignTeacherModal({
       setSuccessMessage('');
       setShowConfirmReassign(false);
       setReassignedClassesList([]);
+      setClassToUnassign(null);
+      setIsUnassigning(false);
+      setUnassignError('');
     }
   }, [isOpen]);
 
@@ -112,6 +121,9 @@ export function AssignTeacherModal({
     setErrorMessage('');
     setSuccessMessage('');
     setShowConfirmReassign(false);
+    setClassToUnassign(null);
+    setIsUnassigning(false);
+    setUnassignError('');
     updateTeacherClassesSelection(teacherId, classesList);
   };
 
@@ -136,16 +148,38 @@ export function AssignTeacherModal({
     }
   };
 
-  // Gỡ phân công nhanh cho 1 lớp cụ thể
-  const handleUnassignSingleClass = async (classItem) => {
-    try {
-      setIsSaving(true);
-      setErrorMessage('');
-      setSuccessMessage('');
+  // Mở hộp thoại xác nhận gỡ phân công giáo viên (chưa gọi RPC)
+  const handleRequestUnassign = (classItem) => {
+    const currentTeacher = teachersList.find(t => t.id === classItem.teacher_id);
+    const currentTeacherName = currentTeacher?.full_name || (classItem.teacher_id ? `GV (ID: ${classItem.teacher_id})` : 'Giáo viên hiện tại');
+    setUnassignError('');
+    setClassToUnassign({
+      id: classItem.id,
+      name: classItem.name,
+      teacher_id: classItem.teacher_id,
+      currentTeacherName
+    });
+  };
 
+  const handleCancelUnassign = () => {
+    if (isUnassigning) return;
+    setClassToUnassign(null);
+    setUnassignError('');
+  };
+
+  // Chỉ gọi RPC remove_teacher_from_class khi Admin bấm Xác Nhận Gỡ
+  const handleConfirmUnassign = async () => {
+    if (!classToUnassign || !classToUnassign.teacher_id || isUnassigning) return;
+
+    try {
+      setIsUnassigning(true);
+      setUnassignError('');
+      setErrorMessage('');
+
+      // RPC nhận classToUnassign.teacher_id (giáo viên hiện tại của lớp), không lấy theo dropdown
       const { data, error } = await supabase.rpc('remove_teacher_from_class', {
-        p_teacher_id: classItem.teacher_id,
-        p_class_id: classItem.id
+        p_teacher_id: classToUnassign.teacher_id,
+        p_class_id: classToUnassign.id
       });
 
       if (error) throw error;
@@ -154,8 +188,12 @@ export function AssignTeacherModal({
       }
 
       triggerSound('click');
+      const unassignedClassId = classToUnassign.id;
+      const unassignedClassName = classToUnassign.name;
+      const unassignedTeacherName = classToUnassign.currentTeacherName;
+
       const updatedClasses = classesList.map(c => {
-        if (c.id === classItem.id) {
+        if (c.id === unassignedClassId) {
           return { ...c, teacher_id: null };
         }
         return c;
@@ -163,19 +201,25 @@ export function AssignTeacherModal({
       setClassesList(updatedClasses);
 
       const newSelected = new Set(selectedClassIds);
-      newSelected.delete(classItem.id);
+      newSelected.delete(unassignedClassId);
       setSelectedClassIds(newSelected);
 
-      setSuccessMessage(`Đã gỡ giáo viên phụ trách khỏi lớp "${classItem.name}" thành công!`);
+      const newInitial = new Set(initialTeacherClassIds);
+      newInitial.delete(unassignedClassId);
+      setInitialTeacherClassIds(newInitial);
+
+      setClassToUnassign(null);
+      setSuccessMessage(`Đã gỡ giáo viên ${unassignedTeacherName} khỏi lớp "${unassignedClassName}" thành công!`);
 
       if (onSaved) {
         onSaved();
       }
     } catch (err) {
       triggerSound('error');
-      setErrorMessage('Lỗi khi gỡ giáo viên: ' + (err.message || String(err)));
+      // Giữ modal xác nhận và hiển thị lỗi, không đóng modal và không giả báo thành công
+      setUnassignError('Lỗi khi gỡ giáo viên: ' + (err.message || String(err)));
     } finally {
-      setIsSaving(false);
+      setIsUnassigning(false);
     }
   };
 
@@ -268,7 +312,7 @@ export function AssignTeacherModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white w-full max-w-2xl rounded-3xl border-4 border-sky-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="relative bg-white w-full max-w-2xl rounded-3xl border-4 border-sky-300 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* HEADER */}
         <div className="bg-gradient-to-r from-sky-500 to-indigo-600 px-6 py-4 text-white flex items-center justify-between border-b-4 border-sky-700">
           <div className="flex items-center gap-3">
@@ -282,10 +326,12 @@ export function AssignTeacherModal({
           </div>
           <button
             onClick={() => {
+              if (isSaving || isUnassigning) return;
               triggerSound('click');
               onClose();
             }}
-            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+            disabled={isSaving || isUnassigning}
+            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
@@ -324,7 +370,8 @@ export function AssignTeacherModal({
                 <select
                   value={selectedTeacherId}
                   onChange={handleTeacherChange}
-                  className="w-full px-4 py-3 rounded-2xl border-2 border-slate-200 bg-slate-50 font-bold text-sm text-slate-800 focus:border-indigo-500 focus:bg-white outline-none transition-colors"
+                  disabled={isSaving || isUnassigning}
+                  className="w-full px-4 py-3 rounded-2xl border-2 border-slate-200 bg-slate-50 font-bold text-sm text-slate-800 focus:border-indigo-500 focus:bg-white outline-none transition-colors disabled:opacity-50"
                 >
                   <option value="" disabled>-- Chọn giáo viên từ danh sách --</option>
                   {teachersList.map(t => (
@@ -344,7 +391,8 @@ export function AssignTeacherModal({
                   <button
                     type="button"
                     onClick={handleSelectAllClasses}
-                    className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer"
+                    disabled={isSaving || isUnassigning}
+                    className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer disabled:opacity-50"
                   >
                     {selectedClassIds.size === classesList.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
                   </button>
@@ -369,6 +417,7 @@ export function AssignTeacherModal({
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => handleToggleClass(cls.id)}
+                            disabled={isSaving || isUnassigning}
                             className="hidden"
                           />
                           <div className="text-sky-600 flex-shrink-0">
@@ -402,9 +451,9 @@ export function AssignTeacherModal({
                         {cls.teacher_id && (
                           <button
                             type="button"
-                            onClick={() => handleUnassignSingleClass(cls)}
-                            disabled={isSaving}
-                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-[10px] rounded-lg transition-colors cursor-pointer flex-shrink-0"
+                            onClick={() => handleRequestUnassign(cls)}
+                            disabled={isSaving || isUnassigning}
+                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-[10px] rounded-lg transition-colors cursor-pointer flex-shrink-0 disabled:opacity-50"
                             title="Gỡ giáo viên phụ trách khỏi lớp này"
                           >
                             <UserMinus className="w-3 h-3 inline mr-1" /> Gỡ GV
@@ -440,6 +489,7 @@ export function AssignTeacherModal({
                     <button
                       type="button"
                       onClick={() => setShowConfirmReassign(false)}
+                      disabled={isSaving}
                       className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl font-black text-xs cursor-pointer"
                     >
                       Hủy Bỏ
@@ -464,17 +514,19 @@ export function AssignTeacherModal({
           <button
             type="button"
             onClick={() => {
+              if (isSaving || isUnassigning) return;
               triggerSound('click');
               onClose();
             }}
-            className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black text-xs rounded-2xl transition-colors cursor-pointer"
+            disabled={isSaving || isUnassigning}
+            className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black text-xs rounded-2xl transition-colors cursor-pointer disabled:opacity-50"
           >
             Đóng
           </button>
           <button
             type="button"
             onClick={handleSaveClick}
-            disabled={isSaving || isLoading || !selectedTeacherId}
+            disabled={isSaving || isUnassigning || isLoading || !selectedTeacherId}
             className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-50 font-black text-xs rounded-2xl border-b-4 border-sky-800 shadow-md flex items-center gap-2 active:translate-y-0.5 cursor-pointer"
           >
             {isSaving ? (
@@ -488,6 +540,72 @@ export function AssignTeacherModal({
             )}
           </button>
         </div>
+
+        {/* HỘP THOẠI XÁC NHẬN GỠ GIÁO VIÊN AN TOÀN (OVERLAY MODAL) */}
+        {classToUnassign && (
+          <div className="absolute inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white w-full max-w-md rounded-2xl border-4 border-rose-300 shadow-2xl overflow-hidden flex flex-col p-5 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="p-3 bg-rose-100 text-rose-700 rounded-2xl flex-shrink-0">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Xác Nhận Gỡ Giáo Viên Phụ Trách</h3>
+                  <p className="text-xs text-slate-500 font-semibold mt-0.5">Thao tác quản trị lớp học</p>
+                </div>
+              </div>
+
+              {unassignError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
+                  <span>{unassignError}</span>
+                </div>
+              )}
+
+              <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 text-xs space-y-2">
+                <div>
+                  <span className="text-slate-500 font-bold">Lớp học: </span>
+                  <span className="font-black text-slate-800">{classToUnassign.name}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-bold">Giáo viên hiện tại: </span>
+                  <span className="font-black text-rose-700">{classToUnassign.currentTeacherName}</span>
+                </div>
+                <div className="pt-2 border-t border-slate-200 text-[11px] text-amber-800 font-semibold leading-relaxed space-y-1">
+                  <p>⚠️ Lớp sẽ chuyển sang trạng thái <strong>chưa có giáo viên phụ trách</strong>.</p>
+                  <p>🔒 Toàn bộ <strong>học sinh</strong> và <strong>lịch sử học tập</strong> trong lớp được giữ nguyên vẹn, không bị xóa.</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleCancelUnassign}
+                  disabled={isUnassigning}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl font-black text-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Hủy Bỏ
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmUnassign}
+                  disabled={isUnassigning}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-black text-xs shadow-md transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isUnassigning ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang Gỡ...
+                    </>
+                  ) : (
+                    <>
+                      <UserMinus className="w-3.5 h-3.5" /> Xác Nhận Gỡ
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
