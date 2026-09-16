@@ -139,6 +139,7 @@ export async function runRealPostgresTest() {
     } catch (err) {
       caughtRoguePreDrop = true;
       assert(err.message.includes('PRE-DROP VALIDATION FAILED'), 'Real PG: Lỗi phải xuất phát từ PRE-DROP VALIDATION');
+      await client.query('ROLLBACK;').catch(() => {});
     }
     assert.strictEqual(caughtRoguePreDrop, true, 'Real PG: Pre-drop assertion phải chặn đứng rogue policy trước khi DROP');
 
