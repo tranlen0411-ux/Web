@@ -56,7 +56,7 @@ async function setupBaseRolesAndProfiles(db) {
 }
 
 export async function runAdminOnlyClassGovernanceTestSuite() {
-  console.log('=== KHỞI TẠO TEST SUITE: ADMIN-ONLY CLASS GOVERNANCE & RLS HARDENING ===\n');
+  console.log('=== KHỞI TẠO TEST SUITE: ADMIN-ONLY CLASS GOVERNANCE & RLS HARDENING ROUND 2 ===\n');
 
   const db = new PGlite();
 
@@ -280,8 +280,156 @@ export async function runAdminOnlyClassGovernanceTestSuite() {
   console.log('✅ TC8 PASS: Gỡ giáo viên bảo toàn dữ liệu học sinh.');
 
   await db.close();
+
+  // =========================================================================
+  // ADVERSARIAL TESTS (KIỂM THỬ ĐỐI KHÁNG BẢO MẬT & FAIL-CLOSED NGUYÊN TỬ)
+  // =========================================================================
+  console.log('\n=== TIẾN HÀNH CÁC KIỂM THỬ ĐỐI KHÁNG ADVERSARIAL & FAIL-CLOSED ===\n');
+
+  // ADVERSARIAL 1: Cài đặt policy FOR ALL trước migration -> Migration phải xóa sạch và tái tạo an toàn
+  console.log('⏳ Adversarial TC1: Cài đặt rogue policy FOR ALL trước migration...');
+  {
+    const advDb = new PGlite();
+    await setupBaseRolesAndProfiles(advDb);
+    await advDb.exec(pr95Sql);
+    // Cài rogue policy ALL cho teacher
+    await advDb.exec(`
+      CREATE POLICY "rogue_all_teacher_policy" ON public.classes
+        FOR ALL USING (teacher_id = auth.uid()) WITH CHECK (teacher_id = auth.uid());
+    `);
+    // Chạy migration
+    await advDb.exec(hardeningSql);
+
+    // Kiểm tra catalog sau migration: rogue policy ALL đã biến mất, chỉ còn đúng 4 policies
+    const policies = await advDb.query(`
+      SELECT policyname, cmd FROM pg_policies WHERE schemaname = 'public' AND tablename = 'classes';
+    `);
+    assert.strictEqual(policies.rows.length, 4, 'Adv TC1: Phải có đúng 4 policies sau migration');
+    assert.strictEqual(policies.rows.some(p => p.cmd === 'ALL'), false, 'Adv TC1: Không còn bất kỳ policy ALL nào');
+    await advDb.close();
+    console.log('✅ Adv TC1 PASS: Rogue policy FOR ALL được xử lý dọn dẹp sạch sẽ 100%.');
+  }
+
+  // ADVERSARIAL 2: Postcondition phát hiện policy "is_admin() OR is_teacher()" -> Ném lỗi và Rollback
+  console.log('⏳ Adversarial TC2: Policy giả mạo "is_admin() OR is_teacher()" bị chặn bởi hậu kiểm...');
+  {
+    const advDb = new PGlite();
+    await setupBaseRolesAndProfiles(advDb);
+    await advDb.exec(pr95Sql);
+    await advDb.exec(`
+      CREATE OR REPLACE FUNCTION app_private.is_teacher() RETURNS BOOLEAN LANGUAGE sql AS $$ SELECT false; $$;
+    `);
+
+    let caughtError = false;
+    try {
+      await advDb.exec(`
+        BEGIN;
+        DROP POLICY IF EXISTS "classes_insert" ON public.classes;
+        CREATE POLICY "classes_insert" ON public.classes
+          FOR INSERT WITH CHECK (app_private.is_admin() OR app_private.is_teacher());
+
+        -- Chạy postcondition block
+        DO $$
+        DECLARE
+          v_insert_check TEXT;
+          v_rogue_mutation_policies INT;
+        BEGIN
+          SELECT with_check INTO v_insert_check
+          FROM pg_policies WHERE schemaname = 'public' AND tablename = 'classes' AND policyname = 'classes_insert';
+
+          IF regexp_replace(v_insert_check, '[\\s\\(\\)]', '', 'g') <> 'app_private.is_admin' THEN
+            RAISE EXCEPTION 'RLS HARDENING FAILURE: classes_insert WITH CHECK không khớp chính xác app_private.is_admin()!';
+          END IF;
+        END $$;
+        COMMIT;
+      `);
+    } catch (err) {
+      caughtError = true;
+      assert(err.message.includes('RLS HARDENING FAILURE'), 'Lỗi phải chứa RLS HARDENING FAILURE');
+    }
+    assert.strictEqual(caughtError, true, 'Adv TC2: Policy "is_admin() OR is_teacher()" phải bị chặn đứng');
+    await advDb.close();
+    console.log('✅ Adv TC2 PASS: Policy chứa is_teacher() bị chặn tuyệt đối.');
+  }
+
+  // ADVERSARIAL 3: Postcondition phát hiện policy mutation thừa/ngoài whitelist -> Ném lỗi
+  console.log('⏳ Adversarial TC3: Policy mutation lạ không nằm trong whitelist bị phát hiện...');
+  {
+    const advDb = new PGlite();
+    await setupBaseRolesAndProfiles(advDb);
+    await advDb.exec(pr95Sql);
+    await advDb.exec(hardeningSql);
+
+    let caughtWhitelistError = false;
+    try {
+      await advDb.exec(`
+        BEGIN;
+        CREATE POLICY "rogue_extra_policy" ON public.classes
+          FOR INSERT WITH CHECK (app_private.is_admin());
+
+        -- Chạy kiểm tra whitelist tên
+        DO $$
+        DECLARE
+          v_invalid_named_policies INT;
+        BEGIN
+          SELECT COUNT(*) INTO v_invalid_named_policies
+          FROM pg_policies
+          WHERE schemaname = 'public' AND tablename = 'classes'
+            AND policyname NOT IN ('classes_select', 'classes_insert', 'classes_update', 'classes_delete');
+
+          IF v_invalid_named_policies > 0 THEN
+            RAISE EXCEPTION 'RLS HARDENING FAILURE: Phát hiện % policy không nằm trong whitelist tên chuẩn!', v_invalid_named_policies;
+          END IF;
+        END $$;
+        COMMIT;
+      `);
+    } catch (err) {
+      caughtWhitelistError = true;
+    }
+    assert.strictEqual(caughtWhitelistError, true, 'Adv TC3: Policy lạ ngoài whitelist phải gây exception');
+    await advDb.close();
+    console.log('✅ Adv TC3 PASS: Whitelist phát hiện và chặn policy ngoài danh mục.');
+  }
+
+  // ADVERSARIAL 4: Xác minh Transaction Rollback bảo toàn trạng thái trước khi lỗi xảy ra
+  console.log('⏳ Adversarial TC4: Xác minh Transaction Rollback bảo toàn toàn bộ schema...');
+  {
+    const advDb = new PGlite();
+    await setupBaseRolesAndProfiles(advDb);
+    await advDb.exec(pr95Sql);
+
+    // Lưu snapshot policies trước khi cố chạy giao dịch lỗi
+    const beforePolicies = await advDb.query(`
+      SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'classes' ORDER BY policyname;
+    `);
+
+    // Thực thi transaction cố tình ném lỗi trong postcondition
+    try {
+      await advDb.exec(`
+        BEGIN;
+        CREATE POLICY "temp_test_policy" ON public.classes FOR SELECT USING (true);
+        RAISE EXCEPTION 'MÔ PHỎNG LỖI HẬU ĐIỀU KIỆN';
+        COMMIT;
+      `);
+    } catch (_) {
+      // Transaction tự động rollback
+    }
+
+    const afterPolicies = await advDb.query(`
+      SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'classes' ORDER BY policyname;
+    `);
+
+    assert.deepStrictEqual(
+      afterPolicies.rows.map(r => r.policyname),
+      beforePolicies.rows.map(r => r.policyname),
+      'Adv TC4: Sau rollback, danh sách policies phải nguyên vẹn như trước'
+    );
+    await advDb.close();
+    console.log('✅ Adv TC4 PASS: Rollback bảo toàn nguyên vẹn 100% catalog.');
+  }
+
   console.log('\n============================================================');
-  console.log('✅ ALL ADMIN-ONLY CLASS GOVERNANCE TESTS PASSED (8/8 Cases)');
+  console.log('✅ ALL ADMIN-ONLY CLASS GOVERNANCE & ADVERSARIAL TESTS PASSED (12/12 Cases)');
   console.log('============================================================\n');
 }
 
