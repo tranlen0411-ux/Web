@@ -373,28 +373,37 @@ async function runPostgresConcurrencyTests() {
 
       // 2. Role anon gọi bị PostgreSQL từ chối ở database level (42501)
       let anonCallThrew = false;
+      const anonTestClient = new Client({ connectionString, statement_timeout: 5000 });
+      await anonTestClient.connect();
       try {
-        await clientA.query(`SET ROLE anon;`);
-        await clientA.query(`SELECT public.join_class_by_code('CODE123');`);
+        await anonTestClient.query(`SET ROLE anon;`);
+        await anonTestClient.query(`SELECT public.join_class_by_code('CODE123');`);
       } catch (err) {
         if (err.code === '42501' || (err.message && err.message.includes('permission denied'))) {
           anonCallThrew = true;
         }
       } finally {
-        await clientA.query(`RESET ROLE;`);
+        await anonTestClient.end();
       }
       assert.strictEqual(anonCallThrew, true, 'TEST C: Role anon gọi join_class_by_code bị từ chối quyền EXECUTE (42501)');
 
       // 3. Role authenticated gọi nhận phản hồi DISABLED và không thay đổi dữ liệu
-      await clientA.query(`
-        SET ROLE authenticated;
-        SELECT set_config('request.jwt.claim.sub', '${student1Id}', true);
-      `);
-      const stubRes = await clientA.query(`SELECT public.join_class_by_code('CODE123') AS result;`);
-      await clientA.query(`RESET ROLE;`);
+      const authTestClient = new Client({ connectionString, statement_timeout: 5000 });
+      await authTestClient.connect();
+      let stubResult = null;
+      try {
+        await authTestClient.query(`
+          SET ROLE authenticated;
+          SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+        `);
+        const stubRes = await authTestClient.query(`SELECT public.join_class_by_code('CODE123') AS result;`);
+        stubResult = stubRes.rows[0].result;
+      } finally {
+        await authTestClient.end();
+      }
 
-      assert.strictEqual(stubRes.rows[0].result.success, false, 'TEST C: stub success là false');
-      assert.strictEqual(stubRes.rows[0].result.status, 'DISABLED', 'TEST C: stub status là DISABLED');
+      assert.strictEqual(stubResult.success, false, 'TEST C: stub success là false');
+      assert.strictEqual(stubResult.status, 'DISABLED', 'TEST C: stub status là DISABLED');
 
       // 4. Kiểm tra zero mutations
       const historyCountAfterStub = await verifyClient.query(`SELECT COUNT(*)::int AS cnt FROM public.class_membership_history;`);
