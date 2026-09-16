@@ -58,6 +58,7 @@ async function setupDatabase(connectionString) {
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
           CREATE ROLE authenticated NOLOGIN;
         END IF;
+        EXECUTE format('GRANT anon, authenticated TO %I', CURRENT_USER);
       END
       $$;
 
