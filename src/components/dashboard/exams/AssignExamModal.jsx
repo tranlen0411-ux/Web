@@ -195,7 +195,7 @@ export const AssignExamModal = ({
               </select>
             ) : (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs font-bold text-amber-900">
-                ⚠️ Không tìm thấy lớp học nào do Thầy/Cô quản lý. Vui lòng tạo lớp học trước khi giao bài.
+                ⚠️ Không tìm thấy lớp học nào do Thầy/Cô quản lý. Vui lòng liên hệ Quản trị viên để được phân công lớp phụ trách trước khi giao bài.
               </div>
             )}
             <p className="text-[11px] font-bold text-slate-400 mt-1">

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   GraduationCap,
-  Plus,
   Users,
   Gamepad2,
   Award,
@@ -21,7 +20,6 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import { ClassManageModal } from '../components/dashboard/ClassManageModal';
 import { AssignGameModal } from '../components/dashboard/AssignGameModal';
 import { AddGameModal } from '../components/dashboard/AddGameModal';
 import { EditGameModal } from '../components/dashboard/EditGameModal';
@@ -69,7 +67,6 @@ export const TeacherDashboard = () => {
   const [studentProgressList, setStudentProgressList] = useState([]);
   const [managedStudents, setManagedStudents] = useState([]);
 
-  const [isClassModalOpen, setIsClassModalOpen] = useState(false);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isAddGameModalOpen, setIsAddGameModalOpen] = useState(false);
   const [selectedGameForAssign, setSelectedGameForAssign] = useState(null);
@@ -125,7 +122,8 @@ export const TeacherDashboard = () => {
             classes:class_id(name, grade_level),
             profiles:student_id(id, full_name, email, grade_level, total_stars, parent_access_code, student_code)
           `)
-          .in('class_id', classIds);
+          .in('class_id', classIds)
+          .eq('is_active', true);
 
         studentsInMyClasses = (memberData || [])
           .map(m => ({
@@ -231,13 +229,6 @@ export const TeacherDashboard = () => {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() => { setIsClassModalOpen(true); triggerSound('click'); }}
-            className="px-5 py-3 bg-amber-400 hover:bg-amber-300 text-amber-950 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-amber-600 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all"
-          >
-            <Plus className="w-4 h-4" /> Tạo Lớp Học Mới
-          </button>
-
           <button
             onClick={() => { setIsAddGameModalOpen(true); triggerSound('click'); }}
             className="px-5 py-3 bg-white text-emerald-900 hover:bg-emerald-50 font-black text-xs sm:text-sm rounded-2xl border-b-4 border-emerald-200 shadow-md flex items-center gap-2 active:translate-y-0.5 transition-all"
@@ -380,14 +371,8 @@ export const TeacherDashboard = () => {
             ) : (
               <div className="text-center py-8 bg-white rounded-3xl border-4 border-amber-200">
                 <GraduationCap className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-                <h4 className="text-base font-black text-amber-900">Thầy/Cô chưa tạo lớp học nào</h4>
-                <p className="text-xs font-bold text-slate-500 mb-3">Tạo lớp học để học sinh gia nhập và làm bài tập nhé!</p>
-                <button
-                  onClick={() => setIsClassModalOpen(true)}
-                  className="px-4 py-2 bg-amber-400 text-amber-950 font-black text-xs rounded-xl shadow-md"
-                >
-                  + Tạo Lớp Học Ngay
-                </button>
+                <h4 className="text-base font-black text-amber-900">Thầy/Cô chưa được phân công lớp học nào</h4>
+                <p className="text-xs font-bold text-slate-500">Vui lòng liên hệ Quản trị viên để được phân công lớp phụ trách.</p>
               </div>
             )}
           </div>
@@ -683,12 +668,6 @@ export const TeacherDashboard = () => {
       )}
 
       {/* MODALS */}
-      <ClassManageModal
-        isOpen={isClassModalOpen}
-        onClose={() => setIsClassModalOpen(false)}
-        onCreated={() => fetchTeacherData()}
-      />
-
       <AssignGameModal
         isOpen={isAssignModalOpen}
         onClose={() => setIsAssignModalOpen(false)}

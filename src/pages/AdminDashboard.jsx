@@ -18,6 +18,7 @@ import {
   QrCode,
   Layers,
   Search,
+  School,
   X
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -30,6 +31,7 @@ import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { StudentQrModal } from '../components/dashboard/StudentQrModal';
 import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
 import { AssignTeacherModal } from '../components/dashboard/AssignTeacherModal';
+import { StudentClassAssignmentModal } from '../components/dashboard/StudentClassAssignmentModal';
 import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
 import { useSound } from '../context/SoundContext';
@@ -110,6 +112,20 @@ export const AdminDashboard = () => {
   const [isImportStudentsOpen, setIsImportStudentsOpen] = useState(false);
   const [isAssignTeacherOpen, setIsAssignTeacherOpen] = useState(false);
   const [isResetScoresOpen, setIsResetScoresOpen] = useState(false);
+  const [isStudentClassModalOpen, setIsStudentClassModalOpen] = useState(false);
+  const [selectedStudentForClass, setSelectedStudentForClass] = useState(null);
+  const [selectedStudentClasses, setSelectedStudentClasses] = useState([]);
+
+  const handleStudentClassSaved = (studentId, targetClassId, actionType) => {
+    if (actionType === 'assign' || actionType === 'transfer') {
+      setClassMembersList(prev => {
+        const filtered = (prev || []).filter(cm => cm.student_id !== studentId);
+        return [...filtered, { student_id: studentId, class_id: targetClassId, is_active: true }];
+      });
+    } else if (actionType === 'remove') {
+      setClassMembersList(prev => (prev || []).filter(cm => cm.student_id !== studentId));
+    }
+  };
 
   useEffect(() => {
     fetchAdminData();
@@ -140,10 +156,11 @@ export const AdminDashboard = () => {
 
       setStats({ users: uCount || 0, games: gCount || 0, classes: cCount || 0 });
 
-      // 2. Lấy danh sách thành viên lớp (class_members) cho cột Lớp
+      // 2. Lấy danh sách thành viên lớp (class_members active) cho cột Lớp
       const { data: cmData, error: cmErr } = await supabase
         .from('class_members')
-        .select('student_id, class_id');
+        .select('student_id, class_id, is_active')
+        .eq('is_active', true);
 
       if (cmErr) {
         console.error('Fetch class_members error:', cmErr.message || cmErr);
@@ -242,10 +259,11 @@ export const AdminDashboard = () => {
       });
     };
 
-    // Map student_id -> danh sách lớp (loại bỏ trùng lặp theo class.id)
+    // Map student_id -> danh sách lớp (loại bỏ trùng lặp theo class.id, chỉ lấy is_active !== false)
     const studentMap = new Map();
     (classMembersList || []).forEach(cm => {
       if (!cm || !cm.student_id || !cm.class_id) return;
+      if (cm.is_active === false) return; // Bỏ qua nếu membership đã bị vô hiệu / kết thúc
       const cls = classById.get(cm.class_id);
       if (!cls) return; // Bỏ qua nếu class không tồn tại trong danh sách lớp (orphan)
       if (!studentMap.has(cm.student_id)) {
@@ -974,13 +992,28 @@ export const AdminDashboard = () => {
                               const studentClasses = studentClassesById.get(u.id) || [];
                               if (studentClasses.length === 0) {
                                 return (
-                                  <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
-                                    Chưa xếp lớp
-                                  </span>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 font-bold rounded-lg text-[11px]">
+                                      Chưa xếp lớp
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedStudentForClass(u);
+                                        setSelectedStudentClasses([]);
+                                        setIsStudentClassModalOpen(true);
+                                        triggerSound('click');
+                                      }}
+                                      className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black rounded-lg text-[10px] border border-emerald-200 transition-colors cursor-pointer"
+                                      title="Xếp lớp cho học sinh"
+                                    >
+                                      + Xếp lớp
+                                    </button>
+                                  </div>
                                 );
                               }
                               return (
-                                <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                <div className="flex items-center gap-1.5 flex-wrap max-w-[220px]">
                                   {studentClasses.map(cls => (
                                     <span
                                       key={cls.id}
@@ -989,6 +1022,19 @@ export const AdminDashboard = () => {
                                       {cls.name}
                                     </span>
                                   ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedStudentForClass(u);
+                                      setSelectedStudentClasses(studentClasses);
+                                      setIsStudentClassModalOpen(true);
+                                      triggerSound('click');
+                                    }}
+                                    className="p-1 hover:bg-sky-200 text-sky-700 rounded-lg transition-colors cursor-pointer"
+                                    title="Chuyển lớp hoặc gỡ khỏi lớp"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
                                 </div>
                               );
                             })()
@@ -1022,6 +1068,19 @@ export const AdminDashboard = () => {
                           <div className="flex items-center justify-end gap-1.5">
                             {isStudent && (
                               <>
+                                <button
+                                  onClick={() => {
+                                    setSelectedStudentForClass(u);
+                                    setSelectedStudentClasses(studentClassesById.get(u.id) || []);
+                                    setIsStudentClassModalOpen(true);
+                                    triggerSound('click');
+                                  }}
+                                  className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-colors"
+                                  title="Quản lý Xếp / Chuyển Lớp"
+                                >
+                                  <School className="w-4 h-4" />
+                                </button>
+
                                 <button
                                   onClick={() => {
                                     setUserForQr(u);
@@ -1238,10 +1297,25 @@ export const AdminDashboard = () => {
         onImportCompleted={() => fetchAdminData()}
       />
 
+      <StudentClassAssignmentModal
+        isOpen={isStudentClassModalOpen}
+        onClose={() => {
+          setIsStudentClassModalOpen(false);
+          setSelectedStudentForClass(null);
+          setSelectedStudentClasses([]);
+        }}
+        student={selectedStudentForClass}
+        currentClasses={selectedStudentClasses}
+        classesList={classesListState}
+        onSaved={handleStudentClassSaved}
+      />
+
       <AssignTeacherModal
         isOpen={isAssignTeacherOpen}
         onClose={() => setIsAssignTeacherOpen(false)}
         onSaved={() => fetchAdminData()}
+        classesList={classesListState}
+        teachersList={usersList.filter(u => u.role === 'teacher')}
       />
 
       <ResetScoresModal

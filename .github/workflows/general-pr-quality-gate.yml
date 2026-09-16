@@ -19,6 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: postgres_test
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,6 +58,11 @@ jobs:
 
       - name: Run PGlite test suite
         run: npm run test:pglite
+
+      - name: Run Real PostgreSQL Concurrency test suite
+        env:
+          TEST_POSTGRES_URL: postgres://test_user:test_password@127.0.0.1:5432/postgres_test
+        run: npm run test:postgres-concurrency
 
       - name: Build main web application
         run: npm run build
