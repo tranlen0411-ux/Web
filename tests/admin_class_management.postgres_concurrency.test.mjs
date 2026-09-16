@@ -356,6 +356,59 @@ async function runPostgresConcurrencyTests() {
         deadlockOrTimeout: 'NO'
       };
       console.log('✅ TEST B (CONCURRENT TRANSFER) PASS: 100% Fail-Closed, không có event mồ côi, không deadlock.');
+
+      // ========================================================================
+      // TEST C: HARDENING PRIVILEGES & DISABLED STUB (REAL POSTGRESQL CATALOG & ROLES)
+      // ========================================================================
+      console.log('\n--- 4. KIỂM THỬ TEST C: JOIN CLASS STUB & CATALOG PERMISSIONS (REAL POSTGRES) ---');
+
+      // 1. Kiểm tra catalog privileges thực tế
+      const privRes = await verifyClient.query(`
+        SELECT
+          has_function_privilege('anon', 'public.join_class_by_code(text)', 'EXECUTE') AS anon_priv,
+          has_function_privilege('authenticated', 'public.join_class_by_code(text)', 'EXECUTE') AS auth_priv;
+      `);
+      assert.strictEqual(privRes.rows[0].anon_priv, false, 'TEST C: anon role bị thu hồi quyền EXECUTE trên join_class_by_code');
+      assert.strictEqual(privRes.rows[0].auth_priv, true, 'TEST C: authenticated role được cấp quyền EXECUTE trên join_class_by_code');
+
+      // 2. Role anon gọi bị PostgreSQL từ chối ở database level (42501)
+      let anonCallThrew = false;
+      try {
+        await clientA.query(`SET ROLE anon;`);
+        await clientA.query(`SELECT public.join_class_by_code('CODE123');`);
+      } catch (err) {
+        if (err.code === '42501' || (err.message && err.message.includes('permission denied'))) {
+          anonCallThrew = true;
+        }
+      } finally {
+        await clientA.query(`RESET ROLE;`);
+      }
+      assert.strictEqual(anonCallThrew, true, 'TEST C: Role anon gọi join_class_by_code bị từ chối quyền EXECUTE (42501)');
+
+      // 3. Role authenticated gọi nhận phản hồi DISABLED và không thay đổi dữ liệu
+      await clientA.query(`
+        SET ROLE authenticated;
+        SELECT set_config('request.jwt.claim.sub', '${student1Id}', true);
+      `);
+      const stubRes = await clientA.query(`SELECT public.join_class_by_code('CODE123') AS result;`);
+      await clientA.query(`RESET ROLE;`);
+
+      assert.strictEqual(stubRes.rows[0].result.success, false, 'TEST C: stub success là false');
+      assert.strictEqual(stubRes.rows[0].result.status, 'DISABLED', 'TEST C: stub status là DISABLED');
+
+      // 4. Kiểm tra zero mutations
+      const historyCountAfterStub = await verifyClient.query(`SELECT COUNT(*)::int AS cnt FROM public.class_membership_history;`);
+      assert.strictEqual(historyCountAfterStub.rows[0].cnt, 3, 'TEST C: Lịch sử membership không bị can thiệp bởi join_class_by_code stub');
+
+      report.testC = {
+        result: 'PASS',
+        anonPrivilegeDenied: 'YES',
+        authenticatedPrivilegeAllowed: 'YES',
+        runtimeRejection: 'PASS',
+        disabledResponse: 'PASS'
+      };
+      console.log('✅ TEST C (JOIN CLASS STUB PRIVILEGE HARDENING) PASS: anon bị chặn, authenticated nhận DISABLED, zero mutations.');
+
     } finally {
       await verifyClient.end();
     }
@@ -368,7 +421,7 @@ async function runPostgresConcurrencyTests() {
   // 4. BÁO CÁO KẾT QUẢ CHO CI / GITHUB ACTIONS
   // ==========================================================================
   console.log('\n============================================================');
-  console.log('📊 TỔNG KẾT KIỂM THỬ REAL POSTGRESQL CONCURRENCY');
+  console.log('📊 TỔNG KẾT KIỂM THỬ REAL POSTGRESQL CONCURRENCY & PERMISSIONS');
   console.log('============================================================');
   console.log(`REAL_CONCURRENCY_TEST: PASS`);
   console.log(`POSTGRES_SERVICE_VERSION: 16`);
@@ -388,6 +441,9 @@ async function runPostgresConcurrencyTests() {
   console.log(`ACTIVE_MEMBERSHIP_COUNT_AFTER_TRANSFER: ${report.testB.activeCount}`);
   console.log(`TRANSFER_EVENT_LOG_VALID: ${report.testB.eventLogValid}`);
   console.log(`TRANSFER_DEADLOCK_OR_TIMEOUT: ${report.testB.deadlockOrTimeout}`);
+  console.log(`JOIN_CLASS_STUB_PERMISSION_RESULT: ${report.testC ? report.testC.result : 'SKIPPED'}`);
+  console.log(`JOIN_CLASS_STUB_ANON_DENIED: ${report.testC ? report.testC.anonPrivilegeDenied : 'N/A'}`);
+  console.log(`JOIN_CLASS_STUB_AUTH_ALLOWED: ${report.testC ? report.testC.authenticatedPrivilegeAllowed : 'N/A'}`);
   console.log('============================================================\n');
 }
 

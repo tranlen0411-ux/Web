@@ -229,7 +229,7 @@ CREATE POLICY "class_membership_history_select" ON public.class_membership_histo
 
 -- 8. VÔ HIỆU HÓA HÀM TỰ GIA NHẬP LỚP (JOIN_CLASS_BY_CODE)
 CREATE OR REPLACE FUNCTION public.join_class_by_code(p_code TEXT)
-RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+RETURNS JSONB LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
 BEGIN
   RETURN jsonb_build_object(
     'success', false,
@@ -753,8 +753,9 @@ END;
 $$;
 
 -- ============================================================================
--- 10. PHÂN QUYỀN THỰC THI CHO CÁC RPC MỚI
+-- 10. PHÂN QUYỀN THỰC THI CHO CÁC RPC MỚI VÀ STUB VÔ HIỆU HÓA
 -- ============================================================================
+REVOKE ALL ON FUNCTION public.join_class_by_code(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.assign_student_to_class(UUID, UUID, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.transfer_student_class(UUID, UUID, UUID, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.remove_student_from_class(UUID, UUID, TEXT) FROM PUBLIC;
@@ -764,6 +765,7 @@ REVOKE ALL ON FUNCTION public.remove_teacher_from_class(UUID, UUID) FROM PUBLIC;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.join_class_by_code(TEXT) FROM anon;';
     EXECUTE 'REVOKE ALL ON FUNCTION public.assign_student_to_class(UUID, UUID, TEXT) FROM anon;';
     EXECUTE 'REVOKE ALL ON FUNCTION public.transfer_student_class(UUID, UUID, UUID, TEXT) FROM anon;';
     EXECUTE 'REVOKE ALL ON FUNCTION public.remove_student_from_class(UUID, UUID, TEXT) FROM anon;';
@@ -772,6 +774,7 @@ BEGIN
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.join_class_by_code(TEXT) TO authenticated;';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.assign_student_to_class(UUID, UUID, TEXT) TO authenticated;';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.transfer_student_class(UUID, UUID, UUID, TEXT) TO authenticated;';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.remove_student_from_class(UUID, UUID, TEXT) TO authenticated;';

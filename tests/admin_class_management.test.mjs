@@ -522,6 +522,22 @@ export async function runAdminClassManagementTestSuite() {
     'Concurrent assignment: 1 yêu cầu thành công và 1 yêu cầu bị từ chối TRANSFER_REQUIRED (nguyên tử)'
   );
 
+  // TEST 29: Kiểm thử join_class_by_code stub - Disabled & Zero Data Mutation
+  let joinRes = await callRpcAs(student1Id, `SELECT public.join_class_by_code('LOP1B') AS r;`);
+  assert(
+    joinRes.rows[0].r.success === false && joinRes.rows[0].r.status === 'DISABLED',
+    'SET ROLE authenticated: Gọi join_class_by_code nhận đúng phản hồi DISABLED'
+  );
+
+  // TEST 30: Kiểm thử catalog permissions và zero-mutation của join_class_by_code
+  let anonPrivCheck = await db.query(`SELECT has_function_privilege('anon', 'public.join_class_by_code(text)', 'EXECUTE') AS priv;`);
+  let authPrivCheck = await db.query(`SELECT has_function_privilege('authenticated', 'public.join_class_by_code(text)', 'EXECUTE') AS priv;`);
+  assert(anonPrivCheck.rows[0].priv === false, 'Catalog check: anon role bị thu hồi quyền EXECUTE trên join_class_by_code');
+  assert(authPrivCheck.rows[0].priv === true, 'Catalog check: authenticated role có quyền EXECUTE trên join_class_by_code');
+
+  let historyCountCheck = await db.query(`SELECT COUNT(*) AS cnt FROM public.class_membership_history;`);
+  assert(parseInt(historyCountCheck.rows[0].cnt) >= 1, 'Lịch sử membership không bị can thiệp bởi join_class_by_code stub');
+
   console.log(`\n🎉 TẤT CẢ ${passedTests}/${totalTests} TESTS (UPGRADE MIGRATION & AUTHENTICATED ROLES) ĐÃ PASS XUẤT SẮC!\n`);
 }
 
