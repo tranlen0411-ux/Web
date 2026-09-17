@@ -146,6 +146,8 @@ export async function runImageAnnotationTestSuite() {
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       metadata JSONB
     );
+    ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE storage.objects FORCE ROW LEVEL SECURITY;
 
     CREATE OR REPLACE FUNCTION storage.foldername(name text)
     RETURNS text[]
@@ -358,89 +360,86 @@ export async function runImageAnnotationTestSuite() {
   assert.equal(noObjRes.rows[0].result.error, 'STORAGE_OBJECT_NOT_FOUND');
   console.log('   ✅ PASS: Missing storage object rejected');
 
+  async function insertMockStorageObject(bucket, name, owner, metadata) {
+    await db.exec(`SET ROLE postgres;`);
+    await db.query(`
+      INSERT INTO storage.objects (bucket_id, name, owner, metadata)
+      VALUES ('${bucket}', '${name}', '${owner}', '${JSON.stringify(metadata)}'::jsonb);
+    `);
+    await setAuthUser(studentAId);
+  }
+
+  async function deleteMockStorageObject(name, bucket = 'exercise-submissions') {
+    await db.exec(`SET ROLE postgres;`);
+    await db.query(`DELETE FROM storage.objects WHERE bucket_id = '${bucket}' AND name = '${name}';`);
+    await setAuthUser(studentAId);
+  }
+
   // TEST 6: Finalize khi object sai bucket -> Bị từ chối
   markTest('FIX 2: Storage object sai bucket (ví dụ avatars thay vì exercise-submissions) -> Rejected');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('avatars', '${storagePath1}', '${studentAId}', '{"size": 500000, "mimetype": "image/png"}'::jsonb);
-  `);
+  await insertMockStorageObject('avatars', storagePath1, studentAId, { size: 500000, mimetype: 'image/png' });
   const wrongBucketRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(wrongBucketRes.rows[0].result.success, false);
   assert.equal(wrongBucketRes.rows[0].result.error, 'STORAGE_OBJECT_NOT_FOUND');
-  // Dọn mock wrong bucket
-  await db.exec(`DELETE FROM storage.objects WHERE bucket_id = 'avatars' AND name = '${storagePath1}';`);
+  await deleteMockStorageObject(storagePath1, 'avatars');
   console.log('   ✅ PASS: Wrong bucket rejected');
 
   // TEST 7: Finalize khi object sai path -> Bị từ chối
   markTest('FIX 2: Storage object sai storage path -> Rejected');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('exercise-submissions', 'students/${studentAId}/submissions/${submissionAId}/other_path.png', '${studentAId}', '{"size": 500000, "mimetype": "image/png"}'::jsonb);
-  `);
+  const wrongPath = `students/${studentAId}/submissions/${submissionAId}/other_path.png`;
+  await insertMockStorageObject('exercise-submissions', wrongPath, studentAId, { size: 500000, mimetype: 'image/png' });
   const wrongPathRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(wrongPathRes.rows[0].result.success, false);
   assert.equal(wrongPathRes.rows[0].result.error, 'STORAGE_OBJECT_NOT_FOUND');
-  await db.exec(`DELETE FROM storage.objects WHERE name = 'students/${studentAId}/submissions/${submissionAId}/other_path.png';`);
+  await deleteMockStorageObject(wrongPath);
   console.log('   ✅ PASS: Wrong path rejected');
 
   // TEST 8: Storage metadata size vượt 10 MiB -> Bị từ chối
   markTest('FIX 2: Storage metadata size vượt quá 10 MiB -> Rejected (INVALID_FILE_SIZE)');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('exercise-submissions', '${storagePath1}', '${studentAId}', '{"size": 15000000, "mimetype": "image/png"}'::jsonb);
-  `);
+  await insertMockStorageObject('exercise-submissions', storagePath1, studentAId, { size: 15000000, mimetype: 'image/png' });
   const overSizeRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(overSizeRes.rows[0].result.success, false);
   assert.equal(overSizeRes.rows[0].result.error, 'INVALID_FILE_SIZE');
-  await db.exec(`DELETE FROM storage.objects WHERE name = '${storagePath1}';`);
+  await deleteMockStorageObject(storagePath1);
   console.log('   ✅ PASS: Oversized metadata size rejected');
 
   // TEST 9: Storage metadata size không khớp giá trị khai báo -> Bị từ chối
   markTest('FIX 2: Storage metadata size không khớp khai báo (khai báo 500000, storage 400000) -> Rejected (FILE_SIZE_MISMATCH)');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('exercise-submissions', '${storagePath1}', '${studentAId}', '{"size": 400000, "mimetype": "image/png"}'::jsonb);
-  `);
+  await insertMockStorageObject('exercise-submissions', storagePath1, studentAId, { size: 400000, mimetype: 'image/png' });
   const mismatchSizeRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(mismatchSizeRes.rows[0].result.success, false);
   assert.equal(mismatchSizeRes.rows[0].result.error, 'FILE_SIZE_MISMATCH');
-  await db.exec(`DELETE FROM storage.objects WHERE name = '${storagePath1}';`);
+  await deleteMockStorageObject(storagePath1);
   console.log('   ✅ PASS: Size mismatch rejected');
 
   // TEST 10: Storage metadata MIME không hợp lệ (ví dụ application/pdf) -> Bị từ chối
   markTest('FIX 2: Storage metadata MIME không hợp lệ (application/pdf) -> Rejected (INVALID_MIME_TYPE)');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('exercise-submissions', '${storagePath1}', '${studentAId}', '{"size": 500000, "mimetype": "application/pdf"}'::jsonb);
-  `);
+  await insertMockStorageObject('exercise-submissions', storagePath1, studentAId, { size: 500000, mimetype: 'application/pdf' });
   const invalidMimeRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(invalidMimeRes.rows[0].result.success, false);
   assert.equal(invalidMimeRes.rows[0].result.error, 'INVALID_MIME_TYPE');
-  await db.exec(`DELETE FROM storage.objects WHERE name = '${storagePath1}';`);
+  await deleteMockStorageObject(storagePath1);
   console.log('   ✅ PASS: Invalid metadata MIME rejected');
 
   // TEST 11: Storage metadata MIME không khớp bản ghi khai báo (khai báo PNG nhưng storage là JPEG) -> Bị từ chối
   markTest('FIX 2: Storage metadata MIME không khớp khai báo (khai báo PNG, storage JPEG) -> Rejected (MIME_TYPE_MISMATCH)');
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES ('exercise-submissions', '${storagePath1}', '${studentAId}', '{"size": 500000, "mimetype": "image/jpeg"}'::jsonb);
-  `);
+  await insertMockStorageObject('exercise-submissions', storagePath1, studentAId, { size: 500000, mimetype: 'image/jpeg' });
   const mismatchMimeRes = await db.query(`
     SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;
   `);
   assert.equal(mismatchMimeRes.rows[0].result.success, false);
   assert.equal(mismatchMimeRes.rows[0].result.error, 'MIME_TYPE_MISMATCH');
-  await db.exec(`DELETE FROM storage.objects WHERE name = '${storagePath1}';`);
+  await deleteMockStorageObject(storagePath1);
   console.log('   ✅ PASS: MIME mismatch rejected');
 
   // TEST 12: Học sinh khác cố finalize attachment của Học sinh A -> Bị từ chối (BOLA/IDOR)
@@ -455,13 +454,8 @@ export async function runImageAnnotationTestSuite() {
 
   // TEST 13: Object hợp lệ -> Finalize thành công
   markTest('FIX 2: Storage object và metadata hợp lệ -> Finalized thành công');
-  await setAuthUser(studentAId);
-  await db.exec(`
-    INSERT INTO storage.objects (bucket_id, name, owner, metadata)
-    VALUES
-      ('exercise-submissions', '${storagePath1}', '${studentAId}', '{"size": 500000, "mimetype": "image/png"}'::jsonb),
-      ('exercise-submissions', '${storagePath2}', '${studentAId}', '{"size": 700000, "mimetype": "image/jpeg"}'::jsonb);
-  `);
+  await insertMockStorageObject('exercise-submissions', storagePath1, studentAId, { size: 500000, mimetype: 'image/png' });
+  await insertMockStorageObject('exercise-submissions', storagePath2, studentAId, { size: 700000, mimetype: 'image/jpeg' });
 
   const fin1Res = await db.query(`SELECT public.finalize_academic_submission_attachment('${attachment1Id}', 1920, 1080) as result;`);
   assert.equal(fin1Res.rows[0].result.success, true);
@@ -687,6 +681,119 @@ export async function runImageAnnotationTestSuite() {
   assert.equal(crossStudentRes.rows[0].result.success, false);
   assert.equal(crossStudentRes.rows[0].result.error, 'FORBIDDEN');
   console.log('   ✅ PASS: Cross student access blocked');
+
+  // ============================================================================
+  // NHÓM 5: STORAGE RLS POLICIES & INSERT PERMISSION INTEGRITY
+  // ============================================================================
+
+  // Tạo thêm 1 bài nộp draft mới của Học sinh A để kiểm tra upload draft
+  const draftSubmissionId = 'dd222222-2222-2222-2222-222222222222';
+  await db.exec(`
+    INSERT INTO public.academic_submissions (id, exercise_id, student_id, attempt_number, status, objective_score, max_score) VALUES
+      ('${draftSubmissionId}', '${exerciseAId}', '${studentAId}', 2, 'draft', 0, 10.00);
+  `);
+
+  async function tryStorageInsert(name, bucket = 'exercise-submissions') {
+    try {
+      await db.query(`
+        INSERT INTO storage.objects (bucket_id, name, owner)
+        VALUES ('${bucket}', '${name}', auth.uid());
+      `);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  // TEST 29: Xác nhận chỉ còn đúng 1 policy INSERT trên storage.objects cho exercise-submissions
+  markTest('Storage Policy Uniqueness: Chỉ tồn tại đúng 1 INSERT policy duy nhất (Exercise submissions student insert policy)');
+  const insertPolicies = await db.query(`
+    SELECT polname
+    FROM pg_policy
+    WHERE polrelid = 'storage.objects'::regclass
+      AND polcmd = 'a'
+      AND (polname LIKE '%Exercise submissions%' OR polname LIKE '%exercise%');
+  `);
+  assert.equal(insertPolicies.rows.length, 1);
+  assert.equal(insertPolicies.rows[0].polname, 'Exercise submissions student insert policy');
+  console.log('   ✅ PASS: Exactly 1 unique INSERT policy exists (no dual permissive policies)');
+
+  // TEST 30: Legacy upload với bài nộp trạng thái draft -> ALLOW
+  markTest('Legacy Path Draft: Học sinh A upload file hợp lệ vào bài nộp draft ({uid}/{submission_id}/file.png) -> ALLOW');
+  await setAuthUser(studentAId);
+  const legDraft = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/legacy_draft.png`);
+  assert.equal(legDraft.success, true);
+  console.log('   ✅ PASS: Legacy path upload on draft allowed');
+
+  // TEST 31: Legacy upload với bài nộp trạng thái submitted/graded -> DENY
+  markTest('Legacy Path Graded: Học sinh A upload file vào bài nộp đã graded/submitted -> DENIED by RLS');
+  await setAuthUser(studentAId);
+  const legGraded = await tryStorageInsert(`${studentAId}/${submissionAId}/legacy_graded.png`);
+  assert.equal(legGraded.success, false);
+  console.log('   ✅ PASS: Legacy path upload on graded/submitted submission blocked');
+
+  // TEST 32: Legacy upload chứa extension nguy hiểm (.svg, .exe, .html, .js, .sh, .bat) -> DENY
+  markTest('Legacy Path Dangerous Ext: Upload .svg, .exe, .html, .js, .sh, .bat trên legacy path -> DENIED');
+  await setAuthUser(studentAId);
+  const legSvg = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.svg`);
+  const legExe = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.exe`);
+  const legHtml = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.html`);
+  const legJs = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.js`);
+  const legSh = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.sh`);
+  const legBat = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/bad.bat`);
+  assert.equal(legSvg.success, false);
+  assert.equal(legExe.success, false);
+  assert.equal(legHtml.success, false);
+  assert.equal(legJs.success, false);
+  assert.equal(legSh.success, false);
+  assert.equal(legBat.success, false);
+  console.log('   ✅ PASS: Dangerous extensions on legacy path strictly blocked');
+
+  // TEST 33: New path upload với bài nộp trạng thái draft -> ALLOW
+  markTest('New Path Draft: Học sinh A upload attachment hợp lệ (students/{uid}/submissions/{sub_id}/attachments/{att_id}/original.png) -> ALLOW');
+  await setAuthUser(studentAId);
+  const newDraft = await tryStorageInsert(`students/${studentAId}/submissions/${draftSubmissionId}/attachments/att-1111/original.png`);
+  assert.equal(newDraft.success, true);
+  console.log('   ✅ PASS: New attachment path upload on draft allowed');
+
+  // TEST 34: New path upload với bài nộp trạng thái graded/submitted -> DENY
+  markTest('New Path Graded: Học sinh A upload attachment vào bài nộp đã graded/submitted -> DENIED by RLS');
+  await setAuthUser(studentAId);
+  const newGraded = await tryStorageInsert(`students/${studentAId}/submissions/${submissionAId}/attachments/att-2222/original.png`);
+  assert.equal(newGraded.success, false);
+  console.log('   ✅ PASS: New attachment path upload on graded submission blocked');
+
+  // TEST 35: New path upload chứa extension nguy hiểm -> DENY
+  markTest('New Path Dangerous Ext: Upload .svg, .exe, .bat trên new path -> DENIED');
+  await setAuthUser(studentAId);
+  const newSvg = await tryStorageInsert(`students/${studentAId}/submissions/${draftSubmissionId}/attachments/att-3333/original.svg`);
+  const newExe = await tryStorageInsert(`students/${studentAId}/submissions/${draftSubmissionId}/attachments/att-4444/original.exe`);
+  assert.equal(newSvg.success, false);
+  assert.equal(newExe.success, false);
+  console.log('   ✅ PASS: Dangerous extensions on new path strictly blocked');
+
+  // TEST 36: Cross-student upload (Legacy Path) -> DENY
+  markTest('Cross-Student Legacy: Học sinh B cố upload vào folder của Học sinh A -> DENIED by RLS');
+  await setAuthUser(studentBId);
+  const crossLeg = await tryStorageInsert(`${studentAId}/${draftSubmissionId}/hacked.png`);
+  assert.equal(crossLeg.success, false);
+  console.log('   ✅ PASS: Cross-student legacy upload blocked');
+
+  // TEST 37: Cross-student upload (New Path) -> DENY
+  markTest('Cross-Student New Path: Học sinh B cố upload vào students/{studentAId}/submissions/{draftSubmissionId}/... -> DENIED by RLS');
+  await setAuthUser(studentBId);
+  const crossNew = await tryStorageInsert(`students/${studentAId}/submissions/${draftSubmissionId}/attachments/att-5555/original.png`);
+  assert.equal(crossNew.success, false);
+  console.log('   ✅ PASS: Cross-student new path upload blocked');
+
+  // TEST 38: Không có permissive broadening (Upload vào folder bất kỳ không gắn với submission thật) -> DENY
+  markTest('No Permissive Broadening: Upload vào folder tùy ý không gắn submission hợp lệ -> DENIED');
+  await setAuthUser(studentAId);
+  const randomFolder = await tryStorageInsert(`students/${studentAId}/random_directory/hack.png`);
+  const nonExistentSub = await tryStorageInsert(`students/${studentAId}/submissions/99999999-9999-9999-9999-999999999999/attachments/att-6666/original.png`);
+  assert.equal(randomFolder.success, false);
+  assert.equal(nonExistentSub.success, false);
+  console.log('   ✅ PASS: Permissive broadening prevented (unattached uploads blocked)');
 
   console.log(`\n🎉 TOÀN BỘ ${totalTests}/${totalTests} TEST CASES BẢO MẬT & CHỨC NĂNG ĐÃ PASS 100%!\n`);
 }

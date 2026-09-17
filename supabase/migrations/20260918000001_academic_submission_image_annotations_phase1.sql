@@ -189,7 +189,7 @@ DROP POLICY IF EXISTS "annotation_versions_delete" ON public.academic_submission
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
-    -- SELECT policy hỗ trợ cả đường dẫn mới (students/{uid}/...) và đường dẫn cũ ({uid}/...)
+    -- 1. SELECT policy hỗ trợ cả đường dẫn mới (students/{uid}/...) và đường dẫn cũ ({uid}/...)
     DROP POLICY IF EXISTS "Exercise submissions select policy" ON storage.objects;
     CREATE POLICY "Exercise submissions select policy" ON storage.objects
     FOR SELECT USING (
@@ -229,25 +229,52 @@ BEGIN
       )
     );
 
-    -- INSERT policy cho học sinh upload attachment ảnh gốc (chống path traversal & upload chéo)
+    -- 2. INSERT policy: DROP CẢ 2 TÊN (tên cũ trên hosted và tên biến thể) để ngăn chặn 2 policy permissive song song
+    DROP POLICY IF EXISTS "Exercise submissions student insert policy" ON storage.objects;
     DROP POLICY IF EXISTS "Exercise submissions insert policy" ON storage.objects;
-    CREATE POLICY "Exercise submissions insert policy" ON storage.objects
+
+    CREATE POLICY "Exercise submissions student insert policy" ON storage.objects
     FOR INSERT WITH CHECK (
-      bucket_id = 'exercise-submissions' AND (
+      bucket_id = 'exercise-submissions'
+      AND (
+        -- Blacklist các phần mở rộng file thực thi / mã nguy hiểm
+        (name !~~* '%.svg')
+        AND (name !~~* '%.exe')
+        AND (name !~~* '%.html')
+        AND (name !~~* '%.js')
+        AND (name !~~* '%.sh')
+        AND (name !~~* '%.bat')
+        AND (name !~~* '%..%')
+      )
+      AND (
         app_private.is_admin()
         OR (
+          -- Nhánh Legacy Path: {student_id}/{submission_id}/...
+          (storage.foldername(name))[1] = (SELECT auth.uid())::text
+          AND EXISTS (
+            SELECT 1 FROM public.academic_submissions s
+            WHERE s.id::text = (storage.foldername(name))[2]
+              AND s.student_id = (SELECT auth.uid())
+              AND s.status IN ('draft', 'revision_requested')
+          )
+        )
+        OR (
+          -- Nhánh New Path: students/{student_id}/submissions/{submission_id}/attachments/{attachment_id}/...
           (storage.foldername(name))[1] = 'students'
           AND (storage.foldername(name))[2] = (SELECT auth.uid())::text
           AND (storage.foldername(name))[3] = 'submissions'
           AND (storage.foldername(name))[5] = 'attachments'
-        )
-        OR (
-          (storage.foldername(name))[1] = (SELECT auth.uid())::text
+          AND EXISTS (
+            SELECT 1 FROM public.academic_submissions s
+            WHERE s.id::text = (storage.foldername(name))[4]
+              AND s.student_id = (SELECT auth.uid())
+              AND s.status IN ('draft', 'revision_requested')
+          )
         )
       )
     );
 
-    -- DROP UPDATE/DELETE policies cho non-admin để đảm bảo ảnh gốc là IMMUTABLE
+    -- 3. DROP UPDATE/DELETE policies cho non-admin để đảm bảo ảnh gốc là IMMUTABLE
     DROP POLICY IF EXISTS "Exercise submissions update policy" ON storage.objects;
     DROP POLICY IF EXISTS "Exercise submissions delete policy" ON storage.objects;
   END IF;

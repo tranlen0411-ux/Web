@@ -12,8 +12,8 @@ SELECT count(*) = 1 AS annotations_table_exists
 FROM information_schema.tables
 WHERE table_schema = 'public' AND table_name = 'academic_submission_annotation_versions';
 
--- 2. Test kích hoạt RLS (Row Level Security)
-SELECT relname, relrowsecurity AS rls_enabled
+-- 2. Test kích hoạt RLS (Row Level Security) & FORCE RLS
+SELECT relname, relrowsecurity AS rls_enabled, relforcerowsecurity AS force_rls
 FROM pg_class
 WHERE relname IN ('academic_submission_attachments', 'academic_submission_annotation_versions');
 
@@ -34,7 +34,21 @@ WHERE proname IN (
   'get_student_graded_submission'
 ) AND pronamespace = 'public'::regnamespace;
 
--- 5. Xác minh Storage policies cho exercise-submissions
-SELECT polname, polcmd, polqual, polwithcheck
+-- 5. Xác minh Storage policies cho exercise-submissions (Đảm bảo chỉ có 1 INSERT policy duy nhất)
+SELECT
+  polname,
+  polcmd,
+  polpermissive,
+  polqual,
+  polwithcheck
 FROM pg_policy
-WHERE polrelid = 'storage.objects'::regclass;
+WHERE polrelid = 'storage.objects'::regclass
+  AND (polname LIKE '%Exercise submissions%' OR polname LIKE '%exercise%')
+ORDER BY polcmd, polname;
+
+-- 6. Xác nhận không còn policy INSERT thừa gây permissive broadening
+SELECT count(*) = 1 AS single_insert_policy_enforced
+FROM pg_policy
+WHERE polrelid = 'storage.objects'::regclass
+  AND polcmd = 'a'
+  AND (polname LIKE '%Exercise submissions%' OR polname LIKE '%exercise%');

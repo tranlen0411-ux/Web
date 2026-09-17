@@ -6,6 +6,11 @@ Phase 1 thiết lập nền tảng Backend vững chắc và an toàn bảo mậ
 - **Hỗ trợ 1-N Attachments cho mỗi Submission**: Học sinh có thể đính kèm nhiều ảnh (JPG, PNG, WebP tối đa 10 MiB) cho từng câu hỏi bài làm.
 - **Tính Bất Biến (Immutability) của Ảnh Gốc**: Ảnh gốc được lưu độc bản, không ghi đè, không cho phép học sinh/giáo viên sửa hoặc xóa sau khi nộp.
 - **Thu Hồi Quyền Giáo Viên Cũ (Stale Teacher Access Revocation)**: Giáo viên chỉ được xem hoặc chấm bài khi *hiện tại đang phụ trách lớp học* chứa bài làm (hoặc là Admin). Hoàn toàn loại bỏ quyền truy cập chỉ dựa trên tư cách tác giả cũ (`teacher_id = auth.uid()`).
+- **Chuẩn Hóa Storage RLS Policies (Chống Dual Permissive Policy Risk & Broadening)**:
+  - Bảng `storage.objects` bucket `exercise-submissions` chỉ duy trì đúng **1 INSERT policy duy nhất** (`Exercise submissions student insert policy`) và **1 SELECT policy** (`Exercise submissions select policy`).
+  - Toàn bộ các ràng buộc an toàn của Hosted được bảo toàn tuyệt đối: kiểm tra `status IN ('draft', 'revision_requested')`, xác minh `submission_id` tồn tại và thuộc quyền sở hữu của `auth.uid()`, chặn các phần mở rộng nguy hiểm (`.svg`, `.exe`, `.html`, `.js`, `.sh`, `.bat`) và path traversal (`%..%`).
+  - Hỗ trợ song song cả đường dẫn cũ (`{uid}/{submission_id}/...`) và cấu trúc mới (`students/{uid}/submissions/{submission_id}/attachments/{attachment_id}/original.{ext}`).
+  - Xóa bỏ mọi fallback lỏng lẻo nhằm chống tình trạng mở rộng quyền (permissive broadening).
 - **Xác Minh Đối Tượng Storage & Metadata khi Finalize**: Trước khi chuyển attachment sang trạng thái `finalized`, RPC bắt buộc kiểm tra sự tồn tại thực tế của tệp trong `storage.objects`, đồng thời kiểm tra kích thước và MIME type từ `metadata` của Storage.
 - **Mô hình Annotation Vector/JSON Append-Only**: Nét vẽ, chữ nhận xét, dấu chấm bài (tick/cross/circle) được lưu dưới dạng JSON vector độc lập. Mỗi lần lưu hoặc hoàn tất chấm bài sẽ sinh ra một phiên bản mới (`version >= 1`), hỗ trợ khôi phục lịch sử và hoàn tác.
 - **Kiểm soát Xung đột Phiên bản (Optimistic Concurrency Control - OCC)**: Giáo viên gửi kèm `expected_version`. Nếu có tab hoặc giáo viên khác đã chấm, server tự động trả lỗi `VERSION_CONFLICT` để chống ghi đè dữ liệu.
@@ -20,8 +25,9 @@ Phase 1 thiết lập nền tảng Backend vững chắc và an toàn bảo mậ
 | :--- | :--- | :--- | :--- |
 | **Declared MIME & Size** | Khai báo từ Client khi gọi `prepare` | Kiểm tra whitelist (`image/jpeg`, `image/png`, `image/webp`) và `0 < byte_size <= 10 MiB` | ✅ **VERIFIED** |
 | **Storage Metadata MIME & Size** | Metadata do Supabase Storage ghi nhận trong `storage.objects` | RPC `finalize` truy vấn `storage.objects`, so khớp kích thước metadata với khai báo và kiểm tra MIME metadata | ✅ **VERIFIED** (`STORAGE_METADATA_VERIFIED: YES`) |
+| **Storage RLS Insertion Security** | Ràng buộc bảo mật tầng Storage Table | Storage RLS policy kiểm tra quyền sở hữu bài nháp, trạng thái `draft`, chặn extension thực thi và chống ghi đè | ✅ **VERIFIED** (`STORAGE_RLS_VERIFIED: YES`) |
 | **Binary Content / Magic Bytes** | Dữ liệu nhị phân bên trong tệp ảnh | Phân tích header nhị phân (magic bytes) của tệp nhị phân thô | ⚠️ **NO** (SQL thuần không thể phân tích byte nhị phân thô; cần Edge Function/Worker nếu triển khai) (`BINARY_MAGIC_BYTES_VERIFIED: NO`) |
-| **Hosted Storage Verification** | Kiểm thử trực tiếp trên môi trường Supabase Cloud Hosted | Test trên hạ tầng Storage thực tế | ⚠️ **NO** (Mới chạy và xác thực 100% trên PGlite cục bộ; `HOSTED_STORAGE_BEHAVIOR_VERIFIED: NO`) |
+| **Hosted Storage Verification** | Kiểm thử trực tiếp trên môi trường Supabase Cloud Hosted | Test trên hạ tầng Storage thực tế | ⚠️ **NO** (Đã chạy audit đối chiếu schema read-only; chưa chạy migration/upload thật trên Prod; `HOSTED_STORAGE_BEHAVIOR_VERIFIED: READ_ONLY_AUDITED`) |
 
 ---
 
@@ -80,9 +86,10 @@ Phase 1 thiết lập nền tảng Backend vững chắc và an toàn bảo mậ
 
 ---
 
-## 5. Kiểm thử Tự động (PGlite Test Suite - 28 Test Cases)
+## 5. Kiểm thử Tự động (PGlite Test Suite - 38 Test Cases)
 
-Toàn bộ 28 kịch bản kiểm tra an toàn & bảo mật trong `tests/academic_submission_image_annotations.test.mjs` đã đạt PASS 100%:
+Toàn bộ 38 kịch bản kiểm tra an toàn & bảo mật trong `tests/academic_submission_image_annotations.test.mjs` đã đạt PASS 100%:
 - **Fix 1 Verification**: Thu hồi quyền giáo viên cũ khi chuyển lớp (RLS trả 0 rows, Workspace/Draft/Finalize RPC bị FORBIDDEN; giáo viên mới và Admin được phép).
 - **Fix 2 Verification**: Bắt lỗi object không tồn tại, sai bucket, sai path, quá dung lượng metadata, lệch size metadata, sai MIME metadata, lệch MIME metadata, idempotent finalize, chặn cross-student finalize.
+- **Fix 3 Verification (Storage RLS Hardening)**: Xác nhận chỉ duy nhất 1 INSERT policy tồn tại (không dual permissive policy); kiểm tra upload draft vs graded trên legacy path và new path; chặn extension nguy hiểm (.svg, .exe, .html, .js, .sh, .bat); chặn cross-student upload; ngăn chặn mở rộng quyền (permissive broadening) vào các thư mục mồ côi.
 - **Bảo mật chung**: Chống IDOR/BOLA học sinh và giáo viên chéo lớp; kiểm tra tính bất biến sau nộp bài; OCC version conflict; ẩn bản nháp trước học sinh.
