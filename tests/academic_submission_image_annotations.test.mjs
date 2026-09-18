@@ -19,6 +19,14 @@ export async function runImageAnnotationTestSuite() {
   );
   const migrationSql = fs.readFileSync(migrationPath, 'utf8');
 
+  const migration2Path = path.join(
+    process.cwd(),
+    'supabase',
+    'migrations',
+    '20260918000002_fix_finalize_grading_rpc.sql'
+  );
+  const migration2Sql = fs.readFileSync(migration2Path, 'utf8');
+
   const db = new PGlite();
 
   // 1. Khởi tạo roles và schema nền tảng (mô phỏng Postgres / Supabase)
@@ -133,8 +141,7 @@ export async function runImageAnnotationTestSuite() {
       points_earned NUMERIC(8,2) DEFAULT 0,
       is_correct BOOLEAN DEFAULT NULL,
       teacher_comment TEXT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS storage.objects (
@@ -192,13 +199,15 @@ export async function runImageAnnotationTestSuite() {
     GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
   `);
 
-  // 2. Áp dụng Migration Phase 1
+  // 2. Áp dụng Migration Phase 1 & Hotfix Phase 1
   console.log('📌 Đang áp dụng migration Phase 1...');
   await db.exec(migrationSql);
+  console.log('📌 Đang áp dụng hotfix migration 2...');
+  await db.exec(migration2Sql);
   await db.exec(`
     GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
   `);
-  console.log('✅ Áp dụng migration Phase 1 thành công!\n');
+  console.log('✅ Áp dụng migrations thành công!\n');
 
   // 3. Chuẩn bị Mock Data
   const adminId = '11111111-1111-1111-1111-111111111111';
@@ -794,6 +803,25 @@ export async function runImageAnnotationTestSuite() {
   assert.equal(randomFolder.success, false);
   assert.equal(nonExistentSub.success, false);
   console.log('   ✅ PASS: Permissive broadening prevented (unattached uploads blocked)');
+
+  // TEST 39: Regression Test: academic_submission_answers không có updated_at, finalize grading vẫn cập nhật điểm & comment chính xác
+  markTest('Regression Contract: academic_submission_answers KHÔNG có updated_at, finalize grading vẫn cập nhật points & comment thành công');
+  const answersCols = await db.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'academic_submission_answers';
+  `);
+  const colNames = answersCols.rows.map(r => r.column_name);
+  assert.equal(colNames.includes('updated_at'), false, 'academic_submission_answers MUST NOT contain updated_at');
+
+  const checkAnswerRow = await db.query(`
+    SELECT points_earned, teacher_comment
+    FROM public.academic_submission_answers
+    WHERE submission_id = '${submissionAId}' AND question_id = '${question2Id}';
+  `);
+  assert.equal(checkAnswerRow.rows.length, 1);
+  assert.equal(Number(checkAnswerRow.rows[0].points_earned), 5.0);
+  assert.equal(checkAnswerRow.rows[0].teacher_comment, 'Vẽ rất đẹp, bài làm chuẩn xác!');
+  console.log('   ✅ PASS: Regression test passed (academic_submission_answers schema & RPC finalize contract verified)');
 
   console.log(`\n🎉 TOÀN BỘ ${totalTests}/${totalTests} TEST CASES BẢO MẬT & CHỨC NĂNG ĐÃ PASS 100%!\n`);
 }
