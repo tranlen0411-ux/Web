@@ -12,6 +12,7 @@ import {
 } from '../../../services/submissionAnnotationClient';
 import { SubmissionAnnotationCanvas } from './SubmissionAnnotationCanvas';
 import { AnnotationToolbar } from './AnnotationToolbar';
+import { zoomIn, zoomOut, resetZoom } from '../../../utils/annotationViewportMath';
 
 /**
  * Map các mã lỗi bảo mật / logic từ finalize RPC sang thông báo thân thiện với giáo viên
@@ -82,6 +83,40 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   const [activeTool, setActiveTool] = useState('pen');
   const [activeColor, setActiveColor] = useState('#ef4444');
   const [strokeWidth, setStrokeWidth] = useState(4);
+
+  // VIEWPORT ZOOM & PAN STATE (PHASE 2 - P2-A2)
+  const [viewportScale, setViewportScale] = useState(1);
+  const [viewportPan, setViewportPan] = useState({ x: 0, y: 0 });
+
+  // Reset viewport whenever opening a different attachment
+  useEffect(() => {
+    if (activeAttachmentForAnnotation) {
+      setViewportScale(1);
+      setViewportPan({ x: 0, y: 0 });
+    }
+  }, [activeAttachmentForAnnotation?.id]);
+
+  const handleZoomIn = () => {
+    setViewportScale(prev => {
+      const next = zoomIn(prev);
+      if (next <= 1) setViewportPan({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const handleZoomOut = () => {
+    setViewportScale(prev => {
+      const next = zoomOut(prev);
+      if (next <= 1) setViewportPan({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const handleResetZoom = () => {
+    const reset = resetZoom();
+    setViewportScale(reset.scale);
+    setViewportPan({ x: reset.panX, y: reset.panY });
+  };
 
   // REFS CHO SAVE DRAFT, OCC & DEBOUNCE
   const pendingIdempotencyKeysRef = useRef({});
@@ -1108,6 +1143,10 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                 version={annotationVersions[activeAttachmentForAnnotation.id] ?? 0}
                 onManualSave={() => handleSaveDraft(activeAttachmentForAnnotation.id, { isManual: true })}
                 onReloadLatest={() => handleReloadLatest(activeAttachmentForAnnotation.id)}
+                scale={viewportScale}
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onResetZoom={handleResetZoom}
               />
             </div>
 
@@ -1123,6 +1162,13 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                     activeTool={activeTool}
                     activeColor={activeColor}
                     strokeWidth={strokeWidth}
+                    scale={viewportScale}
+                    panX={viewportPan.x}
+                    panY={viewportPan.y}
+                    onViewportChange={({ scale: nextScale, panX: nextPanX, panY: nextPanY }) => {
+                      setViewportScale(nextScale);
+                      setViewportPan({ x: nextPanX, y: nextPanY });
+                    }}
                   />
                 ) : (
                   <div className="text-xs font-bold text-slate-400">Đang tải ảnh bài làm...</div>

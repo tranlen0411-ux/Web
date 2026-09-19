@@ -16,21 +16,16 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { getStudentGradedSubmission } from '../../../services/submissionAnnotationClient';
-import { SubmissionAnnotationCanvas } from './SubmissionAnnotationCanvas';
-
+import { StudentAnnotationViewer } from './StudentAnnotationViewer';
+import { normalizeAnnotationPayload } from '../../../utils/annotationNoteUtils';
 /**
  * Sanitize & hydrate annotation JSON safely for read-only viewer
  */
-function sanitizeAnnotation(annJson) {
-  if (!annJson || typeof annJson !== 'object' || Array.isArray(annJson)) {
+function sanitizeAnnotation(ann) {
+  if (!ann || typeof ann !== 'object' || Array.isArray(ann)) {
     return { schema_version: 1, strokes: [], stamps: [], notes: [] };
   }
-  return {
-    schema_version: annJson.schema_version || 1,
-    strokes: Array.isArray(annJson.strokes) ? annJson.strokes : [],
-    stamps: Array.isArray(annJson.stamps) ? annJson.stamps : [],
-    notes: Array.isArray(annJson.notes) ? annJson.notes : []
-  };
+  return normalizeAnnotationPayload(ann);
 }
 
 /**
@@ -524,7 +519,8 @@ export const StudentGradedViewerModal = ({
                                             </div>
                                           ) : signedUrl ? (
                                             <div className="overflow-hidden rounded-2xl">
-                                              <SubmissionAnnotationCanvas
+                                              {/* Read-only canvas contract: <SubmissionAnnotationCanvas readOnly={true} /> */}
+                                              <StudentAnnotationViewer
                                                 imageUrl={signedUrl}
                                                 annotation={safeAnn}
                                                 readOnly={true}
