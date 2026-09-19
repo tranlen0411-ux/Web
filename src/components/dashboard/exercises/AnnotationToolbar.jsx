@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Pen, Check, X, Eraser, Hand, RotateCcw, Trash2, 
   Save, Loader2, AlertTriangle, AlertCircle, RefreshCw,
-  ZoomIn, ZoomOut, Maximize2
+  ZoomIn, ZoomOut, Maximize2, StickyNote
 } from 'lucide-react';
 import { MIN_SCALE, MAX_SCALE } from '../../../utils/annotationViewportMath';
 
@@ -95,6 +95,21 @@ export const AnnotationToolbar = ({
 
         <button
           type="button"
+          onClick={() => onSelectTool?.('note')}
+          disabled={readOnly}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+            activeTool === 'note'
+              ? 'bg-amber-600 text-white shadow-md'
+              : 'text-amber-400 hover:text-amber-300 hover:bg-slate-700'
+          }`}
+          title="Ghi chú nhận xét (Text Note)"
+        >
+          <StickyNote className="w-3.5 h-3.5" />
+          <span>Ghi chú</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => onSelectTool?.('eraser')}
           disabled={readOnly}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
@@ -170,7 +185,7 @@ export const AnnotationToolbar = ({
             key={c.id}
             type="button"
             onClick={() => onSelectColor?.(c.value)}
-            disabled={readOnly || activeTool === 'check' || activeTool === 'cross' || activeTool === 'pan'}
+            disabled={readOnly || activeTool === 'check' || activeTool === 'cross' || activeTool === 'pan' || activeTool === 'note'}
             className={`w-6 h-6 rounded-full transition-transform flex items-center justify-center ${
               activeColor === c.value
                 ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-slate-900'

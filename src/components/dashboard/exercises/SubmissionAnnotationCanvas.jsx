@@ -1,4 +1,5 @@
 import React, { useRef, useState, useCallback } from 'react';
+import { StickyNote } from 'lucide-react';
 import {
   screenToNormalized,
   clampScale,
@@ -9,6 +10,13 @@ import {
   MIN_SCALE,
   MAX_SCALE,
 } from '../../../utils/annotationViewportMath';
+import { AnnotationNotePopover } from './AnnotationNotePopover';
+import {
+  generateNoteId,
+  normalizeNote,
+  MAX_NOTES_COUNT,
+  DEFAULT_NOTE_COLOR,
+} from '../../../utils/annotationNoteUtils';
 
 /**
  * Generate a unique ID for strokes/stamps (UUID contract conformant)
@@ -87,6 +95,11 @@ export const SubmissionAnnotationCanvas = ({
   const [currentStroke, setCurrentStroke] = useState(null);
   const isPointerActiveRef = useRef(false);
 
+  // Note authoring state (Phase 2 - P2-B1)
+  const [pendingNote, setPendingNote] = useState(null);
+  const [isNoteEditorOpen, setIsNoteEditorOpen] = useState(false);
+  const [noteLimitMessage, setNoteLimitMessage] = useState('');
+
   // Desktop Mouse Pan dragging state & refs
   const [isDragging, setIsDragging] = useState(false);
   const isPanningRef = useRef(false);
@@ -136,6 +149,35 @@ export const SubmissionAnnotationCanvas = ({
       panY,
     });
   }, [scale, panX, panY]);
+
+  // Note Authoring Handlers (Phase 2 - P2-B1)
+  const handleSaveNote = ({ text, color }) => {
+    if (!pendingNote) return;
+    const validatedNote = normalizeNote({
+      id: generateNoteId(),
+      x: pendingNote.x,
+      y: pendingNote.y,
+      text,
+      color: color || DEFAULT_NOTE_COLOR,
+    });
+
+    if (validatedNote) {
+      const nextNotes = [...(annotation.notes || []), validatedNote];
+      onChange?.({
+        ...annotation,
+        schema_version: annotation.schema_version || 1,
+        notes: nextNotes,
+      });
+    }
+
+    setIsNoteEditorOpen(false);
+    setPendingNote(null);
+  };
+
+  const handleCancelNote = () => {
+    setIsNoteEditorOpen(false);
+    setPendingNote(null);
+  };
 
   // POINTER DOWN
   const handlePointerDown = (e) => {
@@ -244,7 +286,44 @@ export const SubmissionAnnotationCanvas = ({
       return;
     }
 
-    // 3. PEN TOOL
+    // 3. NOTE TOOL (CLICK/TAP TO PLACE PIN AND OPEN EDITOR)
+    if (activeTool === 'note') {
+      const existingNotes = annotation.notes || [];
+      if (existingNotes.length >= MAX_NOTES_COUNT) {
+        setNoteLimitMessage(`Đã đạt giới hạn tối đa ${MAX_NOTES_COUNT} ghi chú trên ảnh này.`);
+        setTimeout(() => setNoteLimitMessage(''), 3000);
+        return;
+      }
+
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const clickX = e.clientX - (rect?.left || 0);
+      const clickY = e.clientY - (rect?.top || 0);
+      const vpWidth = rect?.width || 800;
+      const vpHeight = rect?.height || 600;
+
+      // Position popover inside viewport boundaries
+      const popoverWidth = 300;
+      const popoverHeight = 180;
+      let left = clickX - (popoverWidth / 2);
+      let top = clickY + 16;
+
+      if (left < 10) left = 10;
+      if (left + popoverWidth > vpWidth - 10) left = vpWidth - popoverWidth - 10;
+      if (top + popoverHeight > vpHeight - 10) top = Math.max(10, clickY - popoverHeight - 16);
+
+      setPendingNote({
+        x,
+        y,
+        positionStyle: {
+          left: `${left}px`,
+          top: `${top}px`,
+        },
+      });
+      setIsNoteEditorOpen(true);
+      return;
+    }
+
+    // 4. PEN TOOL
     if (activeTool === 'pen') {
       try {
         e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -409,7 +488,7 @@ export const SubmissionAnnotationCanvas = ({
     if (readOnly) return 'cursor-default';
     if (activeTool === 'pan') return isDragging ? 'cursor-grabbing' : 'cursor-grab';
     if (activeTool === 'pen') return 'cursor-crosshair';
-    if (activeTool === 'check' || activeTool === 'cross') return 'cursor-pointer';
+    if (activeTool === 'check' || activeTool === 'cross' || activeTool === 'note') return 'cursor-pointer';
     if (activeTool === 'eraser') return 'cursor-pointer';
     return 'cursor-default';
   };
@@ -514,7 +593,55 @@ export const SubmissionAnnotationCanvas = ({
             </div>
           );
         })}
+
+        {/* 4. GHI CHÚ GHIM TRÊN ẢNH (TEXT NOTES PIN OVERLAY - PHASE 2 P2-B1) */}
+        {(annotation.notes || []).map((note, index) => (
+          <div
+            key={note.id || `note_${index}`}
+            style={{
+              position: 'absolute',
+              left: `${note.x * 100}%`,
+              top: `${note.y * 100}%`,
+              transform: 'translate(-50%, -100%)',
+              pointerEvents: 'auto',
+            }}
+            className="group select-none cursor-pointer z-20"
+            title={note.text}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Note Pin Head */}
+            <div
+              className="flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white transition-transform group-hover:scale-125"
+              style={{ backgroundColor: note.color || '#f59e0b' }}
+            >
+              <StickyNote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
+            </div>
+
+            {/* Hover Tooltip / Preview Card */}
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-48 sm:w-56 p-2.5 rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl text-white text-[11px] leading-relaxed break-words z-30 pointer-events-none animate-in fade-in zoom-in-95">
+              <div className="font-bold text-[10px] text-amber-400 mb-0.5 flex items-center justify-between">
+                <span>Ghi chú #{index + 1}</span>
+              </div>
+              <p className="whitespace-pre-wrap text-slate-200">{note.text}</p>
+            </div>
+          </div>
+        ))}
       </div>
+
+      {/* NOTE EDITOR POPOVER */}
+      <AnnotationNotePopover
+        isOpen={isNoteEditorOpen}
+        positionStyle={pendingNote?.positionStyle}
+        onSave={handleSaveNote}
+        onCancel={handleCancelNote}
+      />
+
+      {/* NOTE LIMIT NOTIFICATION TOAST */}
+      {noteLimitMessage && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-rose-600/90 text-white text-xs font-semibold shadow-lg border border-rose-400/50 animate-in fade-in">
+          {noteLimitMessage}
+        </div>
+      )}
     </div>
   );
 };
