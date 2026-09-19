@@ -13,7 +13,9 @@ import {
 } from 'lucide-react';
 import { SubmissionAnnotationCanvas } from '../components/dashboard/exercises/SubmissionAnnotationCanvas';
 import { StudentAnnotationViewer } from '../components/dashboard/exercises/StudentAnnotationViewer';
+import { AnnotationToolbar } from '../components/dashboard/exercises/AnnotationToolbar';
 import { normalizeAnnotationPayload } from '../utils/annotationNoteUtils';
+import { zoomIn, zoomOut, resetZoom } from '../utils/annotationViewportMath';
 
 const SAMPLE_IMAGE_URL = '/test-fixtures/phase2-annotation-sample.svg';
 
@@ -87,6 +89,53 @@ export const Phase2DeviceTestHarnessPage = () => {
   const [studentAnnotation, setStudentAnnotation] = useState(INITIAL_ANNOTATION);
   const [showJsonInspector, setShowJsonInspector] = useState(false);
 
+  // Teacher Toolbar States
+  const [activeTool, setActiveTool] = useState('pen'); // 'pen' | 'check' | 'cross' | 'note' | 'eraser' | 'pan'
+  const [activeColor, setActiveColor] = useState('#ef4444');
+  const [strokeWidth, setStrokeWidth] = useState(4);
+  const [scale, setScale] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+
+  // Undo and Clear handlers
+  const handleUndo = useCallback(() => {
+    setTeacherAnnotation(prev => {
+      if (!prev) return prev;
+      const strokes = [...(prev.strokes || [])];
+      const stamps = [...(prev.stamps || [])];
+      if (strokes.length > 0) {
+        strokes.pop();
+      } else if (stamps.length > 0) {
+        stamps.pop();
+      }
+      return { ...prev, strokes, stamps };
+    });
+  }, []);
+
+  const handleClear = useCallback(() => {
+    setTeacherAnnotation(prev => ({
+      ...prev,
+      strokes: [],
+      stamps: [],
+      notes: []
+    }));
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    setScale(prev => zoomIn(prev));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setScale(prev => zoomOut(prev));
+  }, []);
+
+  const handleResetZoom = useCallback(() => {
+    const res = resetZoom();
+    setScale(res.scale);
+    setPanX(res.panX);
+    setPanY(res.panY);
+  }, []);
+
   // Sync teacher edits to student view
   const handleSyncToStudent = useCallback(() => {
     setStudentAnnotation(JSON.parse(JSON.stringify(teacherAnnotation)));
@@ -96,6 +145,13 @@ export const Phase2DeviceTestHarnessPage = () => {
   const handleResetFixture = useCallback(() => {
     setTeacherAnnotation(JSON.parse(JSON.stringify(INITIAL_ANNOTATION)));
     setStudentAnnotation(JSON.parse(JSON.stringify(INITIAL_ANNOTATION)));
+    setActiveTool('pen');
+    setActiveColor('#ef4444');
+    setStrokeWidth(4);
+    const res = resetZoom();
+    setScale(res.scale);
+    setPanX(res.panX);
+    setPanY(res.panY);
   }, []);
 
   return (
@@ -163,7 +219,8 @@ export const Phase2DeviceTestHarnessPage = () => {
         </div>
         {activeTab === 'teacher' ? (
           <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-            <li><strong>Pinch Zoom:</strong> Dùng 2 ngón tay chụm / xòe để thu phóng hình ảnh (100% đến 400%).</li>
+            <li><strong>Thanh công cụ:</strong> Chọn công cụ Bút (Pen), Đúng (Check), Sai (Cross), Ghi chú (Note), Tẩy (Eraser), hoặc Pan.</li>
+            <li><strong>Pinch Zoom &amp; Nút Zoom:</strong> Dùng 2 ngón tay thu phóng hoặc bấm các nút +/- / 100% trên thanh công cụ.</li>
             <li><strong>Two-finger Pan:</strong> Dùng 2 ngón tay kéo rê vùng xem khi đang chọn công cụ vẽ.</li>
             <li><strong>Tạo Ghi Chú:</strong> Chọn công cụ <em>Ghi chú (Note)</em> -&gt; Chạm vào ảnh -&gt; Gõ tiếng Việt có dấu.</li>
             <li><strong>Chỉnh Sửa Ghi Chú:</strong> Chạm vào ghim ghi chú vừa tạo để sửa nội dung / đổi màu.</li>
@@ -210,13 +267,50 @@ export const Phase2DeviceTestHarnessPage = () => {
         {/* Render Real Phase 2 Components */}
         <div className="flex justify-center">
           {activeTab === 'teacher' ? (
-            <div className="w-full max-w-3xl">
-              <SubmissionAnnotationCanvas
-                imageUrl={SAMPLE_IMAGE_URL}
-                annotation={teacherAnnotation}
-                onChange={(updated) => setTeacherAnnotation(updated)}
-                readOnly={false}
-              />
+            <div className="w-full max-w-3xl space-y-3">
+              {/* Teacher Annotation Toolbar */}
+              <div className="p-2 bg-slate-900 rounded-2xl border border-slate-800 shadow-md">
+                <AnnotationToolbar
+                  activeTool={activeTool}
+                  onSelectTool={setActiveTool}
+                  activeColor={activeColor}
+                  onSelectColor={setActiveColor}
+                  strokeWidth={strokeWidth}
+                  onSelectStrokeWidth={setStrokeWidth}
+                  onUndo={handleUndo}
+                  onClear={handleClear}
+                  canUndo={Boolean(
+                    teacherAnnotation?.strokes?.length > 0 ||
+                    teacherAnnotation?.stamps?.length > 0
+                  )}
+                  readOnly={false}
+                  scale={scale}
+                  onZoomIn={handleZoomIn}
+                  onZoomOut={handleZoomOut}
+                  onResetZoom={handleResetZoom}
+                />
+              </div>
+
+              {/* Teacher Canvas Area */}
+              <div className="bg-slate-950 p-2 sm:p-4 rounded-2xl border border-slate-800 flex justify-center items-center">
+                <SubmissionAnnotationCanvas
+                  imageUrl={SAMPLE_IMAGE_URL}
+                  annotation={teacherAnnotation}
+                  onChange={(updated) => setTeacherAnnotation(updated)}
+                  readOnly={false}
+                  activeTool={activeTool}
+                  activeColor={activeColor}
+                  strokeWidth={strokeWidth}
+                  scale={scale}
+                  panX={panX}
+                  panY={panY}
+                  onViewportChange={({ scale: nextScale, panX: nextPanX, panY: nextPanY }) => {
+                    if (typeof nextScale === 'number') setScale(nextScale);
+                    if (typeof nextPanX === 'number') setPanX(nextPanX);
+                    if (typeof nextPanY === 'number') setPanY(nextPanY);
+                  }}
+                />
+              </div>
             </div>
           ) : (
             <div className="w-full max-w-3xl">

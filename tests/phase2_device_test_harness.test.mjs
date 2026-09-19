@@ -38,8 +38,10 @@ describe('Phase 2 — Physical Device Isolated Test Harness Verification', () =>
     assert(harnessSource.includes('normalizeAnnotationPayload'), 'Harness must use defensive normalizeAnnotationPayload');
   });
 
-  it('5. should reuse real Phase 2 Teacher components (SubmissionAnnotationCanvas)', () => {
+  it('5. should reuse real Phase 2 Teacher components (SubmissionAnnotationCanvas & AnnotationToolbar)', () => {
     assert(harnessSource.includes('import { SubmissionAnnotationCanvas }'), 'Must import SubmissionAnnotationCanvas');
+    assert(harnessSource.includes('import { AnnotationToolbar }'), 'Must import AnnotationToolbar');
+    assert(harnessSource.includes('<AnnotationToolbar'), 'Must render AnnotationToolbar');
     assert(harnessSource.includes('<SubmissionAnnotationCanvas'), 'Must render SubmissionAnnotationCanvas');
   });
 
