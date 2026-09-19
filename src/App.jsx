@@ -12,6 +12,7 @@ import { AdminDashboard } from './pages/AdminDashboard';
 import { GamePlayView } from './pages/GamePlayView';
 import { LeaderboardView } from './pages/LeaderboardView';
 import { MaterialsView } from './pages/MaterialsView';
+import { Phase2DeviceTestHarnessPage } from './pages/Phase2DeviceTestHarnessPage';
 
 // Protected Route Component theo Role từ Supabase
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -120,6 +121,7 @@ function AppRoutes() {
           />
 
           <Route path="/play/:id" element={<GamePlayView />} />
+          <Route path="/phase2-device-test" element={<Phase2DeviceTestHarnessPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
