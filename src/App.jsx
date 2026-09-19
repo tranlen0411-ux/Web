@@ -14,6 +14,12 @@ import { LeaderboardView } from './pages/LeaderboardView';
 import { MaterialsView } from './pages/MaterialsView';
 import { Phase2DeviceTestHarnessPage } from './pages/Phase2DeviceTestHarnessPage';
 
+// Cờ kiểm tra môi trường kích hoạt test harness
+const isHarnessEnabled = Boolean(
+  import.meta.env.DEV ||
+  import.meta.env.VITE_ENABLE_PHASE2_TEST_HARNESS === 'true'
+);
+
 // Protected Route Component theo Role từ Supabase
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, profile, loading } = useAuth();
@@ -26,6 +32,11 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
         </div>
       </div>
     );
+  }
+
+  // Cho phép bypass auth cho /phase2-device-test khi harness được bật
+  if (isHarnessEnabled && typeof window !== 'undefined' && window.location.pathname.startsWith('/phase2-device-test')) {
+    return children;
   }
 
   if (!user) {
@@ -53,6 +64,11 @@ const HomeDispatcher = () => {
         </div>
       </div>
     );
+  }
+
+  // Nếu đang ở đường dẫn test harness và được kích hoạt -> Giữ nguyên trang test không chuyển hướng
+  if (isHarnessEnabled && typeof window !== 'undefined' && window.location.pathname.startsWith('/phase2-device-test')) {
+    return <Phase2DeviceTestHarnessPage />;
   }
 
   if (!user) {
@@ -122,6 +138,7 @@ function AppRoutes() {
 
           <Route path="/play/:id" element={<GamePlayView />} />
           <Route path="/phase2-device-test" element={<Phase2DeviceTestHarnessPage />} />
+          <Route path="/phase2-device-test/*" element={<Phase2DeviceTestHarnessPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
