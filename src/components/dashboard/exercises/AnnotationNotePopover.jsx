@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Trash2 } from 'lucide-react';
 import {
   MAX_NOTE_TEXT_LENGTH,
   NOTE_COLOR_WHITELIST,
@@ -6,28 +7,32 @@ import {
 } from '../../../utils/annotationNoteUtils';
 
 /**
- * AnnotationNotePopover: Inline/Floating Note Editor for Teacher Annotation Canvas (Phase 2 - P2-B1)
- * Supports plain-text textarea, Vietnamese IME composition safety, character counting, color picker, and keyboard shortcuts.
+ * AnnotationNotePopover: Inline/Floating Note Editor for Teacher Annotation Canvas (Phase 2 - P2-B2)
+ * Supports plain-text textarea, Vietnamese IME composition safety, character counting, color picker, delete button, and keyboard shortcuts.
  */
 export const AnnotationNotePopover = ({
   isOpen,
   positionStyle = {},
   initialText = '',
   initialColor = DEFAULT_NOTE_COLOR,
+  isEditing = false,
   onSave,
+  onDelete,
   onCancel,
 }) => {
   const [text, setText] = useState(initialText);
   const [color, setColor] = useState(initialColor);
   const [isComposing, setIsComposing] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const textareaRef = useRef(null);
   const popoverRef = useRef(null);
 
-  // Auto focus textarea when opened
+  // Sync and auto-focus textarea when opened
   useEffect(() => {
     if (isOpen) {
       setText(initialText);
       setColor(initialColor);
+      setShowDeleteConfirm(false);
       const timer = setTimeout(() => {
         textareaRef.current?.focus();
       }, 50);
@@ -37,16 +42,22 @@ export const AnnotationNotePopover = ({
 
   if (!isOpen) return null;
 
+  const trimmedText = text.trim();
+  const isSaveDisabled = trimmedText.length === 0;
+
   const handleSave = () => {
-    const trimmed = text.trim();
-    if (trimmed.length === 0) {
-      onCancel?.();
+    if (isSaveDisabled) {
+      // Block save for empty/whitespace note (do not silently delete)
       return;
     }
     onSave?.({
-      text: trimmed.slice(0, MAX_NOTE_TEXT_LENGTH),
+      text: trimmedText.slice(0, MAX_NOTE_TEXT_LENGTH),
       color,
     });
+  };
+
+  const handleDelete = () => {
+    onDelete?.();
   };
 
   const handleKeyDown = (e) => {
@@ -57,11 +68,13 @@ export const AnnotationNotePopover = ({
       return;
     }
 
-    // 2. Ctrl + Enter / Cmd + Enter -> Save (unless Vietnamese IME is composing)
+    // 2. Ctrl + Enter / Cmd + Enter -> Save (unless Vietnamese IME is composing or save is disabled)
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !isComposing) {
       e.preventDefault();
       e.stopPropagation();
-      handleSave();
+      if (!isSaveDisabled) {
+        handleSave();
+      }
       return;
     }
   };
@@ -83,10 +96,47 @@ export const AnnotationNotePopover = ({
             <path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3z" />
             <path d="M15 3v6h6" />
           </svg>
-          <span>Thêm ghi chú bài làm</span>
+          <span>{isEditing ? 'Chỉnh sửa ghi chú' : 'Thêm ghi chú bài làm'}</span>
         </div>
-        <div className="text-[11px] text-slate-400">
-          {text.length}/{MAX_NOTE_TEXT_LENGTH}
+        <div className="flex items-center gap-2">
+          {/* Delete Button in Header (Visible ONLY when editing existing note) */}
+          {isEditing && onDelete && (
+            <div>
+              {showDeleteConfirm ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    className="px-1.5 py-0.5 text-[10px] rounded font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-colors"
+                    aria-label="Xác nhận xóa ghi chú"
+                  >
+                    Xóa ngay
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="px-1 py-0.5 text-[10px] rounded text-slate-400 hover:text-slate-200"
+                    aria-label="Hủy xóa"
+                  >
+                    Không
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="p-1 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition-colors"
+                  title="Xóa ghi chú này"
+                  aria-label="Xóa ghi chú"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+          <div className="text-[11px] text-slate-400">
+            {text.length}/{MAX_NOTE_TEXT_LENGTH}
+          </div>
         </div>
       </div>
 
@@ -136,7 +186,7 @@ export const AnnotationNotePopover = ({
           <button
             type="button"
             onClick={handleSave}
-            disabled={text.trim().length === 0}
+            disabled={isSaveDisabled}
             className="px-3 py-1 text-xs rounded-md font-medium bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-semibold shadow transition-all"
             aria-label="Lưu ghi chú"
           >

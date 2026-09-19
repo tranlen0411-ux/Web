@@ -14,6 +14,8 @@ import { AnnotationNotePopover } from './AnnotationNotePopover';
 import {
   generateNoteId,
   normalizeNote,
+  updateNoteInList,
+  removeNoteFromList,
   MAX_NOTES_COUNT,
   DEFAULT_NOTE_COLOR,
 } from '../../../utils/annotationNoteUtils';
@@ -71,9 +73,9 @@ function isPointNearStamp(stamp, x, y, threshold = 0.04) {
 }
 
 /**
- * SubmissionAnnotationCanvas: Native React + SVG Overlay Canvas (Phase 2 - P2-A2.1 Multi-touch & Pinch Zoom)
+ * SubmissionAnnotationCanvas: Native React + SVG Overlay Canvas (Phase 2 - P2-B2 Text Note Edit & Eraser Integration)
  * Coordinates are 100% normalized in [0, 1] range.
- * Supports Single Shared Transform Layer, Desktop Mouse Pan Dragging, and Mobile Pinch Zoom / Pan.
+ * Supports Single Shared Transform Layer, Desktop Mouse Pan Dragging, Mobile Pinch Zoom / Pan, and Note Management.
  */
 export const SubmissionAnnotationCanvas = ({
   imageUrl,
@@ -95,8 +97,9 @@ export const SubmissionAnnotationCanvas = ({
   const [currentStroke, setCurrentStroke] = useState(null);
   const isPointerActiveRef = useRef(false);
 
-  // Note authoring state (Phase 2 - P2-B1)
+  // Note authoring & editing state (Phase 2 - P2-B1 & P2-B2)
   const [pendingNote, setPendingNote] = useState(null);
+  const [editingNote, setEditingNote] = useState(null);
   const [isNoteEditorOpen, setIsNoteEditorOpen] = useState(false);
   const [noteLimitMessage, setNoteLimitMessage] = useState('');
 
@@ -130,6 +133,29 @@ export const SubmissionAnnotationCanvas = ({
     panY: rawPanY,
   });
 
+  // Calculate Popover screen position inside Viewport boundaries
+  const calculatePopoverPosition = useCallback((clientX, clientY) => {
+    const rect = viewportRef.current?.getBoundingClientRect();
+    const clickX = clientX - (rect?.left || 0);
+    const clickY = clientY - (rect?.top || 0);
+    const vpWidth = rect?.width || 800;
+    const vpHeight = rect?.height || 600;
+
+    const popoverWidth = 300;
+    const popoverHeight = 180;
+    let left = clickX - (popoverWidth / 2);
+    let top = clickY + 16;
+
+    if (left < 10) left = 10;
+    if (left + popoverWidth > vpWidth - 10) left = vpWidth - popoverWidth - 10;
+    if (top + popoverHeight > vpHeight - 10) top = Math.max(10, clickY - popoverHeight - 16);
+
+    return {
+      left: `${left}px`,
+      top: `${top}px`,
+    };
+  }, []);
+
   // Normalize client pointer coordinates to [0, 1] using Viewport-Anchored Affine Inverse
   // Relative offset: clientX - rect.left, clientY - rect.top -> Math.max(0, Math.min(1, normalized))
   const getNormalizedPoint = useCallback((e) => {
@@ -150,33 +176,90 @@ export const SubmissionAnnotationCanvas = ({
     });
   }, [scale, panX, panY]);
 
-  // Note Authoring Handlers (Phase 2 - P2-B1)
+  // Note Authoring & Management Handlers (Phase 2 - P2-B1 & P2-B2)
   const handleSaveNote = ({ text, color }) => {
-    if (!pendingNote) return;
-    const validatedNote = normalizeNote({
-      id: generateNoteId(),
-      x: pendingNote.x,
-      y: pendingNote.y,
-      text,
-      color: color || DEFAULT_NOTE_COLOR,
-    });
+    if (editingNote) {
+      // EDIT EXISTING NOTE: replace by ID, preserving original id, x, y
+      const nextNotes = updateNoteInList(annotation.notes || [], editingNote.id, {
+        text,
+        color,
+      });
 
-    if (validatedNote) {
-      const nextNotes = [...(annotation.notes || []), validatedNote];
+      onChange?.({
+        ...annotation,
+        schema_version: annotation.schema_version || 1,
+        notes: nextNotes,
+      });
+    } else if (pendingNote) {
+      // CREATE NEW NOTE: generate UUID and clamp coordinates
+      const validatedNote = normalizeNote({
+        id: generateNoteId(),
+        x: pendingNote.x,
+        y: pendingNote.y,
+        text,
+        color: color || DEFAULT_NOTE_COLOR,
+      });
+
+      if (validatedNote) {
+        const nextNotes = [...(annotation.notes || []), validatedNote];
+        onChange?.({
+          ...annotation,
+          schema_version: annotation.schema_version || 1,
+          notes: nextNotes,
+        });
+      }
+    }
+
+    setIsNoteEditorOpen(false);
+    setPendingNote(null);
+    setEditingNote(null);
+  };
+
+  const handleDeleteNote = () => {
+    if (editingNote) {
+      const nextNotes = removeNoteFromList(annotation.notes || [], editingNote.id);
       onChange?.({
         ...annotation,
         schema_version: annotation.schema_version || 1,
         notes: nextNotes,
       });
     }
-
     setIsNoteEditorOpen(false);
     setPendingNote(null);
+    setEditingNote(null);
   };
 
   const handleCancelNote = () => {
     setIsNoteEditorOpen(false);
     setPendingNote(null);
+    setEditingNote(null);
+  };
+
+  // Click on existing Note Pin
+  const handleNotePinClick = (e, note) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (readOnly) return;
+
+    if (activeTool === 'eraser') {
+      // ERASER TOOL: Delete the note directly without opening editor
+      const nextNotes = removeNoteFromList(annotation.notes || [], note.id);
+      onChange?.({
+        ...annotation,
+        schema_version: annotation.schema_version || 1,
+        notes: nextNotes,
+      });
+      return;
+    }
+
+    // ALL OTHER TOOLS: Open editor prefilled with existing note data
+    const pos = calculatePopoverPosition(e.clientX, e.clientY);
+    setEditingNote({
+      ...note,
+      positionStyle: pos,
+    });
+    setPendingNote(null);
+    setIsNoteEditorOpen(true);
   };
 
   // POINTER DOWN
@@ -240,7 +323,7 @@ export const SubmissionAnnotationCanvas = ({
 
     const { x, y } = getNormalizedPoint(e);
 
-    // 1. ERASER TOOL
+    // 1. ERASER TOOL (STROKES / STAMPS)
     if (activeTool === 'eraser') {
       const strokes = annotation.strokes || [];
       const stamps = annotation.stamps || [];
@@ -295,30 +378,13 @@ export const SubmissionAnnotationCanvas = ({
         return;
       }
 
-      const rect = viewportRef.current?.getBoundingClientRect();
-      const clickX = e.clientX - (rect?.left || 0);
-      const clickY = e.clientY - (rect?.top || 0);
-      const vpWidth = rect?.width || 800;
-      const vpHeight = rect?.height || 600;
-
-      // Position popover inside viewport boundaries
-      const popoverWidth = 300;
-      const popoverHeight = 180;
-      let left = clickX - (popoverWidth / 2);
-      let top = clickY + 16;
-
-      if (left < 10) left = 10;
-      if (left + popoverWidth > vpWidth - 10) left = vpWidth - popoverWidth - 10;
-      if (top + popoverHeight > vpHeight - 10) top = Math.max(10, clickY - popoverHeight - 16);
-
+      const pos = calculatePopoverPosition(e.clientX, e.clientY);
       setPendingNote({
         x,
         y,
-        positionStyle: {
-          left: `${left}px`,
-          top: `${top}px`,
-        },
+        positionStyle: pos,
       });
+      setEditingNote(null);
       setIsNoteEditorOpen(true);
       return;
     }
@@ -594,24 +660,33 @@ export const SubmissionAnnotationCanvas = ({
           );
         })}
 
-        {/* 4. GHI CHÚ GHIM TRÊN ẢNH (TEXT NOTES PIN OVERLAY - PHASE 2 P2-B1) */}
+        {/* 4. GHI CHÚ GHIM TRÊN ẢNH (TEXT NOTES PIN OVERLAY - PHASE 2 P2-B1 & P2-B2) */}
         {(annotation.notes || []).map((note, index) => (
           <div
             key={note.id || `note_${index}`}
+            data-testid={`note-pin-${note.id}`}
             style={{
               position: 'absolute',
               left: `${note.x * 100}%`,
               top: `${note.y * 100}%`,
               transform: 'translate(-50%, -100%)',
-              pointerEvents: 'auto',
+              pointerEvents: readOnly ? 'none' : 'auto',
             }}
-            className="group select-none cursor-pointer z-20"
+            className="group select-none cursor-pointer z-20 p-1 -m-1"
             title={note.text}
-            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              // Prevent canvas from initiating pan or stroke drawing
+              e.stopPropagation();
+            }}
+            onClick={(e) => handleNotePinClick(e, note)}
           >
             {/* Note Pin Head */}
             <div
-              className="flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white transition-transform group-hover:scale-125"
+              className={`flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white transition-transform ${
+                activeTool === 'eraser'
+                  ? 'hover:scale-125 ring-2 ring-rose-500 ring-offset-1'
+                  : 'group-hover:scale-125'
+              }`}
               style={{ backgroundColor: note.color || '#f59e0b' }}
             >
               <StickyNote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
@@ -621,6 +696,9 @@ export const SubmissionAnnotationCanvas = ({
             <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-48 sm:w-56 p-2.5 rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl text-white text-[11px] leading-relaxed break-words z-30 pointer-events-none animate-in fade-in zoom-in-95">
               <div className="font-bold text-[10px] text-amber-400 mb-0.5 flex items-center justify-between">
                 <span>Ghi chú #{index + 1}</span>
+                {activeTool === 'eraser' && (
+                  <span className="text-rose-400 text-[9px] font-medium">Click để xóa</span>
+                )}
               </div>
               <p className="whitespace-pre-wrap text-slate-200">{note.text}</p>
             </div>
@@ -631,8 +709,12 @@ export const SubmissionAnnotationCanvas = ({
       {/* NOTE EDITOR POPOVER */}
       <AnnotationNotePopover
         isOpen={isNoteEditorOpen}
-        positionStyle={pendingNote?.positionStyle}
+        positionStyle={editingNote?.positionStyle || pendingNote?.positionStyle}
+        initialText={editingNote?.text || ''}
+        initialColor={editingNote?.color || DEFAULT_NOTE_COLOR}
+        isEditing={!!editingNote}
         onSave={handleSaveNote}
+        onDelete={handleDeleteNote}
         onCancel={handleCancelNote}
       />
 

@@ -134,3 +134,48 @@ export function normalizeAnnotationPayload(rawPayload) {
     notes: normalizeNotes(rawPayload.notes),
   };
 }
+
+/**
+ * Update an existing note in the notes array by its ID
+ * Preserves the original note's id, x, y coordinates while updating text and color.
+ * If validation fails or noteId is not found, returns original array.
+ * 
+ * @param {Array} notes
+ * @param {string} noteId
+ * @param {{ text: string, color?: string }} updateFields
+ * @returns {Array}
+ */
+export function updateNoteInList(notes, noteId, updateFields) {
+  if (!Array.isArray(notes) || !noteId || !updateFields) return notes || [];
+  
+  const existingIndex = notes.findIndex(n => n && n.id === noteId);
+  if (existingIndex === -1) return notes;
+
+  const originalNote = notes[existingIndex];
+  const validated = normalizeNote({
+    id: originalNote.id,
+    x: originalNote.x,
+    y: originalNote.y,
+    text: updateFields.text,
+    color: updateFields.color || originalNote.color,
+  });
+
+  if (!validated) return notes;
+
+  const nextNotes = [...notes];
+  nextNotes[existingIndex] = validated;
+  return nextNotes;
+}
+
+/**
+ * Remove a note from the notes array by its ID
+ * 
+ * @param {Array} notes
+ * @param {string} noteId
+ * @returns {Array}
+ */
+export function removeNoteFromList(notes, noteId) {
+  if (!Array.isArray(notes) || !noteId) return notes || [];
+  return notes.filter(n => n && n.id !== noteId);
+}
+
