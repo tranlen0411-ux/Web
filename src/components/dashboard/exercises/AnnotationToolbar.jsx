@@ -1,8 +1,10 @@
 import React from 'react';
 import { 
-  Pen, Check, X, Eraser, RotateCcw, Trash2, 
-  Save, Loader2, AlertTriangle, AlertCircle, RefreshCw 
+  Pen, Check, X, Eraser, Hand, RotateCcw, Trash2, 
+  Save, Loader2, AlertTriangle, AlertCircle, RefreshCw,
+  ZoomIn, ZoomOut, Maximize2
 } from 'lucide-react';
+import { MIN_SCALE, MAX_SCALE } from '../../../utils/annotationViewportMath';
 
 const COLORS = [
   { id: 'red', value: '#ef4444', label: 'Đỏ' },
@@ -18,7 +20,7 @@ const STROKE_WIDTHS = [
 ];
 
 /**
- * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Step C2 - Draft Save & OCC)
+ * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Phase 2 - P2-A2 Desktop Zoom/Pan)
  */
 export const AnnotationToolbar = ({
   activeTool = 'pen',
@@ -34,12 +36,17 @@ export const AnnotationToolbar = ({
   saveStatus = 'idle', // 'idle' | 'dirty' | 'saving' | 'saved' | 'conflict' | 'error'
   version = 0,
   onManualSave,
-  onReloadLatest
+  onReloadLatest,
+  // Phase 2 Desktop Zoom & Pan controls
+  scale = 1,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
 }) => {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-700 shadow-xl text-white">
       
-      {/* 1. CÁC CÔNG CỤ CHẤM VẼ (TOOLS) */}
+      {/* 1. CÁC CÔNG CỤ CHẤM VẼ & DI CHUYỂN (TOOLS) */}
       <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
         <button
           type="button"
@@ -100,9 +107,62 @@ export const AnnotationToolbar = ({
           <Eraser className="w-3.5 h-3.5" />
           <span>Tẩy</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => onSelectTool?.('pan')}
+          disabled={readOnly}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
+            activeTool === 'pan'
+              ? 'bg-sky-600 text-white shadow-md'
+              : 'text-slate-300 hover:text-white hover:bg-slate-700'
+          }`}
+          title="Di chuyển khung nhìn (Pan Mode)"
+        >
+          <Hand className="w-3.5 h-3.5" />
+          <span>Kéo</span>
+        </button>
       </div>
 
-      {/* 2. CHỌN MÀU SẮC (COLORS) */}
+      {/* 2. CỤM ĐIỀU KHIỂN THU PHÓNG (ZOOM CONTROLS) */}
+      <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+        <button
+          type="button"
+          onClick={onZoomOut}
+          disabled={readOnly || scale <= MIN_SCALE}
+          className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+          title="Thu nhỏ (-25%)"
+        >
+          <ZoomOut className="w-3.5 h-3.5" />
+        </button>
+
+        <span className="text-[11px] font-black text-slate-200 px-1.5 min-w-[42px] text-center select-none" title="Tỉ lệ thu phóng hiện tại">
+          {Math.round(scale * 100)}%
+        </span>
+
+        <button
+          type="button"
+          onClick={onZoomIn}
+          disabled={readOnly || scale >= MAX_SCALE}
+          className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+          title="Phóng to (+25%)"
+        >
+          <ZoomIn className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onResetZoom}
+          disabled={readOnly || scale === 1}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+          title="Đặt lại tỉ lệ 100%"
+        >
+          <Maximize2 className="w-3 h-3" />
+          <span>100%</span>
+        </button>
+      </div>
+
+      {/* 3. CHỌN MÀU SẮC (COLORS) */}
       <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700">
         <span className="text-[10px] font-black text-slate-400 mr-1 hidden sm:inline">Màu:</span>
         {COLORS.map(c => (
@@ -110,7 +170,7 @@ export const AnnotationToolbar = ({
             key={c.id}
             type="button"
             onClick={() => onSelectColor?.(c.value)}
-            disabled={readOnly || activeTool === 'check' || activeTool === 'cross'}
+            disabled={readOnly || activeTool === 'check' || activeTool === 'cross' || activeTool === 'pan'}
             className={`w-6 h-6 rounded-full transition-transform flex items-center justify-center ${
               activeColor === c.value
                 ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-slate-900'
@@ -122,7 +182,7 @@ export const AnnotationToolbar = ({
         ))}
       </div>
 
-      {/* 3. ĐỘ DÀY NÉT VẼ (STROKE WIDTH) */}
+      {/* 4. ĐỘ DÀY NÉT VẼ (STROKE WIDTH) */}
       <div className="flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700">
         <span className="text-[10px] font-black text-slate-400 mr-1 hidden sm:inline">Nét:</span>
         {STROKE_WIDTHS.map(sw => (
@@ -143,7 +203,7 @@ export const AnnotationToolbar = ({
         ))}
       </div>
 
-      {/* 4. HOÀN TÁC, XÓA & LƯU NHÁP OCC (ACTIONS & STATUS) */}
+      {/* 5. HOÀN TÁC, XÓA & LƯU NHÁP OCC (ACTIONS & STATUS) */}
       <div className="flex items-center gap-1.5">
         <button
           type="button"
