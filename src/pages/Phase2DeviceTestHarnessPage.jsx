@@ -59,17 +59,10 @@ const INITIAL_ANNOTATION = {
 };
 
 export const Phase2DeviceTestHarnessPage = () => {
-  // Check environment access flag: Available in local dev, via explicit VITE_ENABLE_PHASE2_TEST_HARNESS flag, or on Vercel Preview hostnames
-  const isPreviewHost = typeof window !== 'undefined' && Boolean(
-    window.location.hostname.includes('vercel.app') ||
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1'
-  );
-
+  // Check environment access flag: Available in local dev or via explicit Preview environment flag VITE_ENABLE_PHASE2_TEST_HARNESS
   const isEnabled = Boolean(
     import.meta.env.DEV ||
-    import.meta.env.VITE_ENABLE_PHASE2_TEST_HARNESS === 'true' ||
-    isPreviewHost
+    import.meta.env.VITE_ENABLE_PHASE2_TEST_HARNESS === 'true'
   );
 
   if (!isEnabled) {
