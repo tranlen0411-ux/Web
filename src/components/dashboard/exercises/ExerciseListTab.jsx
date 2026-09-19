@@ -14,6 +14,7 @@ import { SubmissionGradingModal } from './SubmissionGradingModal';
 import { SaveExerciseQuestionsModal } from '../question-bank/SaveExerciseQuestionsModal';
 import { ExamTakingModal } from '../exams/ExamTakingModal';
 import { StudentExamResultModal } from '../exams/StudentExamResultModal';
+import { StudentGradedViewerModal } from './StudentGradedViewerModal';
 import { createExamStudentClient } from '../../../services/examStudentClient';
 
 export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
@@ -43,6 +44,8 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   const [selectedExerciseToEdit, setSelectedExerciseToEdit] = useState(null);
   const [selectedExerciseToPlay, setSelectedExerciseToPlay] = useState(null);
   const [selectedSubmissionToGrade, setSelectedSubmissionToGrade] = useState(null);
+  const [selectedGradedSubmissionId, setSelectedGradedSubmissionId] = useState(null);
+  const [isGradedViewerOpen, setIsGradedViewerOpen] = useState(false);
   const [selectedExerciseToSaveToBank, setSelectedExerciseToSaveToBank] = useState(null);
   const [isSaveToBankModalOpen, setIsSaveToBankModalOpen] = useState(false);
 
@@ -774,10 +777,13 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Điểm: {sub.total_score}/{sub.max_score}
                         </span>
                         <button
-                          onClick={() => setSelectedExerciseToPlay(ex)}
-                          className="px-3 py-1 bg-emerald-600 text-white font-black text-xs rounded-xl hover:bg-emerald-700"
+                          onClick={() => {
+                            setSelectedGradedSubmissionId(sub.id);
+                            setIsGradedViewerOpen(true);
+                          }}
+                          className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-sm transition-all active:translate-y-0.5"
                         >
-                          Xem Kết Quả
+                          Xem Bài Đã Chấm
                         </button>
                       </div>
                     ) : isRevision ? (
@@ -785,12 +791,24 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
                         <span className="text-xs font-black flex items-center gap-1">
                           <RotateCcw className="w-4 h-4 text-rose-600" /> Cần Làm Lại
                         </span>
-                        <button
-                          onClick={() => setSelectedExerciseToPlay(ex)}
-                          className="px-3 py-1 bg-rose-600 text-white font-black text-xs rounded-xl hover:bg-rose-700"
-                        >
-                          Làm Lại Ngay
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setSelectedGradedSubmissionId(sub.id);
+                              setIsGradedViewerOpen(true);
+                            }}
+                            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl transition-all shadow-sm"
+                            title="Xem nhận xét và nét vẽ của giáo viên"
+                          >
+                            Xem Lời Phê
+                          </button>
+                          <button
+                            onClick={() => setSelectedExerciseToPlay(ex)}
+                            className="px-3 py-1 bg-rose-600 text-white font-black text-xs rounded-xl hover:bg-rose-700"
+                          >
+                            Làm Lại Ngay
+                          </button>
+                        </div>
                       </div>
                     ) : isPending ? (
                       <button
@@ -1029,6 +1047,18 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
           assignmentId={selectedExamAssignmentId}
           onClose={handleCloseExamTakingModal}
           onFinished={handleExamTakingFinished}
+        />
+      )}
+
+      {/* MODAL XEM BÀI ĐÃ CHẤM (STUDENT GRADED VIEWER) */}
+      {role === 'student' && (
+        <StudentGradedViewerModal
+          isOpen={isGradedViewerOpen && !!selectedGradedSubmissionId}
+          submissionId={selectedGradedSubmissionId}
+          onClose={() => {
+            setIsGradedViewerOpen(false);
+            setSelectedGradedSubmissionId(null);
+          }}
         />
       )}
 
