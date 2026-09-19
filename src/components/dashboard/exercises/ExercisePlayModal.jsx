@@ -6,6 +6,8 @@ import {
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
+import { SubmissionImageUploader } from './SubmissionImageUploader';
+import { getStudentSubmissionAttachments } from '../../../services/submissionAnnotationClient';
 
 export const ExercisePlayModal = ({ exercise, onClose }) => {
   const { profile } = useAuth();
@@ -15,6 +17,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
   const [answersMap, setAnswersMap] = useState({});
   const [fileUrlsMap, setFileUrlsMap] = useState({});
   const [signedUrlsMap, setSignedUrlsMap] = useState({});
+  const [attachmentsMap, setAttachmentsMap] = useState({});
 
   // QUẢN LÝ BASELINE VÀ TẤT CẢ FILE MỚI TRONG PHIÊN BẰNG USEREF
   const baselineFilesRef = useRef({}); // { [qId]: { path, signedUrl } }
@@ -80,6 +83,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         }
 
         setSubmissionId(draftRes.submission_id);
+        setAttachmentsMap({});
       }
 
     } catch (err) {
@@ -128,6 +132,43 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     setSignedUrlsMap(signedMap);
     baselineFilesRef.current = baselines;
     newFilesByQuestionRef.current = {};
+
+    // KHÔI PHỤC MULTI-IMAGE ATTACHMENTS TỪ DB CHO SUBMISSION NÀY (PHASE 1 DRAFT RESTORE)
+    if (subObj?.id) {
+      try {
+        const { ok, data: attList } = await getStudentSubmissionAttachments({ submissionId: subObj.id });
+        if (ok && Array.isArray(attList)) {
+          const attMap = {};
+          for (const att of attList) {
+            let signedUrl = '';
+            try {
+              const { data: signRes } = await supabase.storage
+                .from('exercise-submissions')
+                .createSignedUrl(att.storage_path, 900);
+              signedUrl = signRes?.signedUrl || '';
+            } catch (e) {
+              console.error('Sign attachment URL error:', e);
+            }
+            if (!attMap[att.question_id]) {
+              attMap[att.question_id] = [];
+            }
+            attMap[att.question_id].push({
+              ...att,
+              signedUrl,
+              status: 'ready'
+            });
+          }
+          setAttachmentsMap(attMap);
+        } else {
+          setAttachmentsMap({});
+        }
+      } catch (attErr) {
+        console.error('Load attachments error:', attErr);
+        setAttachmentsMap({});
+      }
+    } else {
+      setAttachmentsMap({});
+    }
   };
 
   // QUY TRÌNH THAY FILE NGUYÊN TỬ VỚI BIẾN CỤC BỘ DRAFT SUBMISSION ID
@@ -212,11 +253,21 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     setWarningMsg('');
 
     try {
-      const formattedAnswers = questions.map(q => ({
-        question_id: q.id,
-        answer: answersMap[q.id] !== undefined ? answersMap[q.id] : null,
-        file_url: fileUrlsMap[q.id] || null
-      }));
+      const formattedAnswers = questions.map(q => {
+        // CHỈ LẤY ATTACHMENT ĐÃ READY / FINALIZED VÀ CÓ STORAGE_PATH HỢP LỆ
+        const readyAttachments = (attachmentsMap[q.id] || []).filter(
+          a => (a.status === 'ready' || a.upload_status === 'finalized') && typeof a.storage_path === 'string' && a.storage_path.trim()
+        );
+        const primaryPath = readyAttachments.length > 0 
+          ? readyAttachments[0].storage_path 
+          : (fileUrlsMap[q.id] || null);
+
+        return {
+          question_id: q.id,
+          answer: answersMap[q.id] !== undefined ? answersMap[q.id] : null,
+          file_url: primaryPath
+        };
+      });
 
       // GỌI RPC NỘP/LƯU BÀI VỚI FILE MỚI
       const { data: submitRes, error: submitErr } = await supabase.rpc('submit_academic_exercise', {
@@ -458,7 +509,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
             {/* THANH ĐIỀU HƯỚNG CÂU HỎI */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-2">
               {questions.map((q, idx) => {
-                const isAnswered = answersMap[q.id] !== undefined || fileUrlsMap[q.id];
+                const isAnswered = answersMap[q.id] !== undefined || fileUrlsMap[q.id] || (attachmentsMap[q.id] && attachmentsMap[q.id].length > 0);
                 return (
                   <button
                     key={q.id}
@@ -570,16 +621,52 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                   </div>
                 )}
 
-                {(currentQ.question_type === 'image_upload' || currentQ.question_type === 'file_upload') && (
+                {currentQ.question_type === 'image_upload' && (
+                  <div className="space-y-3">
+                    <SubmissionImageUploader
+                      submissionId={submissionId}
+                      questionId={currentQ.id}
+                      studentId={profile?.id}
+                      attachments={attachmentsMap[currentQ.id] || []}
+                      onAttachmentsChange={(updater) => {
+                        setAttachmentsMap(prev => {
+                          const currentList = prev[currentQ.id] || [];
+                          const updatedList = typeof updater === 'function' ? updater(currentList) : updater;
+                          return { ...prev, [currentQ.id]: updatedList };
+                        });
+                      }}
+                      disabled={isViewingHistory}
+                    />
+
+                    {/* HIỂN THỊ FILE CŨ NẾU LÀ SUBMISSION CŨ CHƯA CÓ ATTACHMENTS (BACKWARD COMPATIBILITY) */}
+                    {(!attachmentsMap[currentQ.id] || attachmentsMap[currentQ.id].length === 0) && signedUrlsMap[currentQ.id] && (
+                      <div className="p-3 bg-white border border-amber-200 rounded-2xl flex items-center justify-between">
+                        <span className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Đã tải file bài làm (Bản cũ)
+                        </span>
+                        <a
+                          href={signedUrlsMap[currentQ.id]}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3 py-1 bg-amber-500 text-white font-black text-xs rounded-xl hover:bg-amber-600"
+                        >
+                          Xem File Nộp
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {currentQ.question_type === 'file_upload' && (
                   <div className="space-y-3">
                     {!isViewingHistory && (
                       <label className="flex flex-col items-center justify-center p-4 bg-white border-2 border-dashed border-amber-300 rounded-2xl cursor-pointer hover:bg-amber-50 transition-colors">
                         <Upload className="w-6 h-6 text-amber-500 mb-1" />
-                        <span className="text-xs font-black text-amber-900">Nhấp để chọn ảnh / file bài làm</span>
-                        <span className="text-[10px] font-bold text-slate-400">Định dạng JPG, PNG, WEBP, PDF, DOCX (Tối đa 10MB)</span>
+                        <span className="text-xs font-black text-amber-900">Nhấp để chọn file bài làm</span>
+                        <span className="text-[10px] font-bold text-slate-400">Định dạng PDF, DOC, DOCX (Tối đa 10MB)</span>
                         <input
                           type="file"
-                          accept="image/jpeg,image/png,image/webp,.pdf,.doc,.docx"
+                          accept=".pdf,.doc,.docx"
                           className="hidden"
                           onChange={(e) => {
                             if (e.target.files && e.target.files[0]) {

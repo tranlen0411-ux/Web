@@ -175,7 +175,7 @@ export async function finalizeGradingWithAnnotations({
  * Học sinh lấy kết quả bài đã chấm (chỉ xem các annotation final)
  * @param {Object} params
  * @param {string} params.submissionId - UUID bài nộp
- * @returns {Promise<{ ok: boolean, data?: any, error?: any }>}
+ * @returns {Promise<{ ok: boolean, data?: any, error?: string, code?: string }>}
  */
 export async function getStudentGradedSubmission({ submissionId }) {
   try {
@@ -183,11 +183,55 @@ export async function getStudentGradedSubmission({ submissionId }) {
       p_submission_id: submissionId,
     });
 
-    if (error) return { ok: false, error };
-    if (!data?.success) return { ok: false, error: new Error(data?.message || 'Lỗi tải bài đã chấm') };
+    if (error) {
+      return {
+        ok: false,
+        error: error.message || 'Lỗi mạng hoặc lỗi kết nối máy chủ.',
+        code: error.code || null,
+        data: null
+      };
+    }
+
+    if (!data?.success) {
+      return {
+        ok: false,
+        error: data?.message || 'Lỗi tải bài đã chấm',
+        code: data?.error || null,
+        data
+      };
+    }
 
     return { ok: true, data };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err?.message || 'Lỗi không xác định',
+      code: err?.code || null,
+      data: null
+    };
+  }
+}
+
+/**
+ * Lấy danh sách các tệp đính kèm đã finalized của học sinh cho bài nộp (hỗ trợ khôi phục draft & xem bài)
+ * @param {Object} params
+ * @param {string} params.submissionId - UUID bài nộp
+ * @returns {Promise<{ ok: boolean, data?: any[], error?: any }>}
+ */
+export async function getStudentSubmissionAttachments({ submissionId }) {
+  try {
+    const { data, error } = await supabase
+      .from('academic_submission_attachments')
+      .select('*')
+      .eq('submission_id', submissionId)
+      .eq('upload_status', 'finalized')
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) return { ok: false, error };
+    return { ok: true, data: data || [] };
   } catch (err) {
     return { ok: false, error: err };
   }
 }
+
