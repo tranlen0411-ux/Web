@@ -1,43 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, supabaseUrl } from '../../lib/supabase';
 
-const OFFICIAL_CLASS_212_STUDENTS = [
-  "Trần Lê Hoàng An",
-  "Đỗ Hoài Anh",
-  "Nguyễn Đình Ân",
-  "Hà Gia Bảo",
-  "Phạm Ngọc Minh Châu",
-  "Nguyễn Công Minh Dương",
-  "Nguyễn Võ Khả Hân",
-  "Huỳnh Minh Hùng",
-  "Phạm Bùi Bảo Khang",
-  "Nguyễn Ngọc An Khánh",
-  "Nguyễn Phúc Đăng Khoa",
-  "Nguyễn Minh Khôi",
-  "Nguyễn Trung Kiên",
-  "Phạm Thị Hoàng Lâm",
-  "Võ Thiên Long",
-  "Trần Thị Quỳnh Mai",
-  "Lê Thị Tú My",
-  "Trần Ngọc Nga",
-  "Trần Thị Kim Ngọc",
-  "Võ Nguyễn Đăng Nguyên",
-  "Nguyễn Ngọc Yến Nhi",
-  "Nguyễn Thanh Nhi",
-  "Nguyễn An Nhiên",
-  "Võ Bảo Như",
-  "Lưu Đình Tấn Phát",
-  "Nguyễn Trần Mạnh Phi",
-  "Nguyễn Ngọc An Phúc",
-  "Nguyễn Thanh Phúc",
-  "Nguyễn Trí Phúc",
-  "Huỳnh Trương Tiến Thành",
-  "Hồ Lê Trường Thịnh",
-  "Phan Ngọc Bảo Trâm",
-  "Phạm Đỗ Anh Tú",
-  "Đặng Yến Vy"
-];
-
 const parseApiResponse = async (response) => {
   const rawText = await response.text();
 
@@ -61,20 +24,22 @@ export function ImportStudentsModal({ isOpen, onClose }) {
   const [step, setStep] = useState(1);
   const [classesList, setClassesList] = useState([]);
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [rawNamesText, setRawNamesText] = useState(OFFICIAL_CLASS_212_STUDENTS.join('\n'));
+  const [rawNamesText, setRawNamesText] = useState('');
   const [lastDryRunNamesText, setLastDryRunNamesText] = useState('');
+  const [lastDryRunClassId, setLastDryRunClassId] = useState('');
   const [parsedStudents, setParsedStudents] = useState([]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [dryRunData, setDryRunData] = useState(null);
+  const [dryRunToken, setDryRunToken] = useState(null);
   const [prodResult, setProdResult] = useState(null);
   const [isConfirmChecked, setIsConfirmChecked] = useState(false);
   const [hasExecutedProd, setHasExecutedProd] = useState(false);
   const [hasDownloadedCSV, setHasDownloadedCSV] = useState(false);
   const [hasConfirmedDelivery, setHasConfirmedDelivery] = useState(false);
 
-  const [idempotencyKey] = useState(() => `batch_212_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+  const [idempotencyKey] = useState(() => `batch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
 
   useEffect(() => {
     if (isOpen) {
@@ -82,6 +47,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
     } else {
       setStep(1);
       setDryRunData(null);
+      setDryRunToken(null);
       setProdResult(null);
       setErrorMessage('');
       setIsConfirmChecked(false);
@@ -103,14 +69,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
       if (data && data.length > 0) {
         setClassesList(data);
-        const class212 = data.find(c =>
-          c.grade_level === 2 &&
-          c.code === 'LOP212-3A5818' &&
-          c.name.toLowerCase().replace(/\s+/g, ' ').includes('2.12')
-        );
-        if (class212) {
-          setSelectedClassId(class212.id);
-        } else {
+        if (!selectedClassId || !data.some(c => c.id === selectedClassId)) {
           setSelectedClassId(data[0].id);
         }
       }
@@ -120,6 +79,8 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       setIsLoading(false);
     }
   };
+
+  const selectedClass = classesList.find(c => c.id === selectedClassId);
 
   const handleParseNames = () => {
     setErrorMessage('');
@@ -150,7 +111,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
   const handleRunDryRun = async () => {
     if (!selectedClassId) {
-      setErrorMessage('Vui lòng chọn Lớp học.');
+      setErrorMessage('Vui lòng chọn Lớp học đích.');
       return;
     }
     if (parsedStudents.length === 0) {
@@ -190,7 +151,9 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       }
 
       setDryRunData(resData);
+      setDryRunToken(resData.dryRunToken || null);
       setLastDryRunNamesText(rawNamesText);
+      setLastDryRunClassId(selectedClassId);
       setStep(3);
     } catch (err) {
       setErrorMessage(err.message);
@@ -206,9 +169,9 @@ export function ImportStudentsModal({ isOpen, onClose }) {
     }
     if (!isConfirmChecked || hasExecutedProd) return;
 
-    if (rawNamesText !== lastDryRunNamesText) {
-      setErrorMessage('Danh sách học sinh đã bị thay đổi sau khi chạy Dry-Run. Vui lòng thực hiện Dry-Run lại!');
-      setStep(2);
+    if (rawNamesText !== lastDryRunNamesText || selectedClassId !== lastDryRunClassId) {
+      setErrorMessage('Lớp học đích hoặc danh sách học sinh đã bị thay đổi sau khi chạy Dry-Run. Vui lòng thực hiện Dry-Run lại!');
+      setStep(1);
       return;
     }
 
@@ -233,6 +196,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
             classId: selectedClassId,
             students: parsedStudents,
             dryRun: false,
+            dryRunToken: dryRunToken,
             idempotencyKey,
           }),
         }
@@ -280,11 +244,12 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       ...rows.map(row => row.map(escapeCSVField).join(','))
     ].join('\n');
 
+    const classNameClean = (selectedClass?.name || prodResult.className || 'Lop').replace(/\s+/g, '_');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `Danh_Sach_Hoc_Sinh_Lop_212_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute('download', `Danh_Sach_Hoc_Sinh_${classNameClean}_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -333,9 +298,39 @@ export function ImportStudentsModal({ isOpen, onClose }) {
     dryRunData.summary.reviewRequired > 0 || 
     dryRunData.results.length !== parsedStudents.length ||
     rawNamesText !== lastDryRunNamesText ||
+    selectedClassId !== lastDryRunClassId ||
     !isConfirmChecked ||
     hasExecutedProd ||
     isLoading;
+
+  const renderStatusBadge = (status) => {
+    switch (status) {
+      case 'CHƯA_CÓ_TÀI_KHOẢN':
+      case 'READY_TO_CREATE':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">CHƯA CÓ TÀI KHOẢN</span>;
+      case 'KHỚP_DUY_NHẤT_CHƯA_CÓ_LỚP':
+      case 'MATCHED_NO_CLASS':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800">CHƯA CÓ LỚP</span>;
+      case 'ĐÃ_Ở_LỚP_ĐÍCH':
+      case 'ALREADY_IN_TARGET_CLASS':
+      case 'ALREADY_IN_CLASS_212':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">ĐÃ Ở LỚP ĐÍCH</span>;
+      case 'ĐANG_Ở_LỚP_KHÁC':
+      case 'IN_ANOTHER_CLASS':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">ĐANG Ở LỚP KHÁC</span>;
+      case 'TRÙNG_TÊN':
+      case 'DUPLICATE_NAME':
+      case 'DUPLICATE_REQUIRES_REVIEW':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">TRÙNG TÊN</span>;
+      case 'THUỘC_NHIỀU_LỚP':
+      case 'MULTIPLE_CLASSES':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">NHIỀU LỚP</span>;
+      case 'DUPLICATE_IN_BATCH':
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">TRÙNG TRONG BATCH</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800">{status}</span>;
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
@@ -343,16 +338,16 @@ export function ImportStudentsModal({ isOpen, onClose }) {
         <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
           <div>
             <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-              <span>📥</span> Nhập Học Sinh Lớp 2.12 Hàng Loạt
+              <span>📥</span> Nhập Học Sinh Hàng Loạt
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Quy trình 4 bước an toàn: Chuẩn hóa $\rightarrow$ Xem trước Dry-Run $\rightarrow$ Thực thi $\rightarrow$ Tải file CSV
+              Quy trình 4 bước an toàn: Nhập danh sách → Xem trước Dry-Run → Thực thi → Tải file CSV
             </p>
           </div>
           <button
             onClick={handleSafeClose}
             disabled={isLoading}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg cursor-pointer"
           >
             ✕
           </button>
@@ -374,7 +369,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Chọn Lớp Đích (Yêu cầu chính thức: Lớp 2.12):
+                Chọn Lớp Đích:
               </label>
               <select
                 value={selectedClassId}
@@ -387,17 +382,22 @@ export function ImportStudentsModal({ isOpen, onClose }) {
                   </option>
                 ))}
               </select>
+              {selectedClass && (
+                <div className="mt-2 p-2.5 bg-sky-50 border border-sky-200 rounded-xl text-xs font-bold text-sky-800 flex items-center gap-2">
+                  <span>🏫</span> Lớp đích: <span className="font-black text-sky-900">{selectedClass.name}</span> — Khối <span className="font-black text-sky-900">{selectedClass.grade_level}</span> (Mã: {selectedClass.code})
+                </div>
+              )}
             </div>
 
             <div>
               <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Danh sách 34 Họ tên Học sinh Lớp 2.12 (Mỗi học sinh 1 dòng):
+                Danh sách Họ và Tên Học sinh (Mỗi học sinh 1 dòng):
               </label>
               <textarea
                 rows={10}
                 value={rawNamesText}
                 onChange={(e) => setRawNamesText(e.target.value)}
-                placeholder="Dán danh sách học sinh vào đây..."
+                placeholder="Nhập hoặc dán danh sách học sinh vào đây (mỗi học sinh 1 dòng)...&#10;Ví dụ:&#10;Nguyễn Văn A&#10;Trần Thị B&#10;Lê Hoàng C"
                 className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-mono focus:ring-2 focus:ring-amber-500 outline-none"
               />
             </div>
@@ -405,13 +405,13 @@ export function ImportStudentsModal({ isOpen, onClose }) {
             <div className="flex justify-end gap-3 pt-2">
               <button
                 onClick={handleSafeClose}
-                className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm transition-all"
+                className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm transition-all cursor-pointer"
               >
                 Hủy
               </button>
               <button
                 onClick={handleParseNames}
-                className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2"
+                className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer"
               >
                 Tiếp Tục Đối Chiếu ➔
               </button>
@@ -421,8 +421,10 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
         {step === 2 && (
           <div className="space-y-4">
-            <div className="bg-amber-50 dark:bg-amber-950/30 p-4 rounded-xl border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
-              <strong>Đã nhận diện {parsedStudents.length} học sinh.</strong> Vui lòng rà soát lại danh sách trước khi khởi chạy bản xem trước Dry-Run.
+            <div className="bg-amber-50 dark:bg-amber-950/30 p-4 rounded-xl border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 flex justify-between items-center">
+              <div>
+                <strong>Đã nhận diện {parsedStudents.length} học sinh.</strong> Lớp đích: <strong>{selectedClass?.name || selectedClassId}</strong> (Khối {selectedClass?.grade_level || '?'})
+              </div>
             </div>
 
             <div className="max-h-60 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl">
@@ -447,14 +449,14 @@ export function ImportStudentsModal({ isOpen, onClose }) {
             <div className="flex justify-between items-center pt-2">
               <button
                 onClick={() => setStep(1)}
-                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm"
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm cursor-pointer"
               >
                 ← Sửa Danh Sách
               </button>
               <button
                 onClick={handleRunDryRun}
                 disabled={isLoading}
-                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2"
+                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer"
               >
                 {isLoading ? '⏳ Đang Quét Dry-Run...' : '🔍 Kiểm Tra Dry-Run Bản Xem Trước ➔'}
               </button>
@@ -464,18 +466,22 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
         {step === 3 && dryRunData && (
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
               <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-200">
-                <span className="block text-xl font-extrabold text-emerald-600">{dryRunData.summary.readyToCreate}</span>
-                <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">Sẵn Sàng Tạo Mới</span>
+                <span className="block text-xl font-extrabold text-emerald-600">{dryRunData.summary.readyToCreate || 0}</span>
+                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">Sẵn Sàng Tạo</span>
               </div>
               <div className="p-3 bg-blue-50 dark:bg-blue-950/40 rounded-xl border border-blue-200">
-                <span className="block text-xl font-extrabold text-blue-600">{dryRunData.summary.alreadyInClass}</span>
-                <span className="text-xs font-semibold text-blue-800 dark:text-blue-300">Đã Thuộc Lớp 2.12</span>
+                <span className="block text-xl font-extrabold text-blue-600">{dryRunData.summary.alreadyInClass || 0}</span>
+                <span className="text-[11px] font-semibold text-blue-800 dark:text-blue-300">Đã Ở Lớp Đích</span>
+              </div>
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/40 rounded-xl border border-rose-200">
+                <span className="block text-xl font-extrabold text-rose-600">{dryRunData.summary.inAnotherClass || 0}</span>
+                <span className="text-[11px] font-semibold text-rose-800 dark:text-rose-300">Ở Lớp Khác</span>
               </div>
               <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200">
-                <span className="block text-xl font-extrabold text-amber-600">{dryRunData.summary.reviewRequired}</span>
-                <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">Cần Admin Xác Minh</span>
+                <span className="block text-xl font-extrabold text-amber-600">{dryRunData.summary.reviewRequired || 0}</span>
+                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">Cần Xác Minh</span>
               </div>
             </div>
 
@@ -495,13 +501,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
                       <td className="p-2.5 font-bold text-slate-400">{r.stt}</td>
                       <td className="p-2.5 font-semibold text-slate-800 dark:text-white">{r.fullName}</td>
                       <td className="p-2.5">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          r.status === 'READY_TO_CREATE' ? 'bg-emerald-100 text-emerald-800' :
-                          r.status === 'ALREADY_IN_CLASS_212' ? 'bg-blue-100 text-blue-800' :
-                          'bg-amber-100 text-amber-800'
-                        }`}>
-                          {r.status}
-                        </span>
+                        {renderStatusBadge(r.status)}
                       </td>
                       <td className="p-2.5 text-slate-500 dark:text-slate-400">{r.note}</td>
                     </tr>
@@ -512,7 +512,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
             {dryRunData.summary.reviewRequired > 0 && (
               <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-center gap-2">
-                <span>🚫</span> Nút thực thi bị khóa vì có {dryRunData.summary.reviewRequired} dòng cần Admin xác minh hoặc bị trùng lặp.
+                <span>🚫</span> Nút thực thi bị khóa vì có {dryRunData.summary.reviewRequired} dòng cần Admin xác minh, học sinh ở lớp khác hoặc bị trùng lặp.
               </div>
             )}
 
@@ -525,14 +525,14 @@ export function ImportStudentsModal({ isOpen, onClose }) {
                   disabled={dryRunData.summary.reviewRequired > 0 || hasExecutedProd}
                   className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
                 />
-                Tôi đã kiểm tra kỹ bản xem trước Dry-Run và xác nhận chịu trách nhiệm cho thao tác tạo tài khoản thật trên Production.
+                Tôi đã kiểm tra kỹ bản xem trước Dry-Run cho lớp {selectedClass?.name || 'đã chọn'} và xác nhận chịu trách nhiệm cho thao tác tạo tài khoản thật trên Production.
               </label>
             </div>
 
             <div className="flex justify-between items-center pt-2">
               <button
                 onClick={() => setStep(2)}
-                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm"
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-100 font-semibold text-sm cursor-pointer"
               >
                 ← Quay Lại
               </button>
@@ -542,7 +542,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
                 className={`px-6 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2 ${
                   isProdDisabled
                     ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
                 }`}
               >
                 {isLoading ? '⏳ Đang Tạo Tài Khoản Production...' : '⚡ Xác Nhận Tạo Thật Trên Production ➔'}
@@ -556,7 +556,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
             <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl border border-emerald-300 dark:border-emerald-800 text-center">
               <span className="text-3xl">🎉</span>
               <h3 className="text-lg font-bold text-emerald-800 dark:text-emerald-200 mt-1">
-                Hoàn Tất Tạo Tài Khoản Lớp 2.12!
+                Hoàn Tất Tạo Tài Khoản {prodResult.className || selectedClass?.name || 'Lớp Học'}!
               </h3>
               <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
                 Đã tạo thành công {prodResult.summary.created} tài khoản mới và gán {prodResult.summary.assignedExisting} học sinh có sẵn.
@@ -586,19 +586,19 @@ export function ImportStudentsModal({ isOpen, onClose }) {
               <button
                 onClick={handleDownloadCSV}
                 disabled={prodResult.replayed || hasConfirmedDelivery}
-                className="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2"
+                className="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2 cursor-pointer"
               >
                 <span>💾</span> {hasDownloadedCSV ? '✓ Đã bắt đầu tải CSV' : 'Tải File CSV Mật Khẩu PIN Học Sinh'}
               </button>
               {hasDownloadedCSV && !hasConfirmedDelivery && (
                 <button onClick={handleConfirmDelivery}
-                  className="px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm">
+                  className="px-5 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm cursor-pointer">
                   Tôi xác nhận đã lưu file
                 </button>
               )}
               <button
                 onClick={handleSafeClose}
-                className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white font-bold text-sm"
+                className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white font-bold text-sm cursor-pointer"
               >
                 Đóng
               </button>
