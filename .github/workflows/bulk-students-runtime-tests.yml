@@ -28,12 +28,12 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: 2.1.1
+          version: '2.114.0'
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          deno-version: '2.9.5'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
