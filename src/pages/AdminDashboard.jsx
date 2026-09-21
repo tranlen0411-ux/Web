@@ -31,6 +31,7 @@ import { StudentPinModal } from '../components/dashboard/StudentPinModal';
 import { StudentQrModal } from '../components/dashboard/StudentQrModal';
 import { ImportStudentsModal } from '../components/dashboard/ImportStudentsModal';
 import { AssignTeacherModal } from '../components/dashboard/AssignTeacherModal';
+import { ClassManageModal } from '../components/dashboard/ClassManageModal';
 import { StudentClassAssignmentModal } from '../components/dashboard/StudentClassAssignmentModal';
 import { ResetScoresModal } from '../components/dashboard/ResetScoresModal';
 import { ParentCodeCell } from '../components/common/ParentCodeCell';
@@ -111,6 +112,7 @@ export const AdminDashboard = () => {
   const [userToDelete, setUserToDelete] = useState(null);
   const [isImportStudentsOpen, setIsImportStudentsOpen] = useState(false);
   const [isAssignTeacherOpen, setIsAssignTeacherOpen] = useState(false);
+  const [isCreateClassOpen, setIsCreateClassOpen] = useState(false);
   const [isResetScoresOpen, setIsResetScoresOpen] = useState(false);
   const [isStudentClassModalOpen, setIsStudentClassModalOpen] = useState(false);
   const [selectedStudentForClass, setSelectedStudentForClass] = useState(null);
@@ -703,7 +705,17 @@ export const AdminDashboard = () => {
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => {
+                  setIsCreateClassOpen(true);
+                  triggerSound('click');
+                }}
+                className="px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white font-black text-xs sm:text-sm rounded-2xl border-b-4 border-sky-700 shadow-md flex items-center gap-2 active:translate-y-0.5"
+              >
+                <School className="w-4 h-4 text-white" /> 🏫 Tạo Lớp Học
+              </button>
+
               <button
                 onClick={() => {
                   setIsImportStudentsOpen(true);
@@ -1316,6 +1328,12 @@ export const AdminDashboard = () => {
         onSaved={() => fetchAdminData()}
         classesList={classesListState}
         teachersList={usersList.filter(u => u.role === 'teacher')}
+      />
+
+      <ClassManageModal
+        isOpen={isCreateClassOpen}
+        onClose={() => setIsCreateClassOpen(false)}
+        onCreated={() => fetchAdminData()}
       />
 
       <ResetScoresModal
