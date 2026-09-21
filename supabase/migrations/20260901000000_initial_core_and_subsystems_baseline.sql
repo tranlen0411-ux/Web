@@ -262,3 +262,15 @@ CREATE TABLE IF NOT EXISTS app_private.student_pin_reset_logs (
   student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 10. PHÂN QUYỀN MẶC ĐỊNH CHO CÁC SCHEMAS VÀ BẢNG TRÊN FRESH LOCAL DATABASE
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+
+GRANT USAGE ON SCHEMA app_private TO postgres, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA app_private TO postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA app_private TO postgres, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA app_private TO postgres, service_role;
+
