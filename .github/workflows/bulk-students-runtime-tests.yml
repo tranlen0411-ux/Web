@@ -53,8 +53,16 @@ jobs:
           deno check supabase/functions/admin-bulk-create-students/index.ts
           deno check supabase/functions/admin-reset-student-pin/index.ts
 
+      - name: Stage Local CI Baseline for Fresh Supabase Engine
+        run: |
+          cp supabase/tests/bulk-students/00_fixture_baseline.sql supabase/migrations/20260901000000_initial_core_and_subsystems_baseline.sql
+
       - name: Start Supabase Local Engine
         run: supabase start
+
+      - name: Cleanup Local CI Staged Baseline
+        run: |
+          rm -f supabase/migrations/20260901000000_initial_core_and_subsystems_baseline.sql
 
       - name: Load Fixture SQL (Local PostgreSQL Only)
         run: |

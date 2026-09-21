@@ -1,11 +1,7 @@
 -- ============================================================================
--- BASELINE MIGRATION: CORE TABLES & SUBSYSTEM FOUNDATION
--- TIMESTAMP: 20260901000000 (Before Exam Builder & Question Bank migrations)
--- PROVIDES: profiles, classes, class_members, learning_materials, scorm_packages,
---           scorm_launch_sessions, question_bank_items, question_bank_versions,
---           academic_exercises, academic_exercise_questions, academic_submissions,
---           academic_submission_answers, exercise_file_cleanup_jobs,
---           app_private schemas and credentials tables for local fresh boot.
+-- BASELINE FIXTURE FOR LOCAL CI & INTEGRATION TESTING RUNNERS ONLY
+-- PURPOSE: INITIALIZE CORE TABLES & SUBSYSTEM FOUNDATION FOR FRESH CONTAINERS
+-- NOT A PRODUCTION MIGRATION - DO NOT PLACE IN supabase/migrations/
 -- ============================================================================
 
 CREATE SCHEMA IF NOT EXISTS app_private;
@@ -273,4 +269,3 @@ GRANT USAGE ON SCHEMA app_private TO postgres, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA app_private TO postgres, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA app_private TO postgres, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA app_private TO postgres, service_role;
-
