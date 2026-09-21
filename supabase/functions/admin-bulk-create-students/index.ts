@@ -418,7 +418,8 @@ serve(async (req) => {
             matchedNoClassCount++;
             readyCount++;
           } else if (memberships.length === 1) {
-            const otherClassName = memberships[0].classes?.name || memberships[0].class_id;
+            const otherClassData = (memberships[0] as any)?.classes;
+            const otherClassName = (Array.isArray(otherClassData) ? otherClassData[0]?.name : otherClassData?.name) || memberships[0].class_id;
             dryResults.push({
               stt: item.stt,
               fullName: item.fullName,
