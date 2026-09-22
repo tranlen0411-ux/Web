@@ -30,12 +30,10 @@ serve(async (req) => {
   const {data:student,error:studentErr}=await adminClient.from('profiles').select('id,role,is_disabled').eq('id',body.studentId).maybeSingle();
   if (studentErr||!student||student.role!=='student'||student.is_disabled===true) return new Response(JSON.stringify({success:false,message:'Không thể cấp lại PIN cho tài khoản này.'}),{status:400,headers});
   const {data:membership,error:membershipErr}=await adminClient.from('class_members')
-    .select('class_id, classes!inner(code,name,grade_level)')
+    .select('class_id, classes!inner(id,code,name,grade_level)')
     .eq('student_id',student.id)
-    .eq('classes.code','LOP212-3A5818')
-    .eq('classes.grade_level',2)
     .maybeSingle();
-  if (membershipErr||!membership) return new Response(JSON.stringify({success:false,message:'Học sinh không thuộc Lớp 2.12.'}),{status:400,headers});
+  if (membershipErr||!membership) return new Response(JSON.stringify({success:false,message:'Học sinh chưa được gán vào lớp học nào.'}),{status:400,headers});
   const {data:allowed,error:limitErr}=await adminClient.rpc('claim_student_pin_reset',{p_admin_id:user.id,p_student_id:student.id});
   if (limitErr||allowed!==true) return new Response(JSON.stringify({success:false,message:'Đã vượt giới hạn cấp lại PIN. Vui lòng thử sau.'}),{status:429,headers});
   const pin=crypto.getRandomValues(new Uint32Array(1))[0].toString().padStart(10,'0').slice(-4);

@@ -188,7 +188,7 @@ export const ClassManageModal = ({ isOpen, onClose, onCreated }) => {
               </label>
               <input
                 type="text"
-                placeholder="Ví dụ: Lớp 1A, Lớp 2.12, Lớp 3B..."
+                placeholder="Ví dụ: Lớp 1A, Lớp 2A, Lớp 3B..."
                 value={className}
                 onChange={(e) => {
                   setClassName(e.target.value);

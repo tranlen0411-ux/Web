@@ -28,12 +28,12 @@ jobs:
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: 2.1.1
+          version: '2.114.0'
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          deno-version: '2.9.5'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -53,8 +53,16 @@ jobs:
           deno check supabase/functions/admin-bulk-create-students/index.ts
           deno check supabase/functions/admin-reset-student-pin/index.ts
 
+      - name: Stage Local CI Baseline for Fresh Supabase Engine
+        run: |
+          cp supabase/tests/bulk-students/00_fixture_baseline.sql supabase/migrations/20260901000000_initial_core_and_subsystems_baseline.sql
+
       - name: Start Supabase Local Engine
         run: supabase start
+
+      - name: Cleanup Local CI Staged Baseline
+        run: |
+          rm -f supabase/migrations/20260901000000_initial_core_and_subsystems_baseline.sql
 
       - name: Load Fixture SQL (Local PostgreSQL Only)
         run: |
@@ -80,6 +88,22 @@ jobs:
           echo "IP_HASH_PEPPER=${PEPPER_VAL}" > supabase/.env.local
           echo "ALLOW_PRODUCTION_BULK_CREATE=true" >> supabase/.env.local
           echo "JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long" >> supabase/.env.local
+          echo "SUPABASE_URL=http://127.0.0.1:54321" >> supabase/.env.local
+
+          ANON_JWT=$(deno eval '
+            const encoder = new TextEncoder();
+            const secret = "super-secret-jwt-token-with-at-least-32-characters-long";
+            const header = { alg: "HS256", typ: "JWT" };
+            const payload = { role: "anon", iss: "supabase", iat: 1577328000, exp: 1892904000 };
+            const b64Url = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+            const h = b64Url(header);
+            const p = b64Url(payload);
+            const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(`${h}.${p}`));
+            const s = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+            console.log(`${h}.${p}.${s}`);
+          ')
+          echo "SUPABASE_ANON_KEY=${ANON_JWT}" >> supabase/.env.local
 
           SERVICE_ROLE_JWT=$(deno eval '
             const encoder = new TextEncoder();
@@ -98,16 +122,14 @@ jobs:
 
       - name: Serve Edge Functions & Execute Runtime Tests
         run: |
-          # Bắt đầu serve Edge Functions trong background trên runner ubuntu-latest local
-          supabase functions serve student-quick-login --env-file supabase/.env.local &
-          supabase functions serve admin-bulk-create-students --env-file supabase/.env.local &
-          supabase functions serve admin-reset-student-pin --env-file supabase/.env.local &
+          # Bắt đầu serve toàn bộ Edge Functions trong background trên runner ubuntu-latest local
+          supabase functions serve --no-verify-jwt --env-file supabase/.env.local &
 
-          # Chờ Edge Functions gateway khởi động
-          sleep 5
+          # Chờ Edge Functions gateway sẵn sàng
+          sleep 8
 
           # Thực thi bộ test tự động thực tế với Deno
-          SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_JWT}" deno test --allow-net --allow-env --allow-read supabase/tests/bulk-students/runtime_test.ts
+          SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_JWT}" SUPABASE_ANON_KEY="${ANON_JWT}" deno test --allow-net --allow-env --allow-read supabase/tests/bulk-students/runtime_test.ts
 
       - name: Stop Supabase Local Engine
         if: always()
