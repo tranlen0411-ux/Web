@@ -20,6 +20,7 @@ const parseApiResponse = async (response) => {
 };
 
 export function ImportStudentsModal({ isOpen, onClose }) {
+  // Kích hoạt cờ Bulk Create cho Production Web (bảo vệ bởi Backend Lock & Dry-run Receipt)
   const bulkCreateEnabled = import.meta.env.VITE_ENABLE_BULK_CREATE === 'true';
   const [step, setStep] = useState(1);
   const [classesList, setClassesList] = useState([]);
