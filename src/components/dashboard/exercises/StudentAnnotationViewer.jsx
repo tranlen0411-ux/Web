@@ -16,6 +16,7 @@ import {
   normalizeAnnotationPayload,
   DEFAULT_NOTE_COLOR,
 } from '../../../utils/annotationNoteUtils';
+import { renderSvgAnnotationStroke } from './SubmissionAnnotationCanvas';
 
 /**
  * Convert normalized points array (0..1) to SVG Path d string (0..1000 viewBox)
@@ -383,24 +384,13 @@ export const StudentAnnotationViewer = ({
             draggable={false}
           />
 
-          {/* SVG Overlay (Strokes & Stamps) */}
+          {/* SVG Overlay (Strokes: Pen, Line, Ellipse, Arrow) */}
           <svg
             className="absolute inset-0 w-full h-full select-none pointer-events-none"
             viewBox="0 0 1000 1000"
             preserveAspectRatio="none"
           >
-            {strokes.map((stroke) => (
-              <path
-                key={stroke.id}
-                d={pointsToSvgPath(stroke.points)}
-                stroke={stroke.color || '#ef4444'}
-                strokeWidth={(stroke.width || 4) * 2.2}
-                vectorEffect="non-scaling-stroke"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
+            {strokes.map((stroke) => renderSvgAnnotationStroke(stroke, false))}
           </svg>
 
           {/* Stamps Overlay */}

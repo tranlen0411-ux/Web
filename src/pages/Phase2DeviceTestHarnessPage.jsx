@@ -86,40 +86,74 @@ export const Phase2DeviceTestHarnessPage = () => {
   
   // Pure In-Memory React State (Zero Supabase Calls)
   const [teacherAnnotation, setTeacherAnnotation] = useState(INITIAL_ANNOTATION);
+  const [teacherHistory, setTeacherHistory] = useState({ past: [], future: [] });
   const [studentAnnotation, setStudentAnnotation] = useState(INITIAL_ANNOTATION);
   const [showJsonInspector, setShowJsonInspector] = useState(false);
 
   // Teacher Toolbar States
-  const [activeTool, setActiveTool] = useState('pen'); // 'pen' | 'check' | 'cross' | 'note' | 'eraser' | 'pan'
+  const [activeTool, setActiveTool] = useState('pen'); // 'pen' | 'line' | 'ellipse' | 'arrow' | 'check' | 'cross' | 'note' | 'eraser' | 'pan'
   const [activeColor, setActiveColor] = useState('#ef4444');
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [scale, setScale] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
 
-  // Undo and Clear handlers
+  // Handler for teacher annotation changes
+  const handleTeacherAnnotationChange = useCallback((updated, { isHistoryAction = false } = {}) => {
+    if (!isHistoryAction) {
+      setTeacherHistory(prev => ({
+        past: [...prev.past.slice(-49), JSON.parse(JSON.stringify(teacherAnnotation))],
+        future: []
+      }));
+    }
+    setTeacherAnnotation(updated);
+  }, [teacherAnnotation]);
+
+  // Undo and Redo handlers
   const handleUndo = useCallback(() => {
+    if (teacherHistory.past.length > 0) {
+      const prevSnapshot = teacherHistory.past[teacherHistory.past.length - 1];
+      const newPast = teacherHistory.past.slice(0, -1);
+      const newFuture = [...teacherHistory.future, JSON.parse(JSON.stringify(teacherAnnotation))];
+      setTeacherHistory({ past: newPast, future: newFuture });
+      setTeacherAnnotation(prevSnapshot);
+      return;
+    }
+
     setTeacherAnnotation(prev => {
       if (!prev) return prev;
       const strokes = [...(prev.strokes || [])];
       const stamps = [...(prev.stamps || [])];
+      const notes = [...(prev.notes || [])];
       if (strokes.length > 0) {
         strokes.pop();
       } else if (stamps.length > 0) {
         stamps.pop();
+      } else if (notes.length > 0) {
+        notes.pop();
       }
-      return { ...prev, strokes, stamps };
+      return { ...prev, strokes, stamps, notes };
     });
-  }, []);
+  }, [teacherHistory, teacherAnnotation]);
+
+  const handleRedo = useCallback(() => {
+    if (teacherHistory.future.length > 0) {
+      const nextSnapshot = teacherHistory.future[teacherHistory.future.length - 1];
+      const newFuture = teacherHistory.future.slice(0, -1);
+      const newPast = [...teacherHistory.past, JSON.parse(JSON.stringify(teacherAnnotation))];
+      setTeacherHistory({ past: newPast, future: newFuture });
+      setTeacherAnnotation(nextSnapshot);
+    }
+  }, [teacherHistory, teacherAnnotation]);
 
   const handleClear = useCallback(() => {
-    setTeacherAnnotation(prev => ({
-      ...prev,
+    handleTeacherAnnotationChange({
+      schema_version: 1,
       strokes: [],
       stamps: [],
       notes: []
-    }));
-  }, []);
+    });
+  }, [handleTeacherAnnotationChange]);
 
   const handleZoomIn = useCallback(() => {
     setScale(prev => zoomIn(prev));
@@ -144,6 +178,7 @@ export const Phase2DeviceTestHarnessPage = () => {
   // Reset fixture to clean initial state
   const handleResetFixture = useCallback(() => {
     setTeacherAnnotation(JSON.parse(JSON.stringify(INITIAL_ANNOTATION)));
+    setTeacherHistory({ past: [], future: [] });
     setStudentAnnotation(JSON.parse(JSON.stringify(INITIAL_ANNOTATION)));
     setActiveTool('pen');
     setActiveColor('#ef4444');
@@ -219,7 +254,7 @@ export const Phase2DeviceTestHarnessPage = () => {
         </div>
         {activeTab === 'teacher' ? (
           <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-            <li><strong>Thanh công cụ:</strong> Chọn công cụ Bút (Pen), Đúng (Check), Sai (Cross), Ghi chú (Note), Tẩy (Eraser), hoặc Pan.</li>
+            <li><strong>Thanh công cụ:</strong> Chọn công cụ Bút (Pen), Thẳng (Line), Khoanh (Ellipse), Mũi tên (Arrow), Đúng (Check), Sai (Cross), Ghi chú (Note), Tẩy (Eraser), Kéo (Pan), Hoàn tác (Undo), Làm lại (Redo).</li>
             <li><strong>Pinch Zoom &amp; Nút Zoom:</strong> Dùng 2 ngón tay thu phóng hoặc bấm các nút +/- / 100% trên thanh công cụ.</li>
             <li><strong>Two-finger Pan:</strong> Dùng 2 ngón tay kéo rê vùng xem khi đang chọn công cụ vẽ.</li>
             <li><strong>Tạo Ghi Chú:</strong> Chọn công cụ <em>Ghi chú (Note)</em> -&gt; Chạm vào ảnh -&gt; Gõ tiếng Việt có dấu.</li>
@@ -278,11 +313,15 @@ export const Phase2DeviceTestHarnessPage = () => {
                   strokeWidth={strokeWidth}
                   onSelectStrokeWidth={setStrokeWidth}
                   onUndo={handleUndo}
+                  onRedo={handleRedo}
                   onClear={handleClear}
                   canUndo={Boolean(
+                    teacherHistory.past.length > 0 ||
                     teacherAnnotation?.strokes?.length > 0 ||
-                    teacherAnnotation?.stamps?.length > 0
+                    teacherAnnotation?.stamps?.length > 0 ||
+                    teacherAnnotation?.notes?.length > 0
                   )}
+                  canRedo={Boolean(teacherHistory.future.length > 0)}
                   readOnly={false}
                   scale={scale}
                   onZoomIn={handleZoomIn}
@@ -296,7 +335,7 @@ export const Phase2DeviceTestHarnessPage = () => {
                 <SubmissionAnnotationCanvas
                   imageUrl={SAMPLE_IMAGE_URL}
                   annotation={teacherAnnotation}
-                  onChange={(updated) => setTeacherAnnotation(updated)}
+                  onChange={handleTeacherAnnotationChange}
                   readOnly={false}
                   activeTool={activeTool}
                   activeColor={activeColor}

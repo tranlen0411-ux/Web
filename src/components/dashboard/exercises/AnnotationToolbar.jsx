@@ -1,6 +1,7 @@
 import React from 'react';
 import { 
-  Pen, Check, X, Eraser, Hand, RotateCcw, Trash2, 
+  Pen, Minus, Circle, ArrowUpRight, Check, X, Eraser, Hand, 
+  RotateCcw, RotateCw, Trash2, 
   Save, Loader2, AlertTriangle, AlertCircle, RefreshCw,
   ZoomIn, ZoomOut, Maximize2, StickyNote
 } from 'lucide-react';
@@ -20,7 +21,7 @@ const STROKE_WIDTHS = [
 ];
 
 /**
- * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Phase 2 - P2-A2 Desktop Zoom/Pan)
+ * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Quick Tools: Pen, Line, Ellipse, Arrow, Stamps, Note, Undo/Redo)
  */
 export const AnnotationToolbar = ({
   activeTool = 'pen',
@@ -30,29 +31,34 @@ export const AnnotationToolbar = ({
   strokeWidth = 4,
   onSelectStrokeWidth,
   onUndo,
+  onRedo,
   onClear,
   canUndo = false,
+  canRedo = false,
   readOnly = false,
   saveStatus = 'idle', // 'idle' | 'dirty' | 'saving' | 'saved' | 'conflict' | 'error'
   version = 0,
   onManualSave,
   onReloadLatest,
-  // Phase 2 Desktop Zoom & Pan controls
+  // Viewport Zoom & Pan controls
   scale = 1,
   onZoomIn,
   onZoomOut,
   onResetZoom,
 }) => {
+  const isShapeOrPenTool = ['pen', 'line', 'ellipse', 'arrow'].includes(activeTool);
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-700 shadow-xl text-white">
       
       {/* 1. CÁC CÔNG CỤ CHẤM VẼ & DI CHUYỂN (TOOLS) */}
-      <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+      <div className="flex items-center flex-wrap gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+        {/* Bút vẽ tự do */}
         <button
           type="button"
           onClick={() => onSelectTool?.('pen')}
           disabled={readOnly}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
             activeTool === 'pen'
               ? 'bg-amber-500 text-white shadow-md'
               : 'text-slate-300 hover:text-white hover:bg-slate-700'
@@ -63,11 +69,60 @@ export const AnnotationToolbar = ({
           <span>Vẽ</span>
         </button>
 
+        {/* Đoạn thẳng (Line) */}
+        <button
+          type="button"
+          onClick={() => onSelectTool?.('line')}
+          disabled={readOnly}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
+            activeTool === 'line'
+              ? 'bg-amber-500 text-white shadow-md'
+              : 'text-slate-300 hover:text-white hover:bg-slate-700'
+          }`}
+          title="Đoạn thẳng (Line)"
+        >
+          <Minus className="w-3.5 h-3.5" />
+          <span>Thẳng</span>
+        </button>
+
+        {/* Khoanh tròn / Elip (Circle/Ellipse) */}
+        <button
+          type="button"
+          onClick={() => onSelectTool?.('ellipse')}
+          disabled={readOnly}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
+            activeTool === 'ellipse'
+              ? 'bg-amber-500 text-white shadow-md'
+              : 'text-slate-300 hover:text-white hover:bg-slate-700'
+          }`}
+          title="Khoanh vùng elip / hình tròn (Circle/Ellipse)"
+        >
+          <Circle className="w-3.5 h-3.5" />
+          <span>Khoanh</span>
+        </button>
+
+        {/* Mũi tên (Arrow) */}
+        <button
+          type="button"
+          onClick={() => onSelectTool?.('arrow')}
+          disabled={readOnly}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
+            activeTool === 'arrow'
+              ? 'bg-amber-500 text-white shadow-md'
+              : 'text-slate-300 hover:text-white hover:bg-slate-700'
+          }`}
+          title="Mũi tên chỉ dẫn (Arrow)"
+        >
+          <ArrowUpRight className="w-3.5 h-3.5" />
+          <span>Mũi tên</span>
+        </button>
+
+        {/* Dấu đúng */}
         <button
           type="button"
           onClick={() => onSelectTool?.('check')}
           disabled={readOnly}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
             activeTool === 'check'
               ? 'bg-emerald-600 text-white shadow-md'
               : 'text-emerald-400 hover:text-emerald-300 hover:bg-slate-700'
@@ -78,11 +133,12 @@ export const AnnotationToolbar = ({
           <span>Đúng</span>
         </button>
 
+        {/* Dấu sai */}
         <button
           type="button"
           onClick={() => onSelectTool?.('cross')}
           disabled={readOnly}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
             activeTool === 'cross'
               ? 'bg-rose-600 text-white shadow-md'
               : 'text-rose-400 hover:text-rose-300 hover:bg-slate-700'
@@ -93,11 +149,12 @@ export const AnnotationToolbar = ({
           <span>Sai</span>
         </button>
 
+        {/* Ghi chú nhận xét */}
         <button
           type="button"
           onClick={() => onSelectTool?.('note')}
           disabled={readOnly}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-black transition-all ${
             activeTool === 'note'
               ? 'bg-amber-600 text-white shadow-md'
               : 'text-amber-400 hover:text-amber-300 hover:bg-slate-700'
@@ -108,6 +165,7 @@ export const AnnotationToolbar = ({
           <span>Ghi chú</span>
         </button>
 
+        {/* Tẩy nét */}
         <button
           type="button"
           onClick={() => onSelectTool?.('eraser')}
@@ -123,6 +181,7 @@ export const AnnotationToolbar = ({
           <span>Tẩy</span>
         </button>
 
+        {/* Kéo xem */}
         <button
           type="button"
           onClick={() => onSelectTool?.('pan')}
@@ -185,7 +244,7 @@ export const AnnotationToolbar = ({
             key={c.id}
             type="button"
             onClick={() => onSelectColor?.(c.value)}
-            disabled={readOnly || activeTool === 'check' || activeTool === 'cross' || activeTool === 'pan' || activeTool === 'note'}
+            disabled={readOnly || !isShapeOrPenTool}
             className={`w-6 h-6 rounded-full transition-transform flex items-center justify-center ${
               activeColor === c.value
                 ? 'scale-110 ring-2 ring-white ring-offset-2 ring-offset-slate-900'
@@ -205,7 +264,7 @@ export const AnnotationToolbar = ({
             key={sw.id}
             type="button"
             onClick={() => onSelectStrokeWidth?.(sw.value)}
-            disabled={readOnly || activeTool !== 'pen'}
+            disabled={readOnly || !isShapeOrPenTool}
             className={`px-2 py-1 rounded-lg text-[10px] font-black transition-all flex items-center justify-center ${
               strokeWidth === sw.value
                 ? 'bg-slate-600 text-white'
@@ -218,25 +277,39 @@ export const AnnotationToolbar = ({
         ))}
       </div>
 
-      {/* 5. HOÀN TÁC, XÓA & LƯU NHÁP OCC (ACTIONS & STATUS) */}
+      {/* 5. HOÀN TÁC, LÀM LẠI, XÓA & LƯU NHÁP OCC (ACTIONS & STATUS) */}
       <div className="flex items-center gap-1.5">
+        {/* Nút Hoàn tác (Undo) */}
         <button
           type="button"
           onClick={onUndo}
           disabled={readOnly || !canUndo}
           className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-black transition-colors border border-slate-700"
-          title="Hoàn tác nét gần nhất (Undo)"
+          title="Hoàn tác thao tác gần nhất (Undo)"
         >
           <RotateCcw className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Hoàn tác</span>
         </button>
 
+        {/* Nút Làm lại (Redo) */}
+        <button
+          type="button"
+          onClick={onRedo}
+          disabled={readOnly || !canRedo}
+          className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-black transition-colors border border-slate-700"
+          title="Làm lại thao tác vừa hoàn tác (Redo)"
+        >
+          <RotateCw className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Làm lại</span>
+        </button>
+
+        {/* Nút Xóa hết (Clear All) */}
         <button
           type="button"
           onClick={onClear}
-          disabled={readOnly || !canUndo}
+          disabled={readOnly || (!canUndo && !canRedo)}
           className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 disabled:opacity-40 disabled:hover:bg-rose-950/60 text-rose-300 rounded-xl text-xs font-black transition-colors border border-rose-800/50"
-          title="Xóa toàn bộ nét vẽ trên ảnh này"
+          title="Xóa toàn bộ nét vẽ và ghi chú trên ảnh này"
         >
           <Trash2 className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Xóa hết</span>
