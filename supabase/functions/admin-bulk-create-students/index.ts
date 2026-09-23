@@ -94,7 +94,10 @@ serve(async (req) => {
     // 1. ENDPOINT KIỂM TRA TRẠNG THÁI BACKEND AN TOÀN (READ-ONLY, CHỈ ADMIN, KHÔNG LỘ SECRET)
     const reqUrl = new URL(req.url);
     const actionQuery = reqUrl.searchParams.get('action');
-    if (req.method === 'GET' || actionQuery === 'status' || actionQuery === 'get_status') {
+    if (
+      req.method === 'GET' &&
+      (actionQuery === 'status' || actionQuery === 'get_status')
+    ) {
       const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
       return new Response(
         JSON.stringify({
@@ -102,6 +105,13 @@ serve(async (req) => {
           enabled: isAllowProductionBulkCreate,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (req.method === 'GET') {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Yêu cầu GET không hợp lệ hoặc thiếu tham số action.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 

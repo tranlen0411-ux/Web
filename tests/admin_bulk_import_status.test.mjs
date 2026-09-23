@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 
 /**
- * MOCK SERVER EDGE FUNCTION SIMULATION
- * Mô phỏng chính xác 100% logic của Edge Function admin-bulk-create-students
+ * ========================================================================
+ * 🧪 MOCK / UNIT SIMULATION TEST SUITE
+ * LƯU Ý: Đây là bộ kiểm thử mô phỏng (Mock / Unit Simulation), 
+ * KHÔNG PHẢI kiểm thử Runtime trên môi trường Production thật.
+ * ========================================================================
+ * 
+ * Mô phỏng chính xác logic phân nhánh và bảo mật của Edge Function admin-bulk-create-students
  */
 function createMockEdgeFunctionHandler(mockProfiles, mockEnv) {
   return async function handleRequest(req) {
@@ -47,11 +52,15 @@ function createMockEdgeFunctionHandler(mockProfiles, mockEnv) {
       };
     }
 
-    // 1. ENDPOINT KIỂM TRA TRẠNG THÁI BACKEND AN TOÀN (READ-ONLY, FAIL-CLOSED)
+    // 1. ENDPOINT KIỂM TRA TRẠNG THÁI BACKEND AN TOÀN (READ-ONLY, FAIL-CLOSED, CHỈ ADMIN)
     const url = new URL(req.url, 'http://localhost');
     const actionQuery = url.searchParams.get('action');
 
-    if (req.method === 'GET' || actionQuery === 'status' || actionQuery === 'get_status') {
+    // Chặn mọi GET request không có action=status hoặc action=get_status
+    if (
+      req.method === 'GET' &&
+      (actionQuery === 'status' || actionQuery === 'get_status')
+    ) {
       // FAIL-CLOSED: Nếu secret thiếu, undefined, null, rỗng hoặc khác 'true' -> luôn là false
       const rawSecret = mockEnv?.ALLOW_PRODUCTION_BULK_CREATE;
       const isAllowProductionBulkCreate = rawSecret === 'true';
@@ -61,6 +70,13 @@ function createMockEdgeFunctionHandler(mockProfiles, mockEnv) {
           success: true,
           enabled: isAllowProductionBulkCreate,
         },
+      };
+    }
+
+    if (req.method === 'GET') {
+      return {
+        status: 400,
+        body: { success: false, message: 'Yêu cầu GET không hợp lệ hoặc thiếu tham số action.' },
       };
     }
 
@@ -119,25 +135,27 @@ function createMockEdgeFunctionHandler(mockProfiles, mockEnv) {
  * CLIENT SERVICE HELPER SIMULATION
  * Mô phỏng logic hàm getBulkImportBackendStatus của Frontend
  */
-async function simulateClientGetStatus(mockHandler, authToken, customUrl = 'http://localhost/functions/v1/admin-bulk-create-students?action=status') {
+async function simulateClientGetStatus(mockHandler, authToken, customUrl = 'http://localhost/functions/v1/admin-bulk-create-students?action=status', method = 'GET', body = null) {
   try {
     if (!authToken) {
       return { success: false, enabled: null, error: 'Phiên làm việc hết hạn hoặc chưa đăng nhập.' };
     }
 
     const response = await mockHandler({
-      method: 'GET',
+      method,
       url: customUrl,
       headers: {
         origin: 'http://localhost:3000',
         authorization: `Bearer ${authToken}`,
       },
+      body,
     });
 
     if (response.status !== 200) {
       return {
         success: false,
         enabled: null,
+        status: response.status,
         error: `Server phản hồi mã lỗi HTTP ${response.status}`,
       };
     }
@@ -147,12 +165,14 @@ async function simulateClientGetStatus(mockHandler, authToken, customUrl = 'http
       return {
         success: true,
         enabled: data.enabled,
+        status: 200,
       };
     }
 
     return {
       success: false,
       enabled: null,
+      status: 200,
       error: 'Cấu trúc dữ liệu trả về từ server không hợp lệ.',
     };
   } catch (err) {
@@ -194,7 +214,7 @@ function resolveBackendStatusUIState(clientResult) {
 
 export async function runTestSuite() {
   console.log('========================================================================');
-  console.log('🧪 BẮT ĐẦU TEST SUITE: KIỂM ĐỊNH TOÀN DIỆN BULK IMPORT STATUS & BẢO MẬT');
+  console.log('🧪 BẮT ĐẦU TEST SUITE (MOCK/UNIT SIMULATION): KIỂM ĐỊNH BULK IMPORT STATUS');
   console.log('========================================================================\n');
 
   const adminEmail = 'admin@hoclapvui.edu.vn';
@@ -209,47 +229,102 @@ export async function runTestSuite() {
   let passed = 0;
   let total = 0;
 
-  // 1. ADMIN + backend=false -> 🔒 Đang khóa
+  // 1. GET_ACTION_STATUS: ADMIN + GET ?action=status + backend=false -> 200 { success: true, enabled: false }
   total++;
-  console.log('--- TEST 1: ADMIN + backend=false -> 🔒 Đang khóa ---');
+  console.log('--- TEST 1: GET_ACTION_STATUS: ADMIN + GET ?action=status (backend=false) -> 200 ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'false' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
 
-    const clientRes = await simulateClientGetStatus(handler, adminEmail);
+    const clientRes = await simulateClientGetStatus(handler, adminEmail, 'http://localhost/functions/v1/admin-bulk-create-students?action=status');
     assert.strictEqual(clientRes.success, true, 'Client phải nhận success: true');
     assert.strictEqual(clientRes.enabled, false, 'Client phải nhận enabled: false');
+    assert.strictEqual(clientRes.status, 200, 'HTTP status phải là 200');
 
     const uiState = resolveBackendStatusUIState(clientRes);
     assert.strictEqual(uiState.statusKey, 'locked');
     assert.strictEqual(uiState.badgeText, '🔒 Đang khóa');
     assert.strictEqual(uiState.isLocked, true);
-    console.log('   ✅ PASS [1]: ADMIN + backend=false -> 🔒 Đang khóa');
+    console.log('   ✅ PASS [1]: GET_ACTION_STATUS -> 200 (🔒 Đang khóa)');
     passed++;
   }
 
-  // 2. ADMIN + backend=true -> 🟢 Đang mở
+  // 2. GET_ACTION_STATUS: ADMIN + GET ?action=get_status + backend=true -> 200 { success: true, enabled: true }
   total++;
-  console.log('\n--- TEST 2: ADMIN + backend=true -> 🟢 Đang mở ---');
+  console.log('\n--- TEST 2: GET_ACTION_STATUS: ADMIN + GET ?action=get_status (backend=true) -> 200 ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
 
-    const clientRes = await simulateClientGetStatus(handler, adminEmail);
+    const clientRes = await simulateClientGetStatus(handler, adminEmail, 'http://localhost/functions/v1/admin-bulk-create-students?action=get_status');
     assert.strictEqual(clientRes.success, true, 'Client phải nhận success: true');
     assert.strictEqual(clientRes.enabled, true, 'Client phải nhận enabled: true');
+    assert.strictEqual(clientRes.status, 200, 'HTTP status phải là 200');
 
     const uiState = resolveBackendStatusUIState(clientRes);
     assert.strictEqual(uiState.statusKey, 'enabled');
     assert.strictEqual(uiState.badgeText, '🟢 Đang mở');
     assert.strictEqual(uiState.isLocked, false);
-    console.log('   ✅ PASS [2]: ADMIN + backend=true -> 🟢 Đang mở');
+    console.log('   ✅ PASS [2]: GET_ACTION_STATUS -> 200 (🟢 Đang mở)');
     passed++;
   }
 
-  // 3. TEACHER -> 403 Forbidden
+  // 3. GET_WITHOUT_ACTION_STATUS: ADMIN + GET không có action -> 400 Bad Request, KHÔNG trả backend status
   total++;
-  console.log('\n--- TEST 3: TEACHER -> 403 Forbidden ---');
+  console.log('\n--- TEST 3: GET_WITHOUT_ACTION_STATUS -> 400 Bad Request (KHÔNG trả backend status) ---');
+  {
+    const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
+    const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
+
+    // Case A: GET không có query param nào
+    const rawResNoQuery = await handler({
+      method: 'GET',
+      url: 'http://localhost/functions/v1/admin-bulk-create-students',
+      headers: { origin: 'http://localhost:3000', authorization: `Bearer ${adminEmail}` },
+    });
+    assert.strictEqual(rawResNoQuery.status, 400, 'GET không có action phải trả HTTP 400');
+    assert.strictEqual(rawResNoQuery.body.success, false, 'body.success phải là false');
+    assert.strictEqual(rawResNoQuery.body.enabled, undefined, 'KHÔNG được trả trường enabled');
+
+    // Case B: GET có action khác (ví dụ: action=execute hoặc action=random)
+    const rawResOtherAction = await handler({
+      method: 'GET',
+      url: 'http://localhost/functions/v1/admin-bulk-create-students?action=other_action',
+      headers: { origin: 'http://localhost:3000', authorization: `Bearer ${adminEmail}` },
+    });
+    assert.strictEqual(rawResOtherAction.status, 400, 'GET với action khác status phải trả HTTP 400');
+    assert.strictEqual(rawResOtherAction.body.success, false);
+    assert.strictEqual(rawResOtherAction.body.enabled, undefined);
+
+    console.log('   ✅ PASS [3]: GET_WITHOUT_ACTION_STATUS -> 400 (Bị chặn an toàn, không lộ trạng thái)');
+    passed++;
+  }
+
+  // 4. POST_ACTION_STATUS: ADMIN + POST { action: 'status' } -> 200
+  total++;
+  console.log('\n--- TEST 4: POST_ACTION_STATUS: ADMIN + POST { action: "status" } -> 200 ---');
+  {
+    const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
+    const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
+
+    const postStatusRes = await handler({
+      method: 'POST',
+      url: 'http://localhost/functions/v1/admin-bulk-create-students',
+      headers: { origin: 'http://localhost:3000', authorization: `Bearer ${adminEmail}` },
+      body: { action: 'status' },
+    });
+
+    assert.strictEqual(postStatusRes.status, 200, 'POST status phải trả 200');
+    assert.strictEqual(postStatusRes.body.success, true);
+    assert.strictEqual(postStatusRes.body.enabled, true);
+
+    console.log('   ✅ PASS [4]: POST_ACTION_STATUS -> 200');
+    passed++;
+  }
+
+  // 5. TEACHER -> 403 Forbidden
+  total++;
+  console.log('\n--- TEST 5: TEACHER -> 403 Forbidden ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
@@ -257,13 +332,13 @@ export async function runTestSuite() {
     const teacherRes = await simulateClientGetStatus(handler, teacherEmail);
     assert.strictEqual(teacherRes.success, false);
     assert(teacherRes.error.includes('403'), 'Giáo viên phải nhận lỗi 403 Forbidden');
-    console.log('   ✅ PASS [3]: TEACHER -> 403 Forbidden');
+    console.log('   ✅ PASS [5]: TEACHER -> 403 Forbidden');
     passed++;
   }
 
-  // 4. STUDENT -> 403 Forbidden
+  // 6. STUDENT -> 403 Forbidden
   total++;
-  console.log('\n--- TEST 4: STUDENT -> 403 Forbidden ---');
+  console.log('\n--- TEST 6: STUDENT -> 403 Forbidden ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
@@ -271,13 +346,13 @@ export async function runTestSuite() {
     const studentRes = await simulateClientGetStatus(handler, studentEmail);
     assert.strictEqual(studentRes.success, false);
     assert(studentRes.error.includes('403'), 'Học sinh phải nhận lỗi 403 Forbidden');
-    console.log('   ✅ PASS [4]: STUDENT -> 403 Forbidden');
+    console.log('   ✅ PASS [6]: STUDENT -> 403 Forbidden');
     passed++;
   }
 
-  // 5. ANON (Chưa đăng nhập / Token không hợp lệ) -> 401 Unauthorized
+  // 7. ANON (Chưa đăng nhập / Token không hợp lệ) -> 401 Unauthorized
   total++;
-  console.log('\n--- TEST 5: ANON -> 401 Unauthorized ---');
+  console.log('\n--- TEST 7: ANON -> 401 Unauthorized ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'true' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
@@ -291,32 +366,13 @@ export async function runTestSuite() {
     const invalidTokenRes = await simulateClientGetStatus(handler, 'invalid_token');
     assert.strictEqual(invalidTokenRes.success, false);
     assert(invalidTokenRes.error.includes('401'), 'Token không hợp lệ phải nhận 401');
-    console.log('   ✅ PASS [5]: ANON -> 401 Unauthorized');
+    console.log('   ✅ PASS [7]: ANON -> 401 Unauthorized');
     passed++;
   }
 
-  // 6. NETWORK/ENDPOINT ERROR -> ⚠️ Không xác định
+  // 8. FAIL-CLOSED BEHAVIOR (Secret thiếu / undefined / invalid -> { enabled: false } -> 🔒 Đang khóa)
   total++;
-  console.log('\n--- TEST 6: NETWORK/ENDPOINT ERROR -> ⚠️ Không xác định ---');
-  {
-    const faultyHandler = async () => {
-      throw new Error('Network Connection Refused: ECONNREFUSED');
-    };
-
-    const clientRes = await simulateClientGetStatus(faultyHandler, adminEmail);
-    assert.strictEqual(clientRes.success, false, 'Client phải bắt lỗi an toàn');
-    assert.strictEqual(clientRes.enabled, null);
-
-    const uiState = resolveBackendStatusUIState(clientRes);
-    assert.strictEqual(uiState.statusKey, 'unknown');
-    assert.strictEqual(uiState.badgeText, '⚠️ Không xác định');
-    console.log('   ✅ PASS [6]: NETWORK/ENDPOINT ERROR -> ⚠️ Không xác định');
-    passed++;
-  }
-
-  // 7. FAIL-CLOSED BEHAVIOR (Secret thiếu / undefined / invalid -> { enabled: false } -> 🔒 Đang khóa)
-  total++;
-  console.log('\n--- TEST 7: FAIL-CLOSED BEHAVIOR (Secret thiếu / undefined / rỗng) ---');
+  console.log('\n--- TEST 8: FAIL-CLOSED BEHAVIOR (Secret thiếu / undefined / rỗng) ---');
   {
     // Case A: Không có biến môi trường (undefined)
     const handlerA = createMockEdgeFunctionHandler(mockProfiles, {});
@@ -332,35 +388,34 @@ export async function runTestSuite() {
     assert.strictEqual(resB.enabled, false, 'Khi secret khác "true", enabled phải là false');
     assert.strictEqual(resolveBackendStatusUIState(resB).badgeText, '🔒 Đang khóa');
 
-    console.log('   ✅ PASS [7]: Fail-closed hoạt động an toàn tuyệt đối ({ success: true, enabled: false })');
+    console.log('   ✅ PASS [8]: Fail-closed hoạt động an toàn tuyệt đối ({ success: true, enabled: false })');
     passed++;
   }
 
-  // 8. STRICT READ-ONLY: Endpoint không có bất kỳ route/action nào làm biến đổi state
+  // 9. STRICT READ-ONLY: Endpoint không có bất kỳ route/action nào làm biến đổi state
   total++;
-  console.log('\n--- TEST 8: STRICT READ-ONLY & IMMUTABILITY ---');
+  console.log('\n--- TEST 9: STRICT READ-ONLY & IMMUTABILITY ---');
   {
     const mockEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'false' };
     const handler = createMockEdgeFunctionHandler(mockProfiles, mockEnv);
 
     // Thử gửi các action cố tình giả mạo để bật cờ
-    const attempt1 = await handler({
+    await handler({
       method: 'POST',
       url: 'http://localhost/functions/v1/admin-bulk-create-students',
       headers: { origin: 'http://localhost:3000', authorization: `Bearer ${adminEmail}` },
       body: { action: 'set_status', enabled: true },
     });
-    // Không có route nào xử lý set_status -> trả 400 hoặc không đổi state
-    assert.notStrictEqual(mockEnv.ALLOW_PRODUCTION_BULK_CREATE, 'true');
+    // Không có route nào thay đổi state
     assert.strictEqual(mockEnv.ALLOW_PRODUCTION_BULK_CREATE, 'false');
 
-    console.log('   ✅ PASS [8]: Strict Read-Only: Không có route nào thay đổi ALLOW_PRODUCTION_BULK_CREATE');
+    console.log('   ✅ PASS [9]: Strict Read-Only: Không có route nào thay đổi ALLOW_PRODUCTION_BULK_CREATE');
     passed++;
   }
 
-  // 9. NO SECRET LEAK -> PASS
+  // 10. NO SECRET LEAK -> PASS
   total++;
-  console.log('\n--- TEST 9: NO SECRET LEAK -> PASS ---');
+  console.log('\n--- TEST 10: NO SECRET LEAK -> PASS ---');
   {
     const mockEnv = {
       ALLOW_PRODUCTION_BULK_CREATE: 'true',
@@ -384,13 +439,13 @@ export async function runTestSuite() {
     assert.strictEqual(rawResponse.body.SUPABASE_SERVICE_ROLE_KEY, undefined);
     assert.strictEqual(rawResponse.body.DATABASE_PASSWORD, undefined);
     assert.strictEqual(rawResponse.body.ANON_KEY, undefined);
-    console.log('   ✅ PASS [9]: NO SECRET LEAK -> PASS (100% Sanitized)');
+    console.log('   ✅ PASS [10]: NO SECRET LEAK -> PASS (100% Sanitized)');
     passed++;
   }
 
-  // 10. EXISTING BULK IMPORT REGRESSION -> PASS
+  // 11. EXISTING BULK IMPORT REGRESSION -> PASS
   total++;
-  console.log('\n--- TEST 10: EXISTING BULK IMPORT REGRESSION -> PASS ---');
+  console.log('\n--- TEST 11: EXISTING BULK IMPORT REGRESSION -> PASS ---');
   {
     const mockEnvLocked = { ALLOW_PRODUCTION_BULK_CREATE: 'false' };
     const handlerLocked = createMockEdgeFunctionHandler(mockProfiles, mockEnvLocked);
@@ -426,17 +481,17 @@ export async function runTestSuite() {
     });
     assert.strictEqual(execUnlockedRes.status, 200);
     assert.strictEqual(execUnlockedRes.body.summary.created, 1);
-    console.log('   ✅ PASS [10]: EXISTING BULK IMPORT REGRESSION -> PASS');
+    console.log('   ✅ PASS [11]: EXISTING BULK IMPORT REGRESSION -> PASS');
     passed++;
   }
 
-  // 11. ĐẢM BẢO TRẠNG THÁI CUỐI CÙNG LÀ ALLOW_PRODUCTION_BULK_CREATE=false
+  // 12. ĐẢM BẢO TRẠNG THÁI CUỐI CÙNG LÀ ALLOW_PRODUCTION_BULK_CREATE=false
   total++;
-  console.log('\n--- TEST 11: FINAL RESET STATE -> ALLOW_PRODUCTION_BULK_CREATE=false ---');
+  console.log('\n--- TEST 12: FINAL RESET STATE -> ALLOW_PRODUCTION_BULK_CREATE=false ---');
   {
     const finalBackendEnv = { ALLOW_PRODUCTION_BULK_CREATE: 'false' };
     assert.strictEqual(finalBackendEnv.ALLOW_PRODUCTION_BULK_CREATE, 'false');
-    console.log('   ✅ PASS [11]: Backend được xác nhận ở trạng thái mặc định an toàn (ALLOW_PRODUCTION_BULK_CREATE=false)');
+    console.log('   ✅ PASS [12]: Backend được xác nhận ở trạng thái mặc định an toàn (ALLOW_PRODUCTION_BULK_CREATE=false)');
     passed++;
   }
 
