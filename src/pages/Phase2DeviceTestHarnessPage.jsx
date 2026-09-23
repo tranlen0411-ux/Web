@@ -111,29 +111,15 @@ export const Phase2DeviceTestHarnessPage = () => {
 
   // Undo and Redo handlers
   const handleUndo = useCallback(() => {
-    if (teacherHistory.past.length > 0) {
-      const prevSnapshot = teacherHistory.past[teacherHistory.past.length - 1];
-      const newPast = teacherHistory.past.slice(0, -1);
-      const newFuture = [...teacherHistory.future, JSON.parse(JSON.stringify(teacherAnnotation))];
-      setTeacherHistory({ past: newPast, future: newFuture });
-      setTeacherAnnotation(prevSnapshot);
+    if (teacherHistory.past.length === 0) {
       return;
     }
 
-    setTeacherAnnotation(prev => {
-      if (!prev) return prev;
-      const strokes = [...(prev.strokes || [])];
-      const stamps = [...(prev.stamps || [])];
-      const notes = [...(prev.notes || [])];
-      if (strokes.length > 0) {
-        strokes.pop();
-      } else if (stamps.length > 0) {
-        stamps.pop();
-      } else if (notes.length > 0) {
-        notes.pop();
-      }
-      return { ...prev, strokes, stamps, notes };
-    });
+    const prevSnapshot = teacherHistory.past[teacherHistory.past.length - 1];
+    const newPast = teacherHistory.past.slice(0, -1);
+    const newFuture = [...teacherHistory.future, JSON.parse(JSON.stringify(teacherAnnotation))];
+    setTeacherHistory({ past: newPast, future: newFuture });
+    setTeacherAnnotation(prevSnapshot);
   }, [teacherHistory, teacherAnnotation]);
 
   const handleRedo = useCallback(() => {
@@ -315,12 +301,7 @@ export const Phase2DeviceTestHarnessPage = () => {
                   onUndo={handleUndo}
                   onRedo={handleRedo}
                   onClear={handleClear}
-                  canUndo={Boolean(
-                    teacherHistory.past.length > 0 ||
-                    teacherAnnotation?.strokes?.length > 0 ||
-                    teacherAnnotation?.stamps?.length > 0 ||
-                    teacherAnnotation?.notes?.length > 0
-                  )}
+                  canUndo={Boolean(teacherHistory.past.length > 0)}
                   canRedo={Boolean(teacherHistory.future.length > 0)}
                   readOnly={false}
                   scale={scale}

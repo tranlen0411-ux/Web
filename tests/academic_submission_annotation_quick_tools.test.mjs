@@ -1,5 +1,5 @@
 // tests/academic_submission_annotation_quick_tools.test.mjs
-// COMPREHENSIVE AUTOMATED TEST SUITE: TEACHER GRADING ANNOTATION QUICK TOOLS (PHASE: FINAL PRE-PR AUDIT)
+// COMPREHENSIVE AUTOMATED TEST SUITE: TEACHER GRADING ANNOTATION QUICK TOOLS (PHASE: FINAL PRE-PR AUDIT & UNDO/REDO BOUNDARY FIX)
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,7 +17,7 @@ import {
 } from '../src/utils/annotationViewportMath.js';
 
 console.log('================================================================================');
-console.log('🚀 BẮT ĐẦU KIỂM THỬ: FINAL PRE-PR AUDIT — ANNOTATION QUICK TOOLS');
+console.log('🚀 BẮT ĐẦU KIỂM THỬ: AUDIT & UNDO/REDO SESSION BOUNDARY — ANNOTATION QUICK TOOLS');
 console.log('================================================================================\n');
 
 const testResults = {};
@@ -31,64 +31,7 @@ function distToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 }
 
-// Helper: Point near stroke test matching SubmissionAnnotationCanvas logic
-function isPointNearStroke(stroke, x, y, threshold = 0.04) {
-  const tool = stroke.tool || 'pen';
-
-  if (tool === 'pen') {
-    if (!stroke.points || stroke.points.length === 0) return false;
-    if (stroke.points.some(p => Math.hypot(p.x - x, p.y - y) < threshold)) return true;
-    for (let i = 0; i < stroke.points.length - 1; i++) {
-      const pA = stroke.points[i];
-      const pB = stroke.points[i + 1];
-      if (distToSegment(x, y, pA.x, pA.y, pB.x, pB.y) < threshold) return true;
-    }
-    return false;
-  }
-
-  const points = stroke.points || [];
-  if (points.length < 2) {
-    if (points.length === 1) return Math.hypot(points[0].x - x, points[0].y - y) < threshold;
-    return false;
-  }
-
-  const p1 = stroke.startPoint || points[0];
-  const p2 = stroke.endPoint || points[points.length - 1];
-
-  if (tool === 'line') {
-    return distToSegment(x, y, p1.x, p1.y, p2.x, p2.y) < threshold;
-  }
-
-  if (tool === 'arrow') {
-    const shaftHit = distToSegment(x, y, p1.x, p1.y, p2.x, p2.y) < threshold;
-    const tipHit = Math.hypot(x - p2.x, y - p2.y) < threshold * 1.5;
-    return shaftHit || tipHit;
-  }
-
-  if (tool === 'ellipse') {
-    const cx = (p1.x + p2.x) / 2;
-    const cy = (p1.y + p2.y) / 2;
-    const rx = Math.abs(p2.x - p1.x) / 2;
-    const ry = Math.abs(p2.y - p1.y) / 2;
-
-    if (rx < 0.01 && ry < 0.01) {
-      return Math.hypot(x - cx, y - cy) < threshold;
-    }
-
-    const safeRx = Math.max(rx, 0.001);
-    const safeRy = Math.max(ry, 0.001);
-    const dx = (x - cx) / safeRx;
-    const dy = (y - cy) / safeRy;
-    const normDist = Math.hypot(dx, dy);
-    const distToPerimeter = Math.abs(normDist - 1.0) * Math.min(safeRx, safeRy);
-
-    return distToPerimeter < threshold || Math.abs(normDist - 1.0) < 0.35;
-  }
-
-  return false;
-}
-
-// Multi-attachment history manager simulation
+// Multi-attachment history manager simulation matching SubmissionGradingModal
 class MultiAttachmentHistoryManager {
   constructor() {
     this.annotations = {};
@@ -98,6 +41,14 @@ class MultiAttachmentHistoryManager {
   initAttachment(attId, initialData = { schema_version: 1, strokes: [], stamps: [], notes: [] }) {
     this.annotations[attId] = JSON.parse(JSON.stringify(initialData));
     this.history[attId] = { past: [], future: [] };
+  }
+
+  canUndo(attId) {
+    return Boolean((this.history[attId]?.past?.length || 0) > 0);
+  }
+
+  canRedo(attId) {
+    return Boolean((this.history[attId]?.future?.length || 0) > 0);
   }
 
   applyChange(attId, nextData, isHistoryAction = false) {
@@ -112,11 +63,14 @@ class MultiAttachmentHistoryManager {
 
   undo(attId) {
     const attH = this.history[attId] || { past: [], future: [] };
-    if (attH.past.length === 0) return false;
+    if (!attH.past || attH.past.length === 0) {
+      // Strict NO-OP: No fallback popping of strokes, stamps or notes
+      return false;
+    }
     const prev = attH.past[attH.past.length - 1];
     const newPast = attH.past.slice(0, -1);
     const current = this.annotations[attId];
-    const newFuture = [...attH.future, JSON.parse(JSON.stringify(current))];
+    const newFuture = [...(attH.future || []), JSON.parse(JSON.stringify(current))];
     this.history[attId] = { past: newPast, future: newFuture };
     this.applyChange(attId, prev, true);
     return true;
@@ -124,14 +78,29 @@ class MultiAttachmentHistoryManager {
 
   redo(attId) {
     const attH = this.history[attId] || { past: [], future: [] };
-    if (attH.future.length === 0) return false;
+    if (!attH.future || attH.future.length === 0) {
+      return false;
+    }
     const next = attH.future[attH.future.length - 1];
     const newFuture = attH.future.slice(0, -1);
     const current = this.annotations[attId];
-    const newPast = [...attH.past, JSON.parse(JSON.stringify(current))];
+    const newPast = [...(attH.past || []), JSON.parse(JSON.stringify(current))];
     this.history[attId] = { past: newPast, future: newFuture };
     this.applyChange(attId, next, true);
     return true;
+  }
+
+  reloadLatest(attId, serverData) {
+    this.annotations[attId] = JSON.parse(JSON.stringify(serverData));
+    this.history[attId] = { past: [], future: [] };
+  }
+
+  switchSubmission(newSubmissionAttachments = {}) {
+    this.annotations = {};
+    this.history = {};
+    for (const [id, data] of Object.entries(newSubmissionAttachments)) {
+      this.initAttachment(id, data);
+    }
   }
 }
 
@@ -327,12 +296,180 @@ class MultiAttachmentHistoryManager {
 }
 
 // ============================================================================
-// 4. GESTURE SAFETY, MULTITOUCH & POINTER CANCEL
+// 4. SESSION BOUNDARY & RELOAD LATEST FIXES
 // ============================================================================
 
-// TEST 8: POINTER_CANCEL_SAFE
+// TEST 8: RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED
 {
-  // When pointer cancel fires (e.g. phone call or gesture abort), in-progress stroke is dropped
+  const persistedData = {
+    schema_version: 1,
+    strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }] }],
+    stamps: [{ id: 'st1', type: 'check', x: 0.5, y: 0.5 }],
+    notes: [{ id: 'n1', text: 'Persistent note', x: 0.3, y: 0.3 }]
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_reloaded', persistedData);
+
+  // canUndo must be false because history.past is empty
+  assert.equal(mgr.canUndo('att_reloaded'), false, 'Undo button must be disabled after reload');
+  assert.equal(mgr.canRedo('att_reloaded'), false, 'Redo button must be disabled after reload');
+
+  // Ensure annotations are fully intact
+  assert.equal(mgr.annotations['att_reloaded'].strokes.length, 1);
+  assert.equal(mgr.annotations['att_reloaded'].stamps.length, 1);
+  assert.equal(mgr.annotations['att_reloaded'].notes.length, 1);
+
+  testResults.RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED = 'PASS';
+  console.log('✅ RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED: PASS');
+}
+
+// TEST 9: UNDO_WITH_EMPTY_HISTORY_NOOP
+{
+  const persistedData = {
+    schema_version: 1,
+    strokes: [
+      { id: 's1', tool: 'line', points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] },
+      { id: 's2', tool: 'ellipse', points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.8 }] }
+    ],
+    stamps: [{ id: 'st1', type: 'check', x: 0.5, y: 0.5 }],
+    notes: [{ id: 'n1', text: 'Important note', x: 0.4, y: 0.4 }]
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_noop', persistedData);
+
+  // Calling undo with empty history must be a pure NO-OP (no element popping)
+  const didUndo = mgr.undo('att_noop');
+  assert.equal(didUndo, false);
+  assert.equal(mgr.annotations['att_noop'].strokes.length, 2, 'Strokes must NOT be popped on empty history');
+  assert.equal(mgr.annotations['att_noop'].stamps.length, 1, 'Stamps must NOT be popped on empty history');
+  assert.equal(mgr.annotations['att_noop'].notes.length, 1, 'Notes must NOT be popped on empty history');
+
+  testResults.UNDO_WITH_EMPTY_HISTORY_NOOP = 'PASS';
+  console.log('✅ UNDO_WITH_EMPTY_HISTORY_NOOP: PASS');
+}
+
+// TEST 10: RELOAD_LATEST_CLEARS_PAST_HISTORY
+{
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_1');
+
+  // Make 3 edits
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }] });
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }, { id: 's2', tool: 'line', points: [{ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }] }] });
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], notes: [{ id: 'n1', text: 'draft note', x: 0.5, y: 0.5 }] });
+
+  assert.equal(mgr.history['att_1'].past.length, 3);
+  assert.equal(mgr.canUndo('att_1'), true);
+
+  // Server has fresh version loaded via handleReloadLatest
+  const serverFresh = {
+    schema_version: 1,
+    strokes: [{ id: 's_server', tool: 'pen', points: [{ x: 0.3, y: 0.3 }] }],
+    stamps: [],
+    notes: []
+  };
+
+  mgr.reloadLatest('att_1', serverFresh);
+
+  assert.equal(mgr.history['att_1'].past.length, 0, 'Past history must be reset to empty on reload latest');
+  assert.equal(mgr.canUndo('att_1'), false, 'canUndo must be false after reload latest');
+  assert.equal(mgr.annotations['att_1'].strokes[0].id, 's_server');
+
+  testResults.RELOAD_LATEST_CLEARS_PAST_HISTORY = 'PASS';
+  console.log('✅ RELOAD_LATEST_CLEARS_PAST_HISTORY: PASS');
+}
+
+// TEST 11: RELOAD_LATEST_CLEARS_FUTURE_HISTORY
+{
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_1');
+
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }] });
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }, { id: 's2', tool: 'arrow', points: [{ x: 0.2, y: 0.2 }, { x: 0.6, y: 0.6 }] }] });
+
+  mgr.undo('att_1'); // 1 item in future stack
+  assert.equal(mgr.history['att_1'].future.length, 1);
+  assert.equal(mgr.canRedo('att_1'), true);
+
+  // Reload latest from server
+  mgr.reloadLatest('att_1', { schema_version: 1, strokes: [], stamps: [], notes: [] });
+
+  assert.equal(mgr.history['att_1'].future.length, 0, 'Future history must be reset to empty on reload latest');
+  assert.equal(mgr.canRedo('att_1'), false, 'canRedo must be false after reload latest');
+
+  testResults.RELOAD_LATEST_CLEARS_FUTURE_HISTORY = 'PASS';
+  console.log('✅ RELOAD_LATEST_CLEARS_FUTURE_HISTORY: PASS');
+}
+
+// TEST 12: SWITCH_SUBMISSION_CLEARS_ALL_HISTORY
+{
+  const mgr = new MultiAttachmentHistoryManager();
+  // Workspace 1 with 2 attachments
+  mgr.initAttachment('sub1_att1');
+  mgr.initAttachment('sub1_att2');
+
+  mgr.applyChange('sub1_att1', { ...mgr.annotations['sub1_att1'], strokes: [{ id: 's1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }] });
+  mgr.applyChange('sub1_att2', { ...mgr.annotations['sub1_att2'], strokes: [{ id: 's2', tool: 'line', points: [{ x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }] }] });
+
+  assert.equal(mgr.history['sub1_att1'].past.length, 1);
+  assert.equal(mgr.history['sub1_att2'].past.length, 1);
+
+  // Switch to submission 2 (new workspace hydration)
+  mgr.switchSubmission({
+    'sub2_att1': { schema_version: 1, strokes: [], stamps: [], notes: [] }
+  });
+
+  // Old submission history is completely gone
+  assert.equal(mgr.history['sub1_att1'], undefined, 'Old attachment history must be purged');
+  assert.equal(mgr.history['sub1_att2'], undefined, 'Old attachment history must be purged');
+  assert.equal(mgr.history['sub2_att1'].past.length, 0, 'New attachment history must be empty');
+  assert.equal(mgr.canUndo('sub2_att1'), false);
+
+  testResults.SWITCH_SUBMISSION_CLEARS_ALL_HISTORY = 'PASS';
+  console.log('✅ SWITCH_SUBMISSION_CLEARS_ALL_HISTORY: PASS');
+}
+
+// TEST 13: OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE
+{
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_1', { schema_version: 1, strokes: [], stamps: [], notes: [] });
+
+  // Teacher makes local edits on client A
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 'local_s1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }] });
+  mgr.applyChange('att_1', { ...mgr.annotations['att_1'], strokes: [{ id: 'local_s1', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] }, { id: 'local_s2', tool: 'pen', points: [{ x: 0.2, y: 0.2 }] }] });
+
+  // Conflict happens, client reloads authoritative server state
+  const authoritativeServerState = {
+    schema_version: 1,
+    strokes: [{ id: 'server_s1', tool: 'ellipse', points: [{ x: 0.3, y: 0.3 }, { x: 0.7, y: 0.7 }] }],
+    stamps: [{ id: 'server_st1', type: 'check', x: 0.5, y: 0.5 }],
+    notes: [{ id: 'server_n1', text: 'Server truth', x: 0.4, y: 0.4 }]
+  };
+
+  mgr.reloadLatest('att_1', authoritativeServerState);
+
+  // Attempt to undo
+  const couldUndo = mgr.undo('att_1');
+  assert.equal(couldUndo, false, 'Undo must not be allowed after reload');
+
+  // Authoritative server state is protected and not overwritten by stale pre-reload local state
+  assert.equal(mgr.annotations['att_1'].strokes.length, 1);
+  assert.equal(mgr.annotations['att_1'].strokes[0].id, 'server_s1');
+  assert.equal(mgr.annotations['att_1'].stamps.length, 1);
+  assert.equal(mgr.annotations['att_1'].notes.length, 1);
+
+  testResults.OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE = 'PASS';
+  console.log('✅ OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE: PASS');
+}
+
+// ============================================================================
+// 5. GESTURE SAFETY, MULTITOUCH & POINTER CANCEL
+// ============================================================================
+
+// TEST 14: POINTER_CANCEL_SAFE
+{
   let currentStroke = { id: 'temp_stroke', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] };
   let isPointerActive = true;
   let committedAnnotations = { strokes: [] };
@@ -348,9 +485,8 @@ class MultiAttachmentHistoryManager {
   console.log('✅ POINTER_CANCEL_SAFE: PASS');
 }
 
-// TEST 9: MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY
+// TEST 15: MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY
 {
-  // When 2 fingers touch screen, single pointer drawing is suppressed
   const activePointers = new Map();
   activePointers.set(1, { x: 100, y: 100 });
   activePointers.set(2, { x: 200, y: 200 });
@@ -370,10 +506,8 @@ class MultiAttachmentHistoryManager {
   console.log('✅ MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY: PASS');
 }
 
-// TEST 10: MOBILE_SCROLL_ZOOM_CONFLICT
+// TEST 16: MOBILE_SCROLL_ZOOM_CONFLICT
 {
-  // At 1.0x scale -> touch-action: pan-y (allows vertical scrolling)
-  // At >1.0x scale -> touch-action: none (enables two-finger pan/pinch without page scroll conflict)
   function getTouchAction(scale) {
     return scale === 1 ? 'pan-y' : 'none';
   }
@@ -387,10 +521,10 @@ class MultiAttachmentHistoryManager {
 }
 
 // ============================================================================
-// 5. ZERO LENGTH/SIZE SHAPE GESTURES IGNORED
+// 6. ZERO LENGTH/SIZE SHAPE GESTURES IGNORED
 // ============================================================================
 
-// TEST 11: ZERO_LENGTH_LINE_IGNORED
+// TEST 17: ZERO_LENGTH_LINE_IGNORED
 {
   const p1 = { x: 0.3, y: 0.3 };
   const p2 = { x: 0.3, y: 0.3 }; // Tap without drag
@@ -402,7 +536,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_LENGTH_LINE_IGNORED: PASS');
 }
 
-// TEST 12: ZERO_SIZE_ELLIPSE_IGNORED
+// TEST 18: ZERO_SIZE_ELLIPSE_IGNORED
 {
   const p1 = { x: 0.5, y: 0.5 };
   const p2 = { x: 0.5001, y: 0.5001 }; // Microscopic jitter
@@ -414,7 +548,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_SIZE_ELLIPSE_IGNORED: PASS');
 }
 
-// TEST 13: ZERO_LENGTH_ARROW_IGNORED
+// TEST 19: ZERO_LENGTH_ARROW_IGNORED
 {
   const p1 = { x: 0.4, y: 0.4 };
   const p2 = { x: 0.4, y: 0.4 }; // Zero length
@@ -426,9 +560,8 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_LENGTH_ARROW_IGNORED: PASS');
 }
 
-// TEST 14: STUDENT_RENDER_MATCHES_TEACHER_RENDER
+// TEST 20: STUDENT_RENDER_MATCHES_TEACHER_RENDER
 {
-  // 1. Verify StudentAnnotationViewer imports and uses renderSvgAnnotationStroke from SubmissionAnnotationCanvas
   const studentViewerSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/StudentAnnotationViewer.jsx'), 'utf8');
   const canvasSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/SubmissionAnnotationCanvas.jsx'), 'utf8');
 
@@ -439,6 +572,28 @@ class MultiAttachmentHistoryManager {
 
   testResults.STUDENT_RENDER_MATCHES_TEACHER_RENDER = 'PASS';
   console.log('✅ STUDENT_RENDER_MATCHES_TEACHER_RENDER: PASS');
+}
+
+// TEST 21: STATIC CODE AUDIT FOR SUBMISSION_GRADING_MODAL UNDO BOUNDARIES
+{
+  const modalSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/SubmissionGradingModal.jsx'), 'utf8');
+
+  // Verify canUndo strictly checks past length
+  assert.ok(modalSrc.includes('Boolean((annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.past?.length || 0) > 0)'), 'canUndo must strictly check past history stack length');
+
+  // Verify handleUndoAnnotation returns early when past is empty
+  assert.ok(modalSrc.includes('if (!history.past || history.past.length === 0) {'), 'handleUndoAnnotation must return early when history.past is empty');
+
+  // Verify no fallback popping of strokes in handleUndoAnnotation
+  assert.ok(!modalSrc.includes('// Fallback if history stack is empty'), 'Fallback popping on empty history must be completely removed');
+
+  // Verify handleReloadLatest resets history
+  assert.ok(modalSrc.includes('[attachmentId]: { past: [], future: [] }'), 'handleReloadLatest must reset attachment history');
+
+  // Verify workspace hydration resets history
+  assert.ok(modalSrc.includes('setAnnotationHistoryByAttachment({});'), 'Workspace hydration must reset history across submissions');
+
+  console.log('✅ STATIC_CODE_AUDIT_UNDO_BOUNDARIES: PASS');
 }
 
 console.log('\n================================================================================');
@@ -457,6 +612,12 @@ const requiredKeys = [
   'UNDO_NOTE_CREATE_EDIT_DELETE',
   'NEW_EDIT_CLEARS_REDO_STACK',
   'RELOAD_HISTORY_STACK_EMPTY_BUT_ANNOTATIONS_PERSIST',
+  'RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED',
+  'UNDO_WITH_EMPTY_HISTORY_NOOP',
+  'RELOAD_LATEST_CLEARS_PAST_HISTORY',
+  'RELOAD_LATEST_CLEARS_FUTURE_HISTORY',
+  'SWITCH_SUBMISSION_CLEARS_ALL_HISTORY',
+  'OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE',
   'POINTER_CANCEL_SAFE',
   'MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY',
   'MOBILE_SCROLL_ZOOM_CONFLICT',

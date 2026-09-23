@@ -271,6 +271,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         });
 
         setAnnotationsByAttachment(initialAnnotations);
+        setAnnotationHistoryByAttachment({});
         setAnnotationVersions(initialVersions);
         annotationVersionsRef.current = initialVersions;
         setAnnotationDirty(initialDirty);
@@ -453,44 +454,24 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   };
 
   const handleUndoAnnotation = (attachmentId) => {
+    if (!attachmentId) return;
     const history = annotationHistoryByAttachment[attachmentId] || { past: [], future: [] };
     const current = annotationsByAttachment[attachmentId] || { schema_version: 1, strokes: [], stamps: [], notes: [] };
 
-    if (history.past.length > 0) {
-      const prevSnapshot = history.past[history.past.length - 1];
-      const newPast = history.past.slice(0, -1);
-      const newFuture = [...history.future, JSON.parse(JSON.stringify(current))];
-
-      setAnnotationHistoryByAttachment(prev => ({
-        ...prev,
-        [attachmentId]: { past: newPast, future: newFuture }
-      }));
-
-      handleAnnotationChange(attachmentId, prevSnapshot, { isHistoryAction: true });
+    if (!history.past || history.past.length === 0) {
       return;
     }
 
-    // Fallback if history stack is empty (e.g. freshly loaded page with initial elements)
-    const strokes = [...(current.strokes || [])];
-    const stamps = [...(current.stamps || [])];
-    const notes = [...(current.notes || [])];
+    const prevSnapshot = history.past[history.past.length - 1];
+    const newPast = history.past.slice(0, -1);
+    const newFuture = [...(history.future || []), JSON.parse(JSON.stringify(current))];
 
-    if (strokes.length > 0) {
-      strokes.pop();
-    } else if (stamps.length > 0) {
-      stamps.pop();
-    } else if (notes.length > 0) {
-      notes.pop();
-    }
+    setAnnotationHistoryByAttachment(prev => ({
+      ...prev,
+      [attachmentId]: { past: newPast, future: newFuture }
+    }));
 
-    const updated = {
-      ...current,
-      strokes,
-      stamps,
-      notes
-    };
-
-    handleAnnotationChange(attachmentId, updated);
+    handleAnnotationChange(attachmentId, prevSnapshot, { isHistoryAction: true });
   };
 
   const handleRedoAnnotation = (attachmentId) => {
@@ -576,6 +557,10 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
           }));
         }
         setAnnotationDirty(prev => ({ ...prev, [attachmentId]: false }));
+        setAnnotationHistoryByAttachment(prev => ({
+          ...prev,
+          [attachmentId]: { past: [], future: [] }
+        }));
         setAnnotationSaveError(prev => ({ ...prev, [attachmentId]: null }));
         pendingIdempotencyKeysRef.current[attachmentId] = null;
         finalizeIdempotencyKeysRef.current[attachmentId] = null;
@@ -1196,12 +1181,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                 onRedo={() => handleRedoAnnotation(activeAttachmentForAnnotation.id)}
                 onClear={() => handleClearAnnotation(activeAttachmentForAnnotation.id)}
                 canUndo={
-                  Boolean(
-                    (annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.past?.length || 0) > 0 ||
-                    annotationsByAttachment[activeAttachmentForAnnotation.id]?.strokes?.length > 0 ||
-                    annotationsByAttachment[activeAttachmentForAnnotation.id]?.stamps?.length > 0 ||
-                    annotationsByAttachment[activeAttachmentForAnnotation.id]?.notes?.length > 0
-                  )
+                  Boolean((annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.past?.length || 0) > 0)
                 }
                 canRedo={
                   Boolean((annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.future?.length || 0) > 0)
