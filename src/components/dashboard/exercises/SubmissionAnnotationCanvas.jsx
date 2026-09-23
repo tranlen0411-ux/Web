@@ -52,15 +52,78 @@ function pointsToSvgPath(points) {
 }
 
 /**
- * Check if a point (px, py) is near a stroke (bounding box or distance check)
+ * Check distance from point (px, py) to line segment (x1, y1)-(x2, y2)
+ */
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+}
+
+/**
+ * Check if a point (px, py) is near a stroke (pen, line, ellipse, arrow)
  */
 function isPointNearStroke(stroke, x, y, threshold = 0.04) {
-  if (!stroke.points || stroke.points.length === 0) return false;
-  return stroke.points.some(p => {
-    const dx = p.x - x;
-    const dy = p.y - y;
-    return Math.sqrt(dx * dx + dy * dy) < threshold;
-  });
+  const tool = stroke.tool || 'pen';
+
+  if (tool === 'pen') {
+    if (!stroke.points || stroke.points.length === 0) return false;
+    if (stroke.points.some(p => Math.hypot(p.x - x, p.y - y) < threshold)) return true;
+    for (let i = 0; i < stroke.points.length - 1; i++) {
+      const pA = stroke.points[i];
+      const pB = stroke.points[i + 1];
+      if (distToSegment(x, y, pA.x, pA.y, pB.x, pB.y) < threshold) return true;
+    }
+    return false;
+  }
+
+  const points = stroke.points || [];
+  if (points.length < 2) {
+    if (stroke.startPoint && stroke.endPoint) {
+      // Use explicit start/end points
+    } else if (points.length === 1) {
+      return Math.hypot(points[0].x - x, points[0].y - y) < threshold;
+    } else {
+      return false;
+    }
+  }
+
+  const p1 = stroke.startPoint || points[0];
+  const p2 = stroke.endPoint || points[points.length - 1];
+
+  if (tool === 'line') {
+    return distToSegment(x, y, p1.x, p1.y, p2.x, p2.y) < threshold;
+  }
+
+  if (tool === 'arrow') {
+    const shaftHit = distToSegment(x, y, p1.x, p1.y, p2.x, p2.y) < threshold;
+    const tipHit = Math.hypot(x - p2.x, y - p2.y) < threshold * 1.5;
+    return shaftHit || tipHit;
+  }
+
+  if (tool === 'ellipse') {
+    const cx = (p1.x + p2.x) / 2;
+    const cy = (p1.y + p2.y) / 2;
+    const rx = Math.abs(p2.x - p1.x) / 2;
+    const ry = Math.abs(p2.y - p1.y) / 2;
+
+    if (rx < 0.01 && ry < 0.01) {
+      return Math.hypot(x - cx, y - cy) < threshold;
+    }
+
+    const safeRx = Math.max(rx, 0.001);
+    const safeRy = Math.max(ry, 0.001);
+    const dx = (x - cx) / safeRx;
+    const dy = (y - cy) / safeRy;
+    const normDist = Math.hypot(dx, dy);
+    const distToPerimeter = Math.abs(normDist - 1.0) * Math.min(safeRx, safeRy);
+
+    return distToPerimeter < threshold || Math.abs(normDist - 1.0) < 0.35;
+  }
+
+  return false;
 }
 
 /**
@@ -70,6 +133,116 @@ function isPointNearStamp(stamp, x, y, threshold = 0.04) {
   const dx = stamp.x - x;
   const dy = stamp.y - y;
   return Math.sqrt(dx * dx + dy * dy) < threshold;
+}
+
+/**
+ * Helper to render an SVG stroke element (pen, line, ellipse, arrow)
+ */
+export function renderSvgAnnotationStroke(stroke, isPreview = false) {
+  if (!stroke) return null;
+  const { id, tool = 'pen', color = '#ef4444', width = 4, points = [] } = stroke;
+  const strokeW = (width || 4) * 2.2;
+  const key = isPreview ? 'preview-stroke' : (id || `stroke_${Math.random()}`);
+
+  if (tool === 'pen') {
+    return (
+      <path
+        key={key}
+        d={pointsToSvgPath(points)}
+        stroke={color}
+        strokeWidth={strokeW}
+        vectorEffect="non-scaling-stroke"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={isPreview ? '' : 'transition-opacity hover:opacity-80'}
+      />
+    );
+  }
+
+  const p1 = stroke.startPoint || points[0];
+  const p2 = stroke.endPoint || points[points.length - 1];
+  if (!p1 || !p2) return null;
+
+  const x1 = p1.x * 1000;
+  const y1 = p1.y * 1000;
+  const x2 = p2.x * 1000;
+  const y2 = p2.y * 1000;
+
+  if (tool === 'line') {
+    return (
+      <line
+        key={key}
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
+        stroke={color}
+        strokeWidth={strokeW}
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+        className={isPreview ? '' : 'transition-opacity hover:opacity-80'}
+      />
+    );
+  }
+
+  if (tool === 'ellipse') {
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const rx = Math.max(Math.abs(x2 - x1) / 2, 1);
+    const ry = Math.max(Math.abs(y2 - y1) / 2, 1);
+
+    return (
+      <ellipse
+        key={key}
+        cx={cx}
+        cy={cy}
+        rx={rx}
+        ry={ry}
+        stroke={color}
+        strokeWidth={strokeW}
+        fill="none"
+        vectorEffect="non-scaling-stroke"
+        className={isPreview ? '' : 'transition-opacity hover:opacity-80'}
+      />
+    );
+  }
+
+  if (tool === 'arrow') {
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const headLength = Math.max(16, strokeW * 3.2);
+    const angle1 = angle - Math.PI / 6;
+    const angle2 = angle + Math.PI / 6;
+    const xLeft = x2 - headLength * Math.cos(angle1);
+    const yLeft = y2 - headLength * Math.sin(angle1);
+    const xRight = x2 - headLength * Math.cos(angle2);
+    const yRight = y2 - headLength * Math.sin(angle2);
+
+    return (
+      <g key={key} className={isPreview ? '' : 'transition-opacity hover:opacity-80'}>
+        <line
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke={color}
+          strokeWidth={strokeW}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        <polygon
+          points={`${x2},${y2} ${xLeft},${yLeft} ${xRight},${yRight}`}
+          fill={color}
+          stroke={color}
+          strokeWidth={1}
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </g>
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -403,6 +576,26 @@ export const SubmissionAnnotationCanvas = ({
         width: strokeWidth,
         points: [{ x, y }]
       });
+      return;
+    }
+
+    // 5. SHAPE TOOLS (LINE / ELLIPSE / ARROW)
+    if (activeTool === 'line' || activeTool === 'ellipse' || activeTool === 'arrow') {
+      try {
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+      } catch (err) {}
+
+      isPointerActiveRef.current = true;
+      setCurrentStroke({
+        id: generateAnnotationElementId('stroke'),
+        tool: activeTool,
+        color: activeColor,
+        width: strokeWidth,
+        points: [{ x, y }, { x, y }],
+        startPoint: { x, y },
+        endPoint: { x, y }
+      });
+      return;
     }
   };
 
@@ -477,21 +670,38 @@ export const SubmissionAnnotationCanvas = ({
       return;
     }
 
-    // SINGLE POINTER DRAWING
+    // SINGLE POINTER DRAWING (PEN OR SHAPE)
     if (!isPointerActiveRef.current || !currentStroke || suppressSinglePointerDrawRef.current) return;
     const { x, y } = getNormalizedPoint(e);
 
-    // Filter duplicate or jitter points
-    const lastPoint = currentStroke.points[currentStroke.points.length - 1];
-    if (lastPoint) {
-      const dist = Math.hypot(lastPoint.x - x, lastPoint.y - y);
-      if (dist < 0.001) return; // Ignore microscopic jitter
+    // PEN TOOL: Accumulate path points
+    if (currentStroke.tool === 'pen') {
+      const lastPoint = currentStroke.points[currentStroke.points.length - 1];
+      if (lastPoint) {
+        const dist = Math.hypot(lastPoint.x - x, lastPoint.y - y);
+        if (dist < 0.001) return; // Ignore microscopic jitter
+      }
+
+      setCurrentStroke(prev => prev ? {
+        ...prev,
+        points: [...prev.points, { x, y }]
+      } : null);
+      return;
     }
 
-    setCurrentStroke(prev => prev ? {
-      ...prev,
-      points: [...prev.points, { x, y }]
-    } : null);
+    // SHAPE TOOLS (LINE / ELLIPSE / ARROW): Update endPoint
+    if (['line', 'ellipse', 'arrow'].includes(currentStroke.tool)) {
+      setCurrentStroke(prev => {
+        if (!prev) return null;
+        const startPoint = prev.startPoint || prev.points[0] || { x, y };
+        return {
+          ...prev,
+          startPoint,
+          endPoint: { x, y },
+          points: [startPoint, { x, y }]
+        };
+      });
+    }
   };
 
   // POINTER UP / CANCEL / LOST CAPTURE
@@ -527,7 +737,24 @@ export const SubmissionAnnotationCanvas = ({
 
       isPointerActiveRef.current = false;
 
-      if (currentStroke.points.length > 0) {
+      const tool = currentStroke.tool || 'pen';
+      let isValidStroke = false;
+
+      if (tool === 'pen') {
+        isValidStroke = currentStroke.points && currentStroke.points.length > 0;
+      } else if (['line', 'ellipse', 'arrow'].includes(tool)) {
+        const p1 = currentStroke.startPoint || currentStroke.points?.[0];
+        const p2 = currentStroke.endPoint || currentStroke.points?.[1];
+        if (p1 && p2) {
+          const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+          // Ignore accidental zero-length click/tap gestures without dragging
+          if (dist >= 0.005) {
+            isValidStroke = true;
+          }
+        }
+      }
+
+      if (isValidStroke) {
         onChange?.({
           ...annotation,
           schema_version: annotation.schema_version || 1,
@@ -542,7 +769,27 @@ export const SubmissionAnnotationCanvas = ({
   };
 
   const handlePointerCancel = (e) => {
-    handlePointerUp(e);
+    activePointersRef.current.delete(e.pointerId);
+
+    if (activePointersRef.current.size < 2) {
+      pinchGestureRef.current = null;
+    }
+
+    if (activePointersRef.current.size === 0) {
+      suppressSinglePointerDrawRef.current = false;
+      if (isPanningRef.current) {
+        try {
+          e.currentTarget.releasePointerCapture?.(e.pointerId);
+        } catch (err) {}
+        isPanningRef.current = false;
+        panStartRef.current = null;
+        setIsDragging(false);
+      }
+    }
+
+    // Safely discard any in-progress drawing without mutating annotation
+    isPointerActiveRef.current = false;
+    setCurrentStroke(null);
   };
 
   const handleLostPointerCapture = (e) => {
@@ -553,7 +800,7 @@ export const SubmissionAnnotationCanvas = ({
   const getCursorClass = () => {
     if (readOnly) return 'cursor-default';
     if (activeTool === 'pan') return isDragging ? 'cursor-grabbing' : 'cursor-grab';
-    if (activeTool === 'pen') return 'cursor-crosshair';
+    if (['pen', 'line', 'ellipse', 'arrow'].includes(activeTool)) return 'cursor-crosshair';
     if (activeTool === 'check' || activeTool === 'cross' || activeTool === 'note') return 'cursor-pointer';
     if (activeTool === 'eraser') return 'cursor-pointer';
     return 'cursor-default';
@@ -595,33 +842,11 @@ export const SubmissionAnnotationCanvas = ({
           viewBox="0 0 1000 1000"
           preserveAspectRatio="none"
         >
-          {/* NÉT VẼ ĐÃ LƯU (COMMITTED STROKES) */}
-          {(annotation.strokes || []).map((stroke) => (
-            <path
-              key={stroke.id}
-              d={pointsToSvgPath(stroke.points)}
-              stroke={stroke.color || '#ef4444'}
-              strokeWidth={(stroke.width || 4) * 2.2}
-              vectorEffect="non-scaling-stroke"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="transition-opacity hover:opacity-80"
-            />
-          ))}
+          {/* NÉT VẼ ĐÃ LƯU (COMMITTED STROKES: PEN, LINE, ELLIPSE, ARROW) */}
+          {(annotation.strokes || []).map((stroke) => renderSvgAnnotationStroke(stroke, false))}
 
-          {/* NÉT VẼ ĐANG VẼ DỞ (CURRENT DRAWING STROKE) */}
-          {currentStroke && (
-            <path
-              d={pointsToSvgPath(currentStroke.points)}
-              stroke={currentStroke.color || '#ef4444'}
-              strokeWidth={(currentStroke.width || 4) * 2.2}
-              vectorEffect="non-scaling-stroke"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          )}
+          {/* NÉT VẼ ĐANG VẼ DỞ (CURRENT LIVE DRAWING PREVIEW) */}
+          {currentStroke && renderSvgAnnotationStroke(currentStroke, true)}
         </svg>
 
         {/* 3. CON DẤU ĐÚNG / SAI (ASPECT-RATIO SAFE STAMPS OVERLAY) */}
