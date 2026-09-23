@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, supabaseUrl } from '../../lib/supabase';
+import { getBulkImportBackendStatus } from '../../services/bulkImportClient';
 
 const parseApiResponse = async (response) => {
   const rawText = await response.text();
@@ -32,6 +33,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [backendStatus, setBackendStatus] = useState('loading'); // 'loading' | 'enabled' | 'locked' | 'unknown'
   const [dryRunData, setDryRunData] = useState(null);
   const [dryRunToken, setDryRunToken] = useState(null);
   const [prodResult, setProdResult] = useState(null);
@@ -45,6 +47,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
   useEffect(() => {
     if (isOpen) {
       fetchTargetClasses();
+      fetchBackendStatus();
     } else {
       setStep(1);
       setDryRunData(null);
@@ -57,6 +60,16 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       setHasConfirmedDelivery(false);
     }
   }, [isOpen]);
+
+  const fetchBackendStatus = async () => {
+    setBackendStatus('loading');
+    const res = await getBulkImportBackendStatus();
+    if (res.success && typeof res.enabled === 'boolean') {
+      setBackendStatus(res.enabled ? 'enabled' : 'locked');
+    } else {
+      setBackendStatus('unknown');
+    }
+  };
 
   const fetchTargetClasses = async () => {
     try {
@@ -336,22 +349,62 @@ export function ImportStudentsModal({ isOpen, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-3xl w-full p-6 border border-slate-200 dark:border-slate-800 transition-all">
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4 gap-3">
           <div>
-            <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-              <span>📥</span> Nhập Học Sinh Hàng Loạt
-            </h2>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <span>📥</span> Nhập Học Sinh Hàng Loạt
+              </h2>
+
+              {/* TRẠNG THÁI BULK IMPORT BACKEND */}
+              <div 
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 shadow-xs"
+                title="Trạng thái cấu hình tạo tài khoản thật trên Backend Server"
+              >
+                <span className="text-slate-500 dark:text-slate-400 font-medium">Nhập học sinh hàng loạt:</span>
+                {backendStatus === 'loading' && (
+                  <span className="text-slate-400 animate-pulse font-semibold">⏳ Đang kiểm tra...</span>
+                )}
+                {backendStatus === 'locked' && (
+                  <span className="text-amber-700 dark:text-amber-300 font-extrabold flex items-center gap-1">
+                    🔒 Đang khóa
+                  </span>
+                )}
+                {backendStatus === 'enabled' && (
+                  <span className="text-emerald-700 dark:text-emerald-400 font-extrabold flex items-center gap-1">
+                    🟢 Đang mở
+                  </span>
+                )}
+                {backendStatus === 'unknown' && (
+                  <span className="text-rose-700 dark:text-rose-400 font-extrabold flex items-center gap-1">
+                    ⚠️ Không xác định
+                  </span>
+                )}
+              </div>
+            </div>
+
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               Quy trình 4 bước an toàn: Nhập danh sách → Xem trước Dry-Run → Thực thi → Tải file CSV
             </p>
           </div>
-          <button
-            onClick={handleSafeClose}
-            disabled={isLoading}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg cursor-pointer"
-          >
-            ✕
-          </button>
+
+          <div className="flex items-center gap-1.5 self-end sm:self-center">
+            <button
+              onClick={fetchBackendStatus}
+              disabled={isLoading || backendStatus === 'loading'}
+              title="Kiểm tra lại trạng thái Backend"
+              className="px-2 py-1 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold cursor-pointer border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all"
+            >
+              🔄
+            </button>
+            <button
+              onClick={handleSafeClose}
+              disabled={isLoading}
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-white text-2xl font-bold px-2 py-1 rounded-lg cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {errorMessage && (
