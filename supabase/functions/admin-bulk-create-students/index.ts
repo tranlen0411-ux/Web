@@ -19,7 +19,7 @@ const getStrictCorsHeaders = (origin: string | null) => {
   return {
     'Access-Control-Allow-Origin': cleanOrigin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-idempotency-key',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     'Vary': 'Origin',
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     'Pragma': 'no-cache',
@@ -91,6 +91,20 @@ serve(async (req) => {
       );
     }
 
+    // 1. ENDPOINT KIỂM TRA TRẠNG THÁI BACKEND AN TOÀN (READ-ONLY, CHỈ ADMIN, KHÔNG LỘ SECRET)
+    const reqUrl = new URL(req.url);
+    const actionQuery = reqUrl.searchParams.get('action');
+    if (req.method === 'GET' || actionQuery === 'status' || actionQuery === 'get_status') {
+      const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
+      return new Response(
+        JSON.stringify({
+          success: true,
+          enabled: isAllowProductionBulkCreate,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     let body: any = {};
     try {
       body = await req.json();
@@ -98,6 +112,17 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({ success: false, message: 'Dữ liệu JSON gửi lên không hợp lệ.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (body?.action === 'status' || body?.action === 'get_status' || body?.action === 'check_status') {
+      const isAllowProductionBulkCreate = Deno.env.get('ALLOW_PRODUCTION_BULK_CREATE') === 'true';
+      return new Response(
+        JSON.stringify({
+          success: true,
+          enabled: isAllowProductionBulkCreate,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
