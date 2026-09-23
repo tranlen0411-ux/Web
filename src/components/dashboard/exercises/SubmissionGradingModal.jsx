@@ -1186,6 +1186,13 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                 canRedo={
                   Boolean((annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.future?.length || 0) > 0)
                 }
+                canClear={
+                  Boolean(
+                    (annotationsByAttachment[activeAttachmentForAnnotation.id]?.strokes?.length || 0) > 0 ||
+                    (annotationsByAttachment[activeAttachmentForAnnotation.id]?.stamps?.length || 0) > 0 ||
+                    (annotationsByAttachment[activeAttachmentForAnnotation.id]?.notes?.length || 0) > 0
+                  )
+                }
                 readOnly={!canGrade}
                 saveStatus={annotationSaveState[activeAttachmentForAnnotation.id] || 'idle'}
                 version={annotationVersions[activeAttachmentForAnnotation.id] ?? 0}

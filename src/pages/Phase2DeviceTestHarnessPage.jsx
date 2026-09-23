@@ -303,6 +303,11 @@ export const Phase2DeviceTestHarnessPage = () => {
                   onClear={handleClear}
                   canUndo={Boolean(teacherHistory.past.length > 0)}
                   canRedo={Boolean(teacherHistory.future.length > 0)}
+                  canClear={Boolean(
+                    (teacherAnnotation?.strokes?.length || 0) > 0 ||
+                    (teacherAnnotation?.stamps?.length || 0) > 0 ||
+                    (teacherAnnotation?.notes?.length || 0) > 0
+                  )}
                   readOnly={false}
                   scale={scale}
                   onZoomIn={handleZoomIn}

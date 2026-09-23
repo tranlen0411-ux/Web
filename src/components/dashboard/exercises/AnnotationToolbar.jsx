@@ -35,6 +35,7 @@ export const AnnotationToolbar = ({
   onClear,
   canUndo = false,
   canRedo = false,
+  canClear = false,
   readOnly = false,
   saveStatus = 'idle', // 'idle' | 'dirty' | 'saving' | 'saved' | 'conflict' | 'error'
   version = 0,
@@ -307,7 +308,7 @@ export const AnnotationToolbar = ({
         <button
           type="button"
           onClick={onClear}
-          disabled={readOnly || (!canUndo && !canRedo)}
+          disabled={readOnly || !canClear}
           className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 disabled:opacity-40 disabled:hover:bg-rose-950/60 text-rose-300 rounded-xl text-xs font-black transition-colors border border-rose-800/50"
           title="Xóa toàn bộ nét vẽ và ghi chú trên ảnh này"
         >

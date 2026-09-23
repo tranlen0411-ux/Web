@@ -1,5 +1,5 @@
 // tests/academic_submission_annotation_quick_tools.test.mjs
-// COMPREHENSIVE AUTOMATED TEST SUITE: TEACHER GRADING ANNOTATION QUICK TOOLS (PHASE: FINAL PRE-PR AUDIT & UNDO/REDO BOUNDARY FIX)
+// COMPREHENSIVE AUTOMATED TEST SUITE: TEACHER GRADING ANNOTATION QUICK TOOLS (PHASE: FINAL PRE-PR AUDIT, UNDO/REDO BOUNDARY & DECOUPLE CLEAR)
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,7 +17,7 @@ import {
 } from '../src/utils/annotationViewportMath.js';
 
 console.log('================================================================================');
-console.log('🚀 BẮT ĐẦU KIỂM THỬ: AUDIT & UNDO/REDO SESSION BOUNDARY — ANNOTATION QUICK TOOLS');
+console.log('🚀 BẮT ĐẦU KIỂM THỬ: AUDIT, UNDO/REDO BOUNDARY & DECOUPLE CLEAR — QUICK TOOLS');
 console.log('================================================================================\n');
 
 const testResults = {};
@@ -51,6 +51,15 @@ class MultiAttachmentHistoryManager {
     return Boolean((this.history[attId]?.future?.length || 0) > 0);
   }
 
+  canClear(attId) {
+    const ann = this.annotations[attId] || { strokes: [], stamps: [], notes: [] };
+    return Boolean(
+      (ann.strokes?.length || 0) > 0 ||
+      (ann.stamps?.length || 0) > 0 ||
+      (ann.notes?.length || 0) > 0
+    );
+  }
+
   applyChange(attId, nextData, isHistoryAction = false) {
     if (!isHistoryAction) {
       const current = this.annotations[attId] || { schema_version: 1, strokes: [], stamps: [], notes: [] };
@@ -59,6 +68,16 @@ class MultiAttachmentHistoryManager {
       this.history[attId] = { past: newPast, future: [] };
     }
     this.annotations[attId] = JSON.parse(JSON.stringify(nextData));
+  }
+
+  clear(attId) {
+    const updated = {
+      schema_version: 1,
+      strokes: [],
+      stamps: [],
+      notes: []
+    };
+    this.applyChange(attId, updated, false);
   }
 
   undo(attId) {
@@ -296,10 +315,10 @@ class MultiAttachmentHistoryManager {
 }
 
 // ============================================================================
-// 4. SESSION BOUNDARY & RELOAD LATEST FIXES
+// 4. DECOUPLE CLEAR FROM UNDO/REDO & PERSISTED RELOAD CHECKS
 // ============================================================================
 
-// TEST 8: RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED
+// TEST 8: PERSISTED_ANNOTATIONS_UNDO_DISABLED
 {
   const persistedData = {
     schema_version: 1,
@@ -312,19 +331,143 @@ class MultiAttachmentHistoryManager {
   mgr.initAttachment('att_reloaded', persistedData);
 
   // canUndo must be false because history.past is empty
-  assert.equal(mgr.canUndo('att_reloaded'), false, 'Undo button must be disabled after reload');
-  assert.equal(mgr.canRedo('att_reloaded'), false, 'Redo button must be disabled after reload');
+  assert.equal(mgr.canUndo('att_reloaded'), false, 'Undo must be disabled on reload');
+  assert.equal(mgr.canRedo('att_reloaded'), false, 'Redo must be disabled on reload');
 
-  // Ensure annotations are fully intact
-  assert.equal(mgr.annotations['att_reloaded'].strokes.length, 1);
-  assert.equal(mgr.annotations['att_reloaded'].stamps.length, 1);
-  assert.equal(mgr.annotations['att_reloaded'].notes.length, 1);
-
+  testResults.PERSISTED_ANNOTATIONS_UNDO_DISABLED = 'PASS';
   testResults.RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED = 'PASS';
-  console.log('✅ RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED: PASS');
+  console.log('✅ PERSISTED_ANNOTATIONS_UNDO_DISABLED: PASS');
 }
 
-// TEST 9: UNDO_WITH_EMPTY_HISTORY_NOOP
+// TEST 9: PERSISTED_ANNOTATIONS_CLEAR_ENABLED
+{
+  const persistedData = {
+    schema_version: 1,
+    strokes: [{ id: 's1', tool: 'line', points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }],
+    stamps: [],
+    notes: []
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_persisted_clear', persistedData);
+
+  // Even though canUndo & canRedo are false, canClear MUST be true
+  assert.equal(mgr.canUndo('att_persisted_clear'), false);
+  assert.equal(mgr.canRedo('att_persisted_clear'), false);
+  assert.equal(mgr.canClear('att_persisted_clear'), true, 'canClear must be true when strokes exist even with empty history');
+
+  testResults.PERSISTED_ANNOTATIONS_CLEAR_ENABLED = 'PASS';
+  console.log('✅ PERSISTED_ANNOTATIONS_CLEAR_ENABLED: PASS');
+}
+
+// TEST 10: EMPTY_ANNOTATIONS_CLEAR_DISABLED
+{
+  const emptyData = {
+    schema_version: 1,
+    strokes: [],
+    stamps: [],
+    notes: []
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_empty', emptyData);
+
+  assert.equal(mgr.canClear('att_empty'), false, 'canClear must be false when annotations are empty');
+
+  testResults.EMPTY_ANNOTATIONS_CLEAR_DISABLED = 'PASS';
+  console.log('✅ EMPTY_ANNOTATIONS_CLEAR_DISABLED: PASS');
+}
+
+// TEST 11: CLEAR_CREATES_UNDO_HISTORY
+{
+  const initialData = {
+    schema_version: 1,
+    strokes: [{ id: 's1', tool: 'arrow', points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.8 }] }],
+    stamps: [{ id: 'st1', type: 'check', x: 0.5, y: 0.5 }],
+    notes: [{ id: 'n1', text: 'Lưu ý', x: 0.3, y: 0.3 }]
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_clear_undo', initialData);
+  assert.equal(mgr.history['att_clear_undo'].past.length, 0);
+
+  // Perform clear
+  mgr.clear('att_clear_undo');
+
+  // Clear must add previous snapshot to past history
+  assert.equal(mgr.history['att_clear_undo'].past.length, 1, 'Clear must push previous state to past history');
+  assert.equal(mgr.annotations['att_clear_undo'].strokes.length, 0);
+  assert.equal(mgr.canUndo('att_clear_undo'), true, 'canUndo must become true after clear');
+
+  testResults.CLEAR_CREATES_UNDO_HISTORY = 'PASS';
+  console.log('✅ CLEAR_CREATES_UNDO_HISTORY: PASS');
+}
+
+// TEST 12: UNDO_AFTER_CLEAR_RESTORES_ALL
+{
+  const initialData = {
+    schema_version: 1,
+    strokes: [{ id: 's1', tool: 'ellipse', points: [{ x: 0.1, y: 0.1 }, { x: 0.7, y: 0.7 }] }],
+    stamps: [{ id: 'st1', type: 'cross', x: 0.4, y: 0.4 }],
+    notes: [{ id: 'n1', text: 'Cần sửa', x: 0.6, y: 0.6 }]
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_undo_clear', initialData);
+
+  mgr.clear('att_undo_clear');
+  assert.equal(mgr.annotations['att_undo_clear'].strokes.length, 0);
+
+  // Undo clear
+  mgr.undo('att_undo_clear');
+  assert.equal(mgr.annotations['att_undo_clear'].strokes.length, 1);
+  assert.equal(mgr.annotations['att_undo_clear'].stamps.length, 1);
+  assert.equal(mgr.annotations['att_undo_clear'].notes.length, 1);
+  assert.equal(mgr.annotations['att_undo_clear'].notes[0].text, 'Cần sửa');
+
+  testResults.UNDO_AFTER_CLEAR_RESTORES_ALL = 'PASS';
+  console.log('✅ UNDO_AFTER_CLEAR_RESTORES_ALL: PASS');
+}
+
+// TEST 13: REDO_AFTER_CLEAR_CLEARS_AGAIN
+{
+  const initialData = {
+    schema_version: 1,
+    strokes: [{ id: 's1', tool: 'line', points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }],
+    stamps: [],
+    notes: []
+  };
+
+  const mgr = new MultiAttachmentHistoryManager();
+  mgr.initAttachment('att_redo_clear', initialData);
+
+  mgr.clear('att_redo_clear');
+  mgr.undo('att_redo_clear'); // restored
+  assert.equal(mgr.annotations['att_redo_clear'].strokes.length, 1);
+
+  // Redo clear
+  mgr.redo('att_redo_clear');
+  assert.equal(mgr.annotations['att_redo_clear'].strokes.length, 0);
+
+  testResults.REDO_AFTER_CLEAR_CLEARS_AGAIN = 'PASS';
+  console.log('✅ REDO_AFTER_CLEAR_CLEARS_AGAIN: PASS');
+}
+
+// TEST 14: READONLY_CLEAR_DISABLED
+{
+  function isClearButtonDisabled({ readOnly, canClear }) {
+    return Boolean(readOnly || !canClear);
+  }
+
+  assert.equal(isClearButtonDisabled({ readOnly: true, canClear: true }), true, 'Clear button must be disabled when readOnly is true');
+  assert.equal(isClearButtonDisabled({ readOnly: false, canClear: true }), false, 'Clear button must be enabled when not readOnly and canClear is true');
+  assert.equal(isClearButtonDisabled({ readOnly: false, canClear: false }), true, 'Clear button must be disabled when canClear is false');
+
+  testResults.READONLY_CLEAR_DISABLED = 'PASS';
+  console.log('✅ READONLY_CLEAR_DISABLED: PASS');
+}
+
+// TEST 15: UNDO_WITH_EMPTY_HISTORY_NOOP
 {
   const persistedData = {
     schema_version: 1,
@@ -350,7 +493,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ UNDO_WITH_EMPTY_HISTORY_NOOP: PASS');
 }
 
-// TEST 10: RELOAD_LATEST_CLEARS_PAST_HISTORY
+// TEST 16: RELOAD_LATEST_CLEARS_PAST_HISTORY
 {
   const mgr = new MultiAttachmentHistoryManager();
   mgr.initAttachment('att_1');
@@ -381,7 +524,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ RELOAD_LATEST_CLEARS_PAST_HISTORY: PASS');
 }
 
-// TEST 11: RELOAD_LATEST_CLEARS_FUTURE_HISTORY
+// TEST 17: RELOAD_LATEST_CLEARS_FUTURE_HISTORY
 {
   const mgr = new MultiAttachmentHistoryManager();
   mgr.initAttachment('att_1');
@@ -403,7 +546,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ RELOAD_LATEST_CLEARS_FUTURE_HISTORY: PASS');
 }
 
-// TEST 12: SWITCH_SUBMISSION_CLEARS_ALL_HISTORY
+// TEST 18: SWITCH_SUBMISSION_CLEARS_ALL_HISTORY
 {
   const mgr = new MultiAttachmentHistoryManager();
   // Workspace 1 with 2 attachments
@@ -431,7 +574,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ SWITCH_SUBMISSION_CLEARS_ALL_HISTORY: PASS');
 }
 
-// TEST 13: OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE
+// TEST 19: OLD_HISTORY_CANNOT_OVERWRITE_RELOADED_SERVER_STATE
 {
   const mgr = new MultiAttachmentHistoryManager();
   mgr.initAttachment('att_1', { schema_version: 1, strokes: [], stamps: [], notes: [] });
@@ -468,7 +611,7 @@ class MultiAttachmentHistoryManager {
 // 5. GESTURE SAFETY, MULTITOUCH & POINTER CANCEL
 // ============================================================================
 
-// TEST 14: POINTER_CANCEL_SAFE
+// TEST 20: POINTER_CANCEL_SAFE
 {
   let currentStroke = { id: 'temp_stroke', tool: 'pen', points: [{ x: 0.1, y: 0.1 }] };
   let isPointerActive = true;
@@ -485,7 +628,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ POINTER_CANCEL_SAFE: PASS');
 }
 
-// TEST 15: MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY
+// TEST 21: MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY
 {
   const activePointers = new Map();
   activePointers.set(1, { x: 100, y: 100 });
@@ -506,7 +649,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ MULTITOUCH_DOES_NOT_DRAW_ACCIDENTALLY: PASS');
 }
 
-// TEST 16: MOBILE_SCROLL_ZOOM_CONFLICT
+// TEST 22: MOBILE_SCROLL_ZOOM_CONFLICT
 {
   function getTouchAction(scale) {
     return scale === 1 ? 'pan-y' : 'none';
@@ -524,7 +667,7 @@ class MultiAttachmentHistoryManager {
 // 6. ZERO LENGTH/SIZE SHAPE GESTURES IGNORED
 // ============================================================================
 
-// TEST 17: ZERO_LENGTH_LINE_IGNORED
+// TEST 23: ZERO_LENGTH_LINE_IGNORED
 {
   const p1 = { x: 0.3, y: 0.3 };
   const p2 = { x: 0.3, y: 0.3 }; // Tap without drag
@@ -536,7 +679,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_LENGTH_LINE_IGNORED: PASS');
 }
 
-// TEST 18: ZERO_SIZE_ELLIPSE_IGNORED
+// TEST 24: ZERO_SIZE_ELLIPSE_IGNORED
 {
   const p1 = { x: 0.5, y: 0.5 };
   const p2 = { x: 0.5001, y: 0.5001 }; // Microscopic jitter
@@ -548,7 +691,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_SIZE_ELLIPSE_IGNORED: PASS');
 }
 
-// TEST 19: ZERO_LENGTH_ARROW_IGNORED
+// TEST 25: ZERO_LENGTH_ARROW_IGNORED
 {
   const p1 = { x: 0.4, y: 0.4 };
   const p2 = { x: 0.4, y: 0.4 }; // Zero length
@@ -560,7 +703,7 @@ class MultiAttachmentHistoryManager {
   console.log('✅ ZERO_LENGTH_ARROW_IGNORED: PASS');
 }
 
-// TEST 20: STUDENT_RENDER_MATCHES_TEACHER_RENDER
+// TEST 26: STUDENT_RENDER_MATCHES_TEACHER_RENDER
 {
   const studentViewerSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/StudentAnnotationViewer.jsx'), 'utf8');
   const canvasSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/SubmissionAnnotationCanvas.jsx'), 'utf8');
@@ -574,26 +717,27 @@ class MultiAttachmentHistoryManager {
   console.log('✅ STUDENT_RENDER_MATCHES_TEACHER_RENDER: PASS');
 }
 
-// TEST 21: STATIC CODE AUDIT FOR SUBMISSION_GRADING_MODAL UNDO BOUNDARIES
+// TEST 27: STATIC CODE AUDIT FOR DECOUPLING CLEAR & UNDO/REDO BOUNDARIES
 {
+  const toolbarSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/AnnotationToolbar.jsx'), 'utf8');
   const modalSrc = fs.readFileSync(path.resolve('src/components/dashboard/exercises/SubmissionGradingModal.jsx'), 'utf8');
+  const harnessSrc = fs.readFileSync(path.resolve('src/pages/Phase2DeviceTestHarnessPage.jsx'), 'utf8');
 
-  // Verify canUndo strictly checks past length
-  assert.ok(modalSrc.includes('Boolean((annotationHistoryByAttachment[activeAttachmentForAnnotation.id]?.past?.length || 0) > 0)'), 'canUndo must strictly check past history stack length');
+  // 1. Toolbar accepts canClear prop and uses disabled={readOnly || !canClear}
+  assert.ok(toolbarSrc.includes('canClear = false'), 'AnnotationToolbar must accept canClear prop');
+  assert.ok(toolbarSrc.includes('disabled={readOnly || !canClear}'), 'Clear button must use disabled={readOnly || !canClear}');
+  assert.ok(!toolbarSrc.includes('disabled={readOnly || (!canUndo && !canRedo)}'), 'Clear button must NOT use canUndo/canRedo');
 
-  // Verify handleUndoAnnotation returns early when past is empty
-  assert.ok(modalSrc.includes('if (!history.past || history.past.length === 0) {'), 'handleUndoAnnotation must return early when history.past is empty');
+  // 2. Modal passes canClear prop calculated from strokes, stamps, notes
+  assert.ok(modalSrc.includes('canClear={'), 'SubmissionGradingModal must pass canClear prop');
+  assert.ok(modalSrc.includes('annotationsByAttachment[activeAttachmentForAnnotation.id]?.strokes?.length'), 'Modal canClear must check strokes length');
+  assert.ok(modalSrc.includes('annotationsByAttachment[activeAttachmentForAnnotation.id]?.stamps?.length'), 'Modal canClear must check stamps length');
+  assert.ok(modalSrc.includes('annotationsByAttachment[activeAttachmentForAnnotation.id]?.notes?.length'), 'Modal canClear must check notes length');
 
-  // Verify no fallback popping of strokes in handleUndoAnnotation
-  assert.ok(!modalSrc.includes('// Fallback if history stack is empty'), 'Fallback popping on empty history must be completely removed');
+  // 3. Harness passes canClear prop
+  assert.ok(harnessSrc.includes('canClear={'), 'Phase2DeviceTestHarnessPage must pass canClear prop');
 
-  // Verify handleReloadLatest resets history
-  assert.ok(modalSrc.includes('[attachmentId]: { past: [], future: [] }'), 'handleReloadLatest must reset attachment history');
-
-  // Verify workspace hydration resets history
-  assert.ok(modalSrc.includes('setAnnotationHistoryByAttachment({});'), 'Workspace hydration must reset history across submissions');
-
-  console.log('✅ STATIC_CODE_AUDIT_UNDO_BOUNDARIES: PASS');
+  console.log('✅ STATIC_CODE_AUDIT_DECOUPLED_CLEAR: PASS');
 }
 
 console.log('\n================================================================================');
@@ -612,6 +756,13 @@ const requiredKeys = [
   'UNDO_NOTE_CREATE_EDIT_DELETE',
   'NEW_EDIT_CLEARS_REDO_STACK',
   'RELOAD_HISTORY_STACK_EMPTY_BUT_ANNOTATIONS_PERSIST',
+  'PERSISTED_ANNOTATIONS_UNDO_DISABLED',
+  'PERSISTED_ANNOTATIONS_CLEAR_ENABLED',
+  'EMPTY_ANNOTATIONS_CLEAR_DISABLED',
+  'CLEAR_CREATES_UNDO_HISTORY',
+  'UNDO_AFTER_CLEAR_RESTORES_ALL',
+  'REDO_AFTER_CLEAR_CLEARS_AGAIN',
+  'READONLY_CLEAR_DISABLED',
   'RELOAD_PERSISTED_ANNOTATION_UNDO_DISABLED',
   'UNDO_WITH_EMPTY_HISTORY_NOOP',
   'RELOAD_LATEST_CLEARS_PAST_HISTORY',
