@@ -64,10 +64,38 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         setHistorySubmissions(subData);
         const lastSub = subData[subData.length - 1];
 
-        if (lastSub.status === 'draft' || lastSub.status === 'revision_requested') {
+        if (lastSub.status === 'draft') {
           setSubmissionId(lastSub.id);
           setSelectedAttemptTab(lastSub.attempt_number);
           populateAnswersFromSubmission(lastSub, qData);
+        } else if (lastSub.status === 'revision_requested') {
+          // MULTI-ATTEMPT FIX: Khi giáo viên yêu cầu làm lại, tạo bản nháp attempt mới độc lập
+          const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
+            p_exercise_id: exercise.id
+          });
+
+          if (draftErr || !draftRes?.success || !draftRes?.submission_id) {
+            throw new Error(draftErr?.message || draftRes?.message || 'Lỗi khi khởi tạo lượt làm bài lại.');
+          }
+
+          const newSubId = draftRes.submission_id;
+          const newAttemptNum = draftRes.attempt_number || (lastSub.attempt_number + 1);
+          setSubmissionId(newSubId);
+          setSelectedAttemptTab(newAttemptNum);
+
+          // Tạo bản ghi draft tạm trong list để render tab đúng
+          const newDraftSub = {
+            id: newSubId,
+            exercise_id: exercise.id,
+            student_id: profile?.id,
+            attempt_number: newAttemptNum,
+            status: 'draft',
+            academic_submission_answers: lastSub.academic_submission_answers || []
+          };
+          setHistorySubmissions([...subData, newDraftSub]);
+
+          // Điền trước đáp án văn bản từ lần trước, tuyệt đối không gắn baseline file cũ
+          populateAnswersFromSubmission(lastSub, qData, { isNewAttempt: true, newSubId });
         } else {
           setSelectedAttemptTab(lastSub.attempt_number);
           populateAnswersFromSubmission(lastSub, qData);
@@ -83,6 +111,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         }
 
         setSubmissionId(draftRes.submission_id);
+        setSelectedAttemptTab(draftRes.attempt_number || 1);
         setAttachmentsMap({});
       }
 
@@ -94,7 +123,8 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     }
   };
 
-  const populateAnswersFromSubmission = async (subObj, qList) => {
+  const populateAnswersFromSubmission = async (subObj, qList, options = {}) => {
+    const { isNewAttempt = false, newSubId = null } = options;
     const initAns = {};
     const initFiles = {};
     const signedMap = {};
@@ -105,7 +135,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         if (ans.student_answer_json !== null) {
           initAns[ans.question_id] = ans.student_answer_json;
         }
-        if (ans.file_url) {
+        if (ans.file_url && !isNewAttempt) {
           initFiles[ans.question_id] = ans.file_url;
 
           try {
@@ -130,13 +160,14 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
     setAnswersMap(initAns);
     setFileUrlsMap(initFiles);
     setSignedUrlsMap(signedMap);
-    baselineFilesRef.current = baselines;
+    baselineFilesRef.current = isNewAttempt ? {} : baselines;
     newFilesByQuestionRef.current = {};
 
     // KHÔI PHỤC MULTI-IMAGE ATTACHMENTS TỪ DB CHO SUBMISSION NÀY (PHASE 1 DRAFT RESTORE)
-    if (subObj?.id) {
+    const targetSubId = isNewAttempt ? newSubId : subObj?.id;
+    if (targetSubId) {
       try {
-        const { ok, data: attList } = await getStudentSubmissionAttachments({ submissionId: subObj.id });
+        const { ok, data: attList } = await getStudentSubmissionAttachments({ submissionId: targetSubId });
         if (ok && Array.isArray(attList)) {
           const attMap = {};
           for (const att of attList) {
@@ -310,7 +341,14 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
         }
         const oldBase = baselineFilesRef.current[qId]?.path;
         const currentCommittedPath = fileUrlsMap[qId];
-        if (oldBase && oldBase !== currentCommittedPath) {
+        // BẢO VỆ TUYỆT ĐỐI: CHỈ XÓA NẾU OLDBASE THUỘC VỀ CHÍNH BẢN NHÁP HIỆN TẠI
+        // TUYỆT ĐỐI KHÔNG XÓA FILE THUỘC ATTEMPT KHÁC HOẶC ĐÃ ĐƯỢC SUBMIT/CHẤM
+        if (
+          oldBase &&
+          oldBase !== currentCommittedPath &&
+          submissionId &&
+          oldBase.startsWith(`${profile?.id}/${submissionId}/`)
+        ) {
           oldDeletions.push(oldBase);
         }
       });
@@ -410,7 +448,33 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
 
   const currentQ = questions[currentQIndex];
   const activeSub = historySubmissions.find(s => s.attempt_number === selectedAttemptTab);
-  const isViewingHistory = activeSub && activeSub.status !== 'draft' && activeSub.status !== 'revision_requested';
+  const isViewingHistory = activeSub ? (activeSub.status !== 'draft') : false;
+
+  const handleStartNewAttempt = async () => {
+    setSubmitting(true);
+    try {
+      const { data: draftRes, error: draftErr } = await supabase.rpc('create_or_get_submission_draft', {
+        p_exercise_id: exercise.id
+      });
+      if (draftErr || !draftRes?.success || !draftRes?.submission_id) {
+        alert(draftErr?.message || draftRes?.message || 'Không thể tạo lượt làm bài mới.');
+        return;
+      }
+      setSubmissionId(draftRes.submission_id);
+      setSelectedAttemptTab(draftRes.attempt_number);
+      setAnswersMap({});
+      setFileUrlsMap({});
+      setSignedUrlsMap({});
+      setAttachmentsMap({});
+      baselineFilesRef.current = {};
+      newFilesByQuestionRef.current = {};
+      await initExerciseSession();
+    } catch (e) {
+      alert('Lỗi tạo lượt làm bài mới: ' + (e.message || ''));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -722,7 +786,7 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
               </button>
             </div>
 
-            {!isViewingHistory && (
+            {!isViewingHistory ? (
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -742,6 +806,16 @@ export const ExercisePlayModal = ({ exercise, onClose }) => {
                   {submitting ? 'Đang Nộp Bài...' : 'Nộp Bài Ngay'}
                 </button>
               </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartNewAttempt}
+                disabled={submitting}
+                className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-black text-xs rounded-xl shadow-md flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                Làm Lại Bài Tập (Lượt Mới)
+              </button>
             )}
           </div>
         )}

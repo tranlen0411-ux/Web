@@ -810,7 +810,10 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                       {sub.profiles?.full_name?.charAt(0) || 'H'}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-black text-xs truncate">{sub.profiles?.full_name || 'Học sinh'}</p>
+                      <p className="font-black text-xs truncate">
+                        {sub.profiles?.full_name || 'Học sinh'}
+                        <span className="ml-1 text-[10px] font-bold text-slate-400">(Lần {sub.attempt_number || 1})</span>
+                      </p>
                       <div className="flex items-center gap-1 mt-0.5">
                         <span className={`px-1.5 py-0.5 text-[9px] font-black rounded ${
                           sub.status === 'graded'
@@ -847,18 +850,69 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                   </div>
                 )}
 
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between">
-                  <div>
-                    <h4 className="font-black text-sm text-slate-800">{selectedSub.profiles?.full_name}</h4>
-                    <p className="text-xs font-bold text-slate-500">
-                      Nộp lúc: {new Date(selectedSub.submitted_at).toLocaleString('vi-VN')}
-                    </p>
+                {selectedSub.status === 'revision_requested' && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Lịch sử Lần {selectedSub.attempt_number || 1}: Đã yêu cầu học sinh làm lại. Dữ liệu và chú thích của lần này được bảo lưu toàn vẹn.</span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-2xl font-black text-amber-600">
-                      {selectedSub.total_score ?? 0} / {selectedSub.max_score} điểm
-                    </span>
+                )}
+
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-black text-sm text-slate-800">
+                        {selectedSub.profiles?.full_name}
+                        <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-900 font-black text-xs rounded-lg border border-amber-300">
+                          Lần {selectedSub.attempt_number || 1}
+                        </span>
+                      </h4>
+                      <p className="text-xs font-bold text-slate-500">
+                        Nộp lúc: {new Date(selectedSub.submitted_at).toLocaleString('vi-VN')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-2xl font-black text-amber-600">
+                        {selectedSub.total_score ?? 0} / {selectedSub.max_score} điểm
+                      </span>
+                    </div>
                   </div>
+
+                  {/* ATTEMPT SELECTOR CHO HỌC SINH CÓ NHIỀU LƯỢT LÀM BÀI */}
+                  {(() => {
+                    const studentAttempts = submissions
+                      .filter(s => s.student_id === selectedSub.student_id)
+                      .sort((a, b) => (a.attempt_number || 1) - (b.attempt_number || 1));
+                    if (studentAttempts.length <= 1) return null;
+                    return (
+                      <div className="flex items-center gap-2 pt-2 border-t border-slate-200 overflow-x-auto">
+                        <span className="text-xs font-bold text-slate-500 shrink-0">Lượt nộp của học sinh:</span>
+                        {studentAttempts.map(att => (
+                          <button
+                            key={att.id}
+                            type="button"
+                            onClick={() => selectSubmissionForGrading(att)}
+                            className={`px-3 py-1 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${
+                              selectedSub.id === att.id
+                                ? 'bg-amber-500 text-white shadow-sm'
+                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-amber-50'
+                            }`}
+                          >
+                            <span>Lần {att.attempt_number || 1}</span>
+                            <span className={`text-[10px] px-1 py-0.5 rounded font-bold ${
+                              att.status === 'graded'
+                                ? selectedSub.id === att.id ? 'bg-emerald-200 text-emerald-950' : 'bg-emerald-100 text-emerald-800'
+                                : att.status === 'revision_requested'
+                                ? selectedSub.id === att.id ? 'bg-rose-200 text-rose-950' : 'bg-rose-100 text-rose-800'
+                                : selectedSub.id === att.id ? 'bg-amber-200 text-amber-950' : 'bg-amber-100 text-amber-900'
+                            }`}>
+                              {att.status === 'graded' ? 'Đã chấm' : att.status === 'revision_requested' ? 'Cần làm lại' : 'Chờ chấm'}
+                            </span>
+                            <span className="font-bold text-[11px]">({att.total_score ?? 0}đ)</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {workspaceLoading ? (

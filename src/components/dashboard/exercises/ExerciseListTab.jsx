@@ -409,7 +409,9 @@ export const ExerciseListTab = ({ role = 'student', onLoaded }) => {
   };
 
   const getStudentSubmission = (exerciseId) => {
-    return submissions.find(s => s.exercise_id === exerciseId);
+    const matches = submissions.filter(s => s.exercise_id === exerciseId);
+    if (matches.length === 0) return null;
+    return matches.sort((a, b) => (b.attempt_number || 1) - (a.attempt_number || 1))[0];
   };
 
   const filteredExercises = exercises.filter(ex => {

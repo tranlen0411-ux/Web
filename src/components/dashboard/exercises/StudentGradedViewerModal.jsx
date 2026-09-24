@@ -63,12 +63,18 @@ export const StudentGradedViewerModal = ({
   onClose,
   initialSubmissionStatus = null
 }) => {
+  const [activeSubId, setActiveSubId] = useState(submissionId);
+  const [studentAttempts, setStudentAttempts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [errorCode, setErrorCode] = useState(null);
   const [submissionData, setSubmissionData] = useState(null);
   const [signedUrlsMap, setSignedUrlsMap] = useState({});
   const [signedUrlsLoading, setSignedUrlsLoading] = useState(false);
+
+  useEffect(() => {
+    setActiveSubId(submissionId);
+  }, [submissionId]);
 
   // Close on Escape key
   useEffect(() => {
@@ -82,8 +88,9 @@ export const StudentGradedViewerModal = ({
   }, [isOpen, onClose]);
 
   // Fetch Graded Submission data from authoritative RPC
-  const fetchGradedSubmission = async () => {
-    if (!isOpen || !submissionId) return;
+  const fetchGradedSubmission = async (targetId) => {
+    const subToFetch = targetId || activeSubId || submissionId;
+    if (!isOpen || !subToFetch) return;
 
     setLoading(true);
     setErrorMsg('');
@@ -91,7 +98,7 @@ export const StudentGradedViewerModal = ({
     setSubmissionData(null);
 
     try {
-      const res = await getStudentGradedSubmission({ submissionId });
+      const res = await getStudentGradedSubmission({ submissionId: subToFetch });
 
       if (!res.ok) {
         setErrorCode(res.code);
@@ -122,6 +129,22 @@ export const StudentGradedViewerModal = ({
       }
 
       setSubmissionData(data);
+
+      // Tải danh sách các attempts đã chấm hoặc cần sửa lại của học sinh
+      if (data?.submission?.exercise_id && data?.submission?.student_id) {
+        try {
+          const { data: attList } = await supabase
+            .from('academic_submissions')
+            .select('id, attempt_number, status, total_score, max_score, submitted_at, graded_at')
+            .eq('exercise_id', data.submission.exercise_id)
+            .eq('student_id', data.submission.student_id)
+            .in('status', ['graded', 'revision_requested'])
+            .order('attempt_number', { ascending: true });
+          if (attList) setStudentAttempts(attList);
+        } catch (_attErr) {
+          // Non-blocking attempt list fetch
+        }
+      }
     } catch (err) {
       console.error('Fetch graded submission error:', err);
       setErrorCode('CLIENT_ERROR');
@@ -132,15 +155,16 @@ export const StudentGradedViewerModal = ({
   };
 
   useEffect(() => {
-    if (isOpen && submissionId) {
-      fetchGradedSubmission();
+    if (isOpen && activeSubId) {
+      fetchGradedSubmission(activeSubId);
     } else {
       setSubmissionData(null);
       setErrorMsg('');
       setErrorCode(null);
       setSignedUrlsMap({});
+      setStudentAttempts([]);
     }
-  }, [isOpen, submissionId]);
+  }, [isOpen, activeSubId]);
 
   // Generate private signed URLs (TTL 900s) for all finalized attachments & legacy files
   useEffect(() => {
@@ -281,14 +305,17 @@ export const StudentGradedViewerModal = ({
                     Môn {exercise.subject}
                   </span>
                 )}
+                <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded-md font-black border border-amber-300">
+                  Lần {sub?.attempt_number || 1}
+                </span>
                 {isGraded && (
                   <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-md font-black flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Đã chấm
                   </span>
                 )}
                 {isRevisionRequested && (
-                  <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 rounded-md font-black flex items-center gap-1 border border-amber-300">
-                    <RotateCcw className="w-3.5 h-3.5 text-amber-700" /> Cần sửa lại
+                  <span className="px-2.5 py-0.5 bg-rose-100 text-rose-900 rounded-md font-black flex items-center gap-1 border border-rose-300">
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-700" /> Cần sửa lại
                   </span>
                 )}
               </div>
@@ -306,6 +333,33 @@ export const StudentGradedViewerModal = ({
 
         {/* MODAL BODY */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          {/* TAB CHUYỂN ĐỔI ATTEMPTS KHI HỌC SINH CÓ NHIỀU LƯỢT NỘP */}
+          {studentAttempts.length > 1 && !loading && !errorMsg && (
+            <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 overflow-x-auto">
+              <span className="text-xs font-bold text-slate-500 shrink-0">Lịch sử lượt làm:</span>
+              {studentAttempts.map(att => (
+                <button
+                  key={att.id}
+                  onClick={() => setActiveSubId(att.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shrink-0 ${
+                    activeSubId === att.id
+                      ? 'bg-amber-500 text-white shadow-sm'
+                      : 'bg-white text-slate-700 hover:bg-amber-50 border border-slate-200'
+                  }`}
+                >
+                  <span>Lần {att.attempt_number || 1}</span>
+                  <span className={`text-[10px] px-1 py-0.5 rounded font-bold ${
+                    att.status === 'graded'
+                      ? activeSubId === att.id ? 'bg-emerald-200 text-emerald-950' : 'bg-emerald-100 text-emerald-800'
+                      : activeSubId === att.id ? 'bg-rose-200 text-rose-950' : 'bg-rose-100 text-rose-800'
+                  }`}>
+                    {att.status === 'graded' ? 'Đã chấm' : 'Cần sửa lại'}
+                  </span>
+                  <span className="font-bold text-[11px]">({att.total_score ?? 0}/{att.max_score}đ)</span>
+                </button>
+              ))}
+            </div>
+          )}
           {/* LOADING STATE */}
           {loading && (
             <div className="py-16 text-center space-y-3">
