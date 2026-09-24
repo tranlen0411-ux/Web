@@ -563,6 +563,8 @@ DECLARE
   v_stars_to_award INT := 0;
   v_ratio FLOAT := 0.0;
   v_already_rewarded_for_exercise BOOLEAN := FALSE;
+  v_ex_id UUID;
+  v_st_id UUID;
 BEGIN
   v_teacher_id := auth.uid();
   IF v_teacher_id IS NULL THEN
@@ -574,11 +576,24 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'FORBIDDEN', 'message', 'Lỗi: Chỉ Giáo viên hoặc Admin mới có quyền chấm bài.');
   END IF;
 
-  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id;
+  -- 1. Lấy target exercise_id + student_id để tạo advisory lock key
+  SELECT exercise_id, student_id INTO v_ex_id, v_st_id
+  FROM public.academic_submissions WHERE id = p_submission_id;
+
+  IF v_ex_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'SUBMISSION_NOT_FOUND', 'message', 'Lỗi: Bài nộp không tồn tại.');
+  END IF;
+
+  -- 2. Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt hoặc cùng 1 bài nộp
+  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_ex_id::text || '_' || v_st_id::text));
+
+  -- 3. Đọc lại trạng thái bài nộp authoritative từ database SAU KHI ĐÃ SERIALIZE
+  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id FOR UPDATE;
   IF v_sub.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'SUBMISSION_NOT_FOUND', 'message', 'Lỗi: Bài nộp không tồn tại.');
   END IF;
 
+  -- 4. Kiểm tra lại trạng thái bài nộp (phải là submitted hoặc pending_manual_grade)
   IF v_sub.status NOT IN ('submitted', 'pending_manual_grade') THEN
     RETURN jsonb_build_object('success', false, 'error', 'INVALID_STATUS', 'message', 'Lỗi: Chỉ được chấm bài nộp ở trạng thái submitted hoặc pending_manual_grade.');
   END IF;
@@ -608,9 +623,6 @@ BEGIN
   IF NOT v_has_permission THEN
     RETURN jsonb_build_object('success', false, 'error', 'FORBIDDEN', 'message', 'Lỗi: Bạn không có quyền chấm bài nộp của học sinh này.');
   END IF;
-
-  -- Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt của cùng 1 học sinh + bài tập
-  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_sub.exercise_id::text || '_' || v_sub.student_id::text));
 
   -- --------------------------------------------------------------------------
   -- 1. XỬ LÝ ANNOTATIONS
@@ -912,6 +924,8 @@ DECLARE
   v_graded_subjective_count INT := 0;
   v_updated_rows INT := 0;
   v_already_rewarded_for_exercise BOOLEAN := FALSE;
+  v_ex_id UUID;
+  v_st_id UUID;
 BEGIN
   v_teacher_id := auth.uid();
   IF v_teacher_id IS NULL THEN
@@ -923,11 +937,24 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ Giáo viên hoặc Admin mới có quyền chấm bài.');
   END IF;
 
-  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id;
+  -- 1. Lấy target exercise_id + student_id để tạo advisory lock key
+  SELECT exercise_id, student_id INTO v_ex_id, v_st_id
+  FROM public.academic_submissions WHERE id = p_submission_id;
+
+  IF v_ex_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
+  END IF;
+
+  -- 2. Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt hoặc cùng 1 bài nộp
+  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_ex_id::text || '_' || v_st_id::text));
+
+  -- 3. Đọc lại trạng thái bài nộp authoritative từ database SAU KHI ĐÃ SERIALIZE
+  SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id FOR UPDATE;
   IF v_sub.id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bài nộp không tồn tại.');
   END IF;
 
+  -- 4. Kiểm tra lại trạng thái bài nộp (phải là submitted hoặc pending_manual_grade)
   IF v_sub.status NOT IN ('submitted', 'pending_manual_grade') THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Chỉ được chấm bài nộp ở trạng thái submitted hoặc pending_manual_grade.');
   END IF;
@@ -956,9 +983,6 @@ BEGIN
   IF NOT v_has_permission THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không có quyền chấm bài nộp này (Bạn không phụ trách lớp học của học sinh).');
   END IF;
-
-  -- Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt của cùng 1 học sinh + bài tập
-  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_sub.exercise_id::text || '_' || v_sub.student_id::text));
 
   IF p_manual_grades IS NOT NULL THEN
     IF jsonb_typeof(p_manual_grades) != 'array' THEN

@@ -577,8 +577,124 @@ export async function runDeadlineRewardSafetyTestSuite() {
 
   console.log('✅ GATE 12 PASS: LOCK_ORDER_STATIC_AUDIT (Xác nhận 100% thứ tự thực thi an toàn trong cả 3 RPC)');
 
+  // ===========================================================================
+  // GATE 13: SAME_SUBMISSION_DOUBLE_REWARD_GUARD (SAME_SUBMISSION_DOUBLE_GRADING_RACE_STALE_READ_GUARD)
+  // ===========================================================================
+  console.log('\n--- GATE 13: SAME_SUBMISSION_DOUBLE_REWARD_GUARD ---');
+  
+  // 1. Kiểm tra với finalize_academic_submission_grading_with_annotations trên cùng 1 submission đã graded
+  // sub4Att1Id đã được chấm hoàn tất ở GATE 11 (status = 'graded')
+  const doubleGradeAnnotationRes = await db.query(`
+    SELECT public.finalize_academic_submission_grading_with_annotations(
+      '${sub4Att1Id}'::uuid, '${JSON.stringify(manualGradesConcurrent)}'::jsonb, '[]'::jsonb, 'Thử chấm lại lần 2', false
+    ) as r;
+  `);
+  const dga = doubleGradeAnnotationRes.rows[0].r;
+  assert.equal(dga.success, false, 'Chấm lần 2 trên cùng 1 submission qua finalize_academic_submission_grading_with_annotations phải bị từ chối');
+  assert.equal(dga.error, 'INVALID_STATUS', 'Mã lỗi phải là INVALID_STATUS');
+  assert.match(dga.message, /submitted hoặc pending_manual_grade/i, 'Thông báo lỗi phải nêu rõ trạng thái không hợp lệ');
+
+  // 2. Kiểm tra với grade_academic_submission (Legacy) trên cùng 1 submission
+  const ex5Id = '55555555-1111-5555-a555-555555555555';
+  const q5Id = '55555555-2222-5555-a555-555555555555';
+  const sub5Id = '55555555-3333-5555-a555-555555555551';
+  await db.exec(`
+    INSERT INTO public.academic_exercises (
+      id, title, grade_level, subject, status, reward_stars, max_attempts, due_date, class_id, teacher_id
+    ) VALUES (
+      '${ex5Id}', 'Bài Tự Luận Legacy Grade', 1, 'Tiếng Việt', 'published', 20, 1, NOW() + INTERVAL '1 day', '${classId}', '${teacherId}'
+    );
+    INSERT INTO public.academic_exercise_assignments (exercise_id, class_id) VALUES ('${ex5Id}', '${classId}');
+    INSERT INTO public.academic_exercise_questions (id, exercise_id, question_number, question_type, prompt, points) VALUES
+      ('${q5Id}', '${ex5Id}', 1, 'essay', 'Cảm nghĩ của em', 10);
+    INSERT INTO public.academic_submissions (
+      id, exercise_id, student_id, attempt_number, status, total_score, objective_score, max_score
+    ) VALUES 
+      ('${sub5Id}', '${ex5Id}', '${student2Id}', 1, 'pending_manual_grade', 0, 0, 10);
+    INSERT INTO public.academic_submission_answers (submission_id, question_id, student_answer_json, points_earned) VALUES
+      ('${sub5Id}', '${q5Id}', '"Bài văn ngắn"'::jsonb, 0);
+  `);
+
+  const p2StarsBeforeEx5 = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
+
+  // Lần 1: Chấm qua grade_academic_submission -> Thành công và nhận sao
+  const manualGrades5 = [{ question_id: q5Id, points_earned: 10, teacher_comment: 'Rất tốt' }];
+  const gradeLegacy1 = await db.query(`
+    SELECT public.grade_academic_submission(
+      '${sub5Id}'::uuid, '${JSON.stringify(manualGrades5)}'::jsonb, 'Nhận xét lần 1', false
+    ) as r;
+  `);
+  assert.equal(gradeLegacy1.rows[0].r.success, true, 'Chấm lần 1 qua grade_academic_submission phải thành công');
+  assert.equal(gradeLegacy1.rows[0].r.stars_awarded, 20, 'Nhận trọn 20 sao ở lần chấm 1');
+
+  const p2StarsAfterEx5L1 = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
+  assert.equal(p2StarsAfterEx5L1, p2StarsBeforeEx5 + 20, 'Tổng sao tăng đúng 20');
+
+  // Lần 2: Thử chấm lại cùng sub5Id qua grade_academic_submission -> Bị từ chối vì đã graded
+  const gradeLegacy2 = await db.query(`
+    SELECT public.grade_academic_submission(
+      '${sub5Id}'::uuid, '${JSON.stringify(manualGrades5)}'::jsonb, 'Thử chấm lại lần 2', false
+    ) as r;
+  `);
+  assert.equal(gradeLegacy2.rows[0].r.success, false, 'Chấm lần 2 trên cùng submission qua grade_academic_submission phải bị từ chối');
+  assert.match(gradeLegacy2.rows[0].r.message, /submitted hoặc pending_manual_grade/i, 'Thông báo lỗi phải nêu rõ trạng thái không hợp lệ');
+
+  const p2StarsAfterEx5L2 = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
+  assert.equal(p2StarsAfterEx5L2, p2StarsAfterEx5L1, 'Tổng sao tuyệt đối không được tăng thêm ở lần chấm 2');
+
+  console.log('✅ GATE 13 PASS: SAME_SUBMISSION_DOUBLE_REWARD_GUARD (Chặn đứng stale-read race khi chấm trùng trên cùng 1 submission ở cả 2 RPC)');
+
+  // ===========================================================================
+  // GATE 14: LOCK_BEFORE_REREAD_STATIC_AUDIT (STATIC_AUDIT_AUTHORITATIVE_REREAD_AFTER_LOCK)
+  // ===========================================================================
+  console.log('\n--- GATE 14: LOCK_BEFORE_REREAD_STATIC_AUDIT ---');
+  const gradingRpcs = [
+    'finalize_academic_submission_grading_with_annotations',
+    'grade_academic_submission'
+  ];
+
+  for (const rpcName of gradingRpcs) {
+    const rpcStartIndex = migration2Sql.indexOf(`CREATE OR REPLACE FUNCTION public.${rpcName}`);
+    assert.ok(rpcStartIndex !== -1, `Phải tìm thấy định nghĩa của RPC ${rpcName}`);
+
+    const rpcEndIndex = migration2Sql.indexOf('$function$;', rpcStartIndex);
+    const fullRpc = migration2Sql.slice(rpcStartIndex, rpcEndIndex !== -1 ? rpcEndIndex : rpcStartIndex + 4000);
+    const beginPos = fullRpc.indexOf('BEGIN');
+    const rpcBody = fullRpc.slice(beginPos);
+
+    // 1. Lock position
+    const lockPos = rpcBody.indexOf('pg_advisory_xact_lock');
+    assert.ok(lockPos !== -1, `RPC ${rpcName} PHẢI có lệnh pg_advisory_xact_lock`);
+
+    // 2. Authoritative re-read position (SELECT * INTO v_sub ... FOR UPDATE)
+    const reReadPos = rpcBody.search(/SELECT\s+\*\s+INTO\s+v_sub\s+FROM\s+public\.academic_submissions\s+WHERE\s+id\s+=\s+p_submission_id\s+FOR\s+UPDATE/i);
+    assert.ok(reReadPos !== -1, `RPC ${rpcName} PHẢI có SELECT * INTO v_sub FROM public.academic_submissions WHERE id = p_submission_id FOR UPDATE`);
+
+    // 3. Status validation position (v_sub.status NOT IN ('submitted', 'pending_manual_grade'))
+    const statusCheckPos = rpcBody.search(/v_sub\.status\s+NOT\s+IN\s*\(\s*'submitted'\s*,\s*'pending_manual_grade'\s*\)/i);
+    assert.ok(statusCheckPos !== -1, `RPC ${rpcName} PHẢI có kiểm tra v_sub.status NOT IN ('submitted', 'pending_manual_grade')`);
+
+    // 4. Reward guard position
+    const rewardCheckPos = rpcBody.search(/v_sub\.reward_applied_at\s+IS\s+NULL/i);
+    assert.ok(rewardCheckPos !== -1, `RPC ${rpcName} PHẢI có kiểm tra v_sub.reward_applied_at IS NULL`);
+
+    // 5. Update profile stars position
+    const updateProfilePos = rpcBody.search(/UPDATE\s+public\.profiles\s+SET\s+total_stars/i);
+    assert.ok(updateProfilePos !== -1, `RPC ${rpcName} PHẢI có lệnh UPDATE public.profiles SET total_stars`);
+
+    // 6. Kiểm tra thứ tự bất biến: LOCK < RE-READ (FOR UPDATE) < STATUS_CHECK < REWARD_CHECK < UPDATE_PROFILE
+    assert.ok(lockPos < reReadPos, `Trong ${rpcName}: pg_advisory_xact_lock (pos ${lockPos}) PHẢI đứng trước Authoritative Re-read (pos ${reReadPos})`);
+    assert.ok(reReadPos < statusCheckPos, `Trong ${rpcName}: Authoritative Re-read (pos ${reReadPos}) PHẢI đứng trước Status check (pos ${statusCheckPos})`);
+    assert.ok(statusCheckPos < rewardCheckPos, `Trong ${rpcName}: Status check (pos ${statusCheckPos}) PHẢI đứng trước Reward check (pos ${rewardCheckPos})`);
+    assert.ok(rewardCheckPos < updateProfilePos, `Trong ${rpcName}: Reward check (pos ${rewardCheckPos}) PHẢI đứng trước Update profile (pos ${updateProfilePos})`);
+
+    console.log(`  ✓ RPC ${rpcName}: Lock (pos ${lockPos}) -> Re-read For Update (pos ${reReadPos}) -> Check Status (pos ${statusCheckPos}) -> Check Reward (pos ${rewardCheckPos}) -> Update Stars (pos ${updateProfilePos}) [AN TOÀN TUYỆT ĐỐI]`);
+  }
+
+  console.log('✅ GATE 14 PASS: LOCK_BEFORE_REREAD_STATIC_AUDIT (Xác nhận 100% authoritative re-read sau advisory lock trong cả 2 RPC chấm điểm)');
+
   console.log('\n================================================================================');
-  console.log('🎉 TOÀN BỘ CÁC GATES KIỂM THỬ VÀ STATIC AUDIT ĐỀU PASS 100%');
+  console.log('🎉 TOÀN BỘ 14 GATES KIỂM THỬ VÀ STATIC AUDIT ĐỀU PASS 100%');
   console.log('================================================================================\n');
 }
 
@@ -586,4 +702,5 @@ runDeadlineRewardSafetyTestSuite().catch(err => {
   console.error('❌ REGRESSION TEST FAILED:', err);
   process.exit(1);
 });
+
 
