@@ -453,9 +453,9 @@ export async function runDeadlineRewardSafetyTestSuite() {
   console.log('✅ GATE 10 PASS: Bài tập khác / học sinh khác nhận sao độc lập bình thường');
 
   // ===========================================================================
-  // GATE 11: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER
+  // GATE 11: REWARD_GUARD_SERIALIZED_SEQUENCE_SINGLE_WINNER
   // ===========================================================================
-  console.log('\n--- GATE 11: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER ---');
+  console.log('\n--- GATE 11: REWARD_GUARD_SERIALIZED_SEQUENCE_SINGLE_WINNER ---');
   // Tạo Exercise 4 với 1 câu tự luận
   const ex4Id = '44444444-1111-4444-a444-444444444444';
   const q4Id = '44444444-2222-4444-a444-444444444444';
@@ -463,11 +463,11 @@ export async function runDeadlineRewardSafetyTestSuite() {
     INSERT INTO public.academic_exercises (
       id, title, grade_level, subject, status, reward_stars, max_attempts, due_date, class_id, teacher_id
     ) VALUES (
-      '${ex4Id}', 'Bài Kiểm Tra Đồng Thời', 1, 'Toán', 'published', 15, 2, NOW() + INTERVAL '1 day', '${classId}', '${teacherId}'
+      '${ex4Id}', 'Bài Kiểm Tra Tuần Tự Khóa Thưởng', 1, 'Toán', 'published', 15, 2, NOW() + INTERVAL '1 day', '${classId}', '${teacherId}'
     );
     INSERT INTO public.academic_exercise_assignments (exercise_id, class_id) VALUES ('${ex4Id}', '${classId}');
     INSERT INTO public.academic_exercise_questions (id, exercise_id, question_number, question_type, prompt, points) VALUES
-      ('${q4Id}', '${ex4Id}', 1, 'essay', 'Giải toán đồng thời', 10);
+      ('${q4Id}', '${ex4Id}', 1, 'essay', 'Giải toán', 10);
   `);
 
   // Tạo 2 submissions cho cùng student2Id + ex4Id (Attempt 1 và Attempt 2) đều ở status pending_manual_grade
@@ -486,7 +486,7 @@ export async function runDeadlineRewardSafetyTestSuite() {
 
   const p2StarsBefore = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
 
-  // Giáo viên chấm cả Attempt 1 và Attempt 2 (giả lập serialization qua advisory lock)
+  // Giáo viên chấm lần lượt Attempt 1 và Attempt 2
   await db.exec(`SET app.current_user_id = '${teacherId}';`);
   const manualGradesConcurrent = [{ question_id: q4Id, points_earned: 10, teacher_comment: 'Xuất sắc' }];
 
@@ -502,8 +502,7 @@ export async function runDeadlineRewardSafetyTestSuite() {
     ) as r;
   `);
 
-  // Kiểm tra 3 điều kiện bắt buộc:
-  // 1. both grading operations may complete (cả 2 đều success và graded)
+  // 1. Cả hai thao tác chấm điểm đều thành công
   assert.equal(resGradeAtt1.rows[0].r.success, true, 'Chấm Attempt 1 phải thành công');
   assert.equal(resGradeAtt2.rows[0].r.success, true, 'Chấm Attempt 2 phải thành công');
 
@@ -511,7 +510,8 @@ export async function runDeadlineRewardSafetyTestSuite() {
   const starsAwarded1 = resGradeAtt1.rows[0].r.reward_stars_awarded;
   const starsAwarded2 = resGradeAtt2.rows[0].r.reward_stars_awarded;
   assert.equal(starsAwarded1 + starsAwarded2, 15, 'Chỉ duy nhất 1 lần nhận trọn 15 sao');
-  assert.ok((starsAwarded1 === 15 && starsAwarded2 === 0) || (starsAwarded1 === 0 && starsAwarded2 === 15));
+  assert.equal(starsAwarded1, 15, 'Attempt 1 được chấm trước nhận trọn 15 sao');
+  assert.equal(starsAwarded2, 0, 'Attempt 2 chấm sau không được nhận trùng sao');
 
   // 3. rewards applied rows = 1
   const rewardRows = await db.query(`
@@ -524,10 +524,61 @@ export async function runDeadlineRewardSafetyTestSuite() {
   const p2StarsAfter = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
   assert.equal(p2StarsAfter, p2StarsBefore + 15, 'Tổng sao của học sinh chỉ được cộng đúng 1 lần 15 sao');
 
-  console.log('✅ GATE 11 PASS: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER (Single Winner, exactly 1 reward row, exactly once profile star increment)');
+  console.log('✅ GATE 11 PASS: REWARD_GUARD_SERIALIZED_SEQUENCE_SINGLE_WINNER (Single Winner, exactly 1 reward row, exactly once profile star increment)');
+
+  // ===========================================================================
+  // GATE 12: LOCK_ORDER_STATIC_AUDIT (Kiểm tra tĩnh thứ tự Lock -> Check Reward -> Update Profile)
+  // ===========================================================================
+  console.log('\n--- GATE 12: LOCK_ORDER_STATIC_AUDIT ---');
+  const migration2Path = path.join(process.cwd(), 'supabase', 'migrations', '20260924000002_multi_attempt_deadline_reward_safety.sql');
+  const migration2Sql = fs.readFileSync(migration2Path, 'utf8');
+
+  // Kiểm tra 3 RPC trong migration:
+  const targetRpcs = [
+    'submit_academic_exercise',
+    'finalize_academic_submission_grading_with_annotations',
+    'grade_academic_submission'
+  ];
+
+  for (const rpcName of targetRpcs) {
+    const rpcStartIndex = migration2Sql.indexOf(`CREATE OR REPLACE FUNCTION public.${rpcName}`);
+    assert.ok(rpcStartIndex !== -1, `Phải tìm thấy định nghĩa của RPC ${rpcName}`);
+
+    // Cắt đoạn SQL của RPC này
+    const rpcEndIndex = migration2Sql.indexOf('$function$;', rpcStartIndex);
+    const fullRpc = migration2Sql.slice(rpcStartIndex, rpcEndIndex !== -1 ? rpcEndIndex : rpcStartIndex + 4000);
+    
+    // Cắt đoạn code sau BEGIN
+    const beginPos = fullRpc.indexOf('BEGIN');
+    assert.ok(beginPos !== -1, `Phải tìm thấy BEGIN trong ${rpcName}`);
+    const rpcBody = fullRpc.slice(beginPos);
+
+    // 1. Kiểm tra sự tồn tại của pg_advisory_xact_lock
+    const lockPos = rpcBody.indexOf('pg_advisory_xact_lock');
+    assert.ok(lockPos !== -1, `RPC ${rpcName} PHẢI có lệnh pg_advisory_xact_lock`);
+
+    // 2. Kiểm tra lock key định dạng 'academic_sub_'
+    assert.ok(rpcBody.includes("'academic_sub_'"), `RPC ${rpcName} PHẢI sử dụng đúng lock key 'academic_sub_'`);
+
+    // 3. Kiểm tra kiểm tra reward history qua truy vấn SELECT EXISTS ... reward_applied_at IS NOT NULL
+    const rewardCheckPos = rpcBody.search(/SELECT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+public\.academic_submissions[\s\S]*?reward_applied_at\s+IS\s+NOT\s+NULL/i);
+    assert.ok(rewardCheckPos !== -1, `RPC ${rpcName} PHẢI có truy vấn SELECT EXISTS kiểm tra reward_applied_at`);
+
+    // 4. Kiểm tra cập nhật total_stars
+    const updateProfilePos = rpcBody.search(/UPDATE\s+public\.profiles\s+SET\s+total_stars/i);
+    assert.ok(updateProfilePos !== -1, `RPC ${rpcName} PHẢI có lệnh UPDATE public.profiles SET total_stars`);
+
+    // 5. Xác minh thứ tự chặt chẽ: LOCK < REWARD_CHECK < UPDATE_PROFILE
+    assert.ok(lockPos < rewardCheckPos, `Trong ${rpcName}: pg_advisory_xact_lock (pos ${lockPos}) PHẢI đứng trước reward check (pos ${rewardCheckPos})`);
+    assert.ok(rewardCheckPos < updateProfilePos, `Trong ${rpcName}: reward check (pos ${rewardCheckPos}) PHẢI đứng trước UPDATE profiles (pos ${updateProfilePos})`);
+    
+    console.log(`  ✓ RPC ${rpcName}: Lock (pos ${lockPos}) -> Check Reward (pos ${rewardCheckPos}) -> Update Stars (pos ${updateProfilePos}) [CHÍNH XÁC 100%]`);
+  }
+
+  console.log('✅ GATE 12 PASS: LOCK_ORDER_STATIC_AUDIT (Xác nhận 100% thứ tự thực thi an toàn trong cả 3 RPC)');
 
   console.log('\n================================================================================');
-  console.log('🎉 TOÀN BỘ 11 GATES VỀ DEADLINE & REWARD CONCURRENCY SAFETY ĐỀU PASS 100%');
+  console.log('🎉 TOÀN BỘ CÁC GATES KIỂM THỬ VÀ STATIC AUDIT ĐỀU PASS 100%');
   console.log('================================================================================\n');
 }
 
@@ -535,3 +586,4 @@ runDeadlineRewardSafetyTestSuite().catch(err => {
   console.error('❌ REGRESSION TEST FAILED:', err);
   process.exit(1);
 });
+
