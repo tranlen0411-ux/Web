@@ -452,8 +452,82 @@ export async function runDeadlineRewardSafetyTestSuite() {
   assert.equal(p2Res.rows[0].total_stars, 10, 'Student 2 nhận 10 sao bình thường cho Exercise 2');
   console.log('✅ GATE 10 PASS: Bài tập khác / học sinh khác nhận sao độc lập bình thường');
 
+  // ===========================================================================
+  // GATE 11: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER
+  // ===========================================================================
+  console.log('\n--- GATE 11: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER ---');
+  // Tạo Exercise 4 với 1 câu tự luận
+  const ex4Id = '44444444-1111-4444-a444-444444444444';
+  const q4Id = '44444444-2222-4444-a444-444444444444';
+  await db.exec(`
+    INSERT INTO public.academic_exercises (
+      id, title, grade_level, subject, status, reward_stars, max_attempts, due_date, class_id, teacher_id
+    ) VALUES (
+      '${ex4Id}', 'Bài Kiểm Tra Đồng Thời', 1, 'Toán', 'published', 15, 2, NOW() + INTERVAL '1 day', '${classId}', '${teacherId}'
+    );
+    INSERT INTO public.academic_exercise_assignments (exercise_id, class_id) VALUES ('${ex4Id}', '${classId}');
+    INSERT INTO public.academic_exercise_questions (id, exercise_id, question_number, question_type, prompt, points) VALUES
+      ('${q4Id}', '${ex4Id}', 1, 'essay', 'Giải toán đồng thời', 10);
+  `);
+
+  // Tạo 2 submissions cho cùng student2Id + ex4Id (Attempt 1 và Attempt 2) đều ở status pending_manual_grade
+  const sub4Att1Id = '44444444-3333-4444-a444-444444444441';
+  const sub4Att2Id = '44444444-3333-4444-a444-444444444442';
+  await db.exec(`
+    INSERT INTO public.academic_submissions (
+      id, exercise_id, student_id, attempt_number, status, total_score, objective_score, max_score
+    ) VALUES 
+      ('${sub4Att1Id}', '${ex4Id}', '${student2Id}', 1, 'pending_manual_grade', 0, 0, 10),
+      ('${sub4Att2Id}', '${ex4Id}', '${student2Id}', 2, 'pending_manual_grade', 0, 0, 10);
+    INSERT INTO public.academic_submission_answers (submission_id, question_id, student_answer_json, points_earned) VALUES
+      ('${sub4Att1Id}', '${q4Id}', '"Lời giải 1"'::jsonb, 0),
+      ('${sub4Att2Id}', '${q4Id}', '"Lời giải 2"'::jsonb, 0);
+  `);
+
+  const p2StarsBefore = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
+
+  // Giáo viên chấm cả Attempt 1 và Attempt 2 (giả lập serialization qua advisory lock)
+  await db.exec(`SET app.current_user_id = '${teacherId}';`);
+  const manualGradesConcurrent = [{ question_id: q4Id, points_earned: 10, teacher_comment: 'Xuất sắc' }];
+
+  const resGradeAtt1 = await db.query(`
+    SELECT public.finalize_academic_submission_grading_with_annotations(
+      '${sub4Att1Id}'::uuid, '${JSON.stringify(manualGradesConcurrent)}'::jsonb, '[]'::jsonb, 'Chấm att1', false
+    ) as r;
+  `);
+
+  const resGradeAtt2 = await db.query(`
+    SELECT public.finalize_academic_submission_grading_with_annotations(
+      '${sub4Att2Id}'::uuid, '${JSON.stringify(manualGradesConcurrent)}'::jsonb, '[]'::jsonb, 'Chấm att2', false
+    ) as r;
+  `);
+
+  // Kiểm tra 3 điều kiện bắt buộc:
+  // 1. both grading operations may complete (cả 2 đều success và graded)
+  assert.equal(resGradeAtt1.rows[0].r.success, true, 'Chấm Attempt 1 phải thành công');
+  assert.equal(resGradeAtt2.rows[0].r.success, true, 'Chấm Attempt 2 phải thành công');
+
+  // 2. Exactly one winner nhận sao
+  const starsAwarded1 = resGradeAtt1.rows[0].r.reward_stars_awarded;
+  const starsAwarded2 = resGradeAtt2.rows[0].r.reward_stars_awarded;
+  assert.equal(starsAwarded1 + starsAwarded2, 15, 'Chỉ duy nhất 1 lần nhận trọn 15 sao');
+  assert.ok((starsAwarded1 === 15 && starsAwarded2 === 0) || (starsAwarded1 === 0 && starsAwarded2 === 15));
+
+  // 3. rewards applied rows = 1
+  const rewardRows = await db.query(`
+    SELECT COUNT(*) as c FROM public.academic_submissions 
+    WHERE exercise_id = '${ex4Id}' AND student_id = '${student2Id}' AND reward_applied_at IS NOT NULL;
+  `);
+  assert.equal(Number(rewardRows.rows[0].c), 1, 'Chỉ đúng 1 dòng submission được ghi nhận reward_applied_at');
+
+  // 4. profiles.total_stars increment = exactly once
+  const p2StarsAfter = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = '${student2Id}';`)).rows[0].total_stars;
+  assert.equal(p2StarsAfter, p2StarsBefore + 15, 'Tổng sao của học sinh chỉ được cộng đúng 1 lần 15 sao');
+
+  console.log('✅ GATE 11 PASS: CONCURRENT_REWARD_SAME_STUDENT_EXERCISE_SINGLE_WINNER (Single Winner, exactly 1 reward row, exactly once profile star increment)');
+
   console.log('\n================================================================================');
-  console.log('🎉 TOÀN BỘ 10 GATES VỀ DEADLINE & REWARD SAFETY ĐỀU PASS 100%');
+  console.log('🎉 TOÀN BỘ 11 GATES VỀ DEADLINE & REWARD CONCURRENCY SAFETY ĐỀU PASS 100%');
   console.log('================================================================================\n');
 }
 

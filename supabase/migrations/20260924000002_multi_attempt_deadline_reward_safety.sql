@@ -609,6 +609,9 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'FORBIDDEN', 'message', 'Lỗi: Bạn không có quyền chấm bài nộp của học sinh này.');
   END IF;
 
+  -- Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt của cùng 1 học sinh + bài tập
+  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_sub.exercise_id::text || '_' || v_sub.student_id::text));
+
   -- --------------------------------------------------------------------------
   -- 1. XỬ LÝ ANNOTATIONS
   -- --------------------------------------------------------------------------
@@ -953,6 +956,9 @@ BEGIN
   IF NOT v_has_permission THEN
     RETURN jsonb_build_object('success', false, 'message', 'Lỗi: Bạn không có quyền chấm bài nộp này (Bạn không phụ trách lớp học của học sinh).');
   END IF;
+
+  -- Khóa advisory transaction chống race condition chấm đồng thời nhiều attempt của cùng 1 học sinh + bài tập
+  PERFORM pg_advisory_xact_lock(hashtext('academic_sub_' || v_sub.exercise_id::text || '_' || v_sub.student_id::text));
 
   IF p_manual_grades IS NOT NULL THEN
     IF jsonb_typeof(p_manual_grades) != 'array' THEN
