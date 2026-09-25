@@ -62,7 +62,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
   const rowInfo = q.source_row ? ` (dòng Excel ${q.source_row})` : '';
   const qPrefix = `Câu ${qNum}${rowInfo}`;
 
-  const promptText = String(q.prompt || q.question || '').trim();
+  const promptText = q.prompt !== undefined && q.prompt !== null ? String(q.prompt) : String(q.question || '');
   const pts = parseFloat(q.points) || 1;
 
   if (['single_choice', 'multiple_choice'].includes(qType)) {
@@ -71,14 +71,12 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       ? q.options
       : (Array.isArray(q.options_json) ? q.options_json : []);
 
-    const normOpts = rawOpts
-      .map(o => String(o === null || o === undefined ? '' : o).trim())
-      .filter(o => o.length > 0);
+    const normOpts = rawOpts.map(o => String(o === null || o === undefined ? '' : o));
 
     // 2. Chuẩn hóa correct_answer
     let rawCorrect = q.correct_answer;
     if (rawCorrect === undefined || rawCorrect === null) {
-      if (q.correct_answer_key && q.correct_answer_key.correct_answer) {
+      if (q.correct_answer_key && q.correct_answer_key.correct_answer !== undefined) {
         rawCorrect = q.correct_answer_key.correct_answer;
       }
     }
@@ -87,20 +85,20 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
     let mappingError = null;
 
     if (qType === 'single_choice') {
-      const strCorrect = String(rawCorrect || '').trim();
-      const upperCorrect = strCorrect.toUpperCase();
+      const strCorrect = String(rawCorrect || '');
+      const trimmedUpper = strCorrect.trim().toUpperCase();
 
-      if (['A', 'B', 'C', 'D'].includes(upperCorrect) && normOpts.length >= 2) {
+      if (['A', 'B', 'C', 'D'].includes(trimmedUpper) && normOpts.length >= 2) {
         // a) Dạng chữ cái A/B/C/D
-        const letterIdx = upperCorrect.charCodeAt(0) - 65;
+        const letterIdx = trimmedUpper.charCodeAt(0) - 65;
         if (letterIdx < normOpts.length) {
           resolvedCorrect = normOpts[letterIdx];
         } else {
-          mappingError = `${qPrefix}: không ánh xạ được đáp án ${upperCorrect} vào danh sách ${normOpts.length} lựa chọn.`;
+          mappingError = `${qPrefix}: không ánh xạ được đáp án ${trimmedUpper} vào danh sách ${normOpts.length} lựa chọn.`;
         }
-      } else if (['1', '2', '3', '4'].includes(strCorrect) && normOpts.length >= 2 && !normOpts.includes(strCorrect)) {
+      } else if (['1', '2', '3', '4'].includes(strCorrect.trim()) && normOpts.length >= 2 && !normOpts.includes(strCorrect)) {
         // b) Dạng số thứ tự 1/2/3/4 (chỉ dùng khi đáp án không phải là chuỗi trùng với nội dung lựa chọn)
-        const numIdx = parseInt(strCorrect, 10) - 1;
+        const numIdx = parseInt(strCorrect.trim(), 10) - 1;
         if (numIdx < normOpts.length) {
           resolvedCorrect = normOpts[numIdx];
         } else {
@@ -108,7 +106,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
         }
       } else {
         // c) Nguyên văn nội dung đáp án (ví dụ: "8" hoặc "Hình tam giác")
-        const matchOpt = normOpts.find(o => o.toLowerCase() === strCorrect.toLowerCase());
+        const matchOpt = normOpts.find(o => o.trim().toLowerCase() === strCorrect.trim().toLowerCase());
         if (matchOpt) {
           resolvedCorrect = matchOpt;
         } else if (strCorrect) {
@@ -117,9 +115,9 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       }
     } else if (qType === 'multiple_choice') {
       if (Array.isArray(rawCorrect)) {
-        resolvedCorrect = rawCorrect.map(a => String(a).trim()).filter(Boolean);
+        resolvedCorrect = rawCorrect.map(a => String(a !== null && a !== undefined ? a : '')).filter(Boolean);
       } else {
-        resolvedCorrect = [String(rawCorrect || '').trim()].filter(Boolean);
+        resolvedCorrect = [String(rawCorrect || '')].filter(Boolean);
       }
     }
 
@@ -144,7 +142,9 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
     };
 
   } else if (['fill_blank', 'short_answer'].includes(qType)) {
-    let rawCorrect = String(q.correct_answer || (q.correct_answer_key?.correct_answer) || '').trim();
+    let rawCorrect = q.correct_answer !== undefined && q.correct_answer !== null
+      ? String(q.correct_answer)
+      : String(q.correct_answer_key?.correct_answer || '');
 
     const correctAnswerKey = {
       correct_answer: rawCorrect,
@@ -182,7 +182,11 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
 
   } else {
     // essay
-    const refAnswer = String(q.reference_answer || q.correct_answer || (q.correct_answer_key?.correct_answer) || '').trim();
+    const refAnswer = q.reference_answer !== undefined && q.reference_answer !== null
+      ? String(q.reference_answer)
+      : (q.correct_answer !== undefined && q.correct_answer !== null
+          ? String(q.correct_answer)
+          : String(q.correct_answer_key?.correct_answer || ''));
 
     const correctAnswerKey = {
       correct_answer: refAnswer || 'Xem hướng dẫn chấm của giáo viên',
@@ -633,8 +637,9 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
       return;
     }
 
-    // 1. Đề bài không được rỗng
-    if (!q.prompt) {
+    // 1. Đề bài không được rỗng hoặc chỉ chứa khoảng trắng
+    const promptStr = String(q.prompt !== undefined && q.prompt !== null ? q.prompt : (q.question || ''));
+    if (!promptStr.trim()) {
       errors.push({
         index: idx,
         question_number: qNum,
@@ -648,19 +653,37 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
 
     // 2. Kiểm tra câu trắc nghiệm (single_choice / multiple_choice)
     if (['single_choice', 'multiple_choice'].includes(q.question_type)) {
-      if (q.options_json.length < 2) {
+      const rawOpts = Array.isArray(q.options_json) ? q.options_json : (Array.isArray(q.options) ? q.options : []);
+      const validOpts = rawOpts
+        .map(opt => String(opt === null || opt === undefined ? '' : opt).trim())
+        .filter(opt => opt.length > 0);
+
+      // Bắt lỗi nếu có lựa chọn rỗng hoặc chỉ toàn khoảng trắng
+      const hasWhitespaceOnlyOpt = rawOpts.some(opt => !String(opt === null || opt === undefined ? '' : opt).trim());
+      if (hasWhitespaceOnlyOpt) {
         errors.push({
           index: idx,
           question_number: qNum,
           source_row: q.source_row || null,
           question_type: q.question_type,
           field: 'options',
-          message: `${qPrefix}: options_json chỉ có ${q.options_json.length} lựa chọn; cần ít nhất 2 lựa chọn.`
+          message: `${qPrefix}: Lựa chọn đáp án không được để trống hoặc chỉ chứa khoảng trắng.`
+        });
+      }
+
+      if (validOpts.length < 2) {
+        errors.push({
+          index: idx,
+          question_number: qNum,
+          source_row: q.source_row || null,
+          question_type: q.question_type,
+          field: 'options',
+          message: `${qPrefix}: Cần ít nhất 2 lựa chọn hợp lệ (hiện có ${validOpts.length}).`
         });
       }
 
       if (q.question_type === 'single_choice') {
-        const correctVal = q.correct_answer_key?.correct_answer;
+        const correctVal = String(q.correct_answer_key?.correct_answer || q.correct_answer || '').trim();
         if (!correctVal) {
           errors.push({
             index: idx,
@@ -668,10 +691,10 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
             source_row: q.source_row || null,
             question_type: q.question_type,
             field: 'correct_answer',
-            message: `${qPrefix}: Thiếu đáp án đúng correct_answer_key cho câu hỏi trắc nghiệm.`
+            message: `${qPrefix}: Thiếu đáp án đúng cho câu hỏi trắc nghiệm.`
           });
-        } else if (q.options_json.length >= 2) {
-          const match = q.options_json.some(opt => opt.toLowerCase() === String(correctVal).toLowerCase());
+        } else if (validOpts.length >= 2) {
+          const match = validOpts.some(opt => opt.toLowerCase() === correctVal.toLowerCase());
           if (!match) {
             errors.push({
               index: idx,
@@ -679,14 +702,32 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
               source_row: q.source_row || null,
               question_type: q.question_type,
               field: 'correct_answer',
-              message: `${qPrefix}: Đáp án đúng '${correctVal}' không thuộc danh sách lựa chọn [${q.options_json.join(', ')}].`
+              message: `${qPrefix}: Đáp án đúng '${correctVal}' không thuộc danh sách lựa chọn hợp lệ [${validOpts.join(', ')}].`
             });
           }
         }
+      } else if (q.question_type === 'multiple_choice') {
+        const rawAnswers = Array.isArray(q.correct_answer)
+          ? q.correct_answer
+          : (Array.isArray(q.correct_answer_key?.accepted_answers) ? q.correct_answer_key.accepted_answers : [q.correct_answer]);
+        const validSelectedAnswers = rawAnswers
+          .map(a => String(a === null || a === undefined ? '' : a).trim())
+          .filter(a => a.length > 0 && validOpts.some(opt => opt.toLowerCase() === a.toLowerCase()));
+
+        if (validSelectedAnswers.length === 0) {
+          errors.push({
+            index: idx,
+            question_number: qNum,
+            source_row: q.source_row || null,
+            question_type: q.question_type,
+            field: 'correct_answer',
+            message: `${qPrefix}: Câu hỏi trắc nghiệm nhiều đáp án cần chọn ít nhất 1 đáp án đúng hợp lệ.`
+          });
+        }
       }
     } else if (['fill_blank', 'short_answer'].includes(q.question_type)) {
-      // 3. Câu điền khuyết / trả lời ngắn
-      const correctVal = q.correct_answer_key?.correct_answer;
+      // 3. Câu điền khuyết / trả lời ngắn (chỉ chứa whitespace bị coi là thiếu đáp án)
+      const correctVal = String(q.correct_answer_key?.correct_answer || q.correct_answer || '').trim();
       if (!correctVal) {
         errors.push({
           index: idx,
@@ -714,6 +755,111 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
   });
 
   return errors;
+};
+
+/**
+ * CHUẨN HÓA CÂU HỎI TRƯỚC KHI LƯU VÀO DATABASE (SAVE NORMALIZATION)
+ * - Tách biệt với EDIT STATE: trim đầu/cuối của prompt, option, đáp án
+ * - Lọc bỏ các option chỉ chứa khoảng trắng
+ * - Bảo tồn 100% khoảng trắng bên trong (ví dụ: "Hà Nội", "5 + 5 = 10")
+ */
+export const normalizeQuestionForSave = (q, idx = 0) => {
+  if (!q) return null;
+  const normQ = normalizeImportedQuestion(q, idx);
+  if (!normQ) return null;
+
+  const trimmedPrompt = String(normQ.prompt !== undefined && normQ.prompt !== null ? normQ.prompt : '').trim();
+  const qType = normQ.question_type || 'single_choice';
+  const pts = parseFloat(normQ.points) || 1;
+
+  if (['single_choice', 'multiple_choice'].includes(qType)) {
+    const rawOpts = Array.isArray(normQ.options_json)
+      ? normQ.options_json
+      : (Array.isArray(normQ.options) ? normQ.options : []);
+
+    const cleanOpts = rawOpts
+      .map(o => String(o === null || o === undefined ? '' : o).trim())
+      .filter(o => o.length > 0);
+
+    let cleanCorrect = '';
+    let cleanAccepted = [];
+
+    if (qType === 'single_choice') {
+      const rawCorrect = String(normQ.correct_answer || normQ.correct_answer_key?.correct_answer || '').trim();
+      const matched = cleanOpts.find(o => o.toLowerCase() === rawCorrect.toLowerCase());
+      cleanCorrect = matched || rawCorrect;
+      cleanAccepted = cleanCorrect ? [cleanCorrect] : [];
+    } else {
+      const rawArr = Array.isArray(normQ.correct_answer)
+        ? normQ.correct_answer
+        : (Array.isArray(normQ.correct_answer_key?.accepted_answers) ? normQ.correct_answer_key.accepted_answers : [normQ.correct_answer]);
+      cleanAccepted = rawArr
+        .map(a => String(a === null || a === undefined ? '' : a).trim())
+        .filter(a => a.length > 0 && cleanOpts.some(opt => opt.toLowerCase() === a.toLowerCase()));
+      cleanCorrect = cleanAccepted;
+    }
+
+    return {
+      id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
+      question_number: idx + 1,
+      question_type: qType,
+      prompt: trimmedPrompt,
+      options: cleanOpts,
+      options_json: cleanOpts,
+      points: pts,
+      correct_answer: cleanCorrect,
+      correct_answer_key: {
+        correct_answer: cleanCorrect,
+        accepted_answers: cleanAccepted,
+        case_sensitive: false
+      }
+    };
+  } else if (['fill_blank', 'short_answer'].includes(qType)) {
+    const cleanCorrect = String(normQ.correct_answer || normQ.correct_answer_key?.correct_answer || '').trim();
+    return {
+      id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
+      question_number: idx + 1,
+      question_type: qType,
+      prompt: trimmedPrompt,
+      options: [],
+      options_json: [],
+      points: pts,
+      correct_answer: cleanCorrect,
+      correct_answer_key: {
+        correct_answer: cleanCorrect,
+        accepted_answers: cleanCorrect ? [cleanCorrect] : [],
+        case_sensitive: false
+      }
+    };
+  } else if (qType === 'image_upload') {
+    return {
+      id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
+      question_number: idx + 1,
+      question_type: 'image_upload',
+      prompt: trimmedPrompt,
+      options: [],
+      options_json: [],
+      points: pts,
+      correct_answer: '',
+      reference_answer: '',
+      correct_answer_key: null
+    };
+  } else {
+    // essay
+    const cleanRef = String(normQ.reference_answer || normQ.correct_answer || '').trim();
+    return {
+      id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
+      question_number: idx + 1,
+      question_type: 'essay',
+      prompt: trimmedPrompt,
+      options: [],
+      options_json: [],
+      points: pts,
+      correct_answer: cleanRef || 'Xem hướng dẫn chấm của giáo viên',
+      reference_answer: cleanRef || 'Xem hướng dẫn chấm của giáo viên',
+      correct_answer_key: null
+    };
+  }
 };
 
 /**

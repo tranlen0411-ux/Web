@@ -1,6 +1,7 @@
 import assert from 'node:assert';
 import {
   normalizeImportedQuestion,
+  normalizeQuestionForSave,
   getQuestionValidationErrors
 } from '../src/utils/questionFileParsers.js';
 
@@ -240,5 +241,118 @@ assert.ok(
 );
 console.log('✅ TEST 7 Passed: Excel and Word templates verified to include image_upload sample.');
 
-console.log('\n🎉 ALL 7 TEST SUITES PASSED SUCCESSFULLY (EXIT CODE 0)!');
+// TEST 8: Space preservation in Input, Textarea, Options & Hardened Validation / Save Normalization
+console.log('\n--- TEST 8: Space Character Preservation, Validation & Save Normalization ---');
+
+// 1. Trailing-space while typing (EDIT_SPACE_PRESERVED)
+const typingSteps = [
+  'Em',
+  'Em ',
+  'Em hãy',
+  'Em hãy ',
+  'Em hãy làm',
+  'Em hãy làm ',
+  'Em hãy làm bài'
+];
+
+let currentPrompt = '';
+for (const step of typingSteps) {
+  currentPrompt = step;
+  const qState = normalizeImportedQuestion({
+    question_number: 1,
+    question_type: 'image_upload',
+    prompt: currentPrompt,
+    points: 2
+  }, 0);
+  assert.strictEqual(qState.prompt, step, `Prompt must preserve exact string "${step}" including trailing spaces during edit`);
+}
+assert.strictEqual(currentPrompt, 'Em hãy làm bài', 'Final prompt must match full typed phrase with spaces');
+
+// 2. Internal spaces preserved (INTERNAL_SPACE_PRESERVED)
+const internalSpaceQ = normalizeImportedQuestion({
+  question_number: 2,
+  question_type: 'single_choice',
+  prompt: 'Thủ đô của Việt Nam là Hà Nội đúng không? ',
+  options: ['Hà Nội ', 'Đà Nẵng ', 'TP. Hồ Chí Minh '],
+  correct_answer: 'Hà Nội ',
+  points: 1
+}, 1);
+assert.strictEqual(internalSpaceQ.prompt, 'Thủ đô của Việt Nam là Hà Nội đúng không? ');
+assert.strictEqual(internalSpaceQ.options[0], 'Hà Nội ');
+assert.strictEqual(internalSpaceQ.options[2], 'TP. Hồ Chí Minh ');
+assert.strictEqual(internalSpaceQ.correct_answer, 'Hà Nội ');
+
+// 3. Whitespace-only prompt rejected by validation (WHITESPACE_ONLY_PROMPT: REJECT)
+const whitespacePromptErrors = getQuestionValidationErrors([
+  normalizeImportedQuestion({ question_number: 1, question_type: 'essay', prompt: '   ', points: 1 }, 0)
+]);
+assert.strictEqual(whitespacePromptErrors.length, 1, 'Whitespace-only prompt must fail validation');
+assert.strictEqual(whitespacePromptErrors[0].field, 'prompt');
+
+// 4. Whitespace-only option rejected by validation (WHITESPACE_ONLY_OPTION: REJECT)
+const whitespaceOptionErrors = getQuestionValidationErrors([
+  normalizeImportedQuestion({
+    question_number: 2,
+    question_type: 'single_choice',
+    prompt: 'Chọn một đáp án',
+    options: ['Lựa chọn A', '   '],
+    correct_answer: 'Lựa chọn A',
+    points: 1
+  }, 1)
+]);
+assert.strictEqual(
+  whitespaceOptionErrors.some(e => e.field === 'options'),
+  true,
+  'Whitespace-only option must trigger validation error on options field'
+);
+
+// 5. Whitespace-only short_answer rejected by validation (WHITESPACE_ONLY_SHORT_ANSWER: REJECT)
+const whitespaceShortAnswerErrors = getQuestionValidationErrors([
+  normalizeImportedQuestion({
+    question_number: 3,
+    question_type: 'short_answer',
+    prompt: 'Điền kết quả phép tính 5 + 5 = ...',
+    correct_answer: '   ',
+    points: 1
+  }, 2)
+]);
+assert.strictEqual(
+  whitespaceShortAnswerErrors.some(e => e.field === 'correct_answer'),
+  true,
+  'Whitespace-only short_answer must trigger validation error on correct_answer field'
+);
+
+// 6. Save Normalization safely trims leading/trailing whitespace while preserving internal spaces (SAVE_TRIM_SAFE)
+const savePayload = normalizeQuestionForSave({
+  id: 'persisted-q-12345678901234567890',
+  question_number: 1,
+  question_type: 'single_choice',
+  prompt: '  Hà Nội là thủ đô của Việt Nam?  ',
+  options: ['  Hà Nội  ', '   ', '  Đà Nẵng  '],
+  correct_answer: '  Hà Nội  ',
+  points: 1
+}, 0);
+
+assert.strictEqual(savePayload.prompt, 'Hà Nội là thủ đô của Việt Nam?', 'Prompt must have leading/trailing spaces trimmed but internal spaces preserved');
+assert.deepStrictEqual(savePayload.options, ['Hà Nội', 'Đà Nẵng'], 'Options must be trimmed and whitespace-only items removed');
+assert.strictEqual(savePayload.correct_answer_key.correct_answer, 'Hà Nội', 'Correct answer must be trimmed');
+assert.deepStrictEqual(savePayload.correct_answer_key.accepted_answers, ['Hà Nội'], 'Accepted answers must be trimmed');
+
+// Save normalization for fill_blank / short_answer
+const saveShortAnswer = normalizeQuestionForSave({
+  id: 'short-ans-q-12345678901234567890',
+  question_number: 2,
+  question_type: 'short_answer',
+  prompt: '  Điền từ: Non sông  Việt Nam  ',
+  correct_answer: '  Việt Nam  ',
+  points: 1
+}, 1);
+
+assert.strictEqual(saveShortAnswer.prompt, 'Điền từ: Non sông  Việt Nam');
+assert.strictEqual(saveShortAnswer.correct_answer_key.correct_answer, 'Việt Nam');
+assert.deepStrictEqual(saveShortAnswer.correct_answer_key.accepted_answers, ['Việt Nam']);
+
+console.log('✅ TEST 8 Passed: Space key preservation during edit, hardened validation, and clean save normalization verified.');
+
+console.log('\n🎉 ALL 8 TEST SUITES PASSED SUCCESSFULLY (EXIT CODE 0)!');
 

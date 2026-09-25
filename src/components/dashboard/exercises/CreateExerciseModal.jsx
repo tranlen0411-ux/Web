@@ -11,7 +11,8 @@ import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
 import {
   getQuestionValidationErrors,
-  normalizeImportedQuestion
+  normalizeImportedQuestion,
+  normalizeQuestionForSave
 } from '../../../utils/questionFileParsers';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
 
@@ -335,19 +336,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     setErrorMsg('');
 
     try {
-      const questionsPayload = questions.map((q, idx) => {
-        const normQ = normalizeImportedQuestion(q, idx);
-        return {
-          id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
-          question_number: idx + 1,
-          question_type: normQ.question_type,
-          prompt: normQ.prompt,
-          options_json: normQ.options_json,
-          options: normQ.options_json,
-          points: normQ.points,
-          correct_answer_key: ['essay', 'image_upload'].includes(normQ.question_type) ? null : normQ.correct_answer_key
-        };
-      });
+      const questionsPayload = questions.map((q, idx) => normalizeQuestionForSave(q, idx));
 
       const singleClassId = isGlobal ? null : (targetClassesToAssign[0] || selectedClassId || null);
       const exercisePayload = {
@@ -686,7 +675,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                           value={q.prompt}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, prompt: val }, i) : item));
+                            setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, prompt: val } : item));
                             setValidationErrors([]);
                           }}
                           className="w-full p-2.5 bg-white border border-amber-200 rounded-xl text-xs font-bold"
@@ -726,7 +715,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                   checked={q.correct_answer === opt}
                                   disabled={hasSubmissions}
                                   onChange={() => {
-                                    setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: opt }, i) : item));
+                                    setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: opt } : item));
                                     setValidationErrors([]);
                                   }}
                                   className="w-4 h-4 text-amber-500 cursor-pointer"
@@ -741,7 +730,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                     const nextArr = e.target.checked
                                       ? [...currArr, opt]
                                       : currArr.filter(a => a !== opt);
-                                    setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: nextArr }, i) : item));
+                                    setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: nextArr } : item));
                                     setValidationErrors([]);
                                   }}
                                   className="w-4 h-4 text-amber-500 rounded cursor-pointer"
@@ -763,12 +752,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                       } else if (item.correct_answer === oldVal) {
                                         nextCorrect = e.target.value;
                                       }
-                                      return normalizeImportedQuestion({
+                                      return {
                                         ...item,
                                         options: newOptions,
                                         options_json: newOptions,
                                         correct_answer: nextCorrect
-                                      }, i);
+                                      };
                                     }
                                     return item;
                                   }));
@@ -789,12 +778,12 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                         } else if (item.correct_answer === opt) {
                                           nextCorrect = newOptions[0];
                                         }
-                                        return normalizeImportedQuestion({
+                                        return {
                                           ...item,
                                           options: newOptions,
                                           options_json: newOptions,
                                           correct_answer: nextCorrect
-                                        }, i);
+                                        };
                                       }
                                       return item;
                                     }));
@@ -813,7 +802,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                               type="button"
                               onClick={() => {
                                 const newOptions = [...q.options_json, `Lựa chọn ${String.fromCharCode(65 + q.options_json.length)}`];
-                                setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, options: newOptions, options_json: newOptions }, i) : item));
+                                setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, options: newOptions, options_json: newOptions } : item));
                                 setValidationErrors([]);
                               }}
                               className="text-xs font-bold text-sky-700 hover:text-sky-800 flex items-center gap-1 mt-1"
@@ -835,7 +824,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             value={q.correct_answer}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
+                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val } : item));
                               setValidationErrors([]);
                             }}
                             className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
@@ -854,7 +843,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             value={q.correct_answer}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setQuestions(prev => prev.map((item, i) => i === idx ? normalizeImportedQuestion({ ...item, correct_answer: val }, i) : item));
+                              setQuestions(prev => prev.map((item, i) => i === idx ? { ...item, correct_answer: val, reference_answer: val } : item));
                               setValidationErrors([]);
                             }}
                             className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
