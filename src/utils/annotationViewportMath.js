@@ -235,6 +235,7 @@ export function clampPan({
  * @param {number} [params.scale=1] - Viewport zoom scale
  * @param {number} [params.panX=0] - Viewport pan X offset
  * @param {number} [params.panY=0] - Viewport pan Y offset
+ * @param {number} [params.rotation=0] - Viewport rotation angle in degrees (0, 90, 180, 270)
  * @returns {{ x: number, y: number }} Normalized coordinates strictly clamped to [0, 1]
  */
 export function screenToNormalized({
@@ -246,6 +247,7 @@ export function screenToNormalized({
   scale = 1,
   panX = 0,
   panY = 0,
+  rotation = 0,
 }) {
   if (!viewportRect || !baseWidth || !baseHeight || baseWidth <= 0 || baseHeight <= 0) {
     return { x: 0, y: 0 };
@@ -257,11 +259,29 @@ export function screenToNormalized({
   const viewportX = clientX - viewportRect.left;
   const viewportY = clientY - viewportRect.top;
 
-  // 2. Invert Affine Transform: (viewport - pan) / scale
-  const contentX = (viewportX - panX) / safeScale;
-  const contentY = (viewportY - panY) / safeScale;
+  let contentX, contentY;
 
-  // 3. Normalize against un-transformed base dimensions and clamp to [0, 1]
+  if (rotation && rotation % 360 !== 0) {
+    // When rotated, transform origin is center (50% 50%)
+    const cx = baseWidth / 2;
+    const cy = baseHeight / 2;
+    const x2 = viewportX - (cx + panX);
+    const y2 = viewportY - (cy + panY);
+    const x1 = x2 / safeScale;
+    const y1 = y2 / safeScale;
+    const rad = (-rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    contentX = x1 * cos - y1 * sin + cx;
+    contentY = x1 * sin + y1 * cos + cy;
+  } else {
+    // Standard unrotated viewport (top-left anchor 0 0)
+    contentX = (viewportX - panX) / safeScale;
+    contentY = (viewportY - panY) / safeScale;
+  }
+
+  // 4. Normalize against un-transformed base dimensions and clamp to [0, 1]
   const normalizedX = clamp(contentX / baseWidth, 0, 1);
   const normalizedY = clamp(contentY / baseHeight, 0, 1);
 

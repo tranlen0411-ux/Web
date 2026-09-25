@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Upload, Image as ImageIcon, X, Loader2, CheckCircle2, AlertCircle, Eye 
 } from 'lucide-react';
@@ -7,6 +7,11 @@ import {
   prepareSubmissionAttachment, 
   finalizeSubmissionAttachment 
 } from '../../../services/submissionAnnotationClient';
+import {
+  validateImageFile,
+  optimizeImageBeforeUpload,
+  MAX_ALLOWED_IMAGE_BYTES
+} from '../../../utils/imageOptimizer';
 
 /**
  * Giới hạn tối đa số lượng ảnh trên mỗi câu hỏi (Hardened Cap)
@@ -77,53 +82,42 @@ export const SubmissionImageUploader = ({
   const fileInputRef = useRef(null);
 
   const validateFile = (file) => {
-    if (!file) return 'Không tìm thấy file.';
-    const nameLower = file.name.toLowerCase();
-
-    // 1. Chặn tuyệt đối SVG và các định dạng thực thi nguy hiểm
-    if (
-      nameLower.endsWith('.svg') || 
-      file.type.includes('svg') || 
-      nameLower.endsWith('.exe') || 
-      nameLower.endsWith('.bat') || 
-      nameLower.endsWith('.sh') || 
-      nameLower.endsWith('.html') || 
-      nameLower.endsWith('.js')
-    ) {
-      return 'Chặn định dạng SVG và tệp thực thi để bảo đảm an toàn hệ thống.';
-    }
-
-    // 2. Kiểm tra MIME type hỗ trợ
-    const allowedMime = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedMime.includes(file.type)) {
-      return 'Chỉ chấp nhận định dạng ảnh JPG, PNG hoặc WebP.';
-    }
-
-    // 3. Kiểm tra dung lượng (1 byte <= size <= 10 MiB)
-    const MAX_SIZE = 10 * 1024 * 1024; // 10,485,760 bytes
-    if (file.size <= 0) {
-      return 'Tệp tin rỗng không hợp lệ.';
-    }
-    if (file.size > MAX_SIZE) {
-      return 'Dung lượng ảnh vượt quá giới hạn cho phép (Tối đa 10 MB).';
-    }
-
-    return null;
+    return validateImageFile(file);
   };
 
-  const uploadSingleFile = async (file, tempId, sortOrder) => {
+  // Cleanup preview URLs on component unmount
+  useEffect(() => {
+    return () => {
+      activeUploads.forEach(u => {
+        if (u.previewUrl) {
+          try { URL.revokeObjectURL(u.previewUrl); } catch {}
+        }
+      });
+    };
+  }, []);
+
+  const uploadSingleFile = async (rawFile, tempId, sortOrder) => {
+    let file = rawFile;
+    try {
+      // Tự động tối ưu/nén ảnh phía client nếu cần thiết
+      file = await optimizeImageBeforeUpload(rawFile);
+    } catch (optErr) {
+      console.warn('Tối ưu hóa ảnh không thành công, sử dụng file gốc:', optErr);
+      file = rawFile;
+    }
+
     const objectUrl = URL.createObjectURL(file);
 
     try {
       // BƯỚC 1: PREPARE ATTACHMENT
       setActiveUploads(prev => prev.map(u => 
-        u.tempId === tempId ? { ...u, status: 'preparing' } : u
+        u.tempId === tempId ? { ...u, status: 'preparing', byteSize: file.size } : u
       ));
 
       const prepRes = await prepareSubmissionAttachment({
         submissionId,
         questionId,
-        originalFileName: file.name,
+        originalFileName: file.name || rawFile.name,
         mimeType: file.type,
         byteSize: file.size,
         sortOrder
@@ -188,8 +182,14 @@ export const SubmissionImageUploader = ({
         upload_status: 'finalized'
       };
 
-      // Xóa khỏi activeUploads và đẩy vào danh sách attachments chính thức
-      setActiveUploads(prev => prev.filter(u => u.tempId !== tempId));
+      // Xóa khỏi activeUploads, thu hồi previewUrl và đẩy vào danh sách attachments chính thức
+      setActiveUploads(prev => {
+        const item = prev.find(u => u.tempId === tempId);
+        if (item?.previewUrl && item.previewUrl !== signedUrl) {
+          try { URL.revokeObjectURL(item.previewUrl); } catch {}
+        }
+        return prev.filter(u => u.tempId !== tempId);
+      });
 
       if (onAttachmentsChange) {
         onAttachmentsChange(currentList => {

@@ -258,8 +258,9 @@ export const SubmissionAnnotationCanvas = ({
   activeTool = 'pen',
   activeColor = '#ef4444',
   strokeWidth = 4,
-  // Viewport Zoom/Pan props (P2-A2 controlled or fallback state)
+  // Viewport Zoom, Rotate & Pan props (P2-A2 controlled or fallback state)
   scale: externalScale,
+  rotation = 0,
   panX: externalPanX,
   panY: externalPanY,
   onViewportChange,
@@ -346,8 +347,9 @@ export const SubmissionAnnotationCanvas = ({
       scale,
       panX,
       panY,
+      rotation,
     });
-  }, [scale, panX, panY]);
+  }, [scale, panX, panY, rotation]);
 
   // Note Authoring & Management Handlers (Phase 2 - P2-B1 & P2-B2)
   const handleSaveNote = ({ text, color }) => {
@@ -821,10 +823,11 @@ export const SubmissionAnnotationCanvas = ({
       <div
         ref={contentRef}
         style={{
-          transform: `translate(${panX}px, ${panY}px) scale(${scale})`,
-          transformOrigin: '0 0',
+          transform: `translate(${panX}px, ${panY}px) scale(${scale}) rotate(${rotation}deg)`,
+          transformOrigin: rotation ? '50% 50%' : '0 0',
           width: '100%',
           position: 'relative',
+          transition: isDragging ? 'none' : 'transform 0.15s ease-out',
         }}
       >
         {/* 1. ẢNH GỐC BÀI NỘP CỦA HỌC SINH (BASE IMAGE) */}

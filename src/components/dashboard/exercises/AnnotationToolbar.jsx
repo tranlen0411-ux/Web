@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Pen, Minus, Circle, ArrowUpRight, Check, X, Eraser, Hand, 
-  RotateCcw, RotateCw, Trash2, 
+  RotateCcw, RotateCw, Undo2, Redo2, Trash2, 
   Save, Loader2, AlertTriangle, AlertCircle, RefreshCw,
   ZoomIn, ZoomOut, Maximize2, StickyNote
 } from 'lucide-react';
@@ -21,7 +21,7 @@ const STROKE_WIDTHS = [
 ];
 
 /**
- * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Quick Tools: Pen, Line, Ellipse, Arrow, Stamps, Note, Undo/Redo)
+ * AnnotationToolbar: Thanh công cụ chấm bài & vẽ chú thích trên ảnh (Quick Tools: Pen, Line, Ellipse, Arrow, Stamps, Note, Undo/Redo, Zoom, Rotate)
  */
 export const AnnotationToolbar = ({
   activeTool = 'pen',
@@ -41,11 +41,14 @@ export const AnnotationToolbar = ({
   version = 0,
   onManualSave,
   onReloadLatest,
-  // Viewport Zoom & Pan controls
+  // Viewport Zoom, Rotate & Pan controls
   scale = 1,
+  rotation = 0,
   onZoomIn,
   onZoomOut,
+  onRotate,
   onResetZoom,
+  onResetView,
 }) => {
   const isShapeOrPenTool = ['pen', 'line', 'ellipse', 'arrow'].includes(activeTool);
 
@@ -199,8 +202,9 @@ export const AnnotationToolbar = ({
         </button>
       </div>
 
-      {/* 2. CỤM ĐIỀU KHIỂN THU PHÓNG (ZOOM CONTROLS) */}
+      {/* 2. CỤM ĐIỀU KHIỂN THU PHÓNG & XOAY ẢNH (VIEWPORT CONTROLS) */}
       <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+        {/* Thu nhỏ */}
         <button
           type="button"
           onClick={onZoomOut}
@@ -211,10 +215,12 @@ export const AnnotationToolbar = ({
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
 
-        <span className="text-[11px] font-black text-slate-200 px-1.5 min-w-[42px] text-center select-none" title="Tỉ lệ thu phóng hiện tại">
+        {/* Phần trăm thu phóng */}
+        <span className="text-[11px] font-black text-slate-200 px-1.5 min-w-[40px] text-center select-none" title="Tỉ lệ thu phóng hiện tại">
           {Math.round(scale * 100)}%
         </span>
 
+        {/* Phóng to */}
         <button
           type="button"
           onClick={onZoomIn}
@@ -225,15 +231,30 @@ export const AnnotationToolbar = ({
           <ZoomIn className="w-3.5 h-3.5" />
         </button>
 
+        <div className="w-[1px] h-4 bg-slate-700 my-auto mx-0.5" />
+
+        {/* Xoay ảnh 90 độ */}
         <button
           type="button"
-          onClick={onResetZoom}
-          disabled={readOnly || scale === 1}
+          onClick={onRotate}
+          disabled={readOnly}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-all"
+          title={`Xoay ảnh 90° cùng chiều kim đồng hồ (Hiện tại: ${rotation}°)`}
+        >
+          <RotateCw className="w-3.5 h-3.5 text-amber-400" />
+          <span>{rotation !== 0 ? `${rotation}°` : 'Xoay'}</span>
+        </button>
+
+        {/* Đặt lại trạng thái ban đầu (Reset Zoom & Rotate) */}
+        <button
+          type="button"
+          onClick={onResetView || onResetZoom}
+          disabled={readOnly || (scale === 1 && rotation === 0)}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent transition-all"
-          title="Đặt lại tỉ lệ 100%"
+          title="Đặt lại khung nhìn (100%, 0°)"
         >
           <Maximize2 className="w-3 h-3" />
-          <span>100%</span>
+          <span>Đặt lại</span>
         </button>
       </div>
 
@@ -288,7 +309,7 @@ export const AnnotationToolbar = ({
           className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-black transition-colors border border-slate-700"
           title="Hoàn tác thao tác gần nhất (Undo)"
         >
-          <RotateCcw className="w-3.5 h-3.5" />
+          <Undo2 className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Hoàn tác</span>
         </button>
 
@@ -300,7 +321,7 @@ export const AnnotationToolbar = ({
           className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-black transition-colors border border-slate-700"
           title="Làm lại thao tác vừa hoàn tác (Redo)"
         >
-          <RotateCw className="w-3.5 h-3.5" />
+          <Redo2 className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Làm lại</span>
         </button>
 

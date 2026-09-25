@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, CheckCircle2, RotateCcw, Save, FileText, AlertCircle, 
-  Loader2, Star, Eye, Image as ImageIcon, Pen, Sparkles, AlertTriangle, RefreshCw 
+  Loader2, Star, Eye, Image as ImageIcon, Pen, Sparkles, AlertTriangle, RefreshCw, Clock 
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { formatClassLabel } from '../../../utils/helpers';
@@ -85,15 +85,17 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   const [activeColor, setActiveColor] = useState('#ef4444');
   const [strokeWidth, setStrokeWidth] = useState(4);
 
-  // VIEWPORT ZOOM & PAN STATE (PHASE 2 - P2-A2)
+  // VIEWPORT ZOOM, ROTATE & PAN STATE (PHASE 2 & PHẦN 3)
   const [viewportScale, setViewportScale] = useState(1);
   const [viewportPan, setViewportPan] = useState({ x: 0, y: 0 });
+  const [viewportRotation, setViewportRotation] = useState(0);
 
   // Reset viewport whenever opening a different attachment
   useEffect(() => {
     if (activeAttachmentForAnnotation) {
       setViewportScale(1);
       setViewportPan({ x: 0, y: 0 });
+      setViewportRotation(0);
     }
   }, [activeAttachmentForAnnotation?.id]);
 
@@ -113,10 +115,22 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
     });
   };
 
+  const handleRotate = () => {
+    setViewportRotation(prev => (prev + 90) % 360);
+  };
+
   const handleResetZoom = () => {
     const reset = resetZoom();
     setViewportScale(reset.scale);
     setViewportPan({ x: reset.panX, y: reset.panY });
+    setViewportRotation(0);
+  };
+
+  const handleResetView = () => {
+    const reset = resetZoom();
+    setViewportScale(reset.scale);
+    setViewportPan({ x: reset.panX, y: reset.panY });
+    setViewportRotation(0);
   };
 
   // REFS CHO SAVE DRAFT, OCC & DEBOUNCE
@@ -1253,9 +1267,12 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                 onManualSave={() => handleSaveDraft(activeAttachmentForAnnotation.id, { isManual: true })}
                 onReloadLatest={() => handleReloadLatest(activeAttachmentForAnnotation.id)}
                 scale={viewportScale}
+                rotation={viewportRotation}
                 onZoomIn={handleZoomIn}
                 onZoomOut={handleZoomOut}
+                onRotate={handleRotate}
                 onResetZoom={handleResetZoom}
+                onResetView={handleResetView}
               />
             </div>
 
@@ -1272,6 +1289,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                     activeColor={activeColor}
                     strokeWidth={strokeWidth}
                     scale={viewportScale}
+                    rotation={viewportRotation}
                     panX={viewportPan.x}
                     panY={viewportPan.y}
                     onViewportChange={({ scale: nextScale, panX: nextPanX, panY: nextPanY }) => {
