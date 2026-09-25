@@ -137,12 +137,12 @@ export function normalizeAnnotationPayload(rawPayload) {
 
 /**
  * Update an existing note in the notes array by its ID
- * Preserves the original note's id, x, y coordinates while updating text and color.
+ * Preserves the original note's id, x, y coordinates (or updates them if provided) while validating.
  * If validation fails or noteId is not found, returns original array.
  * 
  * @param {Array} notes
  * @param {string} noteId
- * @param {{ text: string, color?: string }} updateFields
+ * @param {{ text?: string, color?: string, x?: number, y?: number }} updateFields
  * @returns {Array}
  */
 export function updateNoteInList(notes, noteId, updateFields) {
@@ -154,9 +154,9 @@ export function updateNoteInList(notes, noteId, updateFields) {
   const originalNote = notes[existingIndex];
   const validated = normalizeNote({
     id: originalNote.id,
-    x: originalNote.x,
-    y: originalNote.y,
-    text: updateFields.text,
+    x: updateFields.x !== undefined ? updateFields.x : originalNote.x,
+    y: updateFields.y !== undefined ? updateFields.y : originalNote.y,
+    text: updateFields.text !== undefined ? updateFields.text : originalNote.text,
     color: updateFields.color || originalNote.color,
   });
 
@@ -165,6 +165,20 @@ export function updateNoteInList(notes, noteId, updateFields) {
   const nextNotes = [...notes];
   nextNotes[existingIndex] = validated;
   return nextNotes;
+}
+
+/**
+ * Move an existing note in the notes array to new coordinates (x, y)
+ * Preserves note id, text, and color while clamping coordinates to [0, 1].
+ * 
+ * @param {Array} notes
+ * @param {string} noteId
+ * @param {number} x
+ * @param {number} y
+ * @returns {Array}
+ */
+export function moveNoteInList(notes, noteId, x, y) {
+  return updateNoteInList(notes, noteId, { x, y });
 }
 
 /**
