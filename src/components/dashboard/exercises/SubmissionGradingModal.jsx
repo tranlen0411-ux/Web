@@ -674,9 +674,9 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         }
       }
 
-      // 5. Xây dựng danh sách annotations payload (chỉ lấy Phase 1 finalized attachments thuộc selected submission)
+      // 5. Xây dựng danh sách annotations payload (chỉ lấy Phase 1 finalized attachments)
       const finalizedAttachments = (workspaceData?.attachments || []).filter(
-        att => att.upload_status === 'finalized' && att.submission_id === selectedSub.id
+        att => att.upload_status === 'finalized'
       );
 
       const annotationsPayload = finalizedAttachments.map(att => {
@@ -703,6 +703,13 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
           idempotency_key: idempKey
         };
       });
+
+      // Fail-safe: Nếu workspace có finalized attachments nhưng annotationsPayload bị rỗng bất thường
+      if (finalizedAttachments.length > 0 && annotationsPayload.length === 0) {
+        setMsg('⚠️ Lỗi: Không thể chuẩn bị dữ liệu ghi chú cho ảnh bài làm. Vui lòng thử lại.');
+        setIsSubmitting(false);
+        return;
+      }
 
       // 6. Thực thi Atomic Finalize RPC qua Service Client Phase 1
       const { ok, data, error } = await finalizeGradingWithAnnotations({
