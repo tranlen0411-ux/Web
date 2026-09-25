@@ -62,7 +62,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
   const rowInfo = q.source_row ? ` (dòng Excel ${q.source_row})` : '';
   const qPrefix = `Câu ${qNum}${rowInfo}`;
 
-  const promptText = String(q.prompt || q.question || '').trim();
+  const promptText = q.prompt !== undefined && q.prompt !== null ? String(q.prompt) : String(q.question || '');
   const pts = parseFloat(q.points) || 1;
 
   if (['single_choice', 'multiple_choice'].includes(qType)) {
@@ -71,14 +71,12 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       ? q.options
       : (Array.isArray(q.options_json) ? q.options_json : []);
 
-    const normOpts = rawOpts
-      .map(o => String(o === null || o === undefined ? '' : o).trim())
-      .filter(o => o.length > 0);
+    const normOpts = rawOpts.map(o => String(o === null || o === undefined ? '' : o));
 
     // 2. Chuẩn hóa correct_answer
     let rawCorrect = q.correct_answer;
     if (rawCorrect === undefined || rawCorrect === null) {
-      if (q.correct_answer_key && q.correct_answer_key.correct_answer) {
+      if (q.correct_answer_key && q.correct_answer_key.correct_answer !== undefined) {
         rawCorrect = q.correct_answer_key.correct_answer;
       }
     }
@@ -87,20 +85,20 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
     let mappingError = null;
 
     if (qType === 'single_choice') {
-      const strCorrect = String(rawCorrect || '').trim();
-      const upperCorrect = strCorrect.toUpperCase();
+      const strCorrect = String(rawCorrect || '');
+      const trimmedUpper = strCorrect.trim().toUpperCase();
 
-      if (['A', 'B', 'C', 'D'].includes(upperCorrect) && normOpts.length >= 2) {
+      if (['A', 'B', 'C', 'D'].includes(trimmedUpper) && normOpts.length >= 2) {
         // a) Dạng chữ cái A/B/C/D
-        const letterIdx = upperCorrect.charCodeAt(0) - 65;
+        const letterIdx = trimmedUpper.charCodeAt(0) - 65;
         if (letterIdx < normOpts.length) {
           resolvedCorrect = normOpts[letterIdx];
         } else {
-          mappingError = `${qPrefix}: không ánh xạ được đáp án ${upperCorrect} vào danh sách ${normOpts.length} lựa chọn.`;
+          mappingError = `${qPrefix}: không ánh xạ được đáp án ${trimmedUpper} vào danh sách ${normOpts.length} lựa chọn.`;
         }
-      } else if (['1', '2', '3', '4'].includes(strCorrect) && normOpts.length >= 2 && !normOpts.includes(strCorrect)) {
+      } else if (['1', '2', '3', '4'].includes(strCorrect.trim()) && normOpts.length >= 2 && !normOpts.includes(strCorrect)) {
         // b) Dạng số thứ tự 1/2/3/4 (chỉ dùng khi đáp án không phải là chuỗi trùng với nội dung lựa chọn)
-        const numIdx = parseInt(strCorrect, 10) - 1;
+        const numIdx = parseInt(strCorrect.trim(), 10) - 1;
         if (numIdx < normOpts.length) {
           resolvedCorrect = normOpts[numIdx];
         } else {
@@ -108,7 +106,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
         }
       } else {
         // c) Nguyên văn nội dung đáp án (ví dụ: "8" hoặc "Hình tam giác")
-        const matchOpt = normOpts.find(o => o.toLowerCase() === strCorrect.toLowerCase());
+        const matchOpt = normOpts.find(o => o.trim().toLowerCase() === strCorrect.trim().toLowerCase());
         if (matchOpt) {
           resolvedCorrect = matchOpt;
         } else if (strCorrect) {
@@ -117,9 +115,9 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       }
     } else if (qType === 'multiple_choice') {
       if (Array.isArray(rawCorrect)) {
-        resolvedCorrect = rawCorrect.map(a => String(a).trim()).filter(Boolean);
+        resolvedCorrect = rawCorrect.map(a => String(a !== null && a !== undefined ? a : '')).filter(Boolean);
       } else {
-        resolvedCorrect = [String(rawCorrect || '').trim()].filter(Boolean);
+        resolvedCorrect = [String(rawCorrect || '')].filter(Boolean);
       }
     }
 
@@ -144,7 +142,9 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
     };
 
   } else if (['fill_blank', 'short_answer'].includes(qType)) {
-    let rawCorrect = String(q.correct_answer || (q.correct_answer_key?.correct_answer) || '').trim();
+    let rawCorrect = q.correct_answer !== undefined && q.correct_answer !== null
+      ? String(q.correct_answer)
+      : String(q.correct_answer_key?.correct_answer || '');
 
     const correctAnswerKey = {
       correct_answer: rawCorrect,
@@ -182,7 +182,11 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
 
   } else {
     // essay
-    const refAnswer = String(q.reference_answer || q.correct_answer || (q.correct_answer_key?.correct_answer) || '').trim();
+    const refAnswer = q.reference_answer !== undefined && q.reference_answer !== null
+      ? String(q.reference_answer)
+      : (q.correct_answer !== undefined && q.correct_answer !== null
+          ? String(q.correct_answer)
+          : String(q.correct_answer_key?.correct_answer || ''));
 
     const correctAnswerKey = {
       correct_answer: refAnswer || 'Xem hướng dẫn chấm của giáo viên',
@@ -634,7 +638,7 @@ export const getQuestionValidationErrors = (questionsList, hasSubmissions = fals
     }
 
     // 1. Đề bài không được rỗng
-    if (!q.prompt) {
+    if (!q.prompt || !String(q.prompt).trim()) {
       errors.push({
         index: idx,
         question_number: qNum,
