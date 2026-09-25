@@ -15,6 +15,7 @@ import {
   generateNoteId,
   normalizeNote,
   updateNoteInList,
+  moveNoteInList,
   removeNoteFromList,
   MAX_NOTES_COUNT,
   DEFAULT_NOTE_COLOR,
@@ -276,6 +277,11 @@ export const SubmissionAnnotationCanvas = ({
   const [isNoteEditorOpen, setIsNoteEditorOpen] = useState(false);
   const [noteLimitMessage, setNoteLimitMessage] = useState('');
 
+  // Note Pin Dragging State & Refs
+  const [draggingNoteState, setDraggingNoteState] = useState(null);
+  const dragNoteRef = useRef(null);
+  const justDraggedRef = useRef(false);
+
   // Desktop Mouse Pan dragging state & refs
   const [isDragging, setIsDragging] = useState(false);
   const isPanningRef = useRef(false);
@@ -429,6 +435,111 @@ export const SubmissionAnnotationCanvas = ({
     setIsNoteEditorOpen(false);
     setPendingNote(null);
     setEditingNote(null);
+  };
+
+  // Drag Note Pin Pointer Handlers
+  const handleNotePinPointerDown = (e, note) => {
+    e.stopPropagation();
+    if (readOnly || activeTool === 'eraser') return;
+
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch (err) {}
+
+    const pointerPoint = getNormalizedPoint(e);
+    const offsetX = pointerPoint.x - note.x;
+    const offsetY = pointerPoint.y - note.y;
+
+    dragNoteRef.current = {
+      noteId: note.id,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      hasMoved: false,
+      initialNote: note,
+      offsetX,
+      offsetY,
+      currentX: note.x,
+      currentY: note.y,
+    };
+
+    // NOTE_NO_JUMP_ON_POINTER_DOWN: Keep draggingNoteState null until drag threshold is exceeded
+  };
+
+  const handleNotePinPointerMove = (e, note) => {
+    if (readOnly || activeTool === 'eraser') return;
+    const dragInfo = dragNoteRef.current;
+    if (!dragInfo || dragInfo.noteId !== note.id) return;
+
+    e.stopPropagation();
+
+    const dx = e.clientX - dragInfo.startClientX;
+    const dy = e.clientY - dragInfo.startClientY;
+    if (!dragInfo.hasMoved) {
+      if (Math.hypot(dx, dy) >= 4) {
+        dragInfo.hasMoved = true;
+      } else {
+        return; // Below threshold -> do not move or jump
+      }
+    }
+
+    if (dragInfo.hasMoved) {
+      const pointerPoint = getNormalizedPoint(e);
+      // NOTE_DRAG_PRESERVES_POINTER_OFFSET: Compensate for the offset where the user grabbed the pin
+      const rawTargetX = pointerPoint.x - dragInfo.offsetX;
+      const rawTargetY = pointerPoint.y - dragInfo.offsetY;
+
+      const clampedX = Math.max(0, Math.min(1, rawTargetX));
+      const clampedY = Math.max(0, Math.min(1, rawTargetY));
+
+      dragInfo.currentX = clampedX;
+      dragInfo.currentY = clampedY;
+
+      setDraggingNoteState({
+        id: note.id,
+        x: clampedX,
+        y: clampedY,
+      });
+    }
+  };
+
+  const handleNotePinPointerUp = (e, note) => {
+    if (readOnly || activeTool === 'eraser') return;
+    const dragInfo = dragNoteRef.current;
+    if (!dragInfo || dragInfo.noteId !== note.id) return;
+
+    e.stopPropagation();
+
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch (err) {}
+
+    const hasMoved = dragInfo.hasMoved;
+    const finalX = dragInfo.currentX;
+    const finalY = dragInfo.currentY;
+
+    dragNoteRef.current = null;
+    setDraggingNoteState(null);
+
+    if (hasMoved) {
+      justDraggedRef.current = true;
+      // DRAG_ONE_HISTORY_ENTRY_ONLY: Only commit to onChange once on pointerUp
+      const nextNotes = moveNoteInList(annotation.notes || [], note.id, finalX, finalY);
+      onChange?.({
+        ...annotation,
+        schema_version: annotation.schema_version || 1,
+        notes: nextNotes,
+      });
+    }
+  };
+
+  const handleNotePinPointerCancel = (e, note) => {
+    if (dragNoteRef.current?.noteId === note.id) {
+      try {
+        e.currentTarget.releasePointerCapture?.(e.pointerId);
+      } catch (err) {}
+      dragNoteRef.current = null;
+      setDraggingNoteState(null);
+    }
   };
 
   // Click on existing Note Pin
@@ -912,58 +1023,85 @@ export const SubmissionAnnotationCanvas = ({
           );
         })}
 
-        {/* 4. GHI CHÚ GHIM TRÊN ẢNH (TEXT NOTES PIN OVERLAY - PHASE 2 P2-B1 & P2-B2) */}
-        {(annotation.notes || []).map((note, index) => (
-          <div
-            key={note.id || `note_${index}`}
-            role="button"
-            tabIndex={0}
-            aria-label={`Xem ghi chú #${index + 1}`}
-            data-testid={`note-pin-${note.id}`}
-            style={{
-              position: 'absolute',
-              left: `${note.x * 100}%`,
-              top: `${note.y * 100}%`,
-              transform: 'translate(-50%, -100%)',
-              pointerEvents: readOnly ? 'none' : 'auto',
-            }}
-            className="group select-none cursor-pointer z-20 p-1 -m-1 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-900 rounded-full"
-            title={note.text}
-            onPointerDown={(e) => {
-              // Prevent canvas from initiating pan or stroke drawing
-              e.stopPropagation();
-            }}
-            onClick={(e) => handleNotePinClick(e, note)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                handleNotePinClick(e, note);
-              }
-            }}
-          >
-            {/* Note Pin Head */}
-            <div
-              className={`flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white transition-transform ${
-                activeTool === 'eraser'
-                  ? 'hover:scale-125 ring-2 ring-rose-500 ring-offset-1'
-                  : 'group-hover:scale-125'
-              }`}
-              style={{ backgroundColor: note.color || '#f59e0b' }}
-            >
-              <StickyNote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
-            </div>
+        {/* 4. GHI CHÚ GHIM TRÊN ẢNH (TEXT NOTES PIN OVERLAY - PHASE 2 P2-B1, P2-B2 & DRAG MOVE) */}
+        {(annotation.notes || []).map((note, index) => {
+          const isDraggingThis = draggingNoteState?.id === note.id;
+          const displayX = isDraggingThis ? draggingNoteState.x : note.x;
+          const displayY = isDraggingThis ? draggingNoteState.y : note.y;
 
-            {/* Hover Tooltip / Preview Card */}
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-48 sm:w-56 p-2.5 rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl text-white text-[11px] leading-relaxed break-words z-30 pointer-events-none animate-in fade-in zoom-in-95">
-              <div className="font-bold text-[10px] text-amber-400 mb-0.5 flex items-center justify-between">
-                <span>Ghi chú #{index + 1}</span>
-                {activeTool === 'eraser' && (
-                  <span className="text-rose-400 text-[9px] font-medium">Click để xóa</span>
-                )}
+          return (
+            <div
+              key={note.id || `note_${index}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`Xem ghi chú #${index + 1}`}
+              data-testid={`note-pin-${note.id}`}
+              style={{
+                position: 'absolute',
+                left: `${displayX * 100}%`,
+                top: `${displayY * 100}%`,
+                transform: 'translate(-50%, -100%)',
+                pointerEvents: readOnly ? 'none' : 'auto',
+                touchAction: 'none',
+              }}
+              className={`group select-none z-20 p-1 -m-1 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-900 rounded-full ${
+                readOnly
+                  ? 'cursor-default'
+                  : isDraggingThis
+                  ? 'cursor-grabbing z-40'
+                  : activeTool === 'eraser'
+                  ? 'cursor-pointer'
+                  : 'cursor-grab'
+              }`}
+              title={isDraggingThis ? undefined : note.text}
+              onPointerDown={(e) => handleNotePinPointerDown(e, note)}
+              onPointerMove={(e) => handleNotePinPointerMove(e, note)}
+              onPointerUp={(e) => handleNotePinPointerUp(e, note)}
+              onPointerCancel={(e) => handleNotePinPointerCancel(e, note)}
+              onClick={(e) => {
+                if (justDraggedRef.current) {
+                  justDraggedRef.current = false;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  return;
+                }
+                handleNotePinClick(e, note);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  handleNotePinClick(e, note);
+                }
+              }}
+            >
+              {/* Note Pin Head */}
+              <div
+                className={`flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white transition-transform ${
+                  isDraggingThis
+                    ? 'scale-125 ring-4 ring-amber-400/80 shadow-2xl'
+                    : activeTool === 'eraser'
+                    ? 'hover:scale-125 ring-2 ring-rose-500 ring-offset-1'
+                    : 'group-hover:scale-125'
+                }`}
+                style={{ backgroundColor: note.color || '#f59e0b' }}
+              >
+                <StickyNote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
               </div>
-              <p className="whitespace-pre-wrap text-slate-200">{note.text}</p>
+
+              {/* Hover Tooltip / Preview Card (hidden during drag) */}
+              {!isDraggingThis && (
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-48 sm:w-56 p-2.5 rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700 shadow-2xl text-white text-[11px] leading-relaxed break-words z-30 pointer-events-none animate-in fade-in zoom-in-95">
+                  <div className="font-bold text-[10px] text-amber-400 mb-0.5 flex items-center justify-between">
+                    <span>Ghi chú #{index + 1}</span>
+                    {activeTool === 'eraser' && (
+                      <span className="text-rose-400 text-[9px] font-medium">Click để xóa</span>
+                    )}
+                  </div>
+                  <p className="whitespace-pre-wrap text-slate-200">{note.text}</p>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {/* PENDING NOTE PIN PREVIEW (WHILE POPOVER IS OPEN FOR NEW NOTE) */}
         {isNoteEditorOpen && pendingNote && !editingNote && (
