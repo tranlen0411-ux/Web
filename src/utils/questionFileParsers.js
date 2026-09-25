@@ -455,7 +455,7 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
       };
     }
 
-    // 2. Tách thành từng khối câu hỏi theo thẻ [TRẮC NGHIỆM], [ĐIỀN KHUYẾT], [TỰ LUẬN], [NỘP ẢNH]
+    // 2. Tách thành từng khối câu hỏi theo thẻ [TRẮC NGHIỆM], [ĐIỀN KHUYẾT], [TỰ LUẬN]
     const lines = rawText.split(/\r?\n/).map(l => sanitizeText(l)).filter(l => l.length > 0);
 
     const blocks = [];
