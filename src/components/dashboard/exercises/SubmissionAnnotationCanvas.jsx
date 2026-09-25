@@ -440,13 +440,15 @@ export const SubmissionAnnotationCanvas = ({
   // Drag Note Pin Pointer Handlers
   const handleNotePinPointerDown = (e, note) => {
     e.stopPropagation();
-    if (readOnly) return;
+    if (readOnly || activeTool === 'eraser') return;
 
     try {
       e.currentTarget.setPointerCapture?.(e.pointerId);
     } catch (err) {}
 
-    const point = getNormalizedPoint(e);
+    const pointerPoint = getNormalizedPoint(e);
+    const offsetX = pointerPoint.x - note.x;
+    const offsetY = pointerPoint.y - note.y;
 
     dragNoteRef.current = {
       noteId: note.id,
@@ -454,19 +456,17 @@ export const SubmissionAnnotationCanvas = ({
       startClientY: e.clientY,
       hasMoved: false,
       initialNote: note,
-      currentX: point.x,
-      currentY: point.y,
+      offsetX,
+      offsetY,
+      currentX: note.x,
+      currentY: note.y,
     };
 
-    setDraggingNoteState({
-      id: note.id,
-      x: point.x,
-      y: point.y,
-    });
+    // NOTE_NO_JUMP_ON_POINTER_DOWN: Keep draggingNoteState null until drag threshold is exceeded
   };
 
   const handleNotePinPointerMove = (e, note) => {
-    if (readOnly) return;
+    if (readOnly || activeTool === 'eraser') return;
     const dragInfo = dragNoteRef.current;
     if (!dragInfo || dragInfo.noteId !== note.id) return;
 
@@ -474,25 +474,36 @@ export const SubmissionAnnotationCanvas = ({
 
     const dx = e.clientX - dragInfo.startClientX;
     const dy = e.clientY - dragInfo.startClientY;
-    if (!dragInfo.hasMoved && Math.hypot(dx, dy) >= 4) {
-      dragInfo.hasMoved = true;
+    if (!dragInfo.hasMoved) {
+      if (Math.hypot(dx, dy) >= 4) {
+        dragInfo.hasMoved = true;
+      } else {
+        return; // Below threshold -> do not move or jump
+      }
     }
 
     if (dragInfo.hasMoved) {
-      const point = getNormalizedPoint(e);
-      dragInfo.currentX = point.x;
-      dragInfo.currentY = point.y;
+      const pointerPoint = getNormalizedPoint(e);
+      // NOTE_DRAG_PRESERVES_POINTER_OFFSET: Compensate for the offset where the user grabbed the pin
+      const rawTargetX = pointerPoint.x - dragInfo.offsetX;
+      const rawTargetY = pointerPoint.y - dragInfo.offsetY;
+
+      const clampedX = Math.max(0, Math.min(1, rawTargetX));
+      const clampedY = Math.max(0, Math.min(1, rawTargetY));
+
+      dragInfo.currentX = clampedX;
+      dragInfo.currentY = clampedY;
 
       setDraggingNoteState({
         id: note.id,
-        x: point.x,
-        y: point.y,
+        x: clampedX,
+        y: clampedY,
       });
     }
   };
 
   const handleNotePinPointerUp = (e, note) => {
-    if (readOnly) return;
+    if (readOnly || activeTool === 'eraser') return;
     const dragInfo = dragNoteRef.current;
     if (!dragInfo || dragInfo.noteId !== note.id) return;
 
@@ -511,6 +522,7 @@ export const SubmissionAnnotationCanvas = ({
 
     if (hasMoved) {
       justDraggedRef.current = true;
+      // DRAG_ONE_HISTORY_ENTRY_ONLY: Only commit to onChange once on pointerUp
       const nextNotes = moveNoteInList(annotation.notes || [], note.id, finalX, finalY);
       onChange?.({
         ...annotation,
