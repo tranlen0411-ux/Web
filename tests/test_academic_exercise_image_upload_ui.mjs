@@ -91,13 +91,24 @@ assert.strictEqual(fillBlankQ.question_type, 'fill_blank');
 assert.strictEqual(fillBlankQ.correct_answer, '10');
 assert.strictEqual(getQuestionValidationErrors([fillBlankQ]).length, 0);
 
-const essayQ = normalizeImportedQuestion({
+const shortAnswerQ = normalizeImportedQuestion({
   question_number: 4,
+  question_type: 'short_answer',
+  prompt: 'Thủ đô của Việt Nam là gì?',
+  correct_answer: 'Hà Nội',
+  points: 2
+}, 3);
+assert.strictEqual(shortAnswerQ.question_type, 'short_answer');
+assert.strictEqual(shortAnswerQ.correct_answer, 'Hà Nội');
+assert.strictEqual(getQuestionValidationErrors([shortAnswerQ]).length, 0);
+
+const essayQ = normalizeImportedQuestion({
+  question_number: 5,
   question_type: 'essay',
   prompt: 'Viết đoạn văn ngắn tả cây bàng.',
   correct_answer: 'Hướng dẫn chấm của GV',
   points: 5
-}, 3);
+}, 4);
 assert.strictEqual(essayQ.question_type, 'essay');
 assert.strictEqual(getQuestionValidationErrors([essayQ]).length, 0);
 
@@ -128,30 +139,106 @@ const reopenedQuestions = payload.map((q, idx) => normalizeImportedQuestion(q, i
 assert.strictEqual(reopenedQuestions[1].question_type, 'image_upload');
 assert.strictEqual(reopenedQuestions[1].prompt, 'Em hãy làm bài toán ra giấy và chụp ảnh nộp tại đây.');
 assert.strictEqual(reopenedQuestions[1].points, 5);
-// TEST 5: Excel Parser image_upload support
-console.log('\n--- TEST 5: Excel Parser with image_upload ---');
+assert.strictEqual(reopenedQuestions[1].correct_answer_key, null);
+console.log('✅ TEST 4 Passed: Save draft, reopen draft, and payload construction fully verified.');
+
+// TEST 5: Excel Parser image_upload support and invalid type error message
+console.log('\n--- TEST 5: Excel Parser with image_upload & Error Messages ---');
 import * as XLSX from 'xlsx';
-import { parseExcelQuestions } from '../src/utils/questionFileParsers.js';
+import { parseExcelQuestions, parseWordQuestions } from '../src/utils/questionFileParsers.js';
 
 const testWorkbook = XLSX.utils.book_new();
 const excelData = [
   ['type', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'reference_answer', 'points'],
   ['single_choice', '1 + 1 = ?', '1', '2', '3', '4', '2', '', 1],
   ['image_upload', 'Em hãy giải bài toán sau ra vở và chụp ảnh.', '', '', '', '', '', '', 3],
-  ['essay', 'Viết đoạn văn.', '', '', '', '', '', 'Gợi ý chấm', 5]
+  ['essay', 'Viết đoạn văn.', '', '', '', '', '', 'Gợi ý chấm', 5],
+  ['invalid_type_xyz', 'Câu hỏi loại lạ.', '', '', '', '', '', '', 1]
 ];
 const testSheet = XLSX.utils.aoa_to_sheet(excelData);
 XLSX.utils.book_append_sheet(testWorkbook, testSheet, 'Sheet1');
 const excelBuffer = XLSX.write(testWorkbook, { type: 'array', bookType: 'xlsx' });
 
 const excelResult = await parseExcelQuestions(excelBuffer, 'test.xlsx');
-assert.strictEqual(excelResult.success, true, 'Excel parsing should succeed');
-assert.strictEqual(excelResult.questions.length, 3, 'Should parse exactly 3 questions');
+assert.strictEqual(excelResult.questions.length, 3, 'Should parse 3 valid questions');
 assert.strictEqual(excelResult.questions[1].question_type, 'image_upload');
 assert.strictEqual(excelResult.questions[1].prompt, 'Em hãy giải bài toán sau ra vở và chụp ảnh.');
 assert.strictEqual(excelResult.questions[1].points, 3);
 assert.strictEqual(excelResult.questions[1].correct_answer_key, null);
-console.log('✅ TEST 5 Passed: Excel parser successfully parsed image_upload questions.');
 
-console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY (EXIT CODE 0)!');
+// Check invalid type message mentions image_upload
+assert.strictEqual(excelResult.errors.length, 1);
+assert.ok(excelResult.errors[0].message.includes('image_upload (nộp ảnh)'), 'Invalid type message should include image_upload');
+console.log('✅ TEST 5 Passed: Excel parser successfully parsed image_upload and reported correct error message.');
+
+// TEST 6: Word Parser tags for image_upload ([NỘP ẢNH], [NOP ANH], [TẢI ẢNH], [IMAGE])
+console.log('\n--- TEST 6: Word Parser Tags for image_upload ---');
+import JSZip from 'jszip';
+
+const zip = new JSZip();
+zip.file(
+  '[Content_Types].xml',
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  '<Default Extension="xml" ContentType="application/xml"/>' +
+  '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+  '</Types>'
+);
+zip.file(
+  'word/document.xml',
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+  '<w:body>' +
+  '<w:p><w:r><w:t>[NỘP ẢNH]</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Câu hỏi: Bài toán 1 - Nộp ảnh giải toán hình học.</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Điểm: 3</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>[NOP ANH]</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Câu hỏi: Bài toán 2 - Vẽ sơ đồ tư duy ra giấy.</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Điểm: 2.5</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>[TẢI ẢNH]</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Câu hỏi: Bài toán 3 - Viết đoạn văn chữ đẹp ra vở.</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Điểm: 4</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>[IMAGE]</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Câu hỏi: Bài toán 4 - Chụp ảnh sản phẩm thực hành.</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>Điểm: 5</w:t></w:r></w:p>' +
+  '</w:body>' +
+  '</w:document>'
+);
+
+const docxBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+const wordResult = await parseWordQuestions(docxBuffer, 'test.docx');
+
+assert.strictEqual(wordResult.success, true, 'Word parser should succeed');
+assert.strictEqual(wordResult.questions.length, 4, 'Should parse 4 image_upload questions with different tags');
+assert.strictEqual(wordResult.questions[0].question_type, 'image_upload');
+assert.strictEqual(wordResult.questions[0].points, 3);
+assert.strictEqual(wordResult.questions[1].question_type, 'image_upload');
+assert.strictEqual(wordResult.questions[1].points, 2.5);
+assert.strictEqual(wordResult.questions[2].question_type, 'image_upload');
+assert.strictEqual(wordResult.questions[2].points, 4);
+assert.strictEqual(wordResult.questions[3].question_type, 'image_upload');
+assert.strictEqual(wordResult.questions[3].points, 5);
+console.log('✅ TEST 6 Passed: Word parser correctly parsed all tags: [NỘP ẢNH], [NOP ANH], [TẢI ẢNH], [IMAGE].');
+
+// TEST 7: Template Verification (Excel and Word Templates contain image_upload)
+console.log('\n--- TEST 7: Excel & Word Template Verification ---');
+import fs from 'node:fs';
+const parserSource = fs.readFileSync(new URL('../src/utils/questionFileParsers.js', import.meta.url), 'utf-8');
+
+// Verify Excel template has image_upload row
+assert.ok(
+  parserSource.includes('image_upload') &&
+  parserSource.includes('Em hãy giải bài toán sau ra vở ô ly và chụp ảnh bài làm để nộp.'),
+  'Excel template must include image_upload sample row'
+);
+
+// Verify Word template has [NỘP ẢNH] section
+assert.ok(
+  parserSource.includes('[NỘP ẢNH]') &&
+  parserSource.includes('Em hãy giải bài toán sau ra vở ô ly và chụp ảnh bài làm để nộp.'),
+  'Word template must include [NỘP ẢNH] sample section'
+);
+console.log('✅ TEST 7 Passed: Excel and Word templates verified to include image_upload sample.');
+
+console.log('\n🎉 ALL 7 TEST SUITES PASSED SUCCESSFULLY (EXIT CODE 0)!');
 
