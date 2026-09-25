@@ -128,7 +128,30 @@ const reopenedQuestions = payload.map((q, idx) => normalizeImportedQuestion(q, i
 assert.strictEqual(reopenedQuestions[1].question_type, 'image_upload');
 assert.strictEqual(reopenedQuestions[1].prompt, 'Em hãy làm bài toán ra giấy và chụp ảnh nộp tại đây.');
 assert.strictEqual(reopenedQuestions[1].points, 5);
-assert.strictEqual(reopenedQuestions[1].correct_answer_key, null);
-console.log('✅ TEST 4 Passed: Save draft, reopen draft, and payload construction fully verified.');
+// TEST 5: Excel Parser image_upload support
+console.log('\n--- TEST 5: Excel Parser with image_upload ---');
+import * as XLSX from 'xlsx';
+import { parseExcelQuestions } from '../src/utils/questionFileParsers.js';
+
+const testWorkbook = XLSX.utils.book_new();
+const excelData = [
+  ['type', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'reference_answer', 'points'],
+  ['single_choice', '1 + 1 = ?', '1', '2', '3', '4', '2', '', 1],
+  ['image_upload', 'Em hãy giải bài toán sau ra vở và chụp ảnh.', '', '', '', '', '', '', 3],
+  ['essay', 'Viết đoạn văn.', '', '', '', '', '', 'Gợi ý chấm', 5]
+];
+const testSheet = XLSX.utils.aoa_to_sheet(excelData);
+XLSX.utils.book_append_sheet(testWorkbook, testSheet, 'Sheet1');
+const excelBuffer = XLSX.write(testWorkbook, { type: 'array', bookType: 'xlsx' });
+
+const excelResult = await parseExcelQuestions(excelBuffer, 'test.xlsx');
+assert.strictEqual(excelResult.success, true, 'Excel parsing should succeed');
+assert.strictEqual(excelResult.questions.length, 3, 'Should parse exactly 3 questions');
+assert.strictEqual(excelResult.questions[1].question_type, 'image_upload');
+assert.strictEqual(excelResult.questions[1].prompt, 'Em hãy giải bài toán sau ra vở và chụp ảnh.');
+assert.strictEqual(excelResult.questions[1].points, 3);
+assert.strictEqual(excelResult.questions[1].correct_answer_key, null);
+console.log('✅ TEST 5 Passed: Excel parser successfully parsed image_upload questions.');
 
 console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY (EXIT CODE 0)!');
+
