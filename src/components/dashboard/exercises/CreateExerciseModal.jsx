@@ -11,7 +11,8 @@ import { useAuth } from '../../../context/AuthContext';
 import { formatClassLabel } from '../../../utils/helpers';
 import {
   getQuestionValidationErrors,
-  normalizeImportedQuestion
+  normalizeImportedQuestion,
+  normalizeQuestionForSave
 } from '../../../utils/questionFileParsers';
 import { ImportQuestionsModal } from './ImportQuestionsModal';
 
@@ -335,19 +336,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
     setErrorMsg('');
 
     try {
-      const questionsPayload = questions.map((q, idx) => {
-        const normQ = normalizeImportedQuestion(q, idx);
-        return {
-          id: typeof normQ.id === 'string' && normQ.id.length > 20 ? normQ.id : undefined,
-          question_number: idx + 1,
-          question_type: normQ.question_type,
-          prompt: normQ.prompt,
-          options_json: normQ.options_json,
-          options: normQ.options_json,
-          points: normQ.points,
-          correct_answer_key: ['essay', 'image_upload'].includes(normQ.question_type) ? null : normQ.correct_answer_key
-        };
-      });
+      const questionsPayload = questions.map((q, idx) => normalizeQuestionForSave(q, idx));
 
       const singleClassId = isGlobal ? null : (targetClassesToAssign[0] || selectedClassId || null);
       const exercisePayload = {
