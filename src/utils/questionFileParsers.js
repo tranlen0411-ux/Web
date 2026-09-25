@@ -1,4 +1,4 @@
-﻿import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 
 /**
@@ -45,6 +45,7 @@ const normalizeType = (typeStr) => {
   const clean = sanitizeText(typeStr).toLowerCase().replace(/[\s\-_]+/g, '');
   if (clean.includes('tracnghiem') || clean.includes('single') || clean.includes('mcq') || clean === 'choice') return 'single_choice';
   if (clean.includes('dienkhuyet') || clean.includes('dientu') || clean.includes('blank') || clean === 'fill') return 'fill_blank';
+  if (clean.includes('anh') || clean.includes('image') || clean.includes('photo') || clean === 'image_upload') return 'image_upload';
   if (clean.includes('tuluan') || clean === 'essay' || clean === 'text') return 'essay';
   return null;
 };
@@ -160,6 +161,21 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       options_json: [],
       correct_answer: rawCorrect,
       correct_answer_key: correctAnswerKey,
+      points: pts,
+      source_row: q.source_row || null
+    };
+
+  } else if (qType === 'image_upload') {
+    return {
+      id: q.id || undefined,
+      question_number: qNum,
+      question_type: 'image_upload',
+      prompt: promptText,
+      options: [],
+      options_json: [],
+      correct_answer: '',
+      reference_answer: '',
+      correct_answer_key: null,
       points: pts,
       source_row: q.source_row || null
     };

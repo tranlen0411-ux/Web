@@ -4,7 +4,7 @@ import {
   X, Plus, Trash2, Save, FileText, AlertCircle, Loader2, Send, Lock,
   ShieldAlert, FileSpreadsheet, ArrowLeft, ArrowRight, CheckCircle2,
   HelpCircle, Award, Calendar, Layers, Check, AlertTriangle, Edit3,
-  CheckSquare, Square
+  CheckSquare, Square, Camera
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuth } from '../../../context/AuthContext';
@@ -345,7 +345,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
           options_json: normQ.options_json,
           options: normQ.options_json,
           points: normQ.points,
-          correct_answer_key: normQ.question_type === 'essay' ? null : normQ.correct_answer_key
+          correct_answer_key: ['essay', 'image_upload'].includes(normQ.question_type) ? null : normQ.correct_answer_key
         };
       });
 
@@ -639,6 +639,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                                 if (i === idx) {
                                   let initCorrect = 'Lựa chọn A';
                                   if (val === 'multiple_choice') initCorrect = ['Lựa chọn A'];
+                                  if (val === 'image_upload') initCorrect = '';
                                   const initOpts = ['single_choice', 'multiple_choice'].includes(val) ? ['Lựa chọn A', 'Lựa chọn B'] : [];
                                   return normalizeImportedQuestion({
                                     ...item,
@@ -659,6 +660,7 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             <option value="fill_blank">Điền từ / điền số</option>
                             <option value="short_answer">Trả lời ngắn</option>
                             <option value="essay">Tự luận</option>
+                            <option value="image_upload">Nộp ảnh bài làm</option>
                           </select>
 
                           {!hasSubmissions && questions.length > 1 && (
@@ -857,6 +859,16 @@ export const CreateExerciseModal = ({ isOpen, onClose, exerciseToEdit = null }) 
                             }}
                             className="w-full p-2 bg-white border border-amber-200 rounded-lg text-xs font-bold"
                           />
+                        </div>
+                      )}
+
+                      {/* NỘP ẢNH BÀI LÀM */}
+                      {q.question_type === 'image_upload' && (
+                        <div className="pt-1 border-t border-amber-100">
+                          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center gap-2 text-xs text-amber-900 font-medium">
+                            <Camera className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>Học sinh sẽ chụp ảnh hoặc tải file ảnh bài làm để nộp. Giáo viên sẽ chấm điểm và vẽ nhận xét trực tiếp trên ảnh.</span>
+                          </div>
                         </div>
                       )}
                     </div>
