@@ -362,6 +362,11 @@ export const ImportQuestionsModal = ({ isOpen, onClose, onImportQuestions }) => 
                                   Tự luận
                                 </span>
                               )}
+                              {q.question_type === 'image_upload' && (
+                                <span className="px-2.5 py-1 bg-teal-100 text-teal-900 rounded-lg text-[10px] font-black inline-block">
+                                  Nộp ảnh
+                                </span>
+                              )}
                             </td>
                             <td className="p-3 text-slate-900 font-bold">{q.prompt}</td>
                             <td className="p-3 text-[11px] text-slate-600">

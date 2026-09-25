@@ -1,4 +1,4 @@
-﻿import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx';
 import * as mammoth from 'mammoth';
 
 /**
@@ -45,6 +45,7 @@ const normalizeType = (typeStr) => {
   const clean = sanitizeText(typeStr).toLowerCase().replace(/[\s\-_]+/g, '');
   if (clean.includes('tracnghiem') || clean.includes('single') || clean.includes('mcq') || clean === 'choice') return 'single_choice';
   if (clean.includes('dienkhuyet') || clean.includes('dientu') || clean.includes('blank') || clean === 'fill') return 'fill_blank';
+  if (clean.includes('anh') || clean.includes('image') || clean.includes('photo') || clean === 'image_upload') return 'image_upload';
   if (clean.includes('tuluan') || clean === 'essay' || clean === 'text') return 'essay';
   return null;
 };
@@ -160,6 +161,21 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       options_json: [],
       correct_answer: rawCorrect,
       correct_answer_key: correctAnswerKey,
+      points: pts,
+      source_row: q.source_row || null
+    };
+
+  } else if (qType === 'image_upload') {
+    return {
+      id: q.id || undefined,
+      question_number: qNum,
+      question_type: 'image_upload',
+      prompt: promptText,
+      options: [],
+      options_json: [],
+      correct_answer: '',
+      reference_answer: '',
+      correct_answer_key: null,
       points: pts,
       source_row: q.source_row || null
     };
@@ -307,7 +323,7 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
       if (!normalizedType) {
         errors.push({
           row: rowNumber,
-          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), fill_blank (điền từ), essay (tự luận).`
+          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), fill_blank (điền từ), essay (tự luận), image_upload (nộp ảnh).`
         });
         continue;
       }
@@ -467,6 +483,9 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
       } else if (upperLine.includes('[ĐIỀN KHUYẾT]') || upperLine.includes('[DIEN KHUYES]') || upperLine.includes('[ĐIỀN TỪ]')) {
         if (currentBlock) blocks.push(currentBlock);
         currentBlock = { type: 'fill_blank', lines: [], startLine: lineIdx + 1 };
+      } else if (upperLine.includes('[NỘP ẢNH]') || upperLine.includes('[NOP ANH]') || upperLine.includes('[TẢI ẢNH]') || upperLine.includes('[TAI ANH]') || upperLine.includes('[ẢNH]') || upperLine.includes('[IMAGE]')) {
+        if (currentBlock) blocks.push(currentBlock);
+        currentBlock = { type: 'image_upload', lines: [], startLine: lineIdx + 1 };
       } else if (upperLine.includes('[TỰ LUẬN]') || upperLine.includes('[TU LUAN]')) {
         if (currentBlock) blocks.push(currentBlock);
         currentBlock = { type: 'essay', lines: [], startLine: lineIdx + 1 };
@@ -485,7 +504,7 @@ export const parseWordQuestions = async (arrayBuffer, fileName = '') => {
         questions: [],
         errors: [{
           row: 1,
-          message: 'Không tìm thấy cấu trúc câu hỏi chuẩn nào. Mỗi câu hỏi trong file Word phải bắt đầu bằng thẻ [TRẮC NGHIỆM], [ĐIỀN KHUYẾT], hoặc [TỰ LUẬN]. Vui lòng tải file mẫu Word.'
+          message: 'Không tìm thấy cấu trúc câu hỏi chuẩn nào. Mỗi câu hỏi trong file Word phải bắt đầu bằng thẻ [TRẮC NGHIỆM], [ĐIỀN KHUYẾT], [TỰ LUẬN] hoặc [NỘP ẢNH]. Vui lòng tải file mẫu Word.'
         }],
         warnings: []
       };
@@ -706,7 +725,8 @@ export const downloadExcelTemplate = () => {
     ['single_choice', 'Phép cộng 3 + 4 có kết quả bằng bao nhiêu?', '6', '7', '8', '9', 'B', '', 1],
     ['single_choice', 'Số nào liền sau số 19?', '18', '20', '21', '22', '20', '', 1],
     ['fill_blank', 'Điền số thích hợp vào chỗ trống: 10 - 4 = ...', '', '', '', '', '6', '', 1],
-    ['essay', 'Bé hãy viết 2 phép tính cộng có kết quả bằng 10.', '', '', '', '', '', '5 + 5 = 10, 6 + 4 = 10', 2]
+    ['essay', 'Bé hãy viết 2 phép tính cộng có kết quả bằng 10.', '', '', '', '', '', '5 + 5 = 10, 6 + 4 = 10', 2],
+    ['image_upload', 'Em hãy giải bài toán sau ra vở ô ly và chụp ảnh bài làm để nộp.', '', '', '', '', '', '', 2]
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(sampleData);
@@ -746,6 +766,10 @@ Câu hỏi: Điền số thích hợp vào chỗ trống: 10 - 4 = ...
 [TỰ LUẬN]
 Câu hỏi: Bé hãy viết 2 phép tính cộng có kết quả bằng 10.
 Đáp án tham khảo: 5 + 5 = 10, 6 + 4 = 10
+Điểm: 2
+
+[NỘP ẢNH]
+Câu hỏi: Em hãy giải bài toán sau ra vở ô ly và chụp ảnh bài làm để nộp.
 Điểm: 2
 `;
 
