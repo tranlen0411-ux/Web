@@ -140,8 +140,8 @@ function isPointNearStamp(stamp, x, y, threshold = 0.04) {
  */
 export function renderSvgAnnotationStroke(stroke, isPreview = false) {
   if (!stroke) return null;
-  const { id, tool = 'pen', color = '#ef4444', width = 4, points = [] } = stroke;
-  const strokeW = (width || 4) * 2.2;
+  const { id, tool = 'pen', color = '#ef4444', width, points = [] } = stroke;
+  const strokeW = Math.max(1, Number(width !== undefined && width !== null && !isNaN(width) ? width : 4));
   const key = isPreview ? 'preview-stroke' : (id || `stroke_${Math.random()}`);
 
   if (tool === 'pen') {
@@ -210,7 +210,7 @@ export function renderSvgAnnotationStroke(stroke, isPreview = false) {
 
   if (tool === 'arrow') {
     const angle = Math.atan2(y2 - y1, x2 - x1);
-    const headLength = Math.max(16, strokeW * 3.2);
+    const headLength = Math.max(12, strokeW * 3.5);
     const angle1 = angle - Math.PI / 6;
     const angle2 = angle + Math.PI / 6;
     const xLeft = x2 - headLength * Math.cos(angle1);
@@ -309,10 +309,13 @@ export const SubmissionAnnotationCanvas = ({
   // Calculate Popover screen position inside Viewport boundaries
   const calculatePopoverPosition = useCallback((clientX, clientY) => {
     const rect = viewportRef.current?.getBoundingClientRect();
-    const clickX = clientX - (rect?.left || 0);
-    const clickY = clientY - (rect?.top || 0);
+    const vpLeft = rect?.left || 0;
+    const vpTop = rect?.top || 0;
     const vpWidth = rect?.width || 800;
     const vpHeight = rect?.height || 600;
+
+    const clickX = (clientX !== undefined && clientX !== null ? clientX : vpLeft + vpWidth / 2) - vpLeft;
+    const clickY = (clientY !== undefined && clientY !== null ? clientY : vpTop + vpHeight / 2) - vpTop;
 
     const popoverWidth = 300;
     const popoverHeight = 180;
@@ -329,17 +332,37 @@ export const SubmissionAnnotationCanvas = ({
     };
   }, []);
 
-  // Normalize client pointer coordinates to [0, 1] using Viewport-Anchored Affine Inverse
-  // Relative offset: clientX - rect.left, clientY - rect.top -> Math.max(0, Math.min(1, normalized))
+  // Normalize client pointer coordinates to [0, 1] using Viewport-Anchored Affine Inverse & Image Boundaries
+  // Relative offset: localX = clientX - imgRect.left, localY = clientY - imgRect.top
+  // Normalized: x = localX / renderedImageWidth, y = localY / renderedImageHeight strictly clamped to [0, 1]
   const getNormalizedPoint = useCallback((e) => {
+    if (!e) return { x: 0, y: 0 };
+    const clientX = e.clientX !== undefined ? e.clientX : 0;
+    const clientY = e.clientY !== undefined ? e.clientY : 0;
+
+    // 1. Direct Image Element Bounds (Accounts for real image render rect and active transform)
+    const imgEl = imageRef.current;
+    if (imgEl && typeof imgEl.getBoundingClientRect === 'function') {
+      const imgRect = imgEl.getBoundingClientRect();
+      if (imgRect.width > 0 && imgRect.height > 0) {
+        const localX = clientX - imgRect.left;
+        const localY = clientY - imgRect.top;
+        return {
+          x: Math.max(0, Math.min(1, localX / imgRect.width)),
+          y: Math.max(0, Math.min(1, localY / imgRect.height)),
+        };
+      }
+    }
+
+    // 2. Fallback to Content / Viewport Transform Inverse
     if (!viewportRef.current || !contentRef.current) return { x: 0, y: 0 };
     const rect = viewportRef.current.getBoundingClientRect();
-    const baseWidth = contentRef.current.offsetWidth || rect.width;
-    const baseHeight = contentRef.current.offsetHeight || rect.height;
+    const baseWidth = contentRef.current.offsetWidth || rect.width || 800;
+    const baseHeight = contentRef.current.offsetHeight || rect.height || 600;
 
     return screenToNormalized({
-      clientX: e.clientX,
-      clientY: e.clientY,
+      clientX,
+      clientY,
       viewportRect: rect,
       baseWidth,
       baseHeight,
@@ -426,7 +449,11 @@ export const SubmissionAnnotationCanvas = ({
     }
 
     // ALL OTHER TOOLS: Open editor prefilled with existing note data
-    const pos = calculatePopoverPosition(e.clientX, e.clientY);
+    const rect = e.currentTarget?.getBoundingClientRect?.();
+    const pinCenterX = rect ? rect.left + rect.width / 2 : e.clientX;
+    const pinCenterY = rect ? rect.top + rect.height / 2 : e.clientY;
+    const pos = calculatePopoverPosition(pinCenterX ?? e.clientX, pinCenterY ?? e.clientY);
+
     setEditingNote({
       ...note,
       positionStyle: pos,
@@ -889,6 +916,9 @@ export const SubmissionAnnotationCanvas = ({
         {(annotation.notes || []).map((note, index) => (
           <div
             key={note.id || `note_${index}`}
+            role="button"
+            tabIndex={0}
+            aria-label={`Xem ghi chú #${index + 1}`}
             data-testid={`note-pin-${note.id}`}
             style={{
               position: 'absolute',
@@ -897,13 +927,18 @@ export const SubmissionAnnotationCanvas = ({
               transform: 'translate(-50%, -100%)',
               pointerEvents: readOnly ? 'none' : 'auto',
             }}
-            className="group select-none cursor-pointer z-20 p-1 -m-1"
+            className="group select-none cursor-pointer z-20 p-1 -m-1 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-900 rounded-full"
             title={note.text}
             onPointerDown={(e) => {
               // Prevent canvas from initiating pan or stroke drawing
               e.stopPropagation();
             }}
             onClick={(e) => handleNotePinClick(e, note)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                handleNotePinClick(e, note);
+              }
+            }}
           >
             {/* Note Pin Head */}
             <div
@@ -929,6 +964,28 @@ export const SubmissionAnnotationCanvas = ({
             </div>
           </div>
         ))}
+
+        {/* PENDING NOTE PIN PREVIEW (WHILE POPOVER IS OPEN FOR NEW NOTE) */}
+        {isNoteEditorOpen && pendingNote && !editingNote && (
+          <div
+            data-testid="pending-note-pin"
+            style={{
+              position: 'absolute',
+              left: `${pendingNote.x * 100}%`,
+              top: `${pendingNote.y * 100}%`,
+              transform: 'translate(-50%, -100%)',
+              pointerEvents: 'none',
+            }}
+            className="select-none z-20 p-1 -m-1"
+          >
+            <div
+              className="flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full shadow-lg border-2 border-white ring-4 ring-amber-400/50 animate-pulse transition-transform scale-110"
+              style={{ backgroundColor: DEFAULT_NOTE_COLOR }}
+            >
+              <StickyNote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* NOTE EDITOR POPOVER */}

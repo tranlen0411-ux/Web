@@ -1,11 +1,15 @@
 import React from 'react';
 import { 
-  Pen, Minus, Circle, ArrowUpRight, Check, X, Eraser, Hand, 
+  Pen, Minus, Plus, Circle, ArrowUpRight, Check, X, Eraser, Hand, 
   RotateCcw, RotateCw, Trash2, 
   Save, Loader2, AlertTriangle, AlertCircle, RefreshCw,
   ZoomIn, ZoomOut, Maximize2, StickyNote
 } from 'lucide-react';
 import { MIN_SCALE, MAX_SCALE } from '../../../utils/annotationViewportMath';
+
+export const MIN_STROKE_WIDTH = 1;
+export const MAX_STROKE_WIDTH = 12;
+export const STROKE_WIDTH_STEP = 1;
 
 const COLORS = [
   { id: 'red', value: '#ef4444', label: 'Đỏ' },
@@ -14,7 +18,7 @@ const COLORS = [
   { id: 'dark', value: '#1e293b', label: 'Đen' }
 ];
 
-const STROKE_WIDTHS = [
+export const STROKE_WIDTHS = [
   { id: 'small', value: 2, label: 'Nhỏ', px: '2px' },
   { id: 'medium', value: 4, label: 'Vừa', px: '4px' },
   { id: 'large', value: 7, label: 'Lớn', px: '7px' }
@@ -257,25 +261,62 @@ export const AnnotationToolbar = ({
         ))}
       </div>
 
-      {/* 4. ĐỘ DÀY NÉT VẼ (STROKE WIDTH) */}
-      <div className="flex items-center gap-1 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700">
-        <span className="text-[10px] font-black text-slate-400 mr-1 hidden sm:inline">Nét:</span>
-        {STROKE_WIDTHS.map(sw => (
-          <button
-            key={sw.id}
-            type="button"
-            onClick={() => onSelectStrokeWidth?.(sw.value)}
-            disabled={readOnly || !isShapeOrPenTool}
-            className={`px-2 py-1 rounded-lg text-[10px] font-black transition-all flex items-center justify-center ${
-              strokeWidth === sw.value
-                ? 'bg-slate-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            } disabled:opacity-30`}
-            title={`Độ dày ${sw.label}`}
-          >
-            {sw.label}
-          </button>
-        ))}
+      {/* 4. ĐỘ DÀY NÉT VẼ (STROKE WIDTH WITH STEPPER & PRESETS) */}
+      <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-1 rounded-xl border border-slate-700">
+        <span className="text-[10px] font-black text-slate-400 mr-0.5 hidden sm:inline">Nét:</span>
+
+        {/* Nút giảm [-] */}
+        <button
+          type="button"
+          onClick={() => onSelectStrokeWidth?.(Math.max(MIN_STROKE_WIDTH, Number(strokeWidth || 4) - STROKE_WIDTH_STEP))}
+          disabled={readOnly || !isShapeOrPenTool || Number(strokeWidth || 4) <= MIN_STROKE_WIDTH}
+          className="w-5 h-5 rounded-md bg-slate-700 hover:bg-slate-600 active:bg-slate-500 disabled:opacity-30 disabled:hover:bg-slate-700 flex items-center justify-center text-slate-200 transition-colors"
+          title="Giảm độ dày nét (Tối thiểu 1px)"
+        >
+          <Minus className="w-3 h-3" />
+        </button>
+
+        {/* Hiển thị giá trị hiện tại (ví dụ: "4 px") */}
+        <span
+          className="min-w-[30px] text-center text-[11px] font-black text-amber-300 select-none px-0.5"
+          title={`Độ dày hiện tại: ${strokeWidth} px`}
+        >
+          {strokeWidth} px
+        </span>
+
+        {/* Nút tăng [+] */}
+        <button
+          type="button"
+          onClick={() => onSelectStrokeWidth?.(Math.min(MAX_STROKE_WIDTH, Number(strokeWidth || 4) + STROKE_WIDTH_STEP))}
+          disabled={readOnly || !isShapeOrPenTool || Number(strokeWidth || 4) >= MAX_STROKE_WIDTH}
+          className="w-5 h-5 rounded-md bg-slate-700 hover:bg-slate-600 active:bg-slate-500 disabled:opacity-30 disabled:hover:bg-slate-700 flex items-center justify-center text-slate-200 transition-colors"
+          title="Tăng độ dày nét (Tối đa 12px)"
+        >
+          <Plus className="w-3 h-3" />
+        </button>
+
+        {/* Phân cách nhẹ giữa Stepper và Presets */}
+        <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5 hidden xs:block" />
+
+        {/* Các nút preset: Nhỏ (2px), Vừa (4px), Lớn (7px) */}
+        <div className="flex items-center gap-1">
+          {STROKE_WIDTHS.map(sw => (
+            <button
+              key={sw.id}
+              type="button"
+              onClick={() => onSelectStrokeWidth?.(sw.value)}
+              disabled={readOnly || !isShapeOrPenTool}
+              className={`px-1.5 py-0.5 rounded-lg text-[10px] font-black transition-all flex items-center justify-center ${
+                strokeWidth === sw.value
+                  ? 'bg-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              } disabled:opacity-30`}
+              title={`Độ dày ${sw.label} (${sw.px})`}
+            >
+              {sw.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* 5. HOÀN TÁC, LÀM LẠI, XÓA & LƯU NHÁP OCC (ACTIONS & STATUS) */}
