@@ -14,6 +14,7 @@ import {
 import { SubmissionAnnotationCanvas } from './SubmissionAnnotationCanvas';
 import { AnnotationToolbar } from './AnnotationToolbar';
 import { zoomIn, zoomOut, resetZoom } from '../../../utils/annotationViewportMath';
+import { validateAnnotationsPayload } from '../../../utils/annotationPayloadUtils';
 
 /**
  * Map các mã lỗi bảo mật / logic từ finalize RPC sang thông báo thân thiện với giáo viên
@@ -674,9 +675,9 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         }
       }
 
-      // 5. Xây dựng danh sách annotations payload (chỉ lấy Phase 1 finalized attachments thuộc selected submission)
+      // 5. Xây dựng danh sách annotations payload (chỉ lấy Phase 1 finalized attachments)
       const finalizedAttachments = (workspaceData?.attachments || []).filter(
-        att => att.upload_status === 'finalized' && att.submission_id === selectedSub.id
+        att => att.upload_status === 'finalized'
       );
 
       const annotationsPayload = finalizedAttachments.map(att => {
@@ -703,6 +704,13 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
           idempotency_key: idempKey
         };
       });
+
+      // Fail-safe: Kiểm tra tính hợp lệ và toàn vẹn của annotationsPayload trước khi gọi finalize
+      if (!validateAnnotationsPayload(annotationsPayload, finalizedAttachments)) {
+        setMsg('⚠️ Không thể chuẩn bị đầy đủ dữ liệu ghi chú cho ảnh bài làm. Vui lòng thử lại.');
+        setIsSubmitting(false);
+        return;
+      }
 
       // 6. Thực thi Atomic Finalize RPC qua Service Client Phase 1
       const { ok, data, error } = await finalizeGradingWithAnnotations({
