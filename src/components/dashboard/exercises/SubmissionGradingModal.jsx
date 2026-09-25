@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, CheckCircle2, RotateCcw, Save, FileText, AlertCircle, 
-  Loader2, Star, Eye, Image as ImageIcon, Pen, Sparkles, AlertTriangle, RefreshCw 
+  Loader2, Star, Eye, Image as ImageIcon, Pen, Sparkles,
+  AlertTriangle, RefreshCw, Clock
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { formatClassLabel } from '../../../utils/helpers';
