@@ -240,5 +240,53 @@ assert.ok(
 );
 console.log('✅ TEST 7 Passed: Excel and Word templates verified to include image_upload sample.');
 
-console.log('\n🎉 ALL 7 TEST SUITES PASSED SUCCESSFULLY (EXIT CODE 0)!');
+// TEST 8: Space preservation in Input, Textarea, and Options (Regression Prevention)
+console.log('\n--- TEST 8: Space Character Preservation During Interactive Typing ---');
+// Simulate sequential typing with Space: "Em" -> "Em " -> "Em hãy" -> "Em hãy " -> "Em hãy làm" -> "Em hãy làm " -> "Em hãy làm bài"
+const typingSteps = [
+  'Em',
+  'Em ',
+  'Em hãy',
+  'Em hãy ',
+  'Em hãy làm',
+  'Em hãy làm ',
+  'Em hãy làm bài'
+];
+
+let currentPrompt = '';
+for (const step of typingSteps) {
+  currentPrompt = step;
+  const qState = normalizeImportedQuestion({
+    question_number: 1,
+    question_type: 'image_upload',
+    prompt: currentPrompt,
+    points: 2
+  }, 0);
+  assert.strictEqual(qState.prompt, step, `Prompt must preserve exact string "${step}" including trailing spaces`);
+}
+assert.strictEqual(currentPrompt, 'Em hãy làm bài', 'Final prompt must match full typed phrase with spaces');
+
+// Space in options and text fields
+const choiceQ = normalizeImportedQuestion({
+  question_number: 2,
+  question_type: 'single_choice',
+  prompt: 'Chọn câu đúng ',
+  options: ['Lựa chọn 1 ', 'Lựa chọn 2 '],
+  correct_answer: 'Lựa chọn 1 ',
+  points: 1
+}, 1);
+assert.strictEqual(choiceQ.prompt, 'Chọn câu đúng ');
+assert.strictEqual(choiceQ.options[0], 'Lựa chọn 1 ');
+assert.strictEqual(choiceQ.correct_answer, 'Lựa chọn 1 ');
+
+// Validation correctly flags whitespace-only prompt as empty
+const whitespaceOnlyErrors = getQuestionValidationErrors([
+  normalizeImportedQuestion({ question_number: 1, question_type: 'essay', prompt: '   ', points: 1 }, 0)
+]);
+assert.strictEqual(whitespaceOnlyErrors.length, 1, 'Whitespace-only prompt must fail validation');
+assert.strictEqual(whitespaceOnlyErrors[0].field, 'prompt');
+
+console.log('✅ TEST 8 Passed: Space key and whitespace characters 100% preserved during typing.');
+
+console.log('\n🎉 ALL 8 TEST SUITES PASSED SUCCESSFULLY (EXIT CODE 0)!');
 
