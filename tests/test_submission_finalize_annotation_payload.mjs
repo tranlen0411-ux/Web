@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { validateAnnotationsPayload } from '../src/utils/annotationPayloadUtils.js';
 
-test('Finalize annotations payload construction contracts', async (t) => {
+test('Finalize annotations payload construction & fail-safe validation contracts', async (t) => {
   await t.test('WORKSPACE_ATTACHMENT_WITHOUT_SUBMISSION_ID_INCLUDED: filter extracts finalized attachments lacking submission_id property', () => {
     // Mock workspaceData matching RPC get_academic_submission_grading_workspace response (no submission_id)
     const workspaceData = {
@@ -94,21 +95,129 @@ test('Finalize annotations payload construction contracts', async (t) => {
 
     // IDEMPOTENCY_KEY_PRESERVED
     assert.equal(annotationsPayload[0].idempotency_key, 'test-idemp-uuid-1234');
+
+    // VALID PAYLOAD PASSES FAIL-SAFE
+    assert.equal(validateAnnotationsPayload(annotationsPayload, finalizedAttachments), true);
   });
 
-  await t.test('EMPTY_PAYLOAD_FAILSAFE: aborts finalize if finalized attachments exist but payload is empty', () => {
+  await t.test('FAIL-SAFE: PAYLOAD_COUNT_MISMATCH caught', () => {
+    const finalizedAttachments = [
+      { id: 'att-1', upload_status: 'finalized' },
+      { id: 'att-2', upload_status: 'finalized' }
+    ];
+    const annotationsPayload = [
+      { attachment_id: 'att-1', annotation_json: {}, expected_version: 0, idempotency_key: 'idemp-1' }
+    ]; // count 1 vs 2
+
+    assert.equal(validateAnnotationsPayload(annotationsPayload, finalizedAttachments), false);
+  });
+
+  await t.test('FAIL-SAFE: MISSING_ATTACHMENT_ID caught', () => {
     const finalizedAttachments = [{ id: 'att-1', upload_status: 'finalized' }];
-    const annotationsPayload = []; // simulated abnormal empty payload
+    
+    // Empty / null / missing attachment_id
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: '', annotation_json: {}, expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: null, annotation_json: {}, expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ annotation_json: {}, expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+  });
 
-    let failsafeTriggered = false;
-    let errorMsg = '';
-    if (finalizedAttachments.length > 0 && annotationsPayload.length === 0) {
-      failsafeTriggered = true;
-      errorMsg = '⚠️ Lỗi: Không thể chuẩn bị dữ liệu ghi chú cho ảnh bài làm. Vui lòng thử lại.';
-    }
+  await t.test('FAIL-SAFE: INVALID_ANNOTATION_JSON caught', () => {
+    const finalizedAttachments = [{ id: 'att-1', upload_status: 'finalized' }];
+    
+    // annotation_json null, string, or array
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: null, expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: 'invalid', expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: [], expected_version: 0, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+  });
 
-    assert.equal(failsafeTriggered, true);
-    assert.match(errorMsg, /Không thể chuẩn bị dữ liệu ghi chú/);
+  await t.test('FAIL-SAFE: INVALID_EXPECTED_VERSION caught', () => {
+    const finalizedAttachments = [{ id: 'att-1', upload_status: 'finalized' }];
+    
+    // negative number, NaN, or non-number
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: -1, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: NaN, idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: '0', idempotency_key: 'idemp-1' }],
+        finalizedAttachments
+      ),
+      false
+    );
+  });
+
+  await t.test('FAIL-SAFE: MISSING_IDEMPOTENCY_KEY caught', () => {
+    const finalizedAttachments = [{ id: 'att-1', upload_status: 'finalized' }];
+    
+    // null, empty, or whitespace idempotency_key
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: 0, idempotency_key: '' }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: 0, idempotency_key: null }],
+        finalizedAttachments
+      ),
+      false
+    );
+    assert.equal(
+      validateAnnotationsPayload(
+        [{ attachment_id: 'att-1', annotation_json: {}, expected_version: 0 }],
+        finalizedAttachments
+      ),
+      false
+    );
   });
 
   await t.test('REQUEST_REVISION_FLOW & NORMAL_GRADED_FLOW parameters pass properly', () => {

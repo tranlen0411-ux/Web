@@ -14,6 +14,7 @@ import {
 import { SubmissionAnnotationCanvas } from './SubmissionAnnotationCanvas';
 import { AnnotationToolbar } from './AnnotationToolbar';
 import { zoomIn, zoomOut, resetZoom } from '../../../utils/annotationViewportMath';
+import { validateAnnotationsPayload } from '../../../utils/annotationPayloadUtils';
 
 /**
  * Map các mã lỗi bảo mật / logic từ finalize RPC sang thông báo thân thiện với giáo viên
@@ -704,9 +705,9 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
         };
       });
 
-      // Fail-safe: Nếu workspace có finalized attachments nhưng annotationsPayload bị rỗng bất thường
-      if (finalizedAttachments.length > 0 && annotationsPayload.length === 0) {
-        setMsg('⚠️ Lỗi: Không thể chuẩn bị dữ liệu ghi chú cho ảnh bài làm. Vui lòng thử lại.');
+      // Fail-safe: Kiểm tra tính hợp lệ và toàn vẹn của annotationsPayload trước khi gọi finalize
+      if (!validateAnnotationsPayload(annotationsPayload, finalizedAttachments)) {
+        setMsg('⚠️ Không thể chuẩn bị đầy đủ dữ liệu ghi chú cho ảnh bài làm. Vui lòng thử lại.');
         setIsSubmitting(false);
         return;
       }
