@@ -770,6 +770,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
   };
 
   const canGrade = selectedSub && ['submitted', 'pending_manual_grade'].includes(selectedSub.status);
+  const canAnnotate = !!selectedSub && ['submitted', 'pending_manual_grade', 'graded', 'revision_requested'].includes(selectedSub.status);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
@@ -1256,7 +1257,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                     (annotationsByAttachment[activeAttachmentForAnnotation.id]?.notes?.length || 0) > 0
                   )
                 }
-                readOnly={!canGrade}
+                readOnly={!canAnnotate}
                 saveStatus={annotationSaveState[activeAttachmentForAnnotation.id] || 'idle'}
                 version={annotationVersions[activeAttachmentForAnnotation.id] ?? 0}
                 onManualSave={() => handleSaveDraft(activeAttachmentForAnnotation.id, { isManual: true })}
@@ -1276,7 +1277,7 @@ export const SubmissionGradingModal = ({ exercise, onClose }) => {
                     imageUrl={attachmentSignedUrls[activeAttachmentForAnnotation.id]}
                     annotation={annotationsByAttachment[activeAttachmentForAnnotation.id] || { schema_version: 1, strokes: [], stamps: [], notes: [] }}
                     onChange={(newAnn) => handleAnnotationChange(activeAttachmentForAnnotation.id, newAnn)}
-                    readOnly={!canGrade}
+                    readOnly={!canAnnotate}
                     activeTool={activeTool}
                     activeColor={activeColor}
                     strokeWidth={strokeWidth}
