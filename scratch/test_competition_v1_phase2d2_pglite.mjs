@@ -164,14 +164,16 @@ export async function runPhase2D2TestSuite() {
       const privRes = await db.query(`
         SELECT 
           has_function_privilege('anon', '${h.sig}', 'EXECUTE') as anon_has_privilege,
-          has_function_privilege('authenticated', '${h.sig}', 'EXECUTE') as auth_has_privilege;
+          has_function_privilege('authenticated', '${h.sig}', 'EXECUTE') as auth_has_privilege,
+          has_function_privilege('public', '${h.sig}', 'EXECUTE') as public_has_privilege;
       `);
       const row = privRes.rows[0];
       recordAssertion('GATE_ACL_ANON', row.anon_has_privilege === false, `anon must NOT have execute on ${h.name}`);
       recordAssertion('GATE_ACL_AUTH', row.auth_has_privilege === true, `authenticated MUST have execute on ${h.name}`);
+      recordAssertion('GATE_ACL_PUBLIC', row.public_has_privilege === false, `public must NOT have execute on ${h.name}`);
     }
     testResults.checks.GATE_ACL = 'PASS';
-    console.log('✔ [Gate ACL] All 7 host RPCs have anon EXECUTE = FALSE and authenticated EXECUTE = TRUE');
+    console.log('✔ [Gate ACL] All 7 host RPCs have anon EXECUTE = FALSE, authenticated EXECUTE = TRUE, and public EXECUTE = FALSE');
 
     // Helper functions for calling as role
     async function callAsAuth(userId, sqlQuery) {
