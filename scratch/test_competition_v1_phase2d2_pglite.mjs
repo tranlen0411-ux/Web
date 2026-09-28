@@ -94,6 +94,11 @@ export async function runPhase2D2TestSuite() {
     await db.exec(m2Sql);
     console.log('✔ Migration 2 applied cleanly');
 
+    const m21Path = path.resolve('supabase/migrations/20260928005103_competition_v1_host_rpc_grant_hardening.sql');
+    const m21Sql = fs.readFileSync(m21Path, 'utf8');
+    await db.exec(m21Sql);
+    console.log('✔ Migration 2.1 applied cleanly');
+
     // =========================================================================
     // Gate AT, AU, AV, AW: Static Architecture Counts & Privileges
     // =========================================================================
@@ -143,6 +148,30 @@ export async function runPhase2D2TestSuite() {
     recordAssertion('GATE_AW', publicRPCs.length === 11, `Expected 11 public RPCs, found ${publicRPCs.length}`);
     testResults.checks.GATE_AW = 'PASS';
     console.log('✔ [Gate AW] Public RPC total is exactly 11 (4 participant + 7 host)');
+
+    // Gate ACL: Assert exact catalog privileges for all 7 Host RPCs after Migration 2.1
+    const hostSignatures = [
+      { name: 'competition_host_create_session', sig: 'public.competition_host_create_session(text, text, text, integer, jsonb, jsonb, boolean, jsonb)' },
+      { name: 'competition_host_start_session', sig: 'public.competition_host_start_session(uuid)' },
+      { name: 'competition_host_next_question', sig: 'public.competition_host_next_question(uuid)' },
+      { name: 'competition_host_pause_session', sig: 'public.competition_host_pause_session(uuid)' },
+      { name: 'competition_host_resume_session', sig: 'public.competition_host_resume_session(uuid)' },
+      { name: 'competition_host_cancel_session', sig: 'public.competition_host_cancel_session(uuid)' },
+      { name: 'competition_host_finish_session', sig: 'public.competition_host_finish_session(uuid)' }
+    ];
+
+    for (const h of hostSignatures) {
+      const privRes = await db.query(`
+        SELECT 
+          has_function_privilege('anon', '${h.sig}', 'EXECUTE') as anon_has_privilege,
+          has_function_privilege('authenticated', '${h.sig}', 'EXECUTE') as auth_has_privilege;
+      `);
+      const row = privRes.rows[0];
+      recordAssertion('GATE_ACL_ANON', row.anon_has_privilege === false, `anon must NOT have execute on ${h.name}`);
+      recordAssertion('GATE_ACL_AUTH', row.auth_has_privilege === true, `authenticated MUST have execute on ${h.name}`);
+    }
+    testResults.checks.GATE_ACL = 'PASS';
+    console.log('✔ [Gate ACL] All 7 host RPCs have anon EXECUTE = FALSE and authenticated EXECUTE = TRUE');
 
     // Helper functions for calling as role
     async function callAsAuth(userId, sqlQuery) {
