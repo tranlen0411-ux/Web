@@ -64,4 +64,8 @@ verify_jwt = false
 [functions.exam-update-graded-feedback]
 verify_jwt = false
 
+[functions.competition-capability-token-issuer]
+verify_jwt = false
+
+
 
