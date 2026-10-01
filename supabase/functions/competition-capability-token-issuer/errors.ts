@@ -8,18 +8,21 @@ const STATUS_CODE_MAP: Record<ErrorCode, number> = {
   forbidden: 403,
   session_unavailable: 409,
   rate_limited: 429,
+  rate_limit_unavailable: 503,
   internal_error: 500,
 };
 
 export class CapabilityIssuerError extends Error {
   readonly errorCode: ErrorCode;
   readonly httpStatus: number;
+  readonly retryAfter?: number;
 
-  constructor(errorCode: ErrorCode, message: string) {
+  constructor(errorCode: ErrorCode, message: string, retryAfter?: number) {
     super(message);
     this.name = 'CapabilityIssuerError';
     this.errorCode = errorCode;
     this.httpStatus = STATUS_CODE_MAP[errorCode] || 500;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -27,10 +30,21 @@ export function createErrorResponse(
   errorCode: ErrorCode,
   message: string,
   requestId: string,
-  origin: string | null = null
+  origin: string | null = null,
+  retryAfter?: number
 ): Response {
   const status = STATUS_CODE_MAP[errorCode] || 500;
   const cors = getCorsHeaders(origin);
+  const headers: Record<string, string> = {
+    ...cors,
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+  };
+
+  if (retryAfter !== undefined && retryAfter !== null && retryAfter > 0) {
+    headers['Retry-After'] = String(Math.ceil(retryAfter));
+  }
+
   const body: StandardErrorEnvelope = {
     error: errorCode,
     message,
@@ -39,11 +53,7 @@ export function createErrorResponse(
 
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      ...cors,
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-    },
+    headers,
   });
 }
 
