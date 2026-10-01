@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'forbidden'
   | 'session_unavailable'
   | 'rate_limited'
+  | 'rate_limit_unavailable'
   | 'internal_error';
 
 export interface GuestRequestBody {
@@ -64,11 +65,15 @@ export interface RpcVerificationResult {
   errorMessage?: string;
 }
 
-/**
- * Provisional Rate Limiter interface hook point.
- * Implementation Status: DEFERRED / PROVISIONAL (Model resolved as PARTIAL).
- * Not treated as an authoritative security boundary.
- */
-export interface RateLimiter {
-  check(identifier: string): Promise<{ allowed: boolean; retryAfter?: number }>;
+export interface RateLimitCheckResult {
+  allowed: boolean;
+  retryAfter?: number;
+  remaining?: number;
+  reset?: number;
+}
+
+export interface RateLimiterService {
+  checkParticipant(sessionId: string, participantId: string, requestId?: string): Promise<RateLimitCheckResult>;
+  checkAuthUser(userId: string, requestId?: string): Promise<RateLimitCheckResult>;
+  checkSession(sessionId: string, requestId?: string): Promise<RateLimitCheckResult>;
 }
