@@ -48,15 +48,12 @@ export async function handleCapabilityIssuerRequest(
       throw new CapabilityIssuerError('internal_error', 'Backend RPC admin credentials unavailable');
     }
 
-    // Resolve Rate Limiter Service
+    // Resolve Rate Limiter Service (fail closed if unavailable in runtime)
     let rateLimiter: RateLimiterService | null = null;
     if (injectedRateLimiter !== undefined) {
       rateLimiter = injectedRateLimiter;
     } else {
-      const rateLimitConfig = resolveRateLimitConfig();
-      if (rateLimitConfig) {
-        rateLimiter = getRateLimiterService();
-      }
+      rateLimiter = getRateLimiterService();
     }
 
     if (validated.mode === 'guest') {

@@ -6,7 +6,7 @@ import { assertEquals } from 'https://deno.land/std@0.168.0/testing/asserts.ts';
 import { handleCapabilityIssuerRequest } from '../index.ts';
 import { mintCapabilityToken } from '../signer.ts';
 import { executeAdminRpc } from '../rpc.ts';
-import { deriveOpaqueKey } from '../rate-limit.ts';
+import { deriveOpaqueKey, ENV_NAMESPACE_REGEX, resolveRateLimitConfig } from '../rate-limit.ts';
 import { AdminCredential, RateLimiterService, RateLimitCheckResult } from '../types.ts';
 import { CapabilityIssuerError } from '../errors.ts';
 
@@ -94,6 +94,8 @@ class MockRateLimiterService implements RateLimiterService {
   }
 }
 
+const defaultMockLimiter = new MockRateLimiterService();
+
 // ==========================================
 // LEGACY M3C-C TESTS (1 to 30)
 // ==========================================
@@ -106,7 +108,7 @@ Deno.test('1. Guest valid -> token response (200)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 200);
   const json = await res.json();
   assertEquals(typeof json.token, 'string');
@@ -121,7 +123,7 @@ Deno.test('2. Guest wrong credential -> unauthorized (401)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
   const json = await res.json();
   assertEquals(json.error, 'unauthorized');
@@ -135,7 +137,7 @@ Deno.test('3. Guest kicked -> forbidden (403)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 403);
 });
 
@@ -147,7 +149,7 @@ Deno.test('4. Guest disconnected -> forbidden (403)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 403);
 });
 
@@ -159,7 +161,7 @@ Deno.test('5. Session closed -> session_unavailable (409)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 409);
 });
 
@@ -172,7 +174,7 @@ Deno.test('6. Auth valid claims -> token response (200)', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid-jwt-token' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 200);
 });
 
@@ -185,7 +187,7 @@ Deno.test('7. Auth invalid JWT -> unauthorized (401)', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer invalid-jwt-token' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -198,7 +200,7 @@ Deno.test('8. Auth missing sub -> unauthorized (401)', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer token-missing-sub' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -211,7 +213,7 @@ Deno.test('9. Auth caller mismatch -> forbidden (403)', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid-jwt-token' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 403);
 });
 
@@ -223,7 +225,7 @@ Deno.test('10. Both guest_token + Authorization -> invalid_request (400)', async
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid-jwt-token' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 400);
 });
 
@@ -235,7 +237,7 @@ Deno.test('11. Neither credential -> unauthorized (401)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -247,7 +249,7 @@ Deno.test('12. Malformed UUID -> invalid_request (400)', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: 'not-a-valid-uuid', participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 400);
 });
 
@@ -259,7 +261,7 @@ Deno.test('13. Missing signing env -> internal_error / fail closed (500)', async
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, '', mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, '', mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 500);
 });
 
@@ -270,7 +272,7 @@ Deno.test('14. Backend secret key unavailable -> fail closed (500)', async () =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
-  const res = await handleCapabilityIssuerRequest(req, undefined, null, MOCK_SIGNING_KEY);
+  const res = await handleCapabilityIssuerRequest(req, undefined, null, MOCK_SIGNING_KEY, undefined, defaultMockLimiter);
   assertEquals(res.status, 500);
 });
 
@@ -310,7 +312,7 @@ Deno.test('18. Raw guest token never appears in logs', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: secretGuestToken }),
     });
-    await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   } finally {
     console.log = originalLog;
   }
@@ -331,7 +333,7 @@ Deno.test('19. Authorization value never appears in logs', async () => {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secretBearer}` },
       body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
     });
-    await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   } finally {
     console.log = originalLog;
   }
@@ -403,7 +405,7 @@ Deno.test('26. invalid JWT cannot pass via getUser fallback', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer invalid_bearer_jwt_123' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -416,7 +418,7 @@ Deno.test('27. expired JWT cannot pass via fallback', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer expired_bearer_jwt_123' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -429,7 +431,7 @@ Deno.test('28. malformed JWT cannot pass via fallback', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer not_a_jwt' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 401);
 });
 
@@ -442,7 +444,7 @@ Deno.test('29. verified getClaims sub accepted', async () => {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid_getclaims_token_123' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 200);
 });
 
@@ -455,7 +457,7 @@ Deno.test('30. fallback getUser user.id must match verified identity contract', 
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid_fallback_getuser_token_123' },
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
   });
-  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+  const res = await handleCapabilityIssuerRequest(req, authClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, defaultMockLimiter);
   assertEquals(res.status, 200);
 });
 
@@ -957,9 +959,7 @@ Deno.test('67. an expired/aborted signal is never reused on the next limiter exe
 Deno.test('68. TimeoutError -> 503', async () => {
   const mockLimiter = new MockRateLimiterService();
   mockLimiter.shouldThrowError = true;
-  const timeoutErr = new Error('The operation was aborted due to timeout');
-  timeoutErr.name = 'TimeoutError';
-  mockLimiter.thrownError = timeoutErr;
+  mockLimiter.thrownError = new CapabilityIssuerError('rate_limit_unavailable', 'Rate limiting service is temporarily unavailable');
   const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
   const req = new Request('http://localhost/token', {
     method: 'POST',
@@ -967,7 +967,10 @@ Deno.test('68. TimeoutError -> 503', async () => {
     body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
   });
   const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, mockLimiter);
-  assertEquals(res.status, 500); // generic mock throws raw Error which maps to 500 or 503 if CapabilityIssuerError
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
 });
 
 // 69. AbortError -> 503
@@ -1211,6 +1214,335 @@ Deno.test('82. session limiter remains 50/60 unchanged', () => {
   const windowSeconds = 60;
   assertEquals(windowRequests, 50);
   assertEquals(windowSeconds, 60);
+});
+
+// ==========================================
+// REGRESSION TESTS FOR MISSING-CONFIG FAIL-CLOSED (83 to 90)
+// ==========================================
+
+// 83. all four rate-limit env variables absent -> 503 fail-closed
+Deno.test('83. all four rate-limit env variables absent -> 503 fail-closed', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+
+  try {
+    if (typeof Deno.env?.delete === 'function') {
+      Deno.env.delete('UPSTASH_REDIS_REST_URL');
+      Deno.env.delete('UPSTASH_REDIS_REST_TOKEN');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitConfig();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err instanceof CapabilityIssuerError, true);
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+    assertEquals('token' in json, false);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken);
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper);
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs);
+    }
+  }
+});
+
+// 84. only URL present -> 503 fail-closed
+Deno.test('84. only URL present -> 503 fail-closed', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+
+  try {
+    if (typeof Deno.env?.set === 'function' && typeof Deno.env?.delete === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', 'https://mock-redis.upstash.io');
+      Deno.env.delete('UPSTASH_REDIS_REST_TOKEN');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitConfig();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err instanceof CapabilityIssuerError, true);
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+    assertEquals('token' in json, false);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken);
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper);
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs);
+    }
+  }
+});
+
+// 85. URL + token present but pepper missing -> 503 fail-closed
+Deno.test('85. URL + token present but pepper missing -> 503 fail-closed', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+
+  try {
+    if (typeof Deno.env?.set === 'function' && typeof Deno.env?.delete === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', 'https://mock-redis.upstash.io');
+      Deno.env.set('UPSTASH_REDIS_REST_TOKEN', 'mock-token');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitConfig();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err instanceof CapabilityIssuerError, true);
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+    assertEquals('token' in json, false);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken);
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper);
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs);
+    }
+  }
+});
+
+// 86. namespace missing -> 503 fail-closed
+Deno.test('86. namespace missing -> 503 fail-closed', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+
+  try {
+    if (typeof Deno.env?.set === 'function' && typeof Deno.env?.delete === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', 'https://mock-redis.upstash.io');
+      Deno.env.set('UPSTASH_REDIS_REST_TOKEN', 'mock-token');
+      Deno.env.set('RATE_LIMIT_KEY_PEPPER', 'mock-pepper');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitConfig();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err instanceof CapabilityIssuerError, true);
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+    assertEquals('token' in json, false);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken);
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper);
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs);
+    }
+  }
+});
+
+// 87. invalid namespace -> 503 fail-closed
+Deno.test('87. invalid namespace -> 503 fail-closed', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+
+  try {
+    if (typeof Deno.env?.set === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', 'https://mock-redis.upstash.io');
+      Deno.env.set('UPSTASH_REDIS_REST_TOKEN', 'mock-token');
+      Deno.env.set('RATE_LIMIT_KEY_PEPPER', 'mock-pepper');
+      Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', 'INVALID_UPPERCASE_NS');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitConfig();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err instanceof CapabilityIssuerError, true);
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+    assertEquals('token' in json, false);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken);
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper);
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs);
+    }
+  }
+});
+
+// 88. valid full config reaches limiter path
+Deno.test('88. valid full config reaches limiter path', () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  const origToken = Deno.env?.get('UPSTASH_REDIS_REST_TOKEN');
+  const origPepper = Deno.env?.get('RATE_LIMIT_KEY_PEPPER');
+  const origNs = Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+  const origTimeout = Deno.env?.get('RATE_LIMIT_REDIS_TIMEOUT_MS');
+
+  try {
+    if (typeof Deno.env?.set === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', 'https://mock-redis.upstash.io');
+      Deno.env.set('UPSTASH_REDIS_REST_TOKEN', 'mock-token-xyz');
+      Deno.env.set('RATE_LIMIT_KEY_PEPPER', 'mock-pepper-123');
+      Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', 'staging');
+      Deno.env.set('RATE_LIMIT_REDIS_TIMEOUT_MS', '450');
+    }
+
+    const config = resolveRateLimitConfig();
+    assertEquals(config.url, 'https://mock-redis.upstash.io');
+    assertEquals(config.token, 'mock-token-xyz');
+    assertEquals(config.pepper, 'mock-pepper-123');
+    assertEquals(config.namespace, 'staging');
+    assertEquals(config.timeoutMs, 450);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl); else Deno.env?.delete?.('UPSTASH_REDIS_REST_URL');
+      if (origToken) Deno.env.set('UPSTASH_REDIS_REST_TOKEN', origToken); else Deno.env?.delete?.('UPSTASH_REDIS_REST_TOKEN');
+      if (origPepper) Deno.env.set('RATE_LIMIT_KEY_PEPPER', origPepper); else Deno.env?.delete?.('RATE_LIMIT_KEY_PEPPER');
+      if (origNs) Deno.env.set('RATE_LIMIT_ENVIRONMENT_NAMESPACE', origNs); else Deno.env?.delete?.('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+      if (origTimeout) Deno.env.set('RATE_LIMIT_REDIS_TIMEOUT_MS', origTimeout); else Deno.env?.delete?.('RATE_LIMIT_REDIS_TIMEOUT_MS');
+    }
+  }
+});
+
+// 89. explicit injected mock limiter remains usable for isolated tests
+Deno.test('89. explicit injected mock limiter remains usable for isolated tests', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  try {
+    if (typeof Deno.env?.delete === 'function') {
+      Deno.env.delete('UPSTASH_REDIS_REST_URL');
+      Deno.env.delete('UPSTASH_REDIS_REST_TOKEN');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    const mockLimiter = new MockRateLimiterService();
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    // Injected mock limiter explicitly bypasses runtime Redis config resolution
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any, mockLimiter);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(typeof json.token, 'string');
+    assertEquals(mockLimiter.participantCalls.length, 1);
+    assertEquals(mockLimiter.sessionCalls.length, 1);
+  } finally {
+    if (origUrl && typeof Deno.env?.set === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+    }
+  }
+});
+
+// 90. missing runtime config can never mint capability JWT
+Deno.test('90. missing runtime config can never mint capability JWT', async () => {
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  try {
+    if (typeof Deno.env?.delete === 'function') {
+      Deno.env.delete('UPSTASH_REDIS_REST_URL');
+      Deno.env.delete('UPSTASH_REDIS_REST_TOKEN');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals('token' in json, false);
+    assertEquals(json.error, 'rate_limit_unavailable');
+  } finally {
+    if (origUrl && typeof Deno.env?.set === 'function') {
+      Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+    }
+  }
 });
 
 

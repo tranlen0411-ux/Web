@@ -13,17 +13,12 @@ export function resolveRateLimitConfig(): {
   pepper: string;
   namespace: string;
   timeoutMs: number;
-} | null {
+} {
   const url = typeof Deno !== 'undefined' ? Deno.env?.get('UPSTASH_REDIS_REST_URL') : undefined;
   const token = typeof Deno !== 'undefined' ? Deno.env?.get('UPSTASH_REDIS_REST_TOKEN') : undefined;
   const pepper = typeof Deno !== 'undefined' ? Deno.env?.get('RATE_LIMIT_KEY_PEPPER') : undefined;
   const rawNamespace = typeof Deno !== 'undefined' ? Deno.env?.get('RATE_LIMIT_ENVIRONMENT_NAMESPACE') : undefined;
   const rawTimeout = typeof Deno !== 'undefined' ? Deno.env?.get('RATE_LIMIT_REDIS_TIMEOUT_MS') : undefined;
-
-  const anyConfigPresent = !!(url || token || pepper || rawNamespace);
-  if (!anyConfigPresent) {
-    return null;
-  }
 
   if (!url || !token || !pepper || !rawNamespace) {
     throw new CapabilityIssuerError('rate_limit_unavailable', 'Rate limiting service configuration unavailable');
