@@ -42,22 +42,31 @@ export function ImportStudentsModal({ isOpen, onClose }) {
   const [hasDownloadedCSV, setHasDownloadedCSV] = useState(false);
   const [hasConfirmedDelivery, setHasConfirmedDelivery] = useState(false);
 
-  const [idempotencyKey] = useState(() => `batch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+  const generateIdempotencyKey = () => `batch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const [idempotencyKey, setIdempotencyKey] = useState(generateIdempotencyKey);
+
+  const resetBatchIdentity = () => {
+    const nextKey = generateIdempotencyKey();
+    setIdempotencyKey(nextKey);
+    setDryRunData(null);
+    setDryRunToken(null);
+    setIsConfirmChecked(false);
+    return nextKey;
+  };
 
   useEffect(() => {
     if (isOpen) {
       fetchTargetClasses();
       fetchBackendStatus();
+      resetBatchIdentity();
     } else {
       setStep(1);
-      setDryRunData(null);
-      setDryRunToken(null);
       setProdResult(null);
       setErrorMessage('');
-      setIsConfirmChecked(false);
       setHasExecutedProd(false);
       setHasDownloadedCSV(false);
       setHasConfirmedDelivery(false);
+      resetBatchIdentity();
     }
   }, [isOpen]);
 
@@ -96,6 +105,11 @@ export function ImportStudentsModal({ isOpen, onClose }) {
 
   const selectedClass = classesList.find(c => c.id === selectedClassId);
 
+  const handleClassChange = (newClassId) => {
+    setSelectedClassId(newClassId);
+    resetBatchIdentity();
+  };
+
   const handleParseNames = () => {
     setErrorMessage('');
     const lines = rawNamesText.split('\n');
@@ -119,6 +133,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
       return;
     }
 
+    resetBatchIdentity();
     setParsedStudents(list);
     setStep(2);
   };
@@ -427,7 +442,7 @@ export function ImportStudentsModal({ isOpen, onClose }) {
               </label>
               <select
                 value={selectedClassId}
-                onChange={(e) => setSelectedClassId(e.target.value)}
+                onChange={(e) => handleClassChange(e.target.value)}
                 className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm focus:ring-2 focus:ring-amber-500 outline-none"
               >
                 {classesList.map(c => (
