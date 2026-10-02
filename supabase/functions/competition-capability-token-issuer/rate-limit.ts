@@ -1,11 +1,34 @@
 // supabase/functions/competition-capability-token-issuer/rate-limit.ts
 import { Redis } from 'https://esm.sh/@upstash/redis@1.34.3';
 import { Ratelimit } from 'https://esm.sh/@upstash/ratelimit@2.0.5';
-import { RateLimitCheckResult, RateLimiterService } from './types.ts';
+import {
+  AdminCredential,
+  CapabilityRateLimitResult,
+  CapabilityRateLimiterService,
+  LimitedDimension,
+  RateLimitCheckResult,
+  RateLimiterService,
+} from './types.ts';
 import { CapabilityIssuerError } from './errors.ts';
+import { resolveAdminCredential } from './rpc.ts';
+import { resolveSupabaseUrl } from './auth.ts';
 
 const DEFAULT_REDIS_TIMEOUT_MS = 400; // Provisional staging timeout
 export const ENV_NAMESPACE_REGEX = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+export type RateLimitProvider = 'upstash' | 'postgres';
+
+export function resolveRateLimitProvider(): RateLimitProvider {
+  const raw = typeof Deno !== 'undefined' ? Deno.env?.get('RATE_LIMIT_PROVIDER') : undefined;
+  if (!raw || raw.trim() === '') {
+    return 'upstash'; // Default fallback to preserve existing M3C-D runtime behavior
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'upstash' || normalized === 'postgres') {
+    return normalized;
+  }
+  throw new CapabilityIssuerError('rate_limit_unavailable', `Invalid rate limit provider: ${raw}`);
+}
 
 export function resolveRateLimitConfig(): {
   url: string;
@@ -74,7 +97,7 @@ export async function deriveOpaqueKey(
   return `competition:${cleanNamespace}:cap:${dimension}:${hexHash}`;
 }
 
-export class UpstashRateLimiterService implements RateLimiterService {
+export class UpstashRateLimiterService implements RateLimiterService, CapabilityRateLimiterService {
   private readonly url: string;
   private readonly token: string;
   private readonly pepper: string;
@@ -243,23 +266,255 @@ export class UpstashRateLimiterService implements RateLimiterService {
       throw new CapabilityIssuerError('rate_limit_unavailable', 'Rate limiting service is temporarily unavailable');
     }
   }
+
+  // Request-Level Abstraction implementation (M3C-E)
+  async checkGuest(
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult> {
+    const partResult = await this.checkParticipant(sessionId, participantId, requestId);
+    if (!partResult.allowed) {
+      return {
+        allowed: false,
+        limitedDimension: 'participant',
+        retryAfter: partResult.retryAfter,
+      };
+    }
+
+    const sessionResult = await this.checkSession(sessionId, requestId);
+    if (!sessionResult.allowed) {
+      return {
+        allowed: false,
+        limitedDimension: 'session',
+        retryAfter: sessionResult.retryAfter,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  async checkAuth(
+    userId: string,
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult> {
+    const userResult = await this.checkAuthUser(userId, requestId);
+    if (!userResult.allowed) {
+      return {
+        allowed: false,
+        limitedDimension: 'user',
+        retryAfter: userResult.retryAfter,
+      };
+    }
+
+    const partResult = await this.checkParticipant(sessionId, participantId, requestId);
+    if (!partResult.allowed) {
+      return {
+        allowed: false,
+        limitedDimension: 'participant',
+        retryAfter: partResult.retryAfter,
+      };
+    }
+
+    const sessionResult = await this.checkSession(sessionId, requestId);
+    if (!sessionResult.allowed) {
+      return {
+        allowed: false,
+        limitedDimension: 'session',
+        retryAfter: sessionResult.retryAfter,
+      };
+    }
+
+    return { allowed: true };
+  }
 }
 
-let globalLimiterService: RateLimiterService | null = null;
+/**
+ * Native Supabase Postgres authoritative rate limiter adapter (M3C-E).
+ * Executes all rate-limit dimensions in a single atomic database RPC call.
+ */
+export class PostgresCapabilityRateLimiterService implements CapabilityRateLimiterService {
+  private readonly supabaseUrl: string;
+  private readonly credential: AdminCredential;
+  private readonly customFetch?: typeof fetch;
 
-export function getRateLimiterService(): RateLimiterService {
-  if (!globalLimiterService) {
-    const config = resolveRateLimitConfig();
-    if (!config) {
-      throw new CapabilityIssuerError('rate_limit_unavailable', 'Rate limiting service configuration unavailable');
+  constructor(
+    supabaseUrl: string,
+    credential: AdminCredential,
+    customFetch?: typeof fetch
+  ) {
+    if (!supabaseUrl) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Supabase URL unavailable for Postgres rate limiter');
     }
-    globalLimiterService = new UpstashRateLimiterService(
-      config.url,
-      config.token,
-      config.pepper,
-      config.namespace,
-      config.timeoutMs
-    );
+    if (!credential || !credential.key) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Backend RPC admin credentials unavailable');
+    }
+    this.supabaseUrl = supabaseUrl;
+    this.credential = credential;
+    this.customFetch = customFetch;
   }
-  return globalLimiterService;
+
+  private async executeLimiterRpc(
+    sessionId: string,
+    participantId: string,
+    authUserId: string | null,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult> {
+    const fetchFn = this.customFetch || fetch;
+    const endpoint = `${this.supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/competition_check_capability_rate_limit`;
+
+    const headers: Record<string, string> = {
+      'apikey': this.credential.key,
+      'Content-Type': 'application/json',
+    };
+
+    if (this.credential.type === 'service_role') {
+      headers['Authorization'] = `Bearer ${this.credential.key}`;
+    }
+
+    const payload = {
+      p_session_id: sessionId,
+      p_participant_id: participantId,
+      p_auth_user_id: authUserId,
+    };
+
+    let response: Response;
+    try {
+      response = await fetchFn(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+    } catch (_) {
+      console.error(JSON.stringify({
+        request_id: requestId || 'unknown',
+        rate_limit_provider: 'postgres',
+        error_class: 'TransportError',
+      }));
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Database rate limit transport failure');
+    }
+
+    if (!response.ok) {
+      console.error(JSON.stringify({
+        request_id: requestId || 'unknown',
+        rate_limit_provider: 'postgres',
+        error_class: 'HttpError',
+        status: response.status,
+      }));
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Database rate limit execution error');
+    }
+
+    let rawData: unknown;
+    try {
+      rawData = await response.json();
+    } catch (_) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Database rate limit response parsing error');
+    }
+
+    if (!Array.isArray(rawData) || rawData.length !== 1) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Malformed rate limit response container');
+    }
+
+    const row = rawData[0] as {
+      allowed?: unknown;
+      limited_dimension?: unknown;
+      retry_after_seconds?: unknown;
+    } | undefined;
+
+    if (!row || typeof row !== 'object' || typeof row.allowed !== 'boolean') {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Malformed rate limit response row');
+    }
+
+    if (row.allowed === true) {
+      if (row.limited_dimension !== null) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory or missing limited_dimension on allowed response');
+      }
+      if (row.retry_after_seconds !== null) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory or missing retry_after_seconds on allowed response');
+      }
+      return { allowed: true };
+    }
+
+    // Rate limited: row.allowed === false
+    const dim = row.limited_dimension;
+    if (dim !== 'user' && dim !== 'participant' && dim !== 'session') {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Invalid rate limit dimension in response');
+    }
+
+    const retryVal = row.retry_after_seconds;
+    if (
+      typeof retryVal !== 'number' ||
+      !Number.isFinite(retryVal) ||
+      !Number.isInteger(retryVal) ||
+      retryVal < 1
+    ) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Invalid or missing retry_after_seconds in rate limit response');
+    }
+
+    return {
+      allowed: false,
+      limitedDimension: dim as LimitedDimension,
+      retryAfter: retryVal,
+    };
+  }
+
+  async checkGuest(
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult> {
+    return await this.executeLimiterRpc(sessionId, participantId, null, requestId);
+  }
+
+  async checkAuth(
+    userId: string,
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult> {
+    return await this.executeLimiterRpc(sessionId, participantId, userId, requestId);
+  }
+}
+
+let globalLimiterService: CapabilityRateLimiterService | null = null;
+
+export function getCapabilityRateLimiterService(
+  customFetch?: typeof fetch,
+  injectedAdminCredential?: AdminCredential | null,
+  injectedSupabaseUrl?: string
+): CapabilityRateLimiterService {
+  const provider = resolveRateLimitProvider();
+
+  if (provider === 'postgres') {
+    const supabaseUrl = injectedSupabaseUrl || resolveSupabaseUrl() || 'http://localhost:54321';
+    const adminCredential = injectedAdminCredential !== undefined ? injectedAdminCredential : resolveAdminCredential();
+    if (!adminCredential || !adminCredential.key) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Backend RPC admin credentials unavailable');
+    }
+    return new PostgresCapabilityRateLimiterService(supabaseUrl, adminCredential, customFetch);
+  }
+
+  // provider === 'upstash'
+  const config = resolveRateLimitConfig();
+  return new UpstashRateLimiterService(
+    config.url,
+    config.token,
+    config.pepper,
+    config.namespace,
+    config.timeoutMs
+  );
+}
+
+// Backward compatibility alias for legacy callers
+export function getRateLimiterService(): RateLimiterService {
+  const config = resolveRateLimitConfig();
+  return new UpstashRateLimiterService(
+    config.url,
+    config.token,
+    config.pepper,
+    config.namespace,
+    config.timeoutMs
+  );
 }

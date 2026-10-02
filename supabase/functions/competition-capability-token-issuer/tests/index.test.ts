@@ -1545,5 +1545,780 @@ Deno.test('90. missing runtime config can never mint capability JWT', async () =
   }
 });
 
+// ============================================================================
+// M3C-E REQUEST-LEVEL ABSTRACTION & POSTGRES ADAPTER TESTS (91 - 108)
+// ============================================================================
+
+function createMockPostgresLimiterFetch(
+  dbRow: { allowed: boolean; limited_dimension?: string | null; retry_after_seconds?: number | null } | null,
+  options?: { httpStatus?: number; throwNetworkError?: boolean; rawBody?: any; verifierRow?: any }
+) {
+  const rpcCalls: Array<{ url: string; body: any }> = [];
+  const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
+    const urlStr = url.toString();
+    const bodyStr = typeof init?.body === 'string' ? init.body : '';
+    let parsedBody: any = {};
+    try { parsedBody = JSON.parse(bodyStr); } catch (_) {}
+    rpcCalls.push({ url: urlStr, body: parsedBody });
+
+    // Handle verifier RPCs if called
+    if (urlStr.includes('competition_verify_guest_capability_credentials') || urlStr.includes('competition_verify_auth_capability_credentials')) {
+      const vRow = options?.verifierRow || { is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' };
+      return new Response(JSON.stringify([vRow]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Handle limiter RPC
+    if (urlStr.includes('competition_check_capability_rate_limit')) {
+      if (options?.throwNetworkError) {
+        throw new Error('Postgres RPC Network Failure');
+      }
+      if (options?.httpStatus && options.httpStatus !== 200) {
+        return new Response(JSON.stringify({ error: 'DB execution error' }), { status: options.httpStatus, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (options?.rawBody !== undefined) {
+        return new Response(typeof options.rawBody === 'string' ? options.rawBody : JSON.stringify(options.rawBody), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify(dbRow ? [dbRow] : []), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    return new Response('{}', { status: 200 });
+  };
+
+  return { fetchFn, rpcCalls };
+}
+
+// 91. Upstash request-level Guest: calls participant then session in order
+Deno.test('91. Upstash request-level Guest calls participant then session in order', async () => {
+  const upstashLimiter = new UpstashRateLimiterService('https://mock-redis.upstash.io', 'mock-token', 'mock-pepper', 'staging');
+  const participantSpy: string[] = [];
+  const sessionSpy: string[] = [];
+
+  upstashLimiter.checkParticipant = async (sId, pId) => {
+    participantSpy.push(`${sId}:${pId}`);
+    return { allowed: true };
+  };
+  upstashLimiter.checkSession = async (sId) => {
+    sessionSpy.push(sId);
+    return { allowed: true };
+  };
+
+  const result = await upstashLimiter.checkGuest(VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  assertEquals(result.allowed, true);
+  assertEquals(participantSpy.length, 1);
+  assertEquals(sessionSpy.length, 1);
+});
+
+// 92. Upstash request-level Auth: calls user then participant then session in order
+Deno.test('92. Upstash request-level Auth calls user then participant then session in order', async () => {
+  const upstashLimiter = new UpstashRateLimiterService('https://mock-redis.upstash.io', 'mock-token', 'mock-pepper', 'staging');
+  const callOrder: string[] = [];
+
+  upstashLimiter.checkAuthUser = async (uId) => {
+    callOrder.push('user:' + uId);
+    return { allowed: true };
+  };
+  upstashLimiter.checkParticipant = async (sId, pId) => {
+    callOrder.push('participant:' + pId);
+    return { allowed: true };
+  };
+  upstashLimiter.checkSession = async (sId) => {
+    callOrder.push('session:' + sId);
+    return { allowed: true };
+  };
+
+  const result = await upstashLimiter.checkAuth(VALID_USER_ID, VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  assertEquals(result.allowed, true);
+  assertEquals(callOrder, ['user:' + VALID_USER_ID, 'participant:' + VALID_PARTICIPANT_ID, 'session:' + VALID_SESSION_ID]);
+});
+
+// 93. Upstash request-level Auth user 429 stops earlier, does NOT call participant or session
+Deno.test('93. Upstash request-level Auth user 429 stops earlier and does not call participant/session', async () => {
+  const upstashLimiter = new UpstashRateLimiterService('https://mock-redis.upstash.io', 'mock-token', 'mock-pepper', 'staging');
+  const callOrder: string[] = [];
+
+  upstashLimiter.checkAuthUser = async (uId) => {
+    callOrder.push('user');
+    return { allowed: false, retryAfter: 25 };
+  };
+  upstashLimiter.checkParticipant = async () => {
+    callOrder.push('participant');
+    return { allowed: true };
+  };
+  upstashLimiter.checkSession = async () => {
+    callOrder.push('session');
+    return { allowed: true };
+  };
+
+  const result = await upstashLimiter.checkAuth(VALID_USER_ID, VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  assertEquals(result.allowed, false);
+  assertEquals(result.limitedDimension, 'user');
+  assertEquals(result.retryAfter, 25);
+  assertEquals(callOrder, ['user']);
+});
+
+// 94. Upstash request-level Guest participant 429 stops earlier, does NOT call session
+Deno.test('94. Upstash request-level Guest participant 429 stops earlier and does not call session', async () => {
+  const upstashLimiter = new UpstashRateLimiterService('https://mock-redis.upstash.io', 'mock-token', 'mock-pepper', 'staging');
+  const callOrder: string[] = [];
+
+  upstashLimiter.checkParticipant = async () => {
+    callOrder.push('participant');
+    return { allowed: false, retryAfter: 15 };
+  };
+  upstashLimiter.checkSession = async () => {
+    callOrder.push('session');
+    return { allowed: true };
+  };
+
+  const result = await upstashLimiter.checkGuest(VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  assertEquals(result.allowed, false);
+  assertEquals(result.limitedDimension, 'participant');
+  assertEquals(result.retryAfter, 15);
+  assertEquals(callOrder, ['participant']);
+});
+
+// 95. Postgres adapter Guest allowed: calls competition_check_capability_rate_limit exactly once with auth_user_id = null
+Deno.test('95. Postgres adapter Guest allowed calls RPC exactly once with auth_user_id null', async () => {
+  const { fetchFn, rpcCalls } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: null,
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(typeof json.token, 'string');
+
+  const limiterCalls = rpcCalls.filter(c => c.url.includes('competition_check_capability_rate_limit'));
+  assertEquals(limiterCalls.length, 1);
+  assertEquals(limiterCalls[0].body, {
+    p_session_id: VALID_SESSION_ID,
+    p_participant_id: VALID_PARTICIPANT_ID,
+    p_auth_user_id: null,
+  });
+});
+
+// 96. Postgres adapter Auth allowed: calls competition_check_capability_rate_limit exactly once with verified user UUID
+Deno.test('96. Postgres adapter Auth allowed calls RPC exactly once with verified user UUID', async () => {
+  const { fetchFn, rpcCalls } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: null,
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const mockAuthClient = {
+    auth: {
+      getClaims: async () => ({ data: { claims: { sub: VALID_USER_ID } }, error: null }),
+      getUser: async () => ({ data: { user: { id: VALID_USER_ID } }, error: null }),
+    },
+  };
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid.jwt.token' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, mockAuthClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals(typeof json.token, 'string');
+
+  const limiterCalls = rpcCalls.filter(c => c.url.includes('competition_check_capability_rate_limit'));
+  assertEquals(limiterCalls.length, 1);
+  assertEquals(limiterCalls[0].body, {
+    p_session_id: VALID_SESSION_ID,
+    p_participant_id: VALID_PARTICIPANT_ID,
+    p_auth_user_id: VALID_USER_ID,
+  });
+});
+
+// 97. Postgres adapter participant denied: maps to HTTP 429 + Retry-After header
+Deno.test('97. Postgres adapter participant denied maps to HTTP 429 and Retry-After', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+    retry_after_seconds: 14,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('Retry-After'), '14');
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limited');
+  assertEquals(json.message, 'Participant rate limit exceeded. Please try again later.');
+});
+
+// 98. Postgres adapter user denied: maps to HTTP 429 + Retry-After header
+Deno.test('98. Postgres adapter user denied maps to HTTP 429 and Retry-After', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'user',
+    retry_after_seconds: 22,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const mockAuthClient = {
+    auth: {
+      getClaims: async () => ({ data: { claims: { sub: VALID_USER_ID } }, error: null }),
+      getUser: async () => ({ data: { user: { id: VALID_USER_ID } }, error: null }),
+    },
+  };
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer valid.jwt.token' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, mockAuthClient, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('Retry-After'), '22');
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limited');
+  assertEquals(json.message, 'User rate limit exceeded. Please try again later.');
+});
+
+// 99. Postgres adapter session denied: maps to HTTP 429 + Retry-After header
+Deno.test('99. Postgres adapter session denied maps to HTTP 429 and Retry-After', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'session',
+    retry_after_seconds: 45,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('Retry-After'), '45');
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limited');
+  assertEquals(json.message, 'Session aggregate rate limit exceeded. Please try again later.');
+});
+
+// 100. Postgres adapter RPC transport/network error: maps to HTTP 503 rate_limit_unavailable, no token minted
+Deno.test('100. Postgres adapter RPC network error maps to 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch(null, { throwNetworkError: true });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 101. Postgres adapter RPC HTTP 500 error: maps to HTTP 503 rate_limit_unavailable, no token minted
+Deno.test('101. Postgres adapter RPC HTTP 500 maps to 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch(null, { httpStatus: 500 });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 102. Postgres adapter malformed JSON response: maps to HTTP 503 rate_limit_unavailable, no token minted
+Deno.test('102. Postgres adapter malformed JSON maps to 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch(null, { rawBody: 'not-json{{' });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 103. Postgres adapter unknown limited_dimension: maps to HTTP 503 rate_limit_unavailable, no token minted
+Deno.test('103. Postgres adapter unknown limited_dimension maps to 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'unknown_dimension_type' as any,
+    retry_after_seconds: 10,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 104. Postgres adapter negative retry_after_seconds: fails closed with HTTP 503, no token minted
+Deno.test('104. Postgres adapter negative retry_after_seconds fails closed with 503', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+    retry_after_seconds: -5,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService(
+    'http://localhost:54321',
+    MOCK_SECRET_CREDENTIAL,
+    fetchFn as any
+  );
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 105. RATE_LIMIT_PROVIDER=postgres resolves successfully even when Upstash env vars are completely missing
+Deno.test('105. RATE_LIMIT_PROVIDER=postgres resolves without Upstash env vars', async () => {
+  const origProvider = Deno.env?.get('RATE_LIMIT_PROVIDER');
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  try {
+    if (typeof Deno.env?.set === 'function') {
+      Deno.env.set('RATE_LIMIT_PROVIDER', 'postgres');
+      Deno.env.delete('UPSTASH_REDIS_REST_URL');
+      Deno.env.delete('UPSTASH_REDIS_REST_TOKEN');
+      Deno.env.delete('RATE_LIMIT_KEY_PEPPER');
+      Deno.env.delete('RATE_LIMIT_ENVIRONMENT_NAMESPACE');
+    }
+
+    const { fetchFn } = createMockPostgresLimiterFetch({
+      allowed: true,
+      limited_dimension: null,
+      retry_after_seconds: null,
+    });
+
+    const limiter = getCapabilityRateLimiterService(fetchFn as any, MOCK_SECRET_CREDENTIAL, 'http://localhost:54321');
+    assertEquals(limiter instanceof PostgresCapabilityRateLimiterService, true);
+
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any);
+    assertEquals(res.status, 200);
+    const json = await res.json();
+    assertEquals(typeof json.token, 'string');
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origProvider) Deno.env.set('RATE_LIMIT_PROVIDER', origProvider); else Deno.env.delete('RATE_LIMIT_PROVIDER');
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+    }
+  }
+});
+
+// 106. RATE_LIMIT_PROVIDER missing defaults to upstash and preserves existing Upstash env requirements
+Deno.test('106. RATE_LIMIT_PROVIDER missing defaults to upstash and preserves config requirements', async () => {
+  const origProvider = Deno.env?.get('RATE_LIMIT_PROVIDER');
+  const origUrl = Deno.env?.get('UPSTASH_REDIS_REST_URL');
+  try {
+    if (typeof Deno.env?.delete === 'function') {
+      Deno.env.delete('RATE_LIMIT_PROVIDER');
+      Deno.env.delete('UPSTASH_REDIS_REST_URL');
+    }
+
+    let threw = false;
+    try {
+      getCapabilityRateLimiterService();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origProvider) Deno.env.set('RATE_LIMIT_PROVIDER', origProvider);
+      if (origUrl) Deno.env.set('UPSTASH_REDIS_REST_URL', origUrl);
+    }
+  }
+});
+
+// 107. Invalid RATE_LIMIT_PROVIDER=invalid_provider fails closed with 503 rate_limit_unavailable
+Deno.test('107. Invalid RATE_LIMIT_PROVIDER fails closed with 503', async () => {
+  const origProvider = Deno.env?.get('RATE_LIMIT_PROVIDER');
+  try {
+    if (typeof Deno.env?.set === 'function') {
+      Deno.env.set('RATE_LIMIT_PROVIDER', 'invalid_provider_name');
+    }
+
+    let threw = false;
+    try {
+      resolveRateLimitProvider();
+    } catch (err: any) {
+      threw = true;
+      assertEquals(err.errorCode, 'rate_limit_unavailable');
+    }
+    assertEquals(threw, true);
+
+    const mockFetch = createMockFetch({ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' });
+    const req = new Request('http://localhost/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+    });
+
+    const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, mockFetch as any);
+    assertEquals(res.status, 503);
+    const json = await res.json();
+    assertEquals(json.error, 'rate_limit_unavailable');
+  } finally {
+    if (typeof Deno.env?.set === 'function') {
+      if (origProvider) Deno.env.set('RATE_LIMIT_PROVIDER', origProvider); else Deno.env.delete('RATE_LIMIT_PROVIDER');
+    }
+  }
+});
+
+// 108. Postgres adapter is stateless and performs no global request result caching across requests
+Deno.test('108. Postgres adapter is stateless and performs no global result caching', async () => {
+  let callCount = 0;
+  const fetchFn = async (url: string | URL | Request) => {
+    const urlStr = url.toString();
+    if (urlStr.includes('competition_check_capability_rate_limit')) {
+      callCount++;
+      return new Response(JSON.stringify([{ allowed: true, limited_dimension: null, retry_after_seconds: null }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  await postgresLimiter.checkGuest(VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  await postgresLimiter.checkGuest(VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+  await postgresLimiter.checkGuest(VALID_SESSION_ID, VALID_PARTICIPANT_ID);
+
+  assertEquals(callCount, 3);
+});
+
+// 109. Postgres RPC returns zero rows: fails closed with 503, no token
+Deno.test('109. Postgres RPC returns zero rows fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch(null);
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 110. Postgres RPC returns multiple rows: fails closed with 503, no token
+Deno.test('110. Postgres RPC returns multiple rows fails closed with 503 and no token', async () => {
+  const fetchFn = async (url: string | URL | Request) => {
+    const urlStr = url.toString();
+    if (urlStr.includes('competition_verify_guest_capability_credentials')) {
+      return new Response(JSON.stringify([{ is_valid: true, error_code: null, participant_status: 'joined', session_status: 'in_progress' }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (urlStr.includes('competition_check_capability_rate_limit')) {
+      return new Response(JSON.stringify([
+        { allowed: true, limited_dimension: null, retry_after_seconds: null },
+        { allowed: false, limited_dimension: 'participant', retry_after_seconds: 10 },
+      ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('{}', { status: 200 });
+  };
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 111. allowed=true with non-null limited_dimension: fails closed with 503, no token
+Deno.test('111. allowed=true with non-null limited_dimension fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: 'participant',
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 112. allowed=true with non-null retry_after_seconds: fails closed with 503, no token
+Deno.test('112. allowed=true with non-null retry_after_seconds fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: null,
+    retry_after_seconds: 5,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 113. allowed=false with missing retry_after_seconds: fails closed with 503, no token
+Deno.test('113. allowed=false with missing retry_after_seconds fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 114. allowed=false with retry_after_seconds=null: fails closed with 503, no token
+Deno.test('114. allowed=false with retry_after_seconds=null fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 115. allowed=false with retry_after_seconds=0: fails closed with 503, no token
+Deno.test('115. allowed=false with retry_after_seconds=0 fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+    retry_after_seconds: 0,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 116. allowed=false with fractional retry_after_seconds: fails closed with 503, no token
+Deno.test('116. allowed=false with fractional retry_after_seconds fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: false,
+    limited_dimension: 'participant',
+    retry_after_seconds: 14.5,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 117. allowed=true with missing limited_dimension: fails closed with 503, no token
+Deno.test('117. allowed=true with missing limited_dimension fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 118. allowed=true with missing retry_after_seconds: fails closed with 503, no token
+Deno.test('118. allowed=true with missing retry_after_seconds fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+
+
 
 
