@@ -2274,6 +2274,51 @@ Deno.test('116. allowed=false with fractional retry_after_seconds fails closed w
   assertEquals('token' in json, false);
 });
 
+// 117. allowed=true with missing limited_dimension: fails closed with 503, no token
+Deno.test('117. allowed=true with missing limited_dimension fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    retry_after_seconds: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+// 118. allowed=true with missing retry_after_seconds: fails closed with 503, no token
+Deno.test('118. allowed=true with missing retry_after_seconds fails closed with 503 and no token', async () => {
+  const { fetchFn } = createMockPostgresLimiterFetch({
+    allowed: true,
+    limited_dimension: null,
+  });
+
+  const postgresLimiter = new PostgresCapabilityRateLimiterService('http://localhost:54321', MOCK_SECRET_CREDENTIAL, fetchFn as any);
+
+  const req = new Request('http://localhost/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: VALID_SESSION_ID, participant_id: VALID_PARTICIPANT_ID, guest_token: VALID_GUEST_TOKEN }),
+  });
+
+  const res = await handleCapabilityIssuerRequest(req, undefined, MOCK_SECRET_CREDENTIAL, MOCK_SIGNING_KEY, fetchFn as any, postgresLimiter);
+  assertEquals(res.status, 503);
+  const json = await res.json();
+  assertEquals(json.error, 'rate_limit_unavailable');
+  assertEquals('token' in json, false);
+});
+
+
 
 
 

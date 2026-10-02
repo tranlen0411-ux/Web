@@ -428,11 +428,11 @@ export class PostgresCapabilityRateLimiterService implements CapabilityRateLimit
     }
 
     if (row.allowed === true) {
-      if (row.limited_dimension !== null && row.limited_dimension !== undefined) {
-        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory limited_dimension on allowed response');
+      if (row.limited_dimension !== null) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory or missing limited_dimension on allowed response');
       }
-      if (row.retry_after_seconds !== null && row.retry_after_seconds !== undefined) {
-        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory retry_after_seconds on allowed response');
+      if (row.retry_after_seconds !== null) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory or missing retry_after_seconds on allowed response');
       }
       return { allowed: true };
     }
