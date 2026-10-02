@@ -1,13 +1,18 @@
 // supabase/functions/competition-capability-token-issuer/index.ts
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { AdminCredential, RateLimiterService } from './types.ts';
+import {
+  AdminCredential,
+  CapabilityRateLimitResult,
+  CapabilityRateLimiterService,
+  RateLimiterService,
+} from './types.ts';
 import { getCorsHeaders, handleOptions } from './cors.ts';
 import { createErrorResponse, CapabilityIssuerError } from './errors.ts';
 import { parseAndValidateRequest } from './validation.ts';
 import { createAuthValidationClient, verifyCallerIdentity, resolveSupabaseUrl } from './auth.ts';
 import { resolveAdminCredential, verifyGuestCapability, verifyAuthCapability } from './rpc.ts';
 import { mintCapabilityToken } from './signer.ts';
-import { getRateLimiterService, resolveRateLimitConfig } from './rate-limit.ts';
+import { getCapabilityRateLimiterService } from './rate-limit.ts';
 
 function generateRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -22,7 +27,7 @@ export async function handleCapabilityIssuerRequest(
   injectedAdminCredential?: AdminCredential | null,
   injectedSigningKey?: string,
   injectedFetch?: typeof fetch,
-  injectedRateLimiter?: RateLimiterService | null
+  injectedRateLimiter?: CapabilityRateLimiterService | RateLimiterService | null
 ): Promise<Response> {
   const requestId = req.headers.get('x-request-id') || generateRequestId();
   const origin = req.headers.get('origin');
@@ -49,11 +54,11 @@ export async function handleCapabilityIssuerRequest(
     }
 
     // Resolve Rate Limiter Service (fail closed if unavailable in runtime)
-    let rateLimiter: RateLimiterService | null = null;
+    let rateLimiter: CapabilityRateLimiterService | RateLimiterService | null = null;
     if (injectedRateLimiter !== undefined) {
       rateLimiter = injectedRateLimiter;
     } else {
-      rateLimiter = getRateLimiterService();
+      rateLimiter = getCapabilityRateLimiterService(injectedFetch, adminCredential, supabaseUrl);
     }
 
     if (validated.mode === 'guest') {
@@ -76,31 +81,49 @@ export async function handleCapabilityIssuerRequest(
         );
       }
 
-      // 5a. Post-Verification Rate Limiting (Authoritative Redis Limiter)
+      // 5a. Post-Verification Rate Limiting (Authoritative Limiter)
       if (rateLimiter) {
-        const participantLimit = await rateLimiter.checkParticipant(
-          validated.data.session_id,
-          validated.data.participant_id,
-          requestId
-        );
-        if (!participantLimit.allowed) {
-          return createErrorResponse(
-            'rate_limited',
-            'Participant rate limit exceeded. Please try again later.',
-            requestId,
-            origin,
-            participantLimit.retryAfter
+        let rateLimitResult: CapabilityRateLimitResult;
+
+        if ('checkGuest' in rateLimiter && typeof rateLimiter.checkGuest === 'function') {
+          rateLimitResult = await rateLimiter.checkGuest(
+            validated.data.session_id,
+            validated.data.participant_id,
+            requestId
           );
+        } else {
+          // Backward-compatibility wrapper for legacy per-dimension mock objects
+          const legacyLimiter = rateLimiter as RateLimiterService;
+          const participantLimit = await legacyLimiter.checkParticipant(
+            validated.data.session_id,
+            validated.data.participant_id,
+            requestId
+          );
+          if (!participantLimit.allowed) {
+            rateLimitResult = {
+              allowed: false,
+              limitedDimension: 'participant',
+              retryAfter: participantLimit.retryAfter,
+            };
+          } else {
+            const sessionLimit = await legacyLimiter.checkSession(validated.data.session_id, requestId);
+            rateLimitResult = sessionLimit.allowed
+              ? { allowed: true }
+              : { allowed: false, limitedDimension: 'session', retryAfter: sessionLimit.retryAfter };
+          }
         }
 
-        const sessionLimit = await rateLimiter.checkSession(validated.data.session_id, requestId);
-        if (!sessionLimit.allowed) {
+        if (!rateLimitResult.allowed) {
+          const dim = rateLimitResult.limitedDimension;
+          const message = dim === 'session'
+            ? 'Session aggregate rate limit exceeded. Please try again later.'
+            : 'Participant rate limit exceeded. Please try again later.';
           return createErrorResponse(
             'rate_limited',
-            'Session aggregate rate limit exceeded. Please try again later.',
+            message,
             requestId,
             origin,
-            sessionLimit.retryAfter
+            rateLimitResult.retryAfter
           );
         }
       }
@@ -153,42 +176,61 @@ export async function handleCapabilityIssuerRequest(
         );
       }
 
-      // 5b. Post-Verification Rate Limiting (Authoritative Redis Limiter)
+      // 5b. Post-Verification Rate Limiting (Authoritative Limiter)
       if (rateLimiter) {
-        const userLimit = await rateLimiter.checkAuthUser(verifiedUserId, requestId);
-        if (!userLimit.allowed) {
-          return createErrorResponse(
-            'rate_limited',
-            'User rate limit exceeded. Please try again later.',
-            requestId,
-            origin,
-            userLimit.retryAfter
+        let rateLimitResult: CapabilityRateLimitResult;
+
+        if ('checkAuth' in rateLimiter && typeof rateLimiter.checkAuth === 'function') {
+          rateLimitResult = await rateLimiter.checkAuth(
+            verifiedUserId,
+            validated.data.session_id,
+            validated.data.participant_id,
+            requestId
           );
+        } else {
+          // Backward-compatibility wrapper for legacy per-dimension mock objects
+          const legacyLimiter = rateLimiter as RateLimiterService;
+          const userLimit = await legacyLimiter.checkAuthUser(verifiedUserId, requestId);
+          if (!userLimit.allowed) {
+            rateLimitResult = {
+              allowed: false,
+              limitedDimension: 'user',
+              retryAfter: userLimit.retryAfter,
+            };
+          } else {
+            const participantLimit = await legacyLimiter.checkParticipant(
+              validated.data.session_id,
+              validated.data.participant_id,
+              requestId
+            );
+            if (!participantLimit.allowed) {
+              rateLimitResult = {
+                allowed: false,
+                limitedDimension: 'participant',
+                retryAfter: participantLimit.retryAfter,
+              };
+            } else {
+              const sessionLimit = await legacyLimiter.checkSession(validated.data.session_id, requestId);
+              rateLimitResult = sessionLimit.allowed
+                ? { allowed: true }
+                : { allowed: false, limitedDimension: 'session', retryAfter: sessionLimit.retryAfter };
+            }
+          }
         }
 
-        const participantLimit = await rateLimiter.checkParticipant(
-          validated.data.session_id,
-          validated.data.participant_id,
-          requestId
-        );
-        if (!participantLimit.allowed) {
+        if (!rateLimitResult.allowed) {
+          const dim = rateLimitResult.limitedDimension;
+          const message = dim === 'user'
+            ? 'User rate limit exceeded. Please try again later.'
+            : dim === 'session'
+            ? 'Session aggregate rate limit exceeded. Please try again later.'
+            : 'Participant rate limit exceeded. Please try again later.';
           return createErrorResponse(
             'rate_limited',
-            'Participant rate limit exceeded. Please try again later.',
+            message,
             requestId,
             origin,
-            participantLimit.retryAfter
-          );
-        }
-
-        const sessionLimit = await rateLimiter.checkSession(validated.data.session_id, requestId);
-        if (!sessionLimit.allowed) {
-          return createErrorResponse(
-            'rate_limited',
-            'Session aggregate rate limit exceeded. Please try again later.',
-            requestId,
-            origin,
-            sessionLimit.retryAfter
+            rateLimitResult.retryAfter
           );
         }
       }

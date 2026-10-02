@@ -72,8 +72,31 @@ export interface RateLimitCheckResult {
   reset?: number;
 }
 
+export type LimitedDimension = 'user' | 'participant' | 'session';
+
+export interface CapabilityRateLimitResult {
+  allowed: boolean;
+  limitedDimension?: LimitedDimension;
+  retryAfter?: number;
+}
+
 export interface RateLimiterService {
   checkParticipant(sessionId: string, participantId: string, requestId?: string): Promise<RateLimitCheckResult>;
   checkAuthUser(userId: string, requestId?: string): Promise<RateLimitCheckResult>;
   checkSession(sessionId: string, requestId?: string): Promise<RateLimitCheckResult>;
+}
+
+export interface CapabilityRateLimiterService {
+  checkGuest(
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult>;
+
+  checkAuth(
+    userId: string,
+    sessionId: string,
+    participantId: string,
+    requestId?: string
+  ): Promise<CapabilityRateLimitResult>;
 }
