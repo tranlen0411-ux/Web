@@ -413,38 +413,50 @@ export class PostgresCapabilityRateLimiterService implements CapabilityRateLimit
       throw new CapabilityIssuerError('rate_limit_unavailable', 'Database rate limit response parsing error');
     }
 
-    const row = (Array.isArray(rawData) ? rawData[0] : rawData) as {
+    if (!Array.isArray(rawData) || rawData.length !== 1) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Malformed rate limit response container');
+    }
+
+    const row = rawData[0] as {
       allowed?: unknown;
       limited_dimension?: unknown;
       retry_after_seconds?: unknown;
     } | undefined;
 
     if (!row || typeof row !== 'object' || typeof row.allowed !== 'boolean') {
-      throw new CapabilityIssuerError('rate_limit_unavailable', 'Malformed rate limit response');
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Malformed rate limit response row');
     }
 
     if (row.allowed === true) {
+      if (row.limited_dimension !== null && row.limited_dimension !== undefined) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory limited_dimension on allowed response');
+      }
+      if (row.retry_after_seconds !== null && row.retry_after_seconds !== undefined) {
+        throw new CapabilityIssuerError('rate_limit_unavailable', 'Contradictory retry_after_seconds on allowed response');
+      }
       return { allowed: true };
     }
 
-    // Rate limited
+    // Rate limited: row.allowed === false
     const dim = row.limited_dimension;
     if (dim !== 'user' && dim !== 'participant' && dim !== 'session') {
       throw new CapabilityIssuerError('rate_limit_unavailable', 'Invalid rate limit dimension in response');
     }
 
-    let retryAfter = 1;
-    if (typeof row.retry_after_seconds === 'number' && Number.isFinite(row.retry_after_seconds)) {
-      if (row.retry_after_seconds < 0) {
-        throw new CapabilityIssuerError('rate_limit_unavailable', 'Invalid negative retry_after_seconds');
-      }
-      retryAfter = Math.max(1, Math.ceil(row.retry_after_seconds));
+    const retryVal = row.retry_after_seconds;
+    if (
+      typeof retryVal !== 'number' ||
+      !Number.isFinite(retryVal) ||
+      !Number.isInteger(retryVal) ||
+      retryVal < 1
+    ) {
+      throw new CapabilityIssuerError('rate_limit_unavailable', 'Invalid or missing retry_after_seconds in rate limit response');
     }
 
     return {
       allowed: false,
       limitedDimension: dim as LimitedDimension,
-      retryAfter,
+      retryAfter: retryVal,
     };
   }
 
