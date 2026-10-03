@@ -63,7 +63,7 @@ expectedArgMappings.forEach(argName => {
 });
 console.log('  ✅ All RPC parameter names match backend contracts');
 
-// C & D. Check storage invariants
+// C. Check storage invariants
 assert.ok(
   !clientSource.includes('localStorage'),
   'competitionClient.js must NOT use localStorage'
@@ -78,35 +78,68 @@ assert.ok(
 );
 console.log('  ✅ Storage invariant PASS: In-memory only, zero browser storage persistence');
 
-// E. Topic format
+// D. Host capability assumption removed check
+assert.ok(
+  !clientSource.includes('(or host)'),
+  'competitionClient.js must NOT imply Host can mint participant capability tokens'
+);
+assert.ok(
+  clientSource.includes('must be the verified Competition participant ID'),
+  'competitionClient.js must state participantId must be verified participant ID'
+);
+console.log('  ✅ Host token assumption PASS: Explicitly removed "(or host)" assumption');
+
+// E. Realtime Client Isolation
+assert.ok(
+  clientSource.includes('export const competitionRealtimeClient = createClient('),
+  'competitionClient.js must create a dedicated competitionRealtimeClient'
+);
+assert.ok(
+  !clientSource.includes('supabase.realtime.setAuth'),
+  'competitionClient.js must NOT call setAuth on shared supabase.realtime'
+);
+assert.ok(
+  clientSource.includes('competitionRealtimeClient.realtime.setAuth'),
+  'competitionClient.js must apply capability setAuth strictly to competitionRealtimeClient'
+);
+console.log('  ✅ Realtime Client Isolation PASS: Dedicated client used, shared supabase client untouched');
+
+// F. Token Refresh updates Realtime auth
+assert.ok(
+  clientSource.includes('competitionRealtimeClient.realtime.setAuth(res.token)'),
+  'competitionClient.js background refresh must update competitionRealtimeClient auth'
+);
+console.log('  ✅ Realtime Token Refresh Sync PASS: Refreshed token updates dedicated Realtime auth');
+
+// G. Topic format
 assert.ok(
   clientSource.includes('competition:session:${sessionId}') || clientSource.includes('competition:session:'),
   'competitionClient.js must use private topic format competition:session:<session_id>'
 );
 console.log('  ✅ Topic format PASS: competition:session:<session_id>');
 
-// F. No Postgres Changes
+// H. No Postgres Changes
 assert.ok(
   !clientSource.includes('postgres_changes'),
   'competitionClient.js must NOT subscribe to postgres_changes'
 );
 console.log('  ✅ Realtime invariant PASS: Zero postgres_changes subscriptions');
 
-// G. No client Broadcast INSERT
+// I. No client Broadcast INSERT
 assert.ok(
   !clientSource.includes('.send(') && !clientSource.includes('type: \'broadcast\''),
   'competitionClient.js must NOT broadcast raw client inserts'
 );
 console.log('  ✅ Broadcast invariant PASS: No client Broadcast INSERT path');
 
-// G2. Presence payload contract
+// J. Presence payload contract
 assert.ok(
   clientSource.includes("p_id: participantId") && clientSource.includes("st: 'active'"),
   'competitionClient.js must use minimal presence payload contract { p_id, st: "active" }'
 );
 console.log('  ✅ Presence payload contract PASS: { p_id: participantId, st: "active" }');
 
-// G3. Channel removal token state cleanup
+// K. Channel removal token state cleanup
 assert.ok(
   clientSource.includes('clearCapabilityToken(sessionId, participantId)'),
   'competitionClient.js removeCompetitionChannel must support clearing capability token state'

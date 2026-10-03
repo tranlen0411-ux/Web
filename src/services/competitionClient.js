@@ -1,4 +1,5 @@
-import { supabase, supabaseUrl } from '../lib/supabase.js';
+import { createClient } from '@supabase/supabase-js';
+import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase.js';
 
 /**
  * COMPETITION CLIENT SERVICE (Competition V1)
@@ -10,9 +11,32 @@ import { supabase, supabaseUrl } from '../lib/supabase.js';
  * - Zero service_role key usage (Client-safe only)
  * - Zero hardcoded secrets / signing keys
  * - In-memory token storage only (Zero browser web storage persistence)
+ * - Dedicated Realtime client (Isolated from application shared Supabase client)
  * - Private Realtime Channel only (topic: competition:session:<session_id>)
  * - Broadcast SELECT only, Zero client Broadcast INSERT
  */
+
+/**
+ * DEDICATED COMPETITION REALTIME CLIENT
+ * Isolates custom capability token authorization from the application's shared Supabase singleton.
+ *
+ * Invariants:
+ * - Uses public/anon key only (Zero service_role key)
+ * - Zero auth persistence (persistSession: false, autoRefreshToken: false)
+ * - setAuth() applied strictly to this instance, never mutating shared supabase.realtime
+ */
+export const competitionRealtimeClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10,
+    },
+  },
+});
 
 // In-memory cache for short-lived HMAC capability tokens: Map<key, { token, expiresAt, timerId }>
 const inMemoryTokenCache = new Map();
@@ -74,9 +98,14 @@ function normalizeResponse(res, defaultError = 'Lỗi không xác định khi th
  * Fetches a short-lived capability token from Edge Function.
  * Stores token strictly in memory and schedules auto-refresh before expiry (exp - 60s).
  *
+ * IMPORTANT:
+ * - participantId must be the verified Competition participant ID (from public.competition_participants).
+ * - Host cannot mint a capability token unless Host has an explicit participant record.
+ * - F2 Host must NOT depend on participant capability tokens unless a separate proven host path exists.
+ *
  * @param {Object} params
  * @param {string} params.sessionId - UUID of the session
- * @param {string} params.participantId - UUID of the participant (or host)
+ * @param {string} params.participantId - UUID of the verified participant
  * @param {string} [params.guestToken] - Optional guest token (min 32 chars) for guest flow
  * @param {boolean} [params.forceRefresh=false] - Force fresh token fetch ignoring memory cache
  * @returns {Promise<{ success: boolean, token?: string, expires_at?: number, error?: string }>}
@@ -93,6 +122,9 @@ export async function getCapabilityToken({ sessionId, participantId, guestToken 
   if (!forceRefresh && inMemoryTokenCache.has(cacheKey)) {
     const cached = inMemoryTokenCache.get(cacheKey);
     if (cached.expiresAt && cached.expiresAt - nowSeconds > 30) {
+      if (cached.token) {
+        competitionRealtimeClient.realtime.setAuth(cached.token);
+      }
       return { success: true, token: cached.token, expires_at: cached.expiresAt };
     }
   }
@@ -134,6 +166,9 @@ export async function getCapabilityToken({ sessionId, participantId, guestToken 
 
     const expiresAt = data.expires_at || parseJwtExp(data.token) || (nowSeconds + 300);
 
+    // Apply token to dedicated Competition Realtime client
+    competitionRealtimeClient.realtime.setAuth(data.token);
+
     // Clear previous refresh timer if exists
     if (inMemoryTokenCache.has(cacheKey)) {
       const old = inMemoryTokenCache.get(cacheKey);
@@ -143,9 +178,15 @@ export async function getCapabilityToken({ sessionId, participantId, guestToken 
     // Schedule auto-refresh 60 seconds before expiration
     const refreshDelayMs = Math.max(1000, (expiresAt - nowSeconds - 60) * 1000);
     const timerId = setTimeout(() => {
-      getCapabilityToken({ sessionId, participantId, guestToken, forceRefresh: true }).catch(() => {
-        // Silent failure in background refresh; caller will fetch on demand if needed
-      });
+      getCapabilityToken({ sessionId, participantId, guestToken, forceRefresh: true })
+        .then((res) => {
+          if (res?.success && res.token) {
+            competitionRealtimeClient.realtime.setAuth(res.token);
+          }
+        })
+        .catch(() => {
+          // Silent failure in background refresh; caller will fetch on demand if needed
+        });
     }, refreshDelayMs);
 
     inMemoryTokenCache.set(cacheKey, {
@@ -195,12 +236,12 @@ export function getCompetitionTopic(sessionId) {
  *
  * @param {Object} params
  * @param {string} params.sessionId - UUID of the session
- * @param {string} params.participantId - UUID of the participant
- * @param {string} [params.capabilityToken] - Optional capability token to setAuth
+ * @param {string} params.participantId - UUID of the verified participant
+ * @param {string} [params.capabilityToken] - Optional capability token to setAuth on dedicated client
  * @param {Object} [params.presence] - Optional presence payload to track
  * @param {Function} [params.onBroadcast] - Optional callback for broadcast events
  * @param {Function} [params.onPresenceSync] - Optional callback for presence sync
- * @returns {RealtimeChannel} Supabase channel instance
+ * @returns {RealtimeChannel} Supabase channel instance on dedicated Realtime client
  */
 export function createCompetitionChannel({
   sessionId,
@@ -214,13 +255,13 @@ export function createCompetitionChannel({
     throw new Error('sessionId is required to create a competition channel.');
   }
 
-  // If capability token is provided, apply it to realtime connection
+  // If capability token is provided, apply it strictly to the dedicated Competition Realtime client
   if (capabilityToken) {
-    supabase.realtime.setAuth(capabilityToken);
+    competitionRealtimeClient.realtime.setAuth(capabilityToken);
   }
 
   const topic = getCompetitionTopic(sessionId);
-  const channel = supabase.channel(topic, {
+  const channel = competitionRealtimeClient.channel(topic, {
     config: {
       private: true,
       presence: participantId ? { key: participantId } : undefined,
@@ -254,7 +295,7 @@ export function createCompetitionChannel({
 }
 
 /**
- * Unsubscribes and cleans up a Realtime competition channel.
+ * Unsubscribes and cleans up a Realtime competition channel on dedicated client.
  * Optionally clears capability token state from in-memory cache.
  */
 export async function removeCompetitionChannel(channel, sessionId = null, participantId = null) {
@@ -263,15 +304,31 @@ export async function removeCompetitionChannel(channel, sessionId = null, partic
   }
   if (!channel) return;
   try {
-    await supabase.removeChannel(channel);
+    await competitionRealtimeClient.removeChannel(channel);
   } catch (_err) {
     // Ignore cleanup errors
   }
 }
 
 // ============================================================================
-// 3. HOST RPC CLIENT METHODS
+// 3. HOST RPC & SNAPSHOT METHODS (F2 HOST FOUNDATION)
 // ============================================================================
+/**
+ * Host Strategy & Proven Backend Integration Boundaries:
+ *
+ * Safely Supported NOW:
+ * 1. Host RPCs (competition_host_create_session, competition_host_start_session, etc.)
+ *    authenticated via standard Supabase user JWT (admin / teacher role).
+ * 2. getSessionSnapshot: Direct RLS SELECT on public.competition_sessions.
+ * 3. getSessionParticipants: Direct Host RLS SELECT on public.competition_participants.
+ * 4. getLeaderboardSnapshot: RPC public.competition_get_leaderboard_snapshot.
+ *
+ * Realtime Authorization Boundary:
+ * - Current M3B Realtime policy is designed for participants with a valid row in competition_participants.
+ * - Host Realtime private topic authorization is NOT PROVEN by current backend without a participant row.
+ * - Therefore, F2 Host UI must use polling / snapshot refresh until a separately reviewed
+ *   Host Realtime authorization path is proven and deployed.
+ */
 
 /**
  * Host: Creates a new competition session.
