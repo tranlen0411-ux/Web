@@ -13,6 +13,8 @@ import { GamePlayView } from './pages/GamePlayView';
 import { LeaderboardView } from './pages/LeaderboardView';
 import { MaterialsView } from './pages/MaterialsView';
 import { Phase2DeviceTestHarnessPage } from './pages/Phase2DeviceTestHarnessPage';
+import { CompetitionHostPage } from './pages/CompetitionHostPage';
+import { CompetitionStudentPage } from './pages/CompetitionStudentPage';
 
 // Cờ kiểm tra môi trường kích hoạt test harness
 const isHarnessEnabled = Boolean(
@@ -132,6 +134,24 @@ function AppRoutes() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/competition/host"
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'teacher']}>
+                <CompetitionHostPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/competition"
+            element={
+              <ProtectedRoute allowedRoles={['student', 'teacher', 'admin']}>
+                <CompetitionStudentPage />
               </ProtectedRoute>
             }
           />
