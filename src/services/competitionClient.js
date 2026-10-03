@@ -611,3 +611,28 @@ export async function getSessionParticipants(sessionId) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
   }
 }
+
+/**
+ * Reads sanitized question snapshot (Safe for Student/Host).
+ * Selects only student-safe fields: id, session_id, question_order, question_text, question_type, options, points, time_limit_seconds.
+ * Never selects correct_answer or explanation.
+ */
+export async function getQuestionSnapshot(questionId) {
+  if (!questionId) {
+    return { success: false, error_code: 'INVALID_QUESTION_ID', message: 'ID câu hỏi không hợp lệ.' };
+  }
+  try {
+    const { data, error } = await supabase
+      .from('competition_questions')
+      .select('id, session_id, question_order, question_text, question_type, options, points, time_limit_seconds')
+      .eq('id', questionId)
+      .maybeSingle();
+
+    if (error) return { success: false, error_code: 'DB_ERROR', message: error.message };
+    if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Không tìm thấy câu hỏi.' };
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+

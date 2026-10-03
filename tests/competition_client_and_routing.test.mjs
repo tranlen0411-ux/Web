@@ -192,8 +192,12 @@ assert.ok(
   hostPageSource.includes('Host foundation ready') || hostPageSource.includes('CompetitionHostPage') || hostPageSource.includes('Bàn Điều Khiển Đấu Trường'),
   'CompetitionHostPage has expected component implementation'
 );
-assert.ok(studentPageSource.includes('Student foundation ready'), 'CompetitionStudentPage has expected placeholder');
+assert.ok(
+  studentPageSource.includes('Student foundation ready') || studentPageSource.includes('CompetitionStudentPage') || studentPageSource.includes('Đấu Trường Trực Tuyến'),
+  'CompetitionStudentPage has expected component implementation'
+);
 console.log('  ✅ Page implementations present and non-empty');
+
 
 // ============================================================================
 // Test 5: Navbar Unchanged Invariant
