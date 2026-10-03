@@ -4,7 +4,7 @@ import {
   createCompetitionChannel,
   removeCompetitionChannel,
   getSessionSnapshot,
-  getQuestionSnapshot,
+  getActiveQuestionSnapshot,
   getLeaderboardSnapshot,
 } from '../services/competitionClient.js';
 
@@ -16,10 +16,12 @@ import {
  * - Connects to isolated private channel: competition:session:<session_id>
  * - Presence payload adheres strictly to: { p_id: participantId, st: 'active' }
  * - Broadcast SELECT only, zero client Broadcast send, zero Postgres Changes.
- * - Authoritative State Polling: Since backend broadcast events are not yet attached to DB triggers,
- *   uses safe 2000ms polling for authoritative state while waiting / in_progress / paused.
+ * - Authoritative State Polling: Uses safe 2000ms polling for authoritative state while waiting / in_progress / paused.
+ * - Active Question Fetch: Uses sanitized competition_get_active_question_snapshot RPC (zero direct table query).
  * - Pauses polling when tab is hidden (document.hidden), immediately refreshes on visibility resume.
  * - Stops all polling and cleans up Realtime channel on terminal states (finished, cancelled) and on unmount.
+ * - Stable Callbacks: refreshAuthoritativeState is 100% stable per sessionId/participantId (Zero dependency on currentQuestion).
+ * - Channel Churn Prevention: Question updates or status polls never recreate the Realtime channel.
  *
  * @param {Object} params
  * @param {string|null} params.sessionId - Session UUID
@@ -42,11 +44,21 @@ export function useStudentCompetitionRealtime({
   const pollTimerRef = useRef(null);
   const isPollingRef = useRef(false);
   const isMountedRef = useRef(true);
-  const lastQuestionIdRef = useRef(null);
+  const isTerminalRef = useRef(false);
+  const currentQuestionRef = useRef(currentQuestion);
+  const sessionDataRef = useRef(sessionData);
 
-  // Authoritative State Refresh Callback
+  useEffect(() => {
+    currentQuestionRef.current = currentQuestion;
+  }, [currentQuestion]);
+
+  useEffect(() => {
+    sessionDataRef.current = sessionData;
+  }, [sessionData]);
+
+  // Stable Authoritative State Refresh Callback (Depends strictly on sessionId & participantId)
   const refreshAuthoritativeState = useCallback(async () => {
-    if (!sessionId || isPollingRef.current) return;
+    if (!sessionId || isPollingRef.current || !isMountedRef.current || isTerminalRef.current) return;
     isPollingRef.current = true;
 
     try {
@@ -60,20 +72,36 @@ export function useStudentCompetitionRealtime({
       }
 
       const session = sessionRes.data;
+      sessionDataRef.current = session;
       setSessionData(session);
 
-      // 2. Fetch Active Question if in_progress and question ID available
-      if (session.status === 'in_progress' && session.current_question_id) {
-        if (session.current_question_id !== lastQuestionIdRef.current || !currentQuestion) {
-          lastQuestionIdRef.current = session.current_question_id;
-          const qRes = await getQuestionSnapshot(session.current_question_id);
-          if (isMountedRef.current && qRes.success) {
-            setCurrentQuestion(qRes.data);
-          }
+      const isTerminal = session.status === 'finished' || session.status === 'cancelled';
+      if (isTerminal) {
+        isTerminalRef.current = true;
+        // Stop polling interval immediately
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
         }
-      } else if (session.status === 'waiting') {
+        // Cleanup realtime channel on terminal state
+        if (channelRef.current) {
+          removeCompetitionChannel(channelRef.current, sessionId, participantId);
+          channelRef.current = null;
+        }
+        setConnectionStatus('disconnected');
+      }
+
+      // 2. Fetch Active Sanitized Question via RPC
+      if (session.status === 'in_progress' || session.status === 'paused') {
+        const qRes = await getActiveQuestionSnapshot({ sessionId, participantId });
+        if (isMountedRef.current && qRes.success) {
+          const activeQ = qRes.data?.question || null;
+          currentQuestionRef.current = activeQ;
+          setCurrentQuestion(activeQ);
+        }
+      } else if (session.status === 'waiting' || isTerminal) {
+        currentQuestionRef.current = null;
         setCurrentQuestion(null);
-        lastQuestionIdRef.current = null;
       }
 
       // 3. Fetch Leaderboard Snapshot if session is finished
@@ -90,11 +118,12 @@ export function useStudentCompetitionRealtime({
     } finally {
       isPollingRef.current = false;
     }
-  }, [sessionId, participantId, currentQuestion]);
+  }, [sessionId, participantId]);
 
-  // Main Realtime & Polling Lifecycle
+  // Main Realtime & Polling Lifecycle Effect
   useEffect(() => {
     isMountedRef.current = true;
+    isTerminalRef.current = false;
 
     if (!sessionId || !participantId || !enabled) {
       setConnectionStatus('disconnected');
@@ -110,7 +139,7 @@ export function useStudentCompetitionRealtime({
 
         // 1. Obtain capability token (in-memory only)
         const tokenRes = await getCapabilityToken({ sessionId, participantId });
-        if (isCancelled) return;
+        if (isCancelled || isTerminalRef.current) return;
 
         if (!tokenRes.success || !tokenRes.token) {
           setConnectionStatus('error');
@@ -126,11 +155,18 @@ export function useStudentCompetitionRealtime({
           presence: { p_id: participantId, st: 'active' },
           onBroadcast: (payload) => {
             // If server emits broadcast in future, trigger authoritative refresh
-            if (payload?.event) {
+            if (payload?.event && !isTerminalRef.current) {
               refreshAuthoritativeState();
             }
           },
         });
+
+        if (isCancelled || isTerminalRef.current) {
+          if (activeChannel) {
+            removeCompetitionChannel(activeChannel, sessionId, participantId);
+          }
+          return;
+        }
 
         channelRef.current = activeChannel;
         setConnectionStatus('connected');
@@ -138,7 +174,7 @@ export function useStudentCompetitionRealtime({
         // Initial authoritative state fetch
         await refreshAuthoritativeState();
       } catch (err) {
-        if (!isCancelled) {
+        if (!isCancelled && !isTerminalRef.current) {
           setConnectionStatus('error');
           setError(err.message || 'Lỗi khởi tạo kết nối phòng thi.');
         }
@@ -150,22 +186,20 @@ export function useStudentCompetitionRealtime({
     // 3. Setup Authoritative State Polling (2000ms cadence while active)
     const pollInterval = setInterval(() => {
       if (document.hidden) return; // Pause polling when tab is hidden
-      if (sessionData?.status === 'finished' || sessionData?.status === 'cancelled') {
-        return; // Stop polling on terminal states
-      }
+      if (isTerminalRef.current) return; // Stop polling on terminal states
       refreshAuthoritativeState();
     }, 2000);
     pollTimerRef.current = pollInterval;
 
     // 4. Tab Visibility Listener (Instant refresh on tab focus)
     const handleVisibilityChange = () => {
-      if (!document.hidden && (!sessionData || !['finished', 'cancelled'].includes(sessionData.status))) {
+      if (!document.hidden && !isTerminalRef.current) {
         refreshAuthoritativeState();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Cleanup on unmount / session change
+    // Cleanup on unmount / session or participant change
     return () => {
       isCancelled = true;
       isMountedRef.current = false;
@@ -174,12 +208,14 @@ export function useStudentCompetitionRealtime({
         pollTimerRef.current = null;
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (activeChannel) {
-        removeCompetitionChannel(activeChannel, sessionId, participantId);
+      if (channelRef.current) {
+        removeCompetitionChannel(channelRef.current, sessionId, participantId);
         channelRef.current = null;
+      } else if (activeChannel) {
+        removeCompetitionChannel(activeChannel, sessionId, participantId);
       }
     };
-  }, [sessionId, participantId, enabled, refreshAuthoritativeState, sessionData?.status]);
+  }, [sessionId, participantId, enabled, refreshAuthoritativeState]);
 
   return {
     connectionStatus,

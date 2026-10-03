@@ -613,26 +613,34 @@ export async function getSessionParticipants(sessionId) {
 }
 
 /**
- * Reads sanitized question snapshot (Safe for Student/Host).
- * Selects only student-safe fields: id, session_id, question_order, question_text, question_type, options, points, time_limit_seconds.
- * Never selects correct_answer or explanation.
+ * Reads sanitized active question snapshot for a competition session.
+ * RPC: public.competition_get_active_question_snapshot
+ *
+ * Security:
+ * - Never selects from public.competition_questions directly
+ * - Excludes correct_answer and explanation
+ * - Server strictly controls active question derivation from session.current_question_id
  */
-export async function getQuestionSnapshot(questionId) {
-  if (!questionId) {
-    return { success: false, error_code: 'INVALID_QUESTION_ID', message: 'ID câu hỏi không hợp lệ.' };
+export async function getActiveQuestionSnapshot({
+  sessionId,
+  participantId = null,
+  guestToken = null,
+}) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
   }
   try {
-    const { data, error } = await supabase
-      .from('competition_questions')
-      .select('id, session_id, question_order, question_text, question_type, options, points, time_limit_seconds')
-      .eq('id', questionId)
-      .maybeSingle();
+    const { data, error } = await supabase.rpc('competition_get_active_question_snapshot', {
+      p_session_id: sessionId,
+      p_participant_id: participantId,
+      p_guest_token: guestToken,
+    });
 
-    if (error) return { success: false, error_code: 'DB_ERROR', message: error.message };
-    if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Không tìm thấy câu hỏi.' };
-    return { success: true, data };
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể lấy thông tin câu hỏi hiện tại.');
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
   }
 }
+
 

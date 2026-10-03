@@ -22,7 +22,8 @@ const expectedRpcNames = [
   'competition_join_session',
   'competition_rejoin_session',
   'competition_submit_answer',
-  'competition_get_leaderboard_snapshot'
+  'competition_get_leaderboard_snapshot',
+  'competition_get_active_question_snapshot'
 ];
 
 expectedRpcNames.forEach(rpcName => {

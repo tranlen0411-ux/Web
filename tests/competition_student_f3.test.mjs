@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-console.log('🧪 RUNNING COMPETITION F3 STUDENT ARENA TESTS');
+console.log('================================================================================');
+console.log('🧪 RUNNING COMPETITION F3 STUDENT ARENA TESTS (HARDENED)');
+console.log('================================================================================\n');
 
 // ============================================================================
 // 1. Static Contract & Source Inspection: src/services/competitionClient.js
 // ============================================================================
-console.log('\n--- [Test 1] Inspecting src/services/competitionClient.js ---');
+console.log('--- [Test 1] Inspecting src/services/competitionClient.js ---');
 const clientSource = fs.readFileSync('src/services/competitionClient.js', 'utf8');
 
 // A. studentJoinSession exact parameter mapping
@@ -55,7 +57,7 @@ assert.ok(
 );
 console.log('  ✅ [E] Presence payload structure verified');
 
-// F. Storage invariants: No localStorage/sessionStorage capability tokens
+// F & R. Storage invariants: No localStorage/sessionStorage capability tokens
 assert.ok(
   !clientSource.includes('localStorage'),
   'competitionClient.js must NOT use localStorage'
@@ -68,46 +70,46 @@ assert.ok(
   clientSource.includes('inMemoryTokenCache'),
   'Tokens must be held in inMemoryTokenCache'
 );
-console.log('  ✅ [F] In-memory capability token storage verified');
+console.log('  ✅ [F, R] In-memory capability token storage verified (Zero browser storage persistence)');
 
-// G. No postgres_changes
+// G & S. No postgres_changes
 assert.ok(
   !clientSource.includes('postgres_changes'),
   'competitionClient.js must NOT subscribe to postgres_changes'
 );
-console.log('  ✅ [G] No postgres_changes in client service');
+console.log('  ✅ [G, S] No postgres_changes in client service');
 
-// H. No client Broadcast send
+// H & T. No client Broadcast send
 assert.ok(
   !clientSource.includes("channel.send({ type: 'broadcast'"),
   'Client must NOT perform broadcast send'
 );
-console.log('  ✅ [H] No client Broadcast send verified');
+console.log('  ✅ [H, T] No client Broadcast send verified');
 
-// Q. Question source is proven student-safe
+// K. No direct table query on competition_questions in frontend client
 assert.ok(
-  clientSource.includes('export async function getQuestionSnapshot'),
-  'competitionClient.js must export getQuestionSnapshot'
+  !clientSource.includes(".from('competition_questions')"),
+  "competitionClient.js must NEVER directly query .from('competition_questions')"
 );
-const getQFuncMatch = clientSource.match(/export async function getQuestionSnapshot[\s\S]*?^}/m);
-assert.ok(getQFuncMatch, 'getQuestionSnapshot function body found');
-assert.ok(
-  !getQFuncMatch[0].includes("select('*')") && !getQFuncMatch[0].includes("'id, session_id, question_order, question_text, question_type, options, points, time_limit_seconds, correct_answer'"),
-  'getQuestionSnapshot must never query or expose correct_answer'
-);
-assert.ok(
-  getQFuncMatch[0].includes('.select(') && !getQFuncMatch[0].includes('correct_answer'),
-  'getQuestionSnapshot select query must not include correct_answer'
-);
-console.log('  ✅ [Q] Student-safe question snapshot reader verified');
+console.log('  ✅ [K] Zero direct .from(\'competition_questions\') in client');
 
+// L. Sanitized active question snapshot reader via RPC
+assert.ok(
+  clientSource.includes('export async function getActiveQuestionSnapshot'),
+  'competitionClient.js must export getActiveQuestionSnapshot'
+);
+assert.ok(
+  clientSource.includes('competition_get_active_question_snapshot'),
+  'getActiveQuestionSnapshot must call competition_get_active_question_snapshot RPC'
+);
+console.log('  ✅ [L] Active question RPC reader verified');
 
-// R. Leaderboard uses sanitized RPC only
+// Leaderboard uses sanitized RPC only
 assert.ok(
   clientSource.includes('competition_get_leaderboard_snapshot'),
   'Leaderboard must strictly use competition_get_leaderboard_snapshot RPC'
 );
-console.log('  ✅ [R] Leaderboard uses sanitized RPC only');
+console.log('  ✅ Leaderboard uses sanitized RPC only');
 
 
 // ============================================================================
@@ -129,7 +131,11 @@ assert.ok(
   !hookSource.includes('.send('),
   'useStudentCompetitionRealtime must NOT emit broadcast sends'
 );
-console.log('  ✅ Hook storage and realtime isolation verified');
+assert.ok(
+  !hookSource.includes(".from('competition_questions')"),
+  "useStudentCompetitionRealtime must NOT direct query .from('competition_questions')"
+);
+console.log('  ✅ Hook storage, query, and realtime isolation verified');
 
 // Hook presence and cleanup
 assert.ok(
@@ -148,11 +154,48 @@ assert.ok(
   hookSource.includes('visibilitychange'),
   'Hook must listen to visibilitychange for instant resume'
 );
+
+// M. refreshAuthoritativeState does NOT depend on currentQuestion
+const refreshCallbackMatch = hookSource.match(/const refreshAuthoritativeState = useCallback\([\s\S]*?\}, \[(.*?)\]\);/);
+assert.ok(refreshCallbackMatch, 'refreshAuthoritativeState useCallback definition found');
 assert.ok(
-  hookSource.includes("sessionData?.status === 'finished'") || hookSource.includes("['finished', 'cancelled'].includes"),
-  'Hook must halt polling on terminal states'
+  !refreshCallbackMatch[1].includes('currentQuestion'),
+  'refreshAuthoritativeState dependency array must NOT include currentQuestion'
 );
-console.log('  ✅ [L, M] Hook channel cleanup, visibility pause/resume, and terminal lifecycle verified');
+assert.ok(
+  !refreshCallbackMatch[1].includes('sessionData'),
+  'refreshAuthoritativeState dependency array must NOT include sessionData'
+);
+console.log('  ✅ [M] refreshAuthoritativeState callback stable and independent of currentQuestion');
+
+// N. Main Realtime effect does NOT depend on currentQuestion or sessionData
+const effectMatch = hookSource.match(/useEffect\(\(\) => \{[\s\S]*?initRealtime[\s\S]*?\}, \[(.*?)\]\);/);
+assert.ok(effectMatch, 'Main Realtime useEffect definition found');
+assert.ok(
+  !effectMatch[1].includes('currentQuestion'),
+  'Main Realtime effect dependency array must NOT include currentQuestion'
+);
+assert.ok(
+  !effectMatch[1].includes('sessionData'),
+  'Main Realtime effect dependency array must NOT include sessionData'
+);
+console.log('  ✅ [N] Question update and normal poll do NOT recreate Realtime channel');
+
+// O, P, Q. Terminal lifecycle: disconnects channel, stops polling, prevents reconnect
+assert.ok(
+  hookSource.includes("session.status === 'finished' || session.status === 'cancelled'") ||
+  hookSource.includes("['finished', 'cancelled'].includes"),
+  'Hook must check for terminal states'
+);
+assert.ok(
+  hookSource.includes('isTerminalRef'),
+  'Hook must use isTerminalRef to prevent reinit after terminal state'
+);
+assert.ok(
+  hookSource.includes('removeCompetitionChannel(channelRef.current') || hookSource.includes('removeCompetitionChannel(activeChannel'),
+  'Hook must remove private channel on terminal state'
+);
+console.log('  ✅ [O, P, Q] Terminal state halts polling, cleans up channel, and prevents reconnect');
 
 
 // ============================================================================
@@ -169,6 +212,10 @@ assert.ok(
 assert.ok(
   !studentPageSource.includes('explanation'),
   'CompetitionStudentPage must NOT expose explanation'
+);
+assert.ok(
+  !studentPageSource.includes(".from('competition_questions')"),
+  "CompetitionStudentPage must NEVER query .from('competition_questions')"
 );
 console.log('  ✅ [I] Zero correct_answer or explanation exposure verified');
 
@@ -190,7 +237,7 @@ assert.ok(
 );
 console.log('  ✅ [K] Double-submit UI guard verified');
 
-// P. Teacher/Admin accidental student join guard
+// Teacher/Admin accidental student join guard
 assert.ok(
   studentPageSource.includes("profile?.role === 'student'") || studentPageSource.includes("isStudentRole"),
   'CompetitionStudentPage must verify student role'
@@ -199,7 +246,7 @@ assert.ok(
   studentPageSource.includes('Khu Vực Dành Riêng Cho Học Sinh'),
   'CompetitionStudentPage must show friendly role notice for non-students'
 );
-console.log('  ✅ [P] Non-student role guard verified');
+console.log('  ✅ Non-student role guard verified');
 
 
 // ============================================================================
@@ -215,13 +262,15 @@ assert.ok(
   appSource.includes('CompetitionStudentPage'),
   'App.jsx must render CompetitionStudentPage for student'
 );
-console.log('  ✅ [N] Student route protected and configured');
+console.log('  ✅ Student route protected and configured');
 
 const navbarSource = fs.readFileSync('src/components/common/Navbar.jsx', 'utf8');
 assert.ok(
   !navbarSource.includes('to="/competition"') && !navbarSource.includes("to='/competition'"),
   'Navbar must NOT include /competition link in F3'
 );
-console.log('  ✅ [O] Navbar unchanged (Zero /competition links added)');
+console.log('  ✅ Navbar unchanged (Zero /competition links added)');
 
-console.log('\n🎉 ALL COMPETITION F3 STUDENT ARENA TESTS PASSED PERFECTLY!\n');
+console.log('\n================================================================================');
+console.log('🎉 ALL COMPETITION F3 STUDENT ARENA TESTS (K-T) PASSED PERFECTLY!');
+console.log('================================================================================\n');
