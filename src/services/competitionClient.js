@@ -240,9 +240,13 @@ export function createCompetitionChannel({
     });
   }
 
+  // Default presence payload adheres to established minimal Competition contract: { p_id: participantId, st: 'active' }
+  const defaultPresence = participantId ? { p_id: participantId, st: 'active' } : null;
+  const presencePayload = presence !== undefined && presence !== null ? presence : defaultPresence;
+
   channel.subscribe((status) => {
-    if (status === 'SUBSCRIBED' && presence) {
-      channel.track(presence);
+    if (status === 'SUBSCRIBED' && presencePayload) {
+      channel.track(presencePayload);
     }
   });
 
@@ -251,8 +255,12 @@ export function createCompetitionChannel({
 
 /**
  * Unsubscribes and cleans up a Realtime competition channel.
+ * Optionally clears capability token state from in-memory cache.
  */
-export async function removeCompetitionChannel(channel) {
+export async function removeCompetitionChannel(channel, sessionId = null, participantId = null) {
+  if (sessionId && participantId) {
+    clearCapabilityToken(sessionId, participantId);
+  }
   if (!channel) return;
   try {
     await supabase.removeChannel(channel);

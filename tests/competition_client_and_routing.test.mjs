@@ -99,6 +99,20 @@ assert.ok(
 );
 console.log('  ✅ Broadcast invariant PASS: No client Broadcast INSERT path');
 
+// G2. Presence payload contract
+assert.ok(
+  clientSource.includes("p_id: participantId") && clientSource.includes("st: 'active'"),
+  'competitionClient.js must use minimal presence payload contract { p_id, st: "active" }'
+);
+console.log('  ✅ Presence payload contract PASS: { p_id: participantId, st: "active" }');
+
+// G3. Channel removal token state cleanup
+assert.ok(
+  clientSource.includes('clearCapabilityToken(sessionId, participantId)'),
+  'competitionClient.js removeCompetitionChannel must support clearing capability token state'
+);
+console.log('  ✅ Channel removal cleanup PASS: cleans capability token state when sessionId/participantId provided');
+
 // ============================================================================
 // Test 2: In-Memory Token Cache Lifecycle Verification
 // ============================================================================
