@@ -643,4 +643,30 @@ export async function getActiveQuestionSnapshot({
   }
 }
 
+/**
+ * Reads sanitized real-time current-question submission statistics for Host.
+ * RPC: public.competition_host_get_submission_stats
+ *
+ * Security:
+ * - Never queries public.competition_answers directly from client
+ * - Excludes answer choices, is_correct, points, time_taken, user_id, guest_token_hash
+ * - Server strictly derives current_question_id from session state
+ */
+export async function getHostSubmissionStats(sessionId) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_host_get_submission_stats', {
+      p_session_id: sessionId,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể lấy thống kê nộp bài của phòng thi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
+
 
