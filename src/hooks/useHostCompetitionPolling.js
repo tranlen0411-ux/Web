@@ -1,17 +1,28 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getSessionSnapshot, getSessionParticipants } from '../services/competitionClient.js';
+import { getSessionSnapshot, getSessionParticipants, getHostSubmissionStats } from '../services/competitionClient.js';
 
 export const POLLING_WAITING_MS = 3000;
 export const POLLING_ACTIVE_MS = 2000;
 
+export const DEFAULT_SUBMISSION_STATS = {
+  has_active_question: false,
+  current_question_id: null,
+  total_eligible: 0,
+  submitted_count: 0,
+  not_submitted_count: 0,
+  participants: [],
+};
+
+
 /**
- * Custom React Hook for Host Competition Polling (Phase F2 Hardened).
+ * Custom React Hook for Host Competition Polling (Phase F2 Hardened + S2 Submission Stats).
  *
  * Guaranteed Invariants:
  * - fetchSessionData callback is 100% stable per sessionId (Zero dependency on snapshot identity)
  * - Zero fetch loops on state updates
  * - 3000ms cadence while WAITING (Lobby)
  * - 2000ms cadence while IN_PROGRESS / PAUSED
+ * - Parallel retrieval of snapshot, participants, and sanitized submissionStats
  * - Stops completely when status is FINISHED or CANCELLED
  * - Pauses polling when document.hidden === true, resumes with 1 immediate fetch + 1 scheduled timer
  * - Non-overlapping async requests (protected by isFetchingRef)
@@ -21,6 +32,7 @@ export const POLLING_ACTIVE_MS = 2000;
 export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') {
   const [snapshot, setSnapshot] = useState(null);
   const [participants, setParticipants] = useState([]);
+  const [submissionStats, setSubmissionStats] = useState(DEFAULT_SUBMISSION_STATS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -52,9 +64,10 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
     }
 
     try {
-      const [snapRes, partRes] = await Promise.all([
+      const [snapRes, partRes, statsRes] = await Promise.all([
         getSessionSnapshot(sessionId),
         getSessionParticipants(sessionId),
+        getHostSubmissionStats(sessionId),
       ]);
 
       if (!isMountedRef.current) return;
@@ -72,6 +85,22 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
       if (partRes.success && Array.isArray(partRes.data)) {
         setParticipants(partRes.data);
       }
+
+      if (statsRes.success && statsRes.data) {
+        // Enforce Question ID consistency between snapshot and submissionStats
+        const authoritativeQuestionId = snapRes.data?.current_question_id ?? snapshotRef.current?.current_question_id;
+        if (
+          statsRes.data.has_active_question &&
+          authoritativeQuestionId &&
+          statsRes.data.current_question_id === authoritativeQuestionId
+        ) {
+          setSubmissionStats(statsRes.data);
+        } else {
+          // If mismatch (transition straddle) or inactive question: fail closed to neutral shape
+          setSubmissionStats(DEFAULT_SUBMISSION_STATS);
+        }
+      }
+
     } catch (err) {
       if (isMountedRef.current && !hasSnapshotRef.current) {
         setError(err.message || 'Lỗi mạng khi cập nhật dữ liệu phòng thi.');
@@ -127,7 +156,20 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
     snapshotRef.current = newSnap;
     if (newSnap) hasSnapshotRef.current = true;
     setSnapshot(newSnap);
+    if (!newSnap || !newSnap.current_question_id || newSnap.status === 'finished' || newSnap.status === 'cancelled') {
+      setSubmissionStats(DEFAULT_SUBMISSION_STATS);
+    }
   }, []);
+
+  // Reset state if sessionId is cleared
+  useEffect(() => {
+    if (!sessionId) {
+      setSnapshot(null);
+      setParticipants([]);
+      setSubmissionStats(DEFAULT_SUBMISSION_STATS);
+      hasSnapshotRef.current = false;
+    }
+  }, [sessionId]);
 
   // Main Polling & Visibility Lifecycle Effect
   useEffect(() => {
@@ -140,6 +182,7 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
       }
       return;
     }
+
 
     // Initial fetch on mount or status change, followed by scheduled polling
     fetchSessionData(false).then(() => {
@@ -199,9 +242,11 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
   return {
     snapshot,
     participants,
+    submissionStats,
     isLoading,
     error,
     refreshNow,
     setSnapshot: setSnapshotPublic,
   };
 }
+
