@@ -465,6 +465,26 @@ export async function hostFinishSession(sessionId) {
   }
 }
 
+/**
+ * Host: Manually closes the active question ahead of natural timer expiry.
+ * RPC: public.competition_host_close_question
+ */
+export async function hostCloseQuestion(sessionId) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_host_close_question', {
+      p_session_id: sessionId,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể đóng câu hỏi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
 // ============================================================================
 // 4. STUDENT RPC CLIENT METHODS
 // ============================================================================
@@ -667,6 +687,33 @@ export async function getHostSubmissionStats(sessionId) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
   }
 }
+
+/**
+ * Reads sanitized authoritative question results and answer distribution for Host.
+ * RPC: public.competition_host_get_question_results
+ *
+ * Security:
+ * - Never queries public.competition_answers directly from client
+ * - Gated server-side: accessible only after question_deadline passes
+ * - Excludes participant-level answer records, user_id, guest_token_hash
+ * - Server strictly derives current_question_id from session state
+ */
+export async function getHostQuestionResults(sessionId) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_host_get_question_results', {
+      p_session_id: sessionId,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể lấy kết quả câu hỏi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
 
 
 
