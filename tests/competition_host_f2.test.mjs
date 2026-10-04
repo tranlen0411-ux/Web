@@ -151,9 +151,10 @@ assert.ok(hostRoles.includes('teacher'), 'Host route must allow teacher');
 assert.ok(!hostRoles.includes('student'), 'Host route must DENY student');
 console.log('  ✅ Access Control PASS: /competition/host accessible only by admin & teacher');
 
-// Navbar unchanged
-assert.ok(!navbarSource.includes('/competition'), 'Navbar must NOT have /competition link in Phase F2');
-console.log('  ✅ Navbar Invariant PASS: Navbar is unchanged');
+// Navbar role-aware host route verification
+assert.ok(navbarSource.includes('Đấu Trường Trực Tiếp'), 'Navbar must contain "Đấu Trường Trực Tiếp" label');
+assert.ok(navbarSource.includes('/competition/host'), 'Navbar must route teacher/admin to /competition/host');
+console.log('  ✅ Navbar Invariant PASS: Role-aware host navigation verified');
 
 // ============================================================================
 // Test 4: Deterministic Polling Lifecycle & Timing Behavior Harness
