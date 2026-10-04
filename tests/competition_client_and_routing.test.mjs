@@ -201,11 +201,13 @@ console.log('  ✅ Page implementations present and non-empty');
 
 
 // ============================================================================
-// Test 5: Navbar Unchanged Invariant
+// Test 5: Navbar Role-Aware Navigation Invariant
 // ============================================================================
-console.log('\n--- [Test 5] Verifying Navbar Unchanged ---');
+console.log('\n--- [Test 5] Verifying Navbar Competition Navigation ---');
 const navbarSource = fs.readFileSync('src/components/common/Navbar.jsx', 'utf8');
-assert.ok(!navbarSource.includes('/competition'), 'Navbar must NOT have /competition link in Phase F1');
-console.log('  ✅ Navbar invariant PASS: No visible competition button added yet');
+assert.ok(navbarSource.includes('Đấu Trường Trực Tiếp'), 'Navbar must contain "Đấu Trường Trực Tiếp" label');
+assert.ok(navbarSource.includes('/competition/host'), 'Navbar must route teacher/admin to /competition/host');
+assert.ok(navbarSource.includes('/competition'), 'Navbar must route student to /competition');
+console.log('  ✅ Navbar invariant PASS: Role-aware competition navigation verified');
 
 console.log('\n🎉 ALL 5 TEST SUITES (A-K) PASSED SUCCESSFULLY!');

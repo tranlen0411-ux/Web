@@ -11,7 +11,8 @@ import {
   GraduationCap,
   ChevronDown,
   Lock,
-  Filter
+  Filter,
+  Swords
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
@@ -125,6 +126,16 @@ export const Navbar = () => {
     }
   };
 
+  const handleCompetitionNavClick = () => {
+    triggerSound('click');
+    setIsMenuOpen(false);
+    if (role === 'admin' || role === 'teacher') {
+      navigate('/competition/host');
+    } else {
+      navigate('/competition');
+    }
+  };
+
   const handleDashboardNavClick = () => {
     triggerSound('click');
     setIsMenuOpen(false);
@@ -154,6 +165,11 @@ export const Navbar = () => {
     (role === 'admin' && location.pathname === '/admin' && currentTab === 'games') ||
     (role === 'teacher' && location.pathname === '/teacher' && currentTab === 'games') ||
     (role === 'student' && location.pathname === '/student' && (currentTab === 'games' || !currentTab));
+
+  const isCompetitionActive =
+    (role === 'admin' || role === 'teacher')
+      ? location.pathname.startsWith('/competition/host')
+      : location.pathname === '/competition';
 
   const isDashboardActive =
     (role === 'admin' && location.pathname === '/admin' && (currentTab === 'users' || currentTab === 'exercises' || currentTab === 'academic-assignments')) ||
@@ -190,7 +206,7 @@ export const Navbar = () => {
         </a>
 
         {/* ĐIỀU HƯỚNG CHÍNH MÀN HÌNH MÁY TÍNH (DESKTOP >= lg) */}
-        {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Bảng Xếp Hạng ➔ Dashboard theo role ➔ Góc Tài Liệu */}
+        {/* THỨ TỰ CHUẨN: Kho Trò Chơi ➔ Đấu Trường Trực Tiếp ➔ Bảng Xếp Hạng ➔ Dashboard theo role ➔ Góc Tài Liệu */}
         <nav className="hidden lg:flex items-center gap-2">
 
           {/* BỘ LỌC LỚP HEADER TOÀN CỤC MÁY TÍNH */}
@@ -229,7 +245,19 @@ export const Navbar = () => {
             <Gamepad2 className="w-4 h-4" /> Kho Trò Chơi
           </button>
 
-          {/* 2. NÚT BẢNG XẾP HẠNG */}
+          {/* 2. NÚT ĐẤU TRƯỜNG TRỰC TIẾP */}
+          <button
+            onClick={handleCompetitionNavClick}
+            className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
+              isCompetitionActive
+                ? 'bg-rose-500 text-white border-rose-600 shadow-sm'
+                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-rose-50 hover:text-rose-600'
+            }`}
+          >
+            <Swords className={`w-4 h-4 ${isCompetitionActive ? 'text-white' : 'text-rose-500'}`} /> Đấu Trường Trực Tiếp
+          </button>
+
+          {/* 3. NÚT BẢNG XẾP HẠNG */}
           <button
             onClick={() => handleNavClick('/leaderboard')}
             className={`px-4 py-2.5 rounded-2xl font-black text-sm transition-all flex items-center gap-2 border-2 ${
@@ -241,7 +269,7 @@ export const Navbar = () => {
             <Trophy className="w-4 h-4 text-amber-400" /> Bảng Xếp Hạng
           </button>
 
-          {/* 3. DASHBOARD THEO ROLE (GÓC HỌC TẬP / LỚP & GIAO BÀI / QUẢN TRỊ HỆ THỐNG) */}
+          {/* 4. DASHBOARD THEO ROLE (GÓC HỌC TẬP / LỚP & GIAO BÀI / QUẢN TRỊ HỆ THỐNG) */}
           {user && (
             <button
               onClick={handleDashboardNavClick}
@@ -258,7 +286,7 @@ export const Navbar = () => {
             </button>
           )}
 
-          {/* 4. NÚT GÓC TÀI LIỆU */}
+          {/* 5. NÚT GÓC TÀI LIỆU */}
           {user && (
             <button
               onClick={() => handleNavClick('/materials')}
@@ -330,7 +358,17 @@ export const Navbar = () => {
                       <Gamepad2 className="w-4 h-4 text-sky-500" /> Kho Trò Chơi
                     </button>
 
-                    {/* 2. BẢNG XẾP HẠNG */}
+                    {/* 2. ĐẤU TRƯỜNG TRỰC TIẾP */}
+                    <button
+                      onClick={handleCompetitionNavClick}
+                      className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
+                        isCompetitionActive ? 'bg-rose-50 text-rose-700 font-black' : 'text-slate-700 hover:bg-amber-50'
+                      }`}
+                    >
+                      <Swords className="w-4 h-4 text-rose-500" /> Đấu Trường Trực Tiếp
+                    </button>
+
+                    {/* 3. BẢNG XẾP HẠNG */}
                     <button
                       onClick={() => handleNavClick('/leaderboard')}
                       className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
@@ -340,7 +378,7 @@ export const Navbar = () => {
                       <Trophy className="w-4 h-4 text-amber-500" /> Bảng Xếp Hạng
                     </button>
 
-                    {/* 3. DASHBOARD THEO ROLE */}
+                    {/* 4. DASHBOARD THEO ROLE */}
                     <button
                       onClick={handleDashboardNavClick}
                       className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
@@ -353,7 +391,7 @@ export const Navbar = () => {
                       {role === 'admin' ? 'Quản Trị Hệ Thống' : role === 'teacher' ? 'Lớp & Giao Bài' : 'Góc Học Tập'}
                     </button>
 
-                    {/* 4. GÓC TÀI LIỆU */}
+                    {/* 5. GÓC TÀI LIỆU */}
                     <button
                       onClick={() => handleNavClick('/materials')}
                       className={`w-full text-left px-4 py-2 text-sm font-bold flex items-center gap-2 ${
