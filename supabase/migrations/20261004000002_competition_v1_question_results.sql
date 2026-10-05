@@ -870,7 +870,13 @@ BEGIN
                        AND p.joined_at <= v_session.question_deadline
                     WHERE a.session_id = p_session_id
                       AND a.question_id = v_session.current_question_id
-                ) a ON a.selected_option_ids @> pg_catalog.jsonb_build_array(o.option_id)
+                ) a ON EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.jsonb_array_elements_text(
+                        COALESCE(a.selected_option_ids, '[]'::jsonb)
+                    ) AS chosen(option_id)
+                    WHERE chosen.option_id = o.option_id
+                )
                 GROUP BY o.option_id, o.option_text, o.opt_ordinality
             )
             SELECT COALESCE(

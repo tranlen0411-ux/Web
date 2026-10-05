@@ -77,12 +77,7 @@ async function setupDatabase() {
   await db.exec(fs.readFileSync(m9Path, 'utf8'));
   console.log('  ✔ Migration 9 (Host Submission Stats RPC) applied cleanly');
 
-  // Migration 10: Question Results & Close Question RPC (R2)
-  const m10Path = path.resolve('supabase/migrations/20261004000002_competition_v1_question_results.sql');
-  await db.exec(fs.readFileSync(m10Path, 'utf8'));
-  console.log('  ✔ Migration 10 (Question Results & Close Question RPC) applied cleanly\n');
-
-  // Supabase baseline grants
+  // Supabase baseline grants (applied before M10 so M10 revocations take strict effect)
   await db.exec(`
     GRANT ALL ON ALL TABLES IN SCHEMA auth, public, extensions TO postgres, authenticated, anon;
     GRANT USAGE ON SCHEMA public, auth, extensions, private TO postgres, authenticated, anon;
@@ -91,6 +86,11 @@ async function setupDatabase() {
     GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public, auth TO postgres, authenticated, anon;
     GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth, extensions, public, private TO postgres, authenticated, anon;
   `);
+
+  // Migration 10: Question Results & Close Question RPC (R2)
+  const m10Path = path.resolve('supabase/migrations/20261004000002_competition_v1_question_results.sql');
+  await db.exec(fs.readFileSync(m10Path, 'utf8'));
+  console.log('  ✔ Migration 10 (Question Results & Close Question RPC) applied cleanly\n');
 }
 
 async function setAuthContext(userId, role = 'authenticated') {
@@ -123,6 +123,36 @@ async function runTests() {
   // ==========================================================================
   console.log('--- [Test Suite 0] Database Catalog & Architecture Verifications ---');
 
+  // Check Submit Helper Overload Count and Canonical Signature
+  const submitProcRes = await db.query(`
+    SELECT
+      p.proname,
+      pg_catalog.pg_get_function_identity_arguments(p.oid) AS identity_args,
+      pg_catalog.pg_get_function_arguments(p.oid) AS full_args,
+      p.prosecdef,
+      n.nspname AS schema_name
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = 'competition_submit_answer_internal'
+      AND n.nspname = 'private';
+  `);
+  assert.equal(submitProcRes.rows.length, 1, 'There MUST be EXACTLY ONE private.competition_submit_answer_internal function (no extra overload)');
+  assert.equal(
+    submitProcRes.rows[0].identity_args,
+    'p_session_id uuid, p_question_id uuid, p_participant_id uuid, p_guest_token text, p_selected_option_ids jsonb, p_text_answer text',
+    'Canonical signature parameter order and types MUST match'
+  );
+  assert.equal(submitProcRes.rows[0].prosecdef, true, 'Private submit helper MUST be SECURITY DEFINER');
+
+  // Verify public.competition_submit_answer exists and is SECURITY INVOKER
+  const pubSubmitRes = await db.query(`
+    SELECT prosecdef FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = 'competition_submit_answer' AND n.nspname = 'public';
+  `);
+  assert.equal(pubSubmitRes.rows.length, 1);
+  assert.equal(pubSubmitRes.rows[0].prosecdef, false, 'Public submit wrapper MUST be SECURITY INVOKER');
+
   // Check Close Question Wrappers
   const pubCloseRes = await db.query(`SELECT prosecdef FROM pg_proc WHERE proname = 'competition_host_close_question';`);
   assert.equal(pubCloseRes.rows.length, 1);
@@ -153,7 +183,20 @@ async function runTests() {
     'Private results helper search_path MUST be empty'
   );
 
-  console.log('  ✅ [0] Catalog signatures, Security Invoker / Definer, and search_path verified');
+  // Verify locking hierarchy uses FOR UPDATE (not FOR SHARE) in submit and close helpers
+  const srcCheck = await db.query(`
+    SELECT p.proname, p.prosrc
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname IN ('competition_submit_answer_internal', 'competition_host_close_question_internal')
+      AND n.nspname = 'private';
+  `);
+  for (const row of srcCheck.rows) {
+    assert.ok(row.prosrc.includes('FOR UPDATE'), `${row.proname} MUST use FOR UPDATE locking`);
+    assert.ok(!row.prosrc.includes('FOR SHARE'), `${row.proname} MUST NOT use FOR SHARE`);
+  }
+
+  console.log('  ✅ [0] Catalog signatures, Overload Count=1, Security Invoker / Definer, FOR UPDATE locks, and search_path verified');
 
   // ==========================================================================
   // Test Suite 1: Authorization Matrix (A - J)
@@ -299,6 +342,11 @@ async function runTests() {
     await db.query(`SELECT public.competition_host_close_question('${sessionId}') as res;`);
     assert.fail('Anon MUST NOT be able to execute public.competition_host_close_question');
   } catch (err) {
+    if (err.name === 'AssertionError') throw err;
+    assert.ok(
+      err.message.includes('permission denied') || err.code === '42501',
+      `Expected permission denied error for anon close, got: ${err.message}`
+    );
     console.log('  ✅ [E] Anon close denied by privilege grant revocation');
   }
 
@@ -320,6 +368,11 @@ async function runTests() {
     await db.query(`SELECT public.competition_host_get_question_results('${sessionId}') as res;`);
     assert.fail('Anon MUST NOT be able to execute public.competition_host_get_question_results');
   } catch (err) {
+    if (err.name === 'AssertionError') throw err;
+    assert.ok(
+      err.message.includes('permission denied') || err.code === '42501',
+      `Expected permission denied error for anon results, got: ${err.message}`
+    );
     console.log('  ✅ [J] Anon results denied by privilege grant revocation');
   }
 
@@ -336,9 +389,37 @@ async function runTests() {
   assert.equal(sub1.rows[0].res.success, true);
   assert.equal(sub1.rows[0].res.is_correct, true);
   assert.equal(Number(sub1.rows[0].res.points_awarded), 10.00);
+  assert.ok(sub1.rows[0].res.time_taken_ms >= 0);
+  assert.equal(Number(sub1.rows[0].res.total_score), 10.00);
+  assert.equal(sub1.rows[0].res.correct_count, 1);
   console.log('  ✅ [N & R] Student 1 submitted before deadline -> scored 10.00 points');
 
+  // Verify Canonical Table Contract: competition_answers columns (inspect directly under superuser)
+  await setAuthContext(null);
+  const ansRow1 = (await db.query(`
+    SELECT * FROM public.competition_answers WHERE participant_id = '${part1Id}' AND question_id = '${q1Id}';
+  `)).rows[0];
+  assert.ok(ansRow1, 'competition_answers record must exist');
+  assert.equal(ansRow1.session_id, sessionId);
+  assert.equal(ansRow1.question_id, q1Id);
+  assert.equal(ansRow1.participant_id, part1Id);
+  assert.deepEqual(ansRow1.selected_option_ids, ['opt_1']);
+  assert.equal(ansRow1.is_correct, true);
+  assert.equal(Number(ansRow1.points_awarded), 10.00);
+  assert.ok(ansRow1.time_taken_ms >= 0, 'time_taken_ms must be populated');
+  assert.ok(ansRow1.submitted_at, 'submitted_at must be populated');
+  assert.ok(ansRow1.created_at, 'created_at must be populated');
+
+  // Verify Score accumulation in public.competition_scores
+  const scoreRow1 = (await db.query(`
+    SELECT * FROM public.competition_scores WHERE participant_id = '${part1Id}' AND session_id = '${sessionId}';
+  `)).rows[0];
+  assert.equal(Number(scoreRow1.total_score), 10.00);
+  assert.equal(scoreRow1.correct_count, 1);
+  console.log('  ✅ Canonical table contract verified: competition_answers + competition_scores');
+
   // Student 1 duplicate submission -> Rejected (Q)
+  await setAuthContext(student1Id);
   const sub1Dup = await db.query(`
     SELECT public.competition_submit_answer('${sessionId}', '${q1Id}', NULL, NULL, '["opt_1"]'::jsonb, NULL) as res;
   `);
@@ -380,6 +461,78 @@ async function runTests() {
   assert.equal(sub3Late.rows[0].res.success, false);
   assert.equal(sub3Late.rows[0].res.error_code, 'ANSWER_TOO_LATE');
   console.log('  ✅ [P & O] Submission after close rejected with ANSWER_TOO_LATE');
+
+  // Guest Submission & SHA-256 Contract Verification (Dedicated Session)
+  await setAuthContext(hostId);
+  const guestSessCreate = await db.query(`
+    SELECT public.competition_host_create_session(
+      'Guest Contract Session',
+      NULL,
+      'individual',
+      10,
+      $1::jsonb
+    ) as res;
+  `, [questionsPayload]);
+  const guestSessId = guestSessCreate.rows[0].res.session.id;
+  const guestRoomCode = guestSessCreate.rows[0].res.session.room_code;
+
+  const validGuestToken = 'abcdef0123456789abcdef0123456789'; // 32 chars
+  await setAuthContext(null, 'anon');
+  const guestJoin = await db.query(`
+    SELECT public.competition_join_session('${guestRoomCode}', 'Guest One', NULL, NULL, '${validGuestToken}') as res;
+  `);
+  assert.equal(guestJoin.rows[0].res.success, true);
+  const guestPartId = guestJoin.rows[0].res.participant.id;
+
+  await setAuthContext(hostId);
+  const guestSessStart = await db.query(`SELECT public.competition_host_start_session('${guestSessId}') as res;`);
+  assert.equal(guestSessStart.rows[0].res.success, true);
+  const guestQ1Id = guestSessStart.rows[0].res.current_question_id;
+
+  // Guest submits answer with valid token
+  await setAuthContext(null, 'anon');
+  const guestSub = await db.query(`
+    SELECT public.competition_submit_answer(
+      '${guestSessId}',
+      '${guestQ1Id}',
+      '${guestPartId}',
+      '${validGuestToken}',
+      '["opt_1"]'::jsonb,
+      NULL
+    ) as res;
+  `);
+  assert.equal(guestSub.rows[0].res.success, true);
+  assert.equal(guestSub.rows[0].res.is_correct, true);
+  assert.equal(Number(guestSub.rows[0].res.points_awarded), 10.00);
+
+  // Guest duplicate submit -> ALREADY_ANSWERED
+  const guestSubDup = await db.query(`
+    SELECT public.competition_submit_answer(
+      '${guestSessId}',
+      '${guestQ1Id}',
+      '${guestPartId}',
+      '${validGuestToken}',
+      '["opt_1"]'::jsonb,
+      NULL
+    ) as res;
+  `);
+  assert.equal(guestSubDup.rows[0].res.success, false);
+  assert.equal(guestSubDup.rows[0].res.error_code, 'ALREADY_ANSWERED');
+
+  // Invalid guest token -> INVALID_GUEST_CREDENTIALS
+  const guestSubWrongToken = await db.query(`
+    SELECT public.competition_submit_answer(
+      '${guestSessId}',
+      '${guestQ1Id}',
+      '${guestPartId}',
+      'wrong_token_with_length_over_32_characters_here',
+      '["opt_1"]'::jsonb,
+      NULL
+    ) as res;
+  `);
+  assert.equal(guestSubWrongToken.rows[0].res.success, false);
+  assert.equal(guestSubWrongToken.rows[0].error_code || guestSubWrongToken.rows[0].res.error_code, 'INVALID_GUEST_CREDENTIALS');
+  console.log('  ✅ Guest flow SHA-256 token verification and submission contract verified');
 
   // ==========================================================================
   // Test Suite 3: Question Results & Distribution Invariants (F, G, S, T, U, V, W, X, Y)
