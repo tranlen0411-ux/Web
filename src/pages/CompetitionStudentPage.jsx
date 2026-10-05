@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Gamepad2,
   Sparkles,
@@ -12,31 +12,117 @@ import {
   LogOut,
   ShieldCheck,
   Check,
-  HelpCircle,
   Award,
   Crown,
   Medal,
+  Flame,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import {
   studentJoinSession,
+  studentRejoinSession,
   studentSubmitAnswer,
   getLeaderboardSnapshot,
+  getSessionSnapshot,
 } from '../services/competitionClient.js';
 import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRealtime.js';
+
+// ============================================================================
+// STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT)
+// ============================================================================
+
+export const STUDENT_SESSION_STORAGE_KEY = 'competition_student_session_id';
+export const STUDENT_PARTICIPANT_STORAGE_KEY = 'competition_student_participant_id';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const isValidUUID = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  return UUID_REGEX.test(value.trim());
+};
+
+// Safe initial session resolver (Query param -> sessionStorage -> null)
+export const getInitialStudentSession = () => {
+  try {
+    if (typeof window === 'undefined') return { sessionId: null, participantId: null };
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlSession = urlParams.get('sessionId') || urlParams.get('session_id');
+    const validUrlSession = urlSession && isValidUUID(urlSession) ? urlSession.trim() : null;
+
+    const storedSession = window.sessionStorage?.getItem(STUDENT_SESSION_STORAGE_KEY);
+    const validStoredSession = storedSession && isValidUUID(storedSession) ? storedSession.trim() : null;
+
+    const storedParticipant = window.sessionStorage?.getItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+    const validStoredParticipant = storedParticipant && isValidUUID(storedParticipant) ? storedParticipant.trim() : null;
+
+    // Session resolution priority: valid URL session OR valid stored session
+    const resolvedSessionId = validUrlSession || validStoredSession;
+    const resolvedParticipantId = validStoredParticipant;
+
+    if (storedSession && !validStoredSession) {
+      window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+    }
+    if (storedParticipant && !validStoredParticipant) {
+      window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+    }
+
+    if (resolvedSessionId && resolvedParticipantId) {
+      return { sessionId: resolvedSessionId, participantId: resolvedParticipantId };
+    }
+  } catch (_e) {
+    // Fail safe
+  }
+  return { sessionId: null, participantId: null };
+};
+
+// Fail-closed vs Transient Network classification
+export const isStudentAuthOrPermanentError = (errorCode, status) => {
+  if (!errorCode && !status) return false;
+  const code = String(errorCode).toUpperCase();
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    status === 404 ||
+    code === 'PGRST116' ||
+    code === '42501' ||
+    code === 'FORBIDDEN_OR_NOT_FOUND' ||
+    code === 'NOT_FOUND' ||
+    code === 'SESSION_NOT_FOUND' ||
+    code === 'PARTICIPANT_NOT_FOUND' ||
+    code === 'PARTICIPANT_KICKED' ||
+    code === 'UNAUTHORIZED' ||
+    code === 'FORBIDDEN' ||
+    code === 'ROLE_NOT_ALLOWED' ||
+    code === 'SESSION_NOT_JOINABLE' ||
+    code.includes('PERMISSION') ||
+    code.includes('NOT_FOUND')
+  ) {
+    return true;
+  }
+  return false;
+};
+
+// ============================================================================
+// MAIN COMPONENT: CompetitionStudentPage (R4 Student Final Results)
+// ============================================================================
 
 export const CompetitionStudentPage = () => {
   const { user, profile } = useAuth();
 
-  // Component Local State
-  const [roomCode, setRoomCode] = useState('');
-  const [sessionId, setSessionId] = useState(null);
-  const [participantId, setParticipantId] = useState(null);
+  // Session & Identity State
+  const initialSession = useMemo(() => getInitialStudentSession(), []);
+  const [sessionId, setSessionId] = useState(initialSession.sessionId);
+  const [participantId, setParticipantId] = useState(initialSession.participantId);
   const [participantInfo, setParticipantInfo] = useState(null);
   const [isJoining, setIsJoining] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(Boolean(initialSession.sessionId && initialSession.participantId));
   const [joinError, setJoinError] = useState(null);
+  const [notification, setNotification] = useState(null);
 
   // Question & Submission Local State
+  const [roomCode, setRoomCode] = useState('');
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedCurrentQuestion, setHasSubmittedCurrentQuestion] = useState(false);
@@ -44,6 +130,12 @@ export const CompetitionStudentPage = () => {
   const [submitResult, setSubmitResult] = useState(null);
   const [submitError, setSubmitError] = useState(null);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
+
+  // Guards & Refs
+  const activeSessionIdRef = useRef(sessionId);
+  const activeParticipantIdRef = useRef(participantId);
+  const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
+  const isMountedRef = useRef(true);
 
   // Private Realtime Hook
   const {
@@ -83,10 +175,216 @@ export const CompetitionStudentPage = () => {
         return 'Phòng thi đang tạm dừng.';
       case 'SESSION_CLOSED':
         return 'Phòng thi đã kết thúc.';
+      case 'PARTICIPANT_KICKED':
+        return 'Bạn đã bị mời ra khỏi phòng thi này.';
+      case 'PARTICIPANT_NOT_FOUND':
+        return 'Không tìm thấy thông tin thí sinh trong phòng thi.';
       default:
         return rawMessage || 'Đã xảy ra lỗi. Vui lòng thử lại.';
     }
   };
+
+  // Auto show notification banner
+  const showToast = useCallback((message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        setNotification(null);
+      }
+    }, 4000);
+  }, []);
+
+  // Fail-closed helper for invalid / unauthorized restored sessions
+  const clearRestoredSessionAndReturnToJoin = useCallback((failureReason) => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+        window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        if (window.location.search) {
+          window.history?.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (_e) {}
+
+    activeSessionIdRef.current = null;
+    activeParticipantIdRef.current = null;
+    restoredSessionPendingValidationRef.current = false;
+    setSessionId(null);
+    setParticipantId(null);
+    setParticipantInfo(null);
+    setSelectedOptionId(null);
+    setHasSubmittedCurrentQuestion(false);
+    setLastSubmittedQuestionId(null);
+    setSubmitResult(null);
+    setSubmitError(null);
+    setTimeLeftSeconds(null);
+    setRoomCode('');
+    setIsRestoring(false);
+
+    if (failureReason) {
+      setJoinError(failureReason);
+      showToast(failureReason, 'error');
+    }
+  }, [showToast]);
+
+  // Synchronize activeSessionIdRef & activeParticipantIdRef with sessionStorage persistence
+  useEffect(() => {
+    activeSessionIdRef.current = sessionId;
+    activeParticipantIdRef.current = participantId;
+
+    try {
+      if (typeof window !== 'undefined') {
+        if (sessionId && isValidUUID(sessionId)) {
+          window.sessionStorage?.setItem(STUDENT_SESSION_STORAGE_KEY, sessionId);
+        } else {
+          window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+        }
+
+        if (participantId && isValidUUID(participantId)) {
+          window.sessionStorage?.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, participantId);
+        } else {
+          window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        }
+      }
+    } catch (_e) {
+      // Fail safe
+    }
+  }, [sessionId, participantId]);
+
+  // Lifecycle Mount Guard
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Initial Restore & Authoritative Validation Effect (Authenticated Student)
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function validateAndRestoreSession() {
+      const initial = getInitialStudentSession();
+      if (!initial.sessionId || !initial.participantId) {
+        setIsRestoring(false);
+        return;
+      }
+
+      try {
+        // 1. Fetch Session Snapshot
+        const sessionRes = await getSessionSnapshot(initial.sessionId);
+        if (isCancelled || !isMountedRef.current) return;
+
+        if (!sessionRes.success) {
+          if (isStudentAuthOrPermanentError(sessionRes.error_code, sessionRes.status)) {
+            clearRestoredSessionAndReturnToJoin('Phiên thi không tồn tại hoặc bạn không có quyền truy cập.');
+          } else {
+            // Transient error: preserve session state for retry
+            showToast('Đang kết nối lại phòng thi...', 'warning');
+          }
+          return;
+        }
+
+        const session = sessionRes.data;
+
+        // 2. Cancelled session -> fail closed
+        if (session.status === 'cancelled') {
+          clearRestoredSessionAndReturnToJoin('Phòng thi đã bị hủy.');
+          return;
+        }
+
+        // 3. Finished session -> DO NOT call rejoin RPC (avoids SESSION_CLOSED error); load leaderboard directly
+        if (session.status === 'finished') {
+          setSessionId(initial.sessionId);
+          setParticipantId(initial.participantId);
+
+          const lbRes = await getLeaderboardSnapshot({
+            sessionId: initial.sessionId,
+            participantId: initial.participantId,
+          });
+
+          if (isCancelled || !isMountedRef.current) return;
+
+          if (!lbRes.success) {
+            if (isStudentAuthOrPermanentError(lbRes.error_code, lbRes.status)) {
+              clearRestoredSessionAndReturnToJoin('Bạn không có quyền xem kết quả phòng thi này.');
+            }
+            return;
+          }
+
+          const lbData = lbRes.data?.leaderboard || [];
+          const matched = lbData.find((item) => item.participant_id === initial.participantId);
+          if (lbData.length > 0 && !matched) {
+            clearRestoredSessionAndReturnToJoin('Không tìm thấy thông tin thí sinh trong bảng kết quả phòng thi.');
+            return;
+          }
+
+          if (matched) {
+            setParticipantInfo({
+              display_name: matched.display_name,
+              avatar_url: matched.avatar_url,
+            });
+          }
+
+          restoredSessionPendingValidationRef.current = false;
+          return;
+        }
+
+        // 4. Active session (waiting / in_progress / paused) -> Call studentRejoinSession
+        const rejoinRes = await studentRejoinSession({
+          sessionId: initial.sessionId,
+          participantId: initial.participantId,
+          guestToken: null,
+        });
+
+        if (isCancelled || !isMountedRef.current) return;
+
+        if (!rejoinRes.success) {
+          if (isStudentAuthOrPermanentError(rejoinRes.error_code, rejoinRes.status)) {
+            clearRestoredSessionAndReturnToJoin(getFriendlyErrorMessage(rejoinRes.error_code, rejoinRes.message));
+          } else {
+            showToast('Lỗi mạng khi kết nối lại. Vui lòng thử lại.', 'warning');
+          }
+          return;
+        }
+
+        const returnedPart = rejoinRes.data?.participant;
+        if (!returnedPart || returnedPart.id !== initial.participantId) {
+          clearRestoredSessionAndReturnToJoin('Thông tin thí sinh không khớp với phiên thi đã lưu.');
+          return;
+        }
+
+        setSessionId(initial.sessionId);
+        setParticipantId(initial.participantId);
+        setParticipantInfo(returnedPart);
+        restoredSessionPendingValidationRef.current = false;
+      } catch (err) {
+        // Transient error during restore: do not clear session
+      } finally {
+        if (!isCancelled && isMountedRef.current) {
+          setIsRestoring(false);
+        }
+      }
+    }
+
+    validateAndRestoreSession();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [clearRestoredSessionAndReturnToJoin, showToast]);
+
+  // Clean local question & submission state when session transitions to finished
+  useEffect(() => {
+    if (sessionData?.status === 'finished') {
+      setSelectedOptionId(null);
+      setHasSubmittedCurrentQuestion(false);
+      setLastSubmittedQuestionId(null);
+      setSubmitResult(null);
+      setSubmitError(null);
+      setTimeLeftSeconds(null);
+    }
+  }, [sessionData?.status]);
 
   // Reset answer selection when authoritative question ID changes
   useEffect(() => {
@@ -100,7 +398,7 @@ export const CompetitionStudentPage = () => {
     }
   }, [currentQuestion?.id, lastSubmittedQuestionId]);
 
-  // Countdown Timer based on server deadline
+  // Countdown Timer based on server deadline (only while in_progress)
   useEffect(() => {
     if (!sessionData?.question_deadline || sessionData.status !== 'in_progress') {
       setTimeLeftSeconds(null);
@@ -158,32 +456,54 @@ export const CompetitionStudentPage = () => {
     } catch (err) {
       setJoinError(err.message || 'Không thể kết nối đến máy chủ.');
     } finally {
-      setIsJoining(false);
+      if (isMountedRef.current) {
+        setIsJoining(false);
+      }
     }
   };
 
-  // Handle Submit Answer
+  // Handle Submit Answer with Stale & Terminal Guards
   const handleSubmitAnswer = async () => {
-    if (!selectedOptionId || isSubmitting || hasSubmittedCurrentQuestion || !currentQuestion?.id) {
+    if (
+      !selectedOptionId ||
+      isSubmitting ||
+      hasSubmittedCurrentQuestion ||
+      !currentQuestion?.id ||
+      sessionData?.status !== 'in_progress'
+    ) {
       return;
     }
 
     setIsSubmitting(true);
     setSubmitError(null);
+    const targetSessionId = sessionId;
+    const targetQuestionId = currentQuestion.id;
 
     try {
       const res = await studentSubmitAnswer({
-        sessionId,
-        questionId: currentQuestion.id,
+        sessionId: targetSessionId,
+        questionId: targetQuestionId,
         participantId,
         guestToken: null,
         selectedOptionIds: [selectedOptionId],
       });
 
+      // Stale Session / Unmount Guard: ignore if session or question changed
+      if (
+        !isMountedRef.current ||
+        activeSessionIdRef.current !== targetSessionId ||
+        sessionData?.status === 'finished'
+      ) {
+        return;
+      }
+
       if (!res.success) {
+        if (res.error_code === 'SESSION_NOT_ACTIVE' || res.error_code === 'SESSION_CLOSED') {
+          return;
+        }
         if (res.error_code === 'ALREADY_ANSWERED') {
           setHasSubmittedCurrentQuestion(true);
-          setLastSubmittedQuestionId(currentQuestion.id);
+          setLastSubmittedQuestionId(targetQuestionId);
         } else {
           setSubmitError(getFriendlyErrorMessage(res.error_code, res.message));
         }
@@ -191,18 +511,35 @@ export const CompetitionStudentPage = () => {
       }
 
       setHasSubmittedCurrentQuestion(true);
-      setLastSubmittedQuestionId(currentQuestion.id);
+      setLastSubmittedQuestionId(targetQuestionId);
       setSubmitResult(res.data);
       refreshAuthoritativeState();
     } catch (err) {
-      setSubmitError(err.message || 'Lỗi khi gửi câu trả lời.');
+      if (isMountedRef.current && activeSessionIdRef.current === targetSessionId) {
+        setSubmitError(err.message || 'Lỗi khi gửi câu trả lời.');
+      }
     } finally {
-      setIsSubmitting(false);
+      if (isMountedRef.current) {
+        setIsSubmitting(false);
+      }
     }
   };
 
-  // Handle Exit Session
+  // Handle Clean Exit (Clears Storage and resets state)
   const handleExit = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+        window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        if (window.location.search) {
+          window.history?.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (_e) {}
+
+    activeSessionIdRef.current = null;
+    activeParticipantIdRef.current = null;
+    restoredSessionPendingValidationRef.current = false;
     setSessionId(null);
     setParticipantId(null);
     setParticipantInfo(null);
@@ -211,7 +548,9 @@ export const CompetitionStudentPage = () => {
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
     setSubmitError(null);
+    setTimeLeftSeconds(null);
     setRoomCode('');
+    setJoinError(null);
   };
 
   // Option Letter Helpers
@@ -219,11 +558,24 @@ export const CompetitionStudentPage = () => {
     return String.fromCharCode(65 + index); // 0 -> A, 1 -> B, 2 -> C, 3 -> D
   };
 
-  // Find current student's score in leaderboard
+  // Find current student's score in authoritative leaderboard
   const studentLeaderboardEntry = useMemo(() => {
     if (!leaderboard || !participantId) return null;
     return leaderboard.find((item) => item.participant_id === participantId) || null;
   }, [leaderboard, participantId]);
+
+  // Mini Podium Groups (Grouped strictly by backend authoritative rank)
+  const goldWinners = useMemo(() => {
+    return Array.isArray(leaderboard) ? leaderboard.filter((item) => item.rank === 1) : [];
+  }, [leaderboard]);
+
+  const silverWinners = useMemo(() => {
+    return Array.isArray(leaderboard) ? leaderboard.filter((item) => item.rank === 2) : [];
+  }, [leaderboard]);
+
+  const bronzeWinners = useMemo(() => {
+    return Array.isArray(leaderboard) ? leaderboard.filter((item) => item.rank === 3) : [];
+  }, [leaderboard]);
 
   // ==========================================================================
   // VIEW RENDERERS
@@ -252,10 +604,39 @@ export const CompetitionStudentPage = () => {
     );
   }
 
-  // 2. JOIN VIEW (State A & B)
+  // 2. RESTORING LOADING STATE
+  if (isRestoring && !sessionData) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-20 text-center">
+        <div className="w-16 h-16 bg-sky-100 rounded-3xl flex items-center justify-center mx-auto mb-4 border-2 border-sky-300">
+          <RefreshCw className="w-8 h-8 text-sky-600 animate-spin" />
+        </div>
+        <h2 className="text-xl font-black text-slate-800 mb-2">Đang khôi phục phiên thi đấu...</h2>
+        <p className="text-sm font-semibold text-slate-500">Vui lòng chờ trong giây lát.</p>
+      </div>
+    );
+  }
+
+  // 3. JOIN VIEW (State A & B: When no active session)
   if (!sessionId) {
     return (
       <div className="max-w-xl mx-auto px-4 py-8">
+        {/* Toast Notification Banner */}
+        {notification && (
+          <div
+            className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-2xl shadow-lg border-2 font-bold text-sm flex items-center gap-2 animate-in fade-in slide-in-from-top-4 ${
+              notification.type === 'error'
+                ? 'bg-rose-50 text-rose-800 border-rose-300'
+                : notification.type === 'warning'
+                ? 'bg-amber-50 text-amber-800 border-amber-300'
+                : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+            }`}
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{notification.message}</span>
+          </div>
+        )}
+
         <div className="bg-white rounded-3xl border-4 border-sky-200 shadow-md p-6 sm:p-8 text-center">
           {/* Header Icon */}
           <div className="w-20 h-20 bg-gradient-to-tr from-sky-400 to-indigo-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm shadow-sky-200 border-2 border-white">
@@ -335,7 +716,7 @@ export const CompetitionStudentPage = () => {
     );
   }
 
-  // 3. LOBBY VIEW (State C: Session Waiting)
+  // 4. LOBBY VIEW (State C: Session Waiting)
   if (sessionData?.status === 'waiting') {
     return (
       <div className="max-w-2xl mx-auto px-4 py-8">
@@ -404,80 +785,250 @@ export const CompetitionStudentPage = () => {
     );
   }
 
-  // 4. PAUSED STATE BANNER (State F)
+  // 5. PAUSED STATE BANNER
   const isPaused = sessionData?.status === 'paused';
 
-  // 5. FINISHED STATE (State G)
+  // 6. FINISHED STATE: STUDENT FINAL RESULTS & MINI PODIUM (State G)
   if (sessionData?.status === 'finished') {
+    // Motivational Message for Student Personal Achievement
+    const getMotivationalBadge = (rank) => {
+      if (rank === 1) {
+        return {
+          title: 'Quán Quân Xuất Sắc! 👑',
+          desc: 'Chúc mừng bạn đã giành ngôi vị cao nhất trên Đấu Trường hôm nay!',
+          badgeClass: 'bg-amber-100 text-amber-900 border-amber-300',
+        };
+      }
+      if (rank === 2 || rank === 3) {
+        return {
+          title: 'Lọt Vào Bục Vinh Danh! 🌟',
+          desc: 'Thành tích vượt trội! Bạn đã đứng trên bục vinh danh của cuộc thi!',
+          badgeClass: 'bg-sky-100 text-sky-900 border-sky-300',
+        };
+      }
+      if (rank && rank <= 5) {
+        return {
+          title: 'Top 5 Thí Sinh Dẫn Đầu! ⚡',
+          desc: 'Màn thể hiện rất ấn tượng! Hãy tiếp tục duy trì phong độ nhé!',
+          badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-300',
+        };
+      }
+      return {
+        title: 'Hoàn Thành Xuất Sắc! 👏',
+        desc: 'Bạn đã nỗ lực hết mình và hoàn thành trọn vẹn vòng thi đấu!',
+        badgeClass: 'bg-slate-100 text-slate-800 border-slate-300',
+      };
+    };
+
+    const motivational = getMotivationalBadge(studentLeaderboardEntry?.rank);
+
     return (
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-3xl border-4 border-amber-300 shadow-lg p-6 sm:p-8 text-center">
-          <div className="w-20 h-20 bg-gradient-to-tr from-amber-400 to-yellow-500 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-md border-2 border-white">
-            <Trophy className="w-10 h-10 text-white" />
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="bg-white rounded-3xl border-4 border-amber-300 shadow-xl p-6 sm:p-10 text-center">
+          {/* Header Trophy Banner */}
+          <div className="w-24 h-24 bg-gradient-to-tr from-amber-400 via-amber-300 to-yellow-400 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-md border-3 border-white">
+            <Trophy className="w-12 h-12 text-amber-900 drop-shadow-sm" />
           </div>
 
-          <h1 className="text-3xl font-black text-slate-800 mb-2">
+          <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-2">
             Đấu Trường Đã Hoàn Thành! 🏆
           </h1>
-          <p className="text-slate-600 font-medium mb-6">
-            Chúc mừng bạn đã hoàn thành phần thi. Dưới đây là bảng xếp hạng chung cuộc:
+          <p className="text-slate-600 font-semibold mb-8 text-base">
+            Chúc mừng tất cả các bạn học sinh đã tham gia và nỗ lực hết mình!
           </p>
 
-          {/* Student Personal Achievement Badge */}
-          {studentLeaderboardEntry && (
-            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-3 border-amber-300 rounded-2xl p-4 mb-8 flex items-center justify-around">
-              <div className="text-center">
-                <div className="text-xs font-bold text-amber-800 uppercase tracking-wider">Hạng của bạn</div>
-                <div className="text-2xl sm:text-3xl font-black text-amber-950 flex items-center justify-center gap-1">
-                  #{studentLeaderboardEntry.rank || '—'}
+          {/* Personal Achievement Highlight Card */}
+          {studentLeaderboardEntry ? (
+            <div className="bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100/50 border-3 border-amber-300 rounded-3xl p-6 mb-10 text-left shadow-sm">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 pb-4 border-b-2 border-amber-200/70">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-amber-200 border-2 border-amber-400 flex items-center justify-center font-black text-amber-900 text-lg overflow-hidden shrink-0">
+                    {profile?.avatar_url ? (
+                      <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                    ) : (
+                      profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'HS'
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-amber-700 uppercase tracking-wider">Thành tích của bạn</div>
+                    <div className="text-lg font-black text-amber-950 truncate">{profile?.full_name || 'Học sinh'}</div>
+                  </div>
+                </div>
+
+                <div className={`px-4 py-1.5 rounded-xl border-2 font-black text-xs ${motivational.badgeClass}`}>
+                  {motivational.title}
                 </div>
               </div>
-              <div className="w-px h-10 bg-amber-200"></div>
-              <div className="text-center">
-                <div className="text-xs font-bold text-amber-800 uppercase tracking-wider">Tổng điểm</div>
-                <div className="text-2xl sm:text-3xl font-black text-emerald-600">
-                  {studentLeaderboardEntry.total_score}
+
+              {/* Personal Metric Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                <div className="bg-white/90 rounded-2xl p-3 border-2 border-amber-200">
+                  <div className="text-xs font-bold text-slate-500 mb-1">Thứ hạng</div>
+                  <div className="text-2xl sm:text-3xl font-black text-amber-700 flex items-center justify-center gap-1">
+                    #{studentLeaderboardEntry.rank ?? '—'}
+                  </div>
+                </div>
+
+                <div className="bg-white/90 rounded-2xl p-3 border-2 border-amber-200">
+                  <div className="text-xs font-bold text-slate-500 mb-1">Tổng điểm</div>
+                  <div className="text-2xl sm:text-3xl font-black text-emerald-600">
+                    {studentLeaderboardEntry.total_score ?? 0} <span className="text-xs font-bold text-slate-400">đ</span>
+                  </div>
+                </div>
+
+                <div className="bg-white/90 rounded-2xl p-3 border-2 border-amber-200">
+                  <div className="text-xs font-bold text-slate-500 mb-1">Số câu đúng</div>
+                  <div className="text-2xl sm:text-3xl font-black text-sky-600">
+                    {studentLeaderboardEntry.correct_count ?? 0} <span className="text-xs font-bold text-slate-400">câu</span>
+                  </div>
+                </div>
+
+                <div className="bg-white/90 rounded-2xl p-3 border-2 border-amber-200">
+                  <div className="text-xs font-bold text-slate-500 mb-1">Thời gian</div>
+                  <div className="text-2xl sm:text-3xl font-black text-indigo-600">
+                    {Math.round((studentLeaderboardEntry.total_response_time_ms || 0) / 1000)} <span className="text-xs font-bold text-slate-400">s</span>
+                  </div>
                 </div>
               </div>
-              <div className="w-px h-10 bg-amber-200"></div>
-              <div className="text-center">
-                <div className="text-xs font-bold text-amber-800 uppercase tracking-wider">Số câu đúng</div>
-                <div className="text-2xl sm:text-3xl font-black text-sky-600">
-                  {studentLeaderboardEntry.correct_count}
-                </div>
-              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 mb-8 text-sm font-semibold text-slate-600">
+              Đang tải kết quả cá nhân của bạn...
             </div>
           )}
 
-          {/* Leaderboard Table */}
+          {/* Mini Podium (Top 3 Authoritative Grouping with Tie-Rank Support) */}
+          <div className="mb-10">
+            <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center justify-center gap-2">
+              <Award className="w-6 h-6 text-amber-500" /> Bục Vinh Danh Đấu Trường
+            </h2>
+
+            <div className="grid grid-cols-3 gap-3 sm:gap-6 items-end max-w-2xl mx-auto pt-4 pb-2">
+              {/* Silver Step (Rank 2 - Left) */}
+              <div className="flex flex-col items-center">
+                <div className="mb-2 text-center min-h-[60px] flex flex-col items-center justify-end">
+                  {silverWinners.length > 0 ? (
+                    silverWinners.map((winner) => (
+                      <div key={winner.participant_id} className="mb-1">
+                        <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-200 border-2 border-slate-400 flex items-center justify-center font-bold text-slate-700 text-sm overflow-hidden mx-auto shadow-sm">
+                          {winner.avatar_url ? (
+                            <img src={winner.avatar_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            winner.display_name?.charAt(0).toUpperCase() || 'H'
+                          )}
+                        </div>
+                        <div className="text-xs font-black text-slate-800 truncate max-w-[90px] sm:max-w-[120px] mt-1">
+                          {winner.display_name}
+                        </div>
+                        <div className="text-xs font-bold text-slate-500">{winner.total_score}đ</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-xs font-bold text-slate-400 italic">Trống</div>
+                  )}
+                </div>
+
+                <div className="w-full bg-gradient-to-t from-slate-300 to-slate-200 border-3 border-slate-300 rounded-t-2xl h-24 sm:h-28 flex flex-col items-center justify-center shadow-md">
+                  <Medal className="w-7 h-7 text-slate-500 mb-1" />
+                  <span className="text-sm sm:text-base font-black text-slate-700">Hạng 2</span>
+                </div>
+              </div>
+
+              {/* Gold Step (Rank 1 - Center - Tallest) */}
+              <div className="flex flex-col items-center">
+                <div className="mb-2 text-center min-h-[60px] flex flex-col items-center justify-end">
+                  {goldWinners.length > 0 ? (
+                    goldWinners.map((winner) => (
+                      <div key={winner.participant_id} className="mb-1">
+                        <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-amber-100 border-3 border-amber-400 flex items-center justify-center font-black text-amber-800 text-base overflow-hidden mx-auto shadow-md ring-2 ring-amber-300">
+                          {winner.avatar_url ? (
+                            <img src={winner.avatar_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            winner.display_name?.charAt(0).toUpperCase() || 'H'
+                          )}
+                        </div>
+                        <div className="text-xs sm:text-sm font-black text-amber-950 truncate max-w-[100px] sm:max-w-[140px] mt-1">
+                          {winner.display_name}
+                        </div>
+                        <div className="text-xs font-black text-amber-700">{winner.total_score}đ</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-xs font-bold text-slate-400 italic">Trống</div>
+                  )}
+                </div>
+
+                <div className="w-full bg-gradient-to-t from-amber-400 to-yellow-300 border-3 border-amber-300 rounded-t-2xl h-32 sm:h-36 flex flex-col items-center justify-center shadow-lg">
+                  <Crown className="w-9 h-9 text-amber-900 fill-amber-500 mb-1" />
+                  <span className="text-base sm:text-lg font-black text-amber-950">Quán Quân</span>
+                </div>
+              </div>
+
+              {/* Bronze Step (Rank 3 - Right) */}
+              <div className="flex flex-col items-center">
+                <div className="mb-2 text-center min-h-[60px] flex flex-col items-center justify-end">
+                  {bronzeWinners.length > 0 ? (
+                    bronzeWinners.map((winner) => (
+                      <div key={winner.participant_id} className="mb-1">
+                        <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-amber-200/80 border-2 border-amber-600/60 flex items-center justify-center font-bold text-amber-900 text-sm overflow-hidden mx-auto shadow-sm">
+                          {winner.avatar_url ? (
+                            <img src={winner.avatar_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            winner.display_name?.charAt(0).toUpperCase() || 'H'
+                          )}
+                        </div>
+                        <div className="text-xs font-black text-slate-800 truncate max-w-[90px] sm:max-w-[120px] mt-1">
+                          {winner.display_name}
+                        </div>
+                        <div className="text-xs font-bold text-amber-800">{winner.total_score}đ</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-xs font-bold text-slate-400 italic">Trống</div>
+                  )}
+                </div>
+
+                <div className="w-full bg-gradient-to-t from-amber-700/80 to-amber-600/70 border-3 border-amber-700/50 rounded-t-2xl h-20 sm:h-24 flex flex-col items-center justify-center shadow-md">
+                  <Medal className="w-6 h-6 text-amber-100 mb-1" />
+                  <span className="text-sm sm:text-base font-black text-white">Hạng 3</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Full Leaderboard Table */}
           <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl overflow-hidden mb-8 text-left">
-            <div className="px-5 py-3 bg-slate-100 border-b-2 border-slate-200 flex items-center justify-between text-xs font-black text-slate-600 uppercase tracking-wider">
+            <div className="px-5 py-3.5 bg-slate-100 border-b-2 border-slate-200 flex items-center justify-between text-xs font-black text-slate-600 uppercase tracking-wider">
               <div className="w-16">Hạng</div>
               <div className="flex-1">Thí sinh</div>
-              <div className="w-24 text-right">Điểm</div>
+              <div className="w-24 text-center hidden sm:block">Số câu đúng</div>
+              <div className="w-24 text-right">Tổng điểm</div>
             </div>
 
             <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-              {leaderboard.length === 0 ? (
-                <div className="p-6 text-center text-sm font-bold text-slate-500">
+              {!Array.isArray(leaderboard) || leaderboard.length === 0 ? (
+                <div className="p-8 text-center text-sm font-bold text-slate-500">
                   Đang tải bảng xếp hạng...
                 </div>
               ) : (
                 leaderboard.map((item, idx) => {
                   const isCurrentStudent = item.participant_id === participantId;
+                  const rankDisplay = item.rank !== null && item.rank !== undefined ? `#${item.rank}` : '—';
+
                   return (
                     <div
                       key={item.participant_id || idx}
-                      className={`px-5 py-3 flex items-center justify-between ${
-                        isCurrentStudent ? 'bg-amber-100/70 font-black' : 'hover:bg-slate-50'
+                      className={`px-5 py-3.5 flex items-center justify-between transition-colors ${
+                        isCurrentStudent ? 'bg-amber-100/80 font-black' : 'hover:bg-slate-50'
                       }`}
                     >
-                      <div className="w-16 flex items-center gap-1 font-black text-sm text-slate-700">
-                        {item.rank === 1 && <Crown className="w-4 h-4 text-amber-500 fill-amber-400" />}
-                        {item.rank === 2 && <Medal className="w-4 h-4 text-slate-400" />}
-                        {item.rank === 3 && <Medal className="w-4 h-4 text-amber-700" />}
-                        <span>#{item.rank || idx + 1}</span>
+                      <div className="w-16 flex items-center gap-1.5 font-black text-sm text-slate-700">
+                        {item.rank === 1 && <Crown className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0" />}
+                        {item.rank === 2 && <Medal className="w-4 h-4 text-slate-400 shrink-0" />}
+                        {item.rank === 3 && <Medal className="w-4 h-4 text-amber-700 shrink-0" />}
+                        <span>{rankDisplay}</span>
                       </div>
+
                       <div className="flex-1 flex items-center gap-3 min-w-0 pr-4">
                         <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-700 shrink-0 overflow-hidden">
                           {item.avatar_url ? (
@@ -487,11 +1038,16 @@ export const CompetitionStudentPage = () => {
                           )}
                         </div>
                         <span className="truncate text-sm font-bold text-slate-800">
-                          {item.display_name} {isCurrentStudent && <span className="text-xs text-amber-800 font-black">(Bạn)</span>}
+                          {item.display_name} {isCurrentStudent && <span className="text-xs text-amber-800 font-black ml-1">(Bạn)</span>}
                         </span>
                       </div>
+
+                      <div className="w-24 text-center text-sm font-bold text-slate-600 hidden sm:block">
+                        {item.correct_count ?? 0}
+                      </div>
+
                       <div className="w-24 text-right text-sm font-black text-emerald-600">
-                        {item.total_score} đ
+                        {item.total_score ?? 0} đ
                       </div>
                     </div>
                   );
@@ -500,18 +1056,20 @@ export const CompetitionStudentPage = () => {
             </div>
           </div>
 
+          {/* Action Exit Button */}
           <button
             onClick={handleExit}
-            className="px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95"
+            className="px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center gap-2"
           >
-            Quay Về Trang Chủ
+            <LogOut className="w-5 h-5" />
+            <span>Quay Về Trang Chủ</span>
           </button>
         </div>
       </div>
     );
   }
 
-  // 6. CANCELLED STATE (State H)
+  // 7. CANCELLED STATE (State H)
   if (sessionData?.status === 'cancelled') {
     return (
       <div className="max-w-xl mx-auto px-4 py-12">
@@ -536,7 +1094,7 @@ export const CompetitionStudentPage = () => {
     );
   }
 
-  // 7. ACTIVE QUESTION & SUBMITTED STATE (State D, E, F)
+  // 8. ACTIVE QUESTION & SUBMITTED STATE (State D, E, F)
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       {/* Paused Banner */}

@@ -722,6 +722,43 @@ export async function getHostQuestionResults(sessionId) {
   }
 }
 
+// ============================================================================
+// 6. STUDENT STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT)
+// ============================================================================
 
+export const STUDENT_SESSION_STORAGE_KEY = 'competition_student_session_id';
+export const STUDENT_PARTICIPANT_STORAGE_KEY = 'competition_student_participant_id';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function isValidSessionUUID(value) {
+  if (!value || typeof value !== 'string') return false;
+  return UUID_REGEX.test(value.trim());
+}
+
+export function isStudentAuthOrPermanentError(errorCode, status) {
+  if (!errorCode && !status) return false;
+  const code = String(errorCode).toUpperCase();
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    status === 404 ||
+    code === 'PGRST116' ||
+    code === '42501' ||
+    code === 'FORBIDDEN_OR_NOT_FOUND' ||
+    code === 'NOT_FOUND' ||
+    code === 'SESSION_NOT_FOUND' ||
+    code === 'PARTICIPANT_NOT_FOUND' ||
+    code === 'PARTICIPANT_KICKED' ||
+    code === 'UNAUTHORIZED' ||
+    code === 'FORBIDDEN' ||
+    code === 'ROLE_NOT_ALLOWED' ||
+    code === 'SESSION_NOT_JOINABLE' ||
+    code.includes('PERMISSION') ||
+    code.includes('NOT_FOUND')
+  ) {
+    return true;
+  }
+  return false;
+}
