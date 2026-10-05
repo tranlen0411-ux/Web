@@ -95,6 +95,60 @@ export const isValidSessionUUID = (id) => {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
 };
 
+// Error classification helper: Distinguishes authoritative failures (403/404/not-found) from transient errors (5xx/network)
+export const isAuthoritativeSessionFailure = (errorOrDetails) => {
+  if (!errorOrDetails) return false;
+  if (typeof errorOrDetails === 'string') {
+    const lower = errorOrDetails.toLowerCase();
+    return (
+      lower.includes('không tồn tại') ||
+      lower.includes('not found') ||
+      lower.includes('không có quyền') ||
+      lower.includes('permission denied') ||
+      lower.includes('unauthorized') ||
+      lower.includes('forbidden') ||
+      lower.includes('invalid session')
+    );
+  }
+  const code = errorOrDetails.error_code || errorOrDetails.code;
+  const status = errorOrDetails.status;
+  const msg = (errorOrDetails.message || '').toLowerCase();
+
+  // Explicit authoritative error codes
+  if (
+    code === 'NOT_FOUND' ||
+    code === 'SESSION_NOT_FOUND' ||
+    code === 'FORBIDDEN' ||
+    code === 'UNAUTHORIZED' ||
+    code === 'FORBIDDEN_OR_NOT_FOUND' ||
+    code === 'INVALID_SESSION' ||
+    code === 'INVALID_SESSION_ID' ||
+    code === '42501' ||
+    code === 'PGRST116'
+  ) {
+    return true;
+  }
+
+  // Explicit HTTP status codes for auth / not found
+  if (status === 401 || status === 403 || status === 404) {
+    return true;
+  }
+
+  // Text message check for authoritative rejection
+  if (
+    msg.includes('không tồn tại') ||
+    msg.includes('not found') ||
+    msg.includes('không có quyền') ||
+    msg.includes('permission denied') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden')
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 // Safe initial session resolver (Query param -> sessionStorage -> null)
 export const getInitialActiveSessionId = () => {
   try {
@@ -120,8 +174,11 @@ export const getInitialActiveSessionId = () => {
 
 export function CompetitionHostPage() {
   // Navigation & Session State
-  const [activeSessionId, setActiveSessionId] = useState(getInitialActiveSessionId);
+  const initialResolvedId = getInitialActiveSessionId();
+  const [activeSessionId, setActiveSessionId] = useState(initialResolvedId);
   const activeSessionIdRef = useRef(activeSessionId);
+  const restoredSessionPendingValidationRef = useRef(Boolean(initialResolvedId));
+
   const [createdQuestionCount, setCreatedQuestionCount] = useState(3);
   const [notification, setNotification] = useState(null);
   const [actionPending, setActionPending] = useState(false);
@@ -130,6 +187,42 @@ export function CompetitionHostPage() {
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [isLeaderboardLoading, setIsLeaderboardLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // Auto show notification banner
+  const showToast = useCallback((message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification(null);
+    }, 4000);
+  }, []);
+
+  // Fail-closed helper for invalid / unauthorized restored sessions
+  const clearRestoredSessionAndReturnToSetup = useCallback((failureReason) => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+        if (window.location.search) {
+          window.history?.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (_e) {}
+
+    activeSessionIdRef.current = null;
+    setActiveSessionId(null);
+    restoredSessionPendingValidationRef.current = false;
+    setQuestions(DEFAULT_QUESTIONS);
+    setLeaderboardData([]);
+    setLeaderboardError(null);
+    setIsLeaderboardOpen(false);
+    setQuestionResults(null);
+    setHostViewMode('LIVE_QUESTION');
+    autoResultAttemptRef.current = null;
+    setTimeLeftSeconds(null);
+
+    if (failureReason) {
+      showToast(failureReason, 'error');
+    }
+  }, [showToast]);
 
   // Synchronize activeSessionIdRef immediately and update sessionStorage persistence
   useEffect(() => {
@@ -169,9 +262,34 @@ export function CompetitionHostPage() {
     submissionStats,
     isLoading: isPollingLoading,
     error: pollingError,
+    errorDetails: pollingErrorDetails,
     refreshNow,
     setSnapshot
   } = useHostCompetitionPolling(activeSessionId);
+
+  // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
+  useEffect(() => {
+    if (!restoredSessionPendingValidationRef.current || !activeSessionId) {
+      return;
+    }
+
+    // Case 1: Initial authoritative snapshot successfully loaded and verified
+    if (snapshot && snapshot.id === activeSessionId) {
+      restoredSessionPendingValidationRef.current = false;
+      return;
+    }
+
+    // Case 2: Authoritative failure returned during initial restoration
+    if (pollingErrorDetails || pollingError) {
+      const errInfo = pollingErrorDetails || { message: pollingError };
+      if (isAuthoritativeSessionFailure(errInfo)) {
+        clearRestoredSessionAndReturnToSetup(
+          errInfo.message || 'Phòng thi không tồn tại hoặc bạn không có quyền quản trị.'
+        );
+      }
+      // If transient (offline, timeout, 5xx), do NOT clear session; keep session for Host retry/reconnect
+    }
+  }, [snapshot, activeSessionId, pollingErrorDetails, pollingError, clearRestoredSessionAndReturnToSetup]);
 
   const snapshotRef = useRef(snapshot);
   useEffect(() => {
@@ -196,14 +314,6 @@ export function CompetitionHostPage() {
       }
     }
   }, [currentQuestionId]);
-
-  // Auto show notification banner
-  const showToast = (message, type = 'info') => {
-    setNotification({ message, type });
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
-  };
 
   // Determine current active state
   const currentStatus = snapshot?.status || (activeSessionId ? 'waiting' : 'setup');
@@ -507,6 +617,7 @@ export function CompetitionHostPage() {
 
       if (res.success && res.data?.session?.id) {
         const newSessionId = res.data.session.id;
+        restoredSessionPendingValidationRef.current = false;
         activeSessionIdRef.current = newSessionId;
         setActiveSessionId(newSessionId);
         try {
@@ -685,24 +796,7 @@ export function CompetitionHostPage() {
   };
 
   const handleResetToSetup = () => {
-    try {
-      if (typeof window !== 'undefined') {
-        window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
-        if (window.location.search) {
-          window.history?.replaceState({}, '', window.location.pathname);
-        }
-      }
-    } catch (_e) {}
-    activeSessionIdRef.current = null;
-    setActiveSessionId(null);
-    setQuestions(DEFAULT_QUESTIONS);
-    setLeaderboardData([]);
-    setLeaderboardError(null);
-    setIsLeaderboardOpen(false);
-    setQuestionResults(null);
-    setHostViewMode('LIVE_QUESTION');
-    autoResultAttemptRef.current = null;
-    setTimeLeftSeconds(null);
+    clearRestoredSessionAndReturnToSetup();
   };
 
   // Helper status badge styling

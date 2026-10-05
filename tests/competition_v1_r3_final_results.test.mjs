@@ -10,9 +10,9 @@ console.log('===================================================================
 // ============================================================================
 console.log('--- [Test 1] Static Source Verification & Data Privacy Invariants ---');
 
-const clientSource = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
 const clientLibSource = fs.readFileSync('src/services/competitionClient.js', 'utf8');
 const hostPageSource = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
+const hookSource = fs.readFileSync('src/hooks/useHostCompetitionPolling.js', 'utf8');
 
 // 1.A: Frontend NEVER queries competition_answers directly
 assert.ok(
@@ -79,7 +79,7 @@ assert.ok(
 );
 console.log('  ✅ [1.E] PASS: Request ID race guard & Active Session Identity guard verified in source');
 
-// 1.F: True Session Persistence & Reload Recovery Implementation (Blocker 2)
+// 1.F: True Session Persistence & Safe Reload Recovery (Blocker 2)
 assert.ok(
   hostPageSource.includes('HOST_SESSION_STORAGE_KEY'),
   'CompetitionHostPage.jsx must define HOST_SESSION_STORAGE_KEY'
@@ -116,22 +116,40 @@ bannedStorageTerms.forEach(term => {
 });
 console.log('  ✅ [1.G] PASS: Zero sensitive tokens persisted (UUID only)');
 
-// 1.H: Reset to Setup clears persisted session
+// 1.H: Authoritative Fail-Closed Guard & Error Classification (Blocker 3)
+assert.ok(
+  hostPageSource.includes('isAuthoritativeSessionFailure'),
+  'CompetitionHostPage.jsx must define isAuthoritativeSessionFailure'
+);
+assert.ok(
+  hostPageSource.includes('clearRestoredSessionAndReturnToSetup'),
+  'CompetitionHostPage.jsx must define clearRestoredSessionAndReturnToSetup'
+);
+assert.ok(
+  hostPageSource.includes('restoredSessionPendingValidationRef'),
+  'CompetitionHostPage.jsx must use restoredSessionPendingValidationRef'
+);
+assert.ok(
+  hookSource.includes('errorDetails'),
+  'useHostCompetitionPolling.js must export errorDetails'
+);
+console.log('  ✅ [1.H] PASS: Restored session authoritative fail-closed validator verified in source');
+
+// 1.I: Reset to Setup clears persisted session
 assert.ok(
   hostPageSource.includes('removeItem(HOST_SESSION_STORAGE_KEY)'),
-  'handleResetToSetup must remove HOST_SESSION_STORAGE_KEY on reset'
+  'handleResetToSetup / clearRestoredSessionAndReturnToSetup must remove HOST_SESSION_STORAGE_KEY on reset'
 );
-console.log('  ✅ [1.H] PASS: Reset to setup cleanly clears persisted session ID');
+console.log('  ✅ [1.I] PASS: Reset to setup cleanly clears persisted session ID');
 
-// 1.I: No extra polling loops introduced
-const hookSource = fs.readFileSync('src/hooks/useHostCompetitionPolling.js', 'utf8');
+// 1.J: No extra polling loops introduced
 const setIntervalInHook = hookSource.match(/setInterval/g) || [];
 assert.equal(
   setIntervalInHook.length,
   0,
   'useHostCompetitionPolling.js must NOT introduce any setInterval polling loops'
 );
-console.log('  ✅ [1.I] PASS: Zero extra polling loops in useHostCompetitionPolling.js');
+console.log('  ✅ [1.J] PASS: Zero extra polling loops in useHostCompetitionPolling.js');
 
 
 // ============================================================================
@@ -158,22 +176,72 @@ class MockSessionStorage {
   }
 }
 
-const STORAGE_KEY = 'competition_host_active_session_id';
+const HOST_SESSION_STORAGE_KEY = 'competition_host_active_session_id';
+const STORAGE_KEY = HOST_SESSION_STORAGE_KEY;
 
-const isValidUUID = (id) => {
-  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isValidSessionUUID = (id) => typeof id === 'string' && UUID_REGEX.test(id.trim());
+
+const isAuthoritativeSessionFailure = (errorOrDetails) => {
+  if (!errorOrDetails) return false;
+  if (typeof errorOrDetails === 'string') {
+    const lower = errorOrDetails.toLowerCase();
+    return (
+      lower.includes('không tồn tại') ||
+      lower.includes('not found') ||
+      lower.includes('không có quyền') ||
+      lower.includes('permission denied') ||
+      lower.includes('unauthorized') ||
+      lower.includes('forbidden') ||
+      lower.includes('invalid session')
+    );
+  }
+  const code = errorOrDetails.error_code || errorOrDetails.code;
+  const status = errorOrDetails.status;
+  const msg = (errorOrDetails.message || '').toLowerCase();
+
+  if (
+    code === 'NOT_FOUND' ||
+    code === 'SESSION_NOT_FOUND' ||
+    code === 'FORBIDDEN' ||
+    code === 'UNAUTHORIZED' ||
+    code === 'FORBIDDEN_OR_NOT_FOUND' ||
+    code === 'INVALID_SESSION' ||
+    code === 'INVALID_SESSION_ID' ||
+    code === '42501' ||
+    code === 'PGRST116'
+  ) {
+    return true;
+  }
+
+  if (status === 401 || status === 403 || status === 404) {
+    return true;
+  }
+
+  if (
+    msg.includes('không tồn tại') ||
+    msg.includes('not found') ||
+    msg.includes('không có quyền') ||
+    msg.includes('permission denied') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden')
+  ) {
+    return true;
+  }
+
+  return false;
 };
 
 const resolveInitialSessionId = (storage, urlQuery = null) => {
   if (urlQuery) {
     const params = new URLSearchParams(urlQuery);
     const urlSession = params.get('sessionId') || params.get('session_id');
-    if (urlSession && isValidUUID(urlSession)) {
+    if (urlSession && isValidSessionUUID(urlSession)) {
       return urlSession.trim();
     }
   }
   const stored = storage.getItem(STORAGE_KEY);
-  if (stored && isValidUUID(stored)) {
+  if (stored && isValidSessionUUID(stored)) {
     return stored.trim();
   }
   if (stored) {
@@ -183,11 +251,20 @@ const resolveInitialSessionId = (storage, urlQuery = null) => {
 };
 
 class MockHostSessionManager {
-  constructor({ sessionId = null, initialStatus = 'in_progress', initialQuestionId = 'q1', storage = new MockSessionStorage(), urlQuery = null } = {}) {
+  constructor({
+    sessionId = null,
+    initialStatus = 'in_progress',
+    initialQuestionId = 'q1',
+    storage = new MockSessionStorage(),
+    urlQuery = null,
+    isCreatedInSession = false
+  } = {}) {
     this.storage = storage;
+    this.urlQuery = urlQuery;
     const resolvedSessionId = sessionId || resolveInitialSessionId(this.storage, urlQuery);
     this.activeSessionId = resolvedSessionId;
     this.activeSessionIdRef = { current: resolvedSessionId };
+    this.restoredSessionPendingValidation = Boolean(resolvedSessionId && !isCreatedInSession);
     this.status = resolvedSessionId ? initialStatus : 'setup';
     this.currentQuestionId = initialQuestionId;
     this.viewMode = 'LIVE_QUESTION';
@@ -197,19 +274,75 @@ class MockHostSessionManager {
     this.leaderboardData = [];
     this.leaderboardError = null;
     this.latestLeaderboardRequestId = 0;
+    this.lastErrorMessage = null;
 
-    if (this.activeSessionId && isValidUUID(this.activeSessionId)) {
+    if (this.activeSessionId && isValidSessionUUID(this.activeSessionId)) {
       this.storage.setItem(STORAGE_KEY, this.activeSessionId);
+    }
+  }
+
+  createSession(newSessionId) {
+    this.activeSessionId = newSessionId;
+    this.activeSessionIdRef.current = newSessionId;
+    this.restoredSessionPendingValidation = false; // Freshly created session
+    this.status = 'waiting';
+    this.viewMode = 'LIVE_QUESTION';
+    if (newSessionId && isValidSessionUUID(newSessionId)) {
+      this.storage.setItem(STORAGE_KEY, newSessionId);
     }
   }
 
   setActiveSession(newSessionId) {
     this.activeSessionId = newSessionId;
     this.activeSessionIdRef.current = newSessionId;
-    if (newSessionId && isValidUUID(newSessionId)) {
+    if (newSessionId && isValidSessionUUID(newSessionId)) {
       this.storage.setItem(STORAGE_KEY, newSessionId);
     } else {
       this.storage.removeItem(STORAGE_KEY);
+    }
+  }
+
+  // Authoritative fail-closed handler
+  clearRestoredSessionAndReturnToSetup(failureReason) {
+    this.storage.removeItem(STORAGE_KEY);
+    this.urlQuery = null;
+    this.activeSessionId = null;
+    this.activeSessionIdRef.current = null;
+    this.restoredSessionPendingValidation = false;
+    this.status = 'setup';
+    this.viewMode = 'LIVE_QUESTION';
+    this.leaderboardData = [];
+    this.leaderboardError = null;
+    this.questionResults = null;
+    this.timeLeftSeconds = null;
+    this.autoResultAttempt = null;
+    this.lastErrorMessage = failureReason;
+  }
+
+  // Handle snapshot poll result with authoritative validation
+  handleSnapshotPollResult(res) {
+    if (res.success && res.data) {
+      if (this.restoredSessionPendingValidation && res.data.id === this.activeSessionId) {
+        this.restoredSessionPendingValidation = false; // Validation passed!
+      }
+      this.status = res.data.status || this.status;
+      if (res.data.status === 'finished') {
+        this.viewMode = 'FINAL_RESULTS';
+        this.questionResults = null;
+        this.timeLeftSeconds = null;
+        this.autoResultAttempt = null;
+      }
+      return { success: true, data: res.data };
+    } else {
+      // Failure
+      if (this.restoredSessionPendingValidation) {
+        if (isAuthoritativeSessionFailure(res)) {
+          this.clearRestoredSessionAndReturnToSetup(res.message || 'Phòng thi không tồn tại hoặc bạn không có quyền.');
+          return { success: false, failedClosed: true };
+        }
+      }
+      // Transient error - preserve session
+      return { success: false, failedClosed: false, error: res.message };
     }
   }
 
@@ -283,32 +416,9 @@ class MockHostSessionManager {
     }
   }
 
-  // 3. Reload recovery on finished session (Blocker 2)
-  async syncSnapshotPoll(snapshot, mockLeaderboardRpc) {
-    if (snapshot.status === 'finished') {
-      this.status = 'finished';
-      this.viewMode = 'FINAL_RESULTS';
-      this.questionResults = null;
-      this.timeLeftSeconds = null;
-      this.autoResultAttempt = null;
-      if (this.activeSessionId) {
-        return await this.fetchLeaderboard(this.activeSessionId, mockLeaderboardRpc);
-      }
-    }
-  }
-
-  // 4. Reset to setup
+  // Reset to setup
   handleResetToSetup() {
-    this.storage.removeItem(STORAGE_KEY);
-    this.activeSessionId = null;
-    this.activeSessionIdRef.current = null;
-    this.status = 'setup';
-    this.viewMode = 'LIVE_QUESTION';
-    this.leaderboardData = [];
-    this.leaderboardError = null;
-    this.questionResults = null;
-    this.timeLeftSeconds = null;
-    this.autoResultAttempt = null;
+    this.clearRestoredSessionAndReturnToSetup();
   }
 }
 
@@ -347,6 +457,7 @@ class MockHostSessionManager {
   const reloadedHost = new MockHostSessionManager({ storage: mockStorage });
   assert.equal(reloadedHost.activeSessionId, validUUID, 'Must restore activeSessionId from sessionStorage');
   assert.equal(reloadedHost.activeSessionIdRef.current, validUUID, 'activeSessionIdRef must sync with restored ID');
+  assert.equal(reloadedHost.restoredSessionPendingValidation, true);
 
   const mockLeaderboardRpc = async () => ({
     success: true,
@@ -358,7 +469,14 @@ class MockHostSessionManager {
   });
 
   // Polling snapshot returns status = 'finished'
-  await reloadedHost.syncSnapshotPoll({ id: validUUID, status: 'finished' }, mockLeaderboardRpc);
+  const pollRes = reloadedHost.handleSnapshotPollResult({
+    success: true,
+    data: { id: validUUID, status: 'finished' }
+  });
+  assert.equal(pollRes.success, true);
+  assert.equal(reloadedHost.restoredSessionPendingValidation, false, 'Validation flag cleared on successful poll');
+
+  await reloadedHost.fetchLeaderboard(validUUID, mockLeaderboardRpc);
 
   assert.equal(reloadedHost.viewMode, 'FINAL_RESULTS');
   assert.equal(reloadedHost.status, 'finished');
@@ -658,6 +776,171 @@ console.log('\n--- [Test 4] Fail-Closed Error & Race Safety ---');
   assert.equal(req1Res.error_code, 'STALE_REQUEST');
   assert.equal(host.leaderboardData[0].display_name, 'UserB', 'Stale request MUST NOT overwrite newer data');
   console.log('  ✅ [4.2] PASS: Stale request ID safely rejected, preventing older data overwrite');
+}
+
+
+// ============================================================================
+// Test 5: Restored Session Fail-Closed & Error Classification (Blocker 3 Tests)
+// ============================================================================
+console.log('\n--- [Test 5] Restored Session Fail-Closed & Error Classification Matrix ---');
+
+// 5.1: Error Classification Helper Tests
+{
+  // Authoritative errors
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'NOT_FOUND', status: 404 }), true);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'SESSION_NOT_FOUND' }), true);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'FORBIDDEN', status: 403 }), true);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'UNAUTHORIZED', status: 401 }), true);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: '42501' }), true);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'PGRST116' }), true);
+  assert.equal(isAuthoritativeSessionFailure({ message: 'Phòng thi không tồn tại.' }), true);
+  assert.equal(isAuthoritativeSessionFailure('permission denied for table competition_sessions'), true);
+
+  // Transient errors (MUST NOT be authoritative failure)
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'CLIENT_EXCEPTION', message: 'Failed to fetch' }), false);
+  assert.equal(isAuthoritativeSessionFailure({ error_code: 'DB_ERROR', status: 500, message: 'Internal server error' }), false);
+  assert.equal(isAuthoritativeSessionFailure({ status: 502, message: 'Bad gateway' }), false);
+  assert.equal(isAuthoritativeSessionFailure({ status: 503, message: 'Service unavailable' }), false);
+  assert.equal(isAuthoritativeSessionFailure({ message: 'Network request failed' }), false);
+  console.log('  ✅ [5.1] PASS: Error classification helper accurately partitions authoritative vs transient errors');
+}
+
+// 5.2: Restored Valid UUID + Valid Snapshot -> Session Preserved
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = '30000000-0000-4000-8000-000000000003';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.activeSessionId, validUUID);
+  assert.equal(host.restoredSessionPendingValidation, true);
+
+  const pollRes = host.handleSnapshotPollResult({
+    success: true,
+    data: { id: validUUID, status: 'in_progress' }
+  });
+
+  assert.equal(pollRes.success, true);
+  assert.equal(host.activeSessionId, validUUID, 'Session ID must remain active');
+  assert.equal(host.restoredSessionPendingValidation, false, 'Validation pending flag must be cleared');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), validUUID, 'Storage item must remain intact');
+  console.log('  ✅ [5.2] PASS: Restored valid session with authorized snapshot is preserved cleanly');
+}
+
+// 5.3: Restored Valid UUID + SESSION_NOT_FOUND -> Fail Closed to Setup
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = '40000000-0000-4000-8000-000000000004';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  const host = new MockHostSessionManager({ storage: mockStorage, urlQuery: `?sessionId=${validUUID}` });
+  assert.equal(host.activeSessionId, validUUID);
+  assert.equal(host.restoredSessionPendingValidation, true);
+
+  const pollRes = host.handleSnapshotPollResult({
+    success: false,
+    error_code: 'NOT_FOUND',
+    status: 404,
+    message: 'Phòng thi không tồn tại.'
+  });
+
+  assert.equal(pollRes.failedClosed, true);
+  assert.equal(host.activeSessionId, null, 'activeSessionId must be cleared');
+  assert.equal(host.activeSessionIdRef.current, null, 'activeSessionIdRef must be cleared');
+  assert.equal(host.status, 'setup', 'Host must return to setup status');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), null, 'sessionStorage must be cleared');
+  assert.equal(host.urlQuery, null, 'URL query must be cleared');
+  console.log('  ✅ [5.3] PASS: Restored session NOT_FOUND fails closed to setup, clearing storage & URL');
+}
+
+// 5.4: Restored Valid UUID + FORBIDDEN / UNAUTHORIZED -> Fail Closed to Setup
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = '50000000-0000-4000-8000-000000000005';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.activeSessionId, validUUID);
+
+  const pollRes = host.handleSnapshotPollResult({
+    success: false,
+    error_code: 'FORBIDDEN',
+    status: 403,
+    message: 'Bạn không có quyền quản trị phòng thi này.'
+  });
+
+  assert.equal(pollRes.failedClosed, true);
+  assert.equal(host.activeSessionId, null);
+  assert.equal(host.status, 'setup');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), null);
+  console.log('  ✅ [5.4] PASS: Restored session FORBIDDEN fails closed to setup');
+}
+
+// 5.5: Restored Valid UUID + NETWORK_ERROR -> Preserves Session (No Fail-Closed)
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = '60000000-0000-4000-8000-000000000006';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.activeSessionId, validUUID);
+
+  const pollRes = host.handleSnapshotPollResult({
+    success: false,
+    error_code: 'CLIENT_EXCEPTION',
+    message: 'TypeError: fetch failed (network offline)'
+  });
+
+  assert.equal(pollRes.failedClosed, false);
+  assert.equal(host.activeSessionId, validUUID, 'Session MUST NOT be cleared on network error');
+  assert.equal(host.activeSessionIdRef.current, validUUID);
+  assert.equal(mockStorage.getItem(STORAGE_KEY), validUUID, 'Storage item MUST be preserved');
+  console.log('  ✅ [5.5] PASS: Restored session on NETWORK_ERROR preserves session & storage for retry');
+}
+
+// 5.6: Restored Valid UUID + HTTP 500/503 -> Preserves Session (No Fail-Closed)
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = '70000000-0000-4000-8000-000000000007';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.activeSessionId, validUUID);
+
+  const pollRes = host.handleSnapshotPollResult({
+    success: false,
+    error_code: 'DB_ERROR',
+    status: 500,
+    message: 'Internal database query timeout'
+  });
+
+  assert.equal(pollRes.failedClosed, false);
+  assert.equal(host.activeSessionId, validUUID, 'Session MUST NOT be cleared on 500 server error');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), validUUID);
+  console.log('  ✅ [5.6] PASS: Restored session on HTTP 500 preserves session for retry');
+}
+
+// 5.7: Normal Active Session Created in Tab + Network Error -> Preserves Session
+{
+  const mockStorage = new MockSessionStorage();
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.status, 'setup');
+
+  const createdSessionId = '80000000-0000-4000-8000-000000000008';
+  host.createSession(createdSessionId);
+  assert.equal(host.activeSessionId, createdSessionId);
+  assert.equal(host.restoredSessionPendingValidation, false, 'Newly created session is not in restored validation mode');
+
+  // Network drops during active session
+  const pollRes = host.handleSnapshotPollResult({
+    success: false,
+    error_code: 'CLIENT_EXCEPTION',
+    message: 'Network offline'
+  });
+
+  assert.equal(pollRes.failedClosed, false);
+  assert.equal(host.activeSessionId, createdSessionId, 'Live running session must NEVER reset on transient error');
+  console.log('  ✅ [5.7] PASS: Normal active session created in tab preserves session across network drops');
 }
 
 console.log('\n================================================================================');

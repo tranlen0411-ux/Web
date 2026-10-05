@@ -600,14 +600,22 @@ export async function getLeaderboardSnapshot({
  */
 export async function getSessionSnapshot(sessionId) {
   try {
-    const { data, error } = await supabase
+    const { data, error, status } = await supabase
       .from('competition_sessions')
       .select('id, room_code, title, description, mode, status, max_participants, current_question_index, current_question_id, question_deadline, started_at, ended_at')
       .eq('id', sessionId)
       .maybeSingle();
 
-    if (error) return { success: false, error_code: 'DB_ERROR', message: error.message };
-    if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.' };
+    if (error) {
+      const isAuthOrNotFound = error.code === 'PGRST116' || error.code === '42501' || status === 401 || status === 403 || status === 404;
+      return {
+        success: false,
+        error_code: isAuthOrNotFound ? 'FORBIDDEN_OR_NOT_FOUND' : (error.code || 'DB_ERROR'),
+        message: error.message,
+        status: status || (error.code === '42501' ? 403 : undefined)
+      };
+    }
+    if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.', status: 404 };
     return { success: true, data };
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
