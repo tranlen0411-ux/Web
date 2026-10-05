@@ -10,12 +10,13 @@ console.log('===================================================================
 // ============================================================================
 console.log('--- [Test 1] Static Source Verification & Data Privacy Invariants ---');
 
-const clientSource = fs.readFileSync('src/services/competitionClient.js', 'utf8');
+const clientSource = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
+const clientLibSource = fs.readFileSync('src/services/competitionClient.js', 'utf8');
 const hostPageSource = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
 
 // 1.A: Frontend NEVER queries competition_answers directly
 assert.ok(
-  !clientSource.includes(".from('competition_answers')"),
+  !clientLibSource.includes(".from('competition_answers')"),
   'competitionClient.js must NOT perform direct .from(\'competition_answers\')'
 );
 assert.ok(
@@ -26,11 +27,11 @@ console.log('  ✅ [1.A] PASS: Zero direct client queries on competition_answers
 
 // 1.B: Authoritative Leaderboard Snapshot Function Used
 assert.ok(
-  clientSource.includes('export async function getLeaderboardSnapshot'),
+  clientLibSource.includes('export async function getLeaderboardSnapshot'),
   'competitionClient.js must export getLeaderboardSnapshot'
 );
 assert.ok(
-  clientSource.includes("supabase.rpc('competition_get_leaderboard_snapshot'"),
+  clientLibSource.includes("supabase.rpc('competition_get_leaderboard_snapshot'"),
   'getLeaderboardSnapshot must invoke competition_get_leaderboard_snapshot RPC'
 );
 console.log('  ✅ [1.B] PASS: Authoritative getLeaderboardSnapshot RPC wrapped correctly');
@@ -59,16 +60,70 @@ bannedRawFields.forEach(field => {
 });
 console.log('  ✅ [1.D] PASS: Zero private participant fields leaked in Host UI');
 
-// 1.E: Stale response / race condition guard in fetchLeaderboard
+// 1.E: Stale response / race condition & session identity guards in fetchLeaderboard (Blocker 1)
 assert.ok(
-  hostPageSource.includes('latestLeaderboardRequestIdRef') ||
-  hostPageSource.includes('latestLeaderboardReqRef') ||
-  hostPageSource.includes('targetSessionId'),
-  'CompetitionHostPage.jsx must have request ID / session guard for leaderboard fetches'
+  hostPageSource.includes('latestLeaderboardRequestIdRef'),
+  'CompetitionHostPage.jsx must have latestLeaderboardRequestIdRef'
 );
-console.log('  ✅ [1.E] PASS: Request ID / stale response race guard implemented');
+assert.ok(
+  hostPageSource.includes('activeSessionIdRef'),
+  'CompetitionHostPage.jsx must have activeSessionIdRef'
+);
+assert.ok(
+  hostPageSource.includes('STALE_SESSION'),
+  'CompetitionHostPage.jsx must have STALE_SESSION error code guard'
+);
+assert.ok(
+  hostPageSource.includes('STALE_REQUEST'),
+  'CompetitionHostPage.jsx must have STALE_REQUEST error code guard'
+);
+console.log('  ✅ [1.E] PASS: Request ID race guard & Active Session Identity guard verified in source');
 
-// 1.F: No extra polling loops introduced
+// 1.F: True Session Persistence & Reload Recovery Implementation (Blocker 2)
+assert.ok(
+  hostPageSource.includes('HOST_SESSION_STORAGE_KEY'),
+  'CompetitionHostPage.jsx must define HOST_SESSION_STORAGE_KEY'
+);
+assert.ok(
+  hostPageSource.includes('isValidSessionUUID'),
+  'CompetitionHostPage.jsx must define isValidSessionUUID'
+);
+assert.ok(
+  hostPageSource.includes('getInitialActiveSessionId'),
+  'CompetitionHostPage.jsx must define getInitialActiveSessionId'
+);
+assert.ok(
+  hostPageSource.includes('sessionStorage'),
+  'CompetitionHostPage.jsx must use sessionStorage for scoped host session persistence'
+);
+console.log('  ✅ [1.F] PASS: Session persistence and safe UUID reload validator verified in source');
+
+// 1.G: Zero Sensitive Tokens Persisted in Storage
+const bannedStorageTerms = [
+  'jwt',
+  'access_token',
+  'refresh_token',
+  'secret',
+  'guest_token'
+];
+bannedStorageTerms.forEach(term => {
+  assert.ok(
+    !hostPageSource.includes(`sessionStorage.setItem(${term}`) &&
+    !hostPageSource.includes(`sessionStorage.setItem('${term}'`) &&
+    !hostPageSource.includes(`localStorage.setItem('${term}'`),
+    `CompetitionHostPage.jsx must NOT persist sensitive token '${term}' in browser storage`
+  );
+});
+console.log('  ✅ [1.G] PASS: Zero sensitive tokens persisted (UUID only)');
+
+// 1.H: Reset to Setup clears persisted session
+assert.ok(
+  hostPageSource.includes('removeItem(HOST_SESSION_STORAGE_KEY)'),
+  'handleResetToSetup must remove HOST_SESSION_STORAGE_KEY on reset'
+);
+console.log('  ✅ [1.H] PASS: Reset to setup cleanly clears persisted session ID');
+
+// 1.I: No extra polling loops introduced
 const hookSource = fs.readFileSync('src/hooks/useHostCompetitionPolling.js', 'utf8');
 const setIntervalInHook = hookSource.match(/setInterval/g) || [];
 assert.equal(
@@ -76,31 +131,91 @@ assert.equal(
   0,
   'useHostCompetitionPolling.js must NOT introduce any setInterval polling loops'
 );
-console.log('  ✅ [1.F] PASS: Zero extra polling loops');
+console.log('  ✅ [1.I] PASS: Zero extra polling loops in useHostCompetitionPolling.js');
 
 
 // ============================================================================
-// Test 2: Host View State Machine Simulation (Finish Flow & Reload Recovery)
+// Test 2: Host View State Machine Simulation (Finish Flow, Reload Recovery, Stale Guards)
 // ============================================================================
 console.log('\n--- [Test 2] Host View State Machine Simulation ---');
 
+// Mock Session Storage
+class MockSessionStorage {
+  constructor() {
+    this.store = new Map();
+  }
+  getItem(key) {
+    return this.store.get(key) ?? null;
+  }
+  setItem(key, value) {
+    this.store.set(key, String(value));
+  }
+  removeItem(key) {
+    this.store.delete(key);
+  }
+  clear() {
+    this.store.clear();
+  }
+}
+
+const STORAGE_KEY = 'competition_host_active_session_id';
+
+const isValidUUID = (id) => {
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+};
+
+const resolveInitialSessionId = (storage, urlQuery = null) => {
+  if (urlQuery) {
+    const params = new URLSearchParams(urlQuery);
+    const urlSession = params.get('sessionId') || params.get('session_id');
+    if (urlSession && isValidUUID(urlSession)) {
+      return urlSession.trim();
+    }
+  }
+  const stored = storage.getItem(STORAGE_KEY);
+  if (stored && isValidUUID(stored)) {
+    return stored.trim();
+  }
+  if (stored) {
+    storage.removeItem(STORAGE_KEY);
+  }
+  return null;
+};
+
 class MockHostSessionManager {
-  constructor({ sessionId, initialStatus = 'in_progress', initialQuestionId = 'q1' }) {
-    this.sessionId = sessionId;
-    this.status = initialStatus;
+  constructor({ sessionId = null, initialStatus = 'in_progress', initialQuestionId = 'q1', storage = new MockSessionStorage(), urlQuery = null } = {}) {
+    this.storage = storage;
+    const resolvedSessionId = sessionId || resolveInitialSessionId(this.storage, urlQuery);
+    this.activeSessionId = resolvedSessionId;
+    this.activeSessionIdRef = { current: resolvedSessionId };
+    this.status = resolvedSessionId ? initialStatus : 'setup';
     this.currentQuestionId = initialQuestionId;
     this.viewMode = 'LIVE_QUESTION';
     this.questionResults = null;
-    this.timeLeftSeconds = 30;
-    this.autoResultAttempt = { key: 'q1:30', attempts: 1 };
+    this.timeLeftSeconds = resolvedSessionId ? 30 : null;
+    this.autoResultAttempt = resolvedSessionId ? { key: 'q1:30', attempts: 1 } : null;
     this.leaderboardData = [];
     this.leaderboardError = null;
-    this.latestRequestId = 0;
+    this.latestLeaderboardRequestId = 0;
+
+    if (this.activeSessionId && isValidUUID(this.activeSessionId)) {
+      this.storage.setItem(STORAGE_KEY, this.activeSessionId);
+    }
+  }
+
+  setActiveSession(newSessionId) {
+    this.activeSessionId = newSessionId;
+    this.activeSessionIdRef.current = newSessionId;
+    if (newSessionId && isValidUUID(newSessionId)) {
+      this.storage.setItem(STORAGE_KEY, newSessionId);
+    } else {
+      this.storage.removeItem(STORAGE_KEY);
+    }
   }
 
   // 1. Host finishes session flow
   async handleFinishSession(mockFinishRpc, mockLeaderboardRpc) {
-    const res = await mockFinishRpc(this.sessionId);
+    const res = await mockFinishRpc(this.activeSessionId);
     if (!res.success) {
       return { success: false, message: res.message };
     }
@@ -112,20 +227,40 @@ class MockHostSessionManager {
     this.status = 'finished';
 
     // Fetch authoritative leaderboard
-    const lbRes = await this.fetchLeaderboard(this.sessionId, mockLeaderboardRpc);
+    const lbRes = await this.fetchLeaderboard(this.activeSessionId, mockLeaderboardRpc);
     this.viewMode = 'FINAL_RESULTS';
     return { success: true, lbSuccess: lbRes.success };
   }
 
-  // 2. Fetch leaderboard with race guard
-  async fetchLeaderboard(targetSessionId, mockLeaderboardRpc) {
-    const reqId = ++this.latestRequestId;
+  // 2. Fetch leaderboard with both requestId race guard AND activeSessionIdRef identity guard (Blocker 1)
+  async fetchLeaderboard(targetSessionIdParam, mockLeaderboardRpc) {
+    const targetSessionId = (typeof targetSessionIdParam === 'string' && targetSessionIdParam)
+      ? targetSessionIdParam
+      : this.activeSessionIdRef.current;
+
+    if (!targetSessionId || typeof targetSessionId !== 'string') {
+      return { success: false, error_code: 'NO_SESSION' };
+    }
+
+    // Pre-flight check
+    if (this.activeSessionIdRef.current && targetSessionId !== this.activeSessionIdRef.current) {
+      return { success: false, error_code: 'STALE_SESSION' };
+    }
+
+    const requestId = ++this.latestLeaderboardRequestId;
     this.leaderboardError = null;
 
     try {
       const res = await mockLeaderboardRpc(targetSessionId);
-      if (reqId !== this.latestRequestId) {
+
+      // Guard 1: Request ID race check
+      if (requestId !== this.latestLeaderboardRequestId) {
         return { success: false, error_code: 'STALE_REQUEST' };
+      }
+
+      // Guard 2: Session Identity Guard (Blocker 1)
+      if (!this.activeSessionIdRef.current || targetSessionId !== this.activeSessionIdRef.current) {
+        return { success: false, error_code: 'STALE_SESSION' };
       }
 
       if (res.success && Array.isArray(res.data?.leaderboard)) {
@@ -137,28 +272,36 @@ class MockHostSessionManager {
         return { success: false, error_code: 'RPC_ERROR' };
       }
     } catch (err) {
-      if (reqId === this.latestRequestId) {
+      if (
+        requestId === this.latestLeaderboardRequestId &&
+        this.activeSessionIdRef.current &&
+        targetSessionId === this.activeSessionIdRef.current
+      ) {
         this.leaderboardError = err.message;
       }
       return { success: false, error_code: 'NETWORK_ERROR' };
     }
   }
 
-  // 3. Reload recovery on finished session
-  syncFinishedSession(snapshot, mockLeaderboardRpc) {
+  // 3. Reload recovery on finished session (Blocker 2)
+  async syncSnapshotPoll(snapshot, mockLeaderboardRpc) {
     if (snapshot.status === 'finished') {
       this.status = 'finished';
       this.viewMode = 'FINAL_RESULTS';
       this.questionResults = null;
       this.timeLeftSeconds = null;
       this.autoResultAttempt = null;
-      return this.fetchLeaderboard(snapshot.id, mockLeaderboardRpc);
+      if (this.activeSessionId) {
+        return await this.fetchLeaderboard(this.activeSessionId, mockLeaderboardRpc);
+      }
     }
   }
 
   // 4. Reset to setup
   handleResetToSetup() {
-    this.sessionId = null;
+    this.storage.removeItem(STORAGE_KEY);
+    this.activeSessionId = null;
+    this.activeSessionIdRef.current = null;
     this.status = 'setup';
     this.viewMode = 'LIVE_QUESTION';
     this.leaderboardData = [];
@@ -171,7 +314,7 @@ class MockHostSessionManager {
 
 // 2.1: Finish flow transitions to FINAL_RESULTS and clears timer/stale results
 {
-  const host = new MockHostSessionManager({ sessionId: 'session_100' });
+  const host = new MockHostSessionManager({ sessionId: 'a0000000-0000-4000-8000-000000000100' });
   const mockFinishRpc = async () => ({ success: true });
   const mockLeaderboardRpc = async () => ({
     success: true,
@@ -194,10 +337,16 @@ class MockHostSessionManager {
   console.log('  ✅ [2.1] PASS: Finish flow transitions to FINAL_RESULTS, stops timer, clears stale results');
 }
 
-// 2.2: Reload / Reconnect recovery on finished session
+// 2.2: True Browser Reload Recovery on Finished Session (Blocker 2)
 {
-  const host = new MockHostSessionManager({ sessionId: 'session_200', initialStatus: 'waiting' });
-  host.questionResults = { question_id: 'q3', submitted_count: 5 }; // Stale from previous run
+  const mockStorage = new MockSessionStorage();
+  const validUUID = 'b0000000-0000-4000-8000-000000000200';
+  mockStorage.setItem(STORAGE_KEY, validUUID);
+
+  // Host opens page after browser F5 / reload
+  const reloadedHost = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(reloadedHost.activeSessionId, validUUID, 'Must restore activeSessionId from sessionStorage');
+  assert.equal(reloadedHost.activeSessionIdRef.current, validUUID, 'activeSessionIdRef must sync with restored ID');
 
   const mockLeaderboardRpc = async () => ({
     success: true,
@@ -208,30 +357,125 @@ class MockHostSessionManager {
     }
   });
 
-  // Simulate snapshot polling detecting status = 'finished'
-  await host.syncFinishedSession({ id: 'session_200', status: 'finished' }, mockLeaderboardRpc);
+  // Polling snapshot returns status = 'finished'
+  await reloadedHost.syncSnapshotPoll({ id: validUUID, status: 'finished' }, mockLeaderboardRpc);
 
-  assert.equal(host.viewMode, 'FINAL_RESULTS');
-  assert.equal(host.status, 'finished');
-  assert.equal(host.questionResults, null, 'Stale questionResults cleared on reload');
-  assert.equal(host.timeLeftSeconds, null, 'Timer remains null on reload');
-  assert.equal(host.leaderboardData.length, 1);
-  console.log('  ✅ [2.2] PASS: Reload on finished session recovers directly to FINAL_RESULTS');
+  assert.equal(reloadedHost.viewMode, 'FINAL_RESULTS');
+  assert.equal(reloadedHost.status, 'finished');
+  assert.equal(reloadedHost.questionResults, null, 'Stale questionResults cleared on reload');
+  assert.equal(reloadedHost.timeLeftSeconds, null, 'Timer remains null on reload');
+  assert.equal(reloadedHost.leaderboardData.length, 1);
+  assert.equal(reloadedHost.leaderboardData[0].display_name, 'Alice');
+  console.log('  ✅ [2.2] PASS: True reload recovery: restores UUID -> polls finished snapshot -> renders FINAL_RESULTS & leaderboard');
 }
 
-// 2.3: Reset to Setup restores clean initial state
+// 2.3: Invalid / Corrupted Persisted Session Fails Closed to Setup
 {
-  const host = new MockHostSessionManager({ sessionId: 'session_300', initialStatus: 'finished' });
-  host.viewMode = 'FINAL_RESULTS';
-  host.leaderboardData = [{ participant_id: 'p1', rank: 1 }];
+  const mockStorage = new MockSessionStorage();
+  mockStorage.setItem(STORAGE_KEY, 'invalid-non-uuid-string-or-token');
+
+  const host = new MockHostSessionManager({ storage: mockStorage });
+  assert.equal(host.activeSessionId, null, 'Invalid UUID must be rejected and not restored');
+  assert.equal(host.status, 'setup', 'Status must stay setup when storage is invalid');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), null, 'Corrupted storage item must be pruned');
+  console.log('  ✅ [2.3] PASS: Corrupted / invalid persisted session safely fails closed to setup');
+}
+
+// 2.4: Reset to Setup Clears Persisted Session from Storage
+{
+  const mockStorage = new MockSessionStorage();
+  const validUUID = 'c0000000-0000-4000-8000-000000000300';
+  const host = new MockHostSessionManager({ sessionId: validUUID, storage: mockStorage, initialStatus: 'finished' });
+  assert.equal(mockStorage.getItem(STORAGE_KEY), validUUID);
 
   host.handleResetToSetup();
-  assert.equal(host.sessionId, null);
+  assert.equal(host.activeSessionId, null);
+  assert.equal(host.activeSessionIdRef.current, null);
   assert.equal(host.status, 'setup');
   assert.equal(host.viewMode, 'LIVE_QUESTION');
   assert.equal(host.leaderboardData.length, 0);
+  assert.equal(mockStorage.getItem(STORAGE_KEY), null, 'SessionStorage must be cleared on reset');
+  console.log('  ✅ [2.4] PASS: Reset to setup clears memory state and sessionStorage');
+}
+
+// 2.5: URL Query Param Session Recovery
+{
+  const mockStorage = new MockSessionStorage();
+  const urlUUID = 'd0000000-0000-4000-8000-000000000400';
+  const host = new MockHostSessionManager({ storage: mockStorage, urlQuery: `?sessionId=${urlUUID}` });
+  assert.equal(host.activeSessionId, urlUUID, 'Must resolve session ID from URL query param');
+  assert.equal(mockStorage.getItem(STORAGE_KEY), urlUUID, 'Must persist resolved URL session to storage');
+  console.log('  ✅ [2.5] PASS: URL query param session recovery works and syncs to storage');
+}
+
+// 2.6: Stale Session ID Guard when Session Switched Without New Request (Blocker 1)
+{
+  const sessionA = 'e0000000-0000-4000-8000-00000000050a';
+  const sessionB = 'e0000000-0000-4000-8000-00000000050b';
+  const host = new MockHostSessionManager({ sessionId: sessionA });
+
+  let resolveSessionA;
+  const slowPromiseA = new Promise(resolve => { resolveSessionA = resolve; });
+  const mockSlowRpcA = async () => slowPromiseA;
+
+  // 1. Session A request starts (pending)
+  const reqAPromise = host.fetchLeaderboard(sessionA, mockSlowRpcA);
+  assert.equal(host.latestLeaderboardRequestId, 1);
+
+  // 2. Host switches to Session B (or resets to null) WITHOUT creating a new leaderboard request
+  host.setActiveSession(sessionB);
+  assert.equal(host.activeSessionId, sessionB);
+  assert.equal(host.activeSessionIdRef.current, sessionB);
+  assert.equal(host.latestLeaderboardRequestId, 1, 'No new leaderboard request created');
+
+  // 3. Response for Session A arrives
+  resolveSessionA({
+    success: true,
+    data: {
+      leaderboard: [
+        { participant_id: 'pA', display_name: 'StaleUserA', rank: 1, total_score: 100 }
+      ]
+    }
+  });
+
+  const resA = await reqAPromise;
+
+  // 4. Verification: Must be rejected with STALE_SESSION and UI state must NOT be mutated
+  assert.equal(resA.error_code, 'STALE_SESSION', 'Response for session A must be rejected with STALE_SESSION');
+  assert.equal(host.leaderboardData.length, 0, 'Leaderboard data must NOT be written with stale Session A response');
   assert.equal(host.leaderboardError, null);
-  console.log('  ✅ [2.3] PASS: Reset to setup cleanly restores state');
+  console.log('  ✅ [2.6] PASS: Blocker 1 verified: Stale Session A response after session switch without new request is rejected (STALE_SESSION)');
+}
+
+// 2.7: Stale Session ID Guard when Host Resets to Setup During Request
+{
+  const sessionA = 'f0000000-0000-4000-8000-00000000060a';
+  const host = new MockHostSessionManager({ sessionId: sessionA });
+
+  let resolveSessionA;
+  const slowPromiseA = new Promise(resolve => { resolveSessionA = resolve; });
+  const mockSlowRpcA = async () => slowPromiseA;
+
+  const reqAPromise = host.fetchLeaderboard(sessionA, mockSlowRpcA);
+
+  // Host resets to setup during pending fetch
+  host.handleResetToSetup();
+  assert.equal(host.activeSessionId, null);
+  assert.equal(host.activeSessionIdRef.current, null);
+
+  resolveSessionA({
+    success: true,
+    data: {
+      leaderboard: [
+        { participant_id: 'pA', display_name: 'StaleUserA', rank: 1, total_score: 50 }
+      ]
+    }
+  });
+
+  const resA = await reqAPromise;
+  assert.equal(resA.error_code, 'STALE_SESSION');
+  assert.equal(host.leaderboardData.length, 0, 'No state written after reset to setup');
+  console.log('  ✅ [2.7] PASS: Stale response arriving after handleResetToSetup rejected with STALE_SESSION');
 }
 
 
@@ -370,7 +614,7 @@ console.log('\n--- [Test 4] Fail-Closed Error & Race Safety ---');
 
 // 4.1: Leaderboard Fetch Failure Fails Closed
 {
-  const host = new MockHostSessionManager({ sessionId: 'session_fail' });
+  const host = new MockHostSessionManager({ sessionId: '10000000-0000-4000-8000-000000000001' });
   const mockFinishRpc = async () => ({ success: true });
   const mockFailingLeaderboardRpc = async () => ({
     success: false,
@@ -385,35 +629,35 @@ console.log('\n--- [Test 4] Fail-Closed Error & Race Safety ---');
   console.log('  ✅ [4.1] PASS: Leaderboard fetch failure sets leaderboardError without rendering corrupted data');
 }
 
-// 4.2: Stale Session ID Request Guard
+// 4.2: Stale Request ID Race Guard
 {
-  const host = new MockHostSessionManager({ sessionId: 'session_A' });
+  const host = new MockHostSessionManager({ sessionId: '20000000-0000-4000-8000-000000000002' });
   
-  // Start slow request for session_A
-  let resolveSessionA;
-  const slowPromise = new Promise(resolve => { resolveSessionA = resolve; });
-  const mockSlowRpc = async () => slowPromise;
+  // Start slow request #1
+  let resolveReq1;
+  const slowPromise1 = new Promise(resolve => { resolveReq1 = resolve; });
+  const mockSlowRpc = async () => slowPromise1;
 
-  const req1Promise = host.fetchLeaderboard('session_A', mockSlowRpc);
+  const req1Promise = host.fetchLeaderboard(host.activeSessionId, mockSlowRpc);
 
-  // Switch to session_B and finish quickly
+  // Trigger fast request #2
   const mockFastRpc = async () => ({
     success: true,
     data: { leaderboard: [{ participant_id: 'pB', display_name: 'UserB', rank: 1 }] }
   });
-  await host.fetchLeaderboard('session_B', mockFastRpc);
+  await host.fetchLeaderboard(host.activeSessionId, mockFastRpc);
   assert.equal(host.leaderboardData[0].display_name, 'UserB');
 
-  // Now slow request for session_A resolves
-  resolveSessionA({
+  // Now slow request #1 resolves
+  resolveReq1({
     success: true,
     data: { leaderboard: [{ participant_id: 'pA', display_name: 'UserA_STALE', rank: 1 }] }
   });
   const req1Res = await req1Promise;
 
   assert.equal(req1Res.error_code, 'STALE_REQUEST');
-  assert.equal(host.leaderboardData[0].display_name, 'UserB', 'Stale request MUST NOT overwrite newer session data');
-  console.log('  ✅ [4.2] PASS: Stale response safely rejected, preventing session data overwrite');
+  assert.equal(host.leaderboardData[0].display_name, 'UserB', 'Stale request MUST NOT overwrite newer data');
+  console.log('  ✅ [4.2] PASS: Stale request ID safely rejected, preventing older data overwrite');
 }
 
 console.log('\n================================================================================');

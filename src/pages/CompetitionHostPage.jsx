@@ -87,9 +87,41 @@ const DEFAULT_QUESTIONS = [
   }
 ];
 
+// Storage Key for Host Session Persistence (Scoped strictly to Host Competition)
+export const HOST_SESSION_STORAGE_KEY = 'competition_host_active_session_id';
+
+// Strict UUID format validator (RFC 4122)
+export const isValidSessionUUID = (id) => {
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+};
+
+// Safe initial session resolver (Query param -> sessionStorage -> null)
+export const getInitialActiveSessionId = () => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlSession = urlParams.get('sessionId') || urlParams.get('session_id');
+    if (urlSession && isValidSessionUUID(urlSession)) {
+      return urlSession.trim();
+    }
+    const stored = window.sessionStorage?.getItem(HOST_SESSION_STORAGE_KEY);
+    if (stored && isValidSessionUUID(stored)) {
+      return stored.trim();
+    }
+    if (stored) {
+      // Discard invalid / non-UUID entries
+      window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+    }
+  } catch (_e) {
+    // Fail safe
+  }
+  return null;
+};
+
 export function CompetitionHostPage() {
   // Navigation & Session State
-  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [activeSessionId, setActiveSessionId] = useState(getInitialActiveSessionId);
+  const activeSessionIdRef = useRef(activeSessionId);
   const [createdQuestionCount, setCreatedQuestionCount] = useState(3);
   const [notification, setNotification] = useState(null);
   const [actionPending, setActionPending] = useState(false);
@@ -98,6 +130,22 @@ export function CompetitionHostPage() {
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [isLeaderboardLoading, setIsLeaderboardLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // Synchronize activeSessionIdRef immediately and update sessionStorage persistence
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+    try {
+      if (typeof window !== 'undefined') {
+        if (activeSessionId && isValidSessionUUID(activeSessionId)) {
+          window.sessionStorage?.setItem(HOST_SESSION_STORAGE_KEY, activeSessionId);
+        } else {
+          window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+        }
+      }
+    } catch (_e) {
+      // Fail safe
+    }
+  }, [activeSessionId]);
 
   // Host View Mode State (R3: LIVE_QUESTION, QUESTION_RESULTS, LEADERBOARD, FINAL_RESULTS)
   const [hostViewMode, setHostViewMode] = useState('LIVE_QUESTION');
@@ -188,18 +236,37 @@ export function CompetitionHostPage() {
     questionResults?.question_id === snapshot.current_question_id
   );
 
-  // Load Leaderboard data on demand with session matching and stale response safety
-  const fetchLeaderboard = useCallback(async (targetSessionId = activeSessionId) => {
-    if (!targetSessionId) return { success: false, error_code: 'NO_SESSION' };
+  // Load Leaderboard data on demand with session matching and stale response safety (Blocker 1 & Race Guard)
+  const fetchLeaderboard = useCallback(async (targetSessionIdParam) => {
+    const targetSessionId = (typeof targetSessionIdParam === 'string' && targetSessionIdParam)
+      ? targetSessionIdParam
+      : activeSessionIdRef.current;
+
+    if (!targetSessionId || typeof targetSessionId !== 'string') {
+      return { success: false, error_code: 'NO_SESSION' };
+    }
+
+    // Pre-flight check against activeSessionIdRef
+    if (activeSessionIdRef.current && targetSessionId !== activeSessionIdRef.current) {
+      return { success: false, error_code: 'STALE_SESSION' };
+    }
+
     const requestId = ++latestLeaderboardRequestIdRef.current;
     setIsLeaderboardLoading(true);
     setLeaderboardError(null);
     try {
       const res = await getLeaderboardSnapshot({ sessionId: targetSessionId });
-      // Guard against stale response from older session or race condition
+
+      // Guard 1: Request ID race check
       if (requestId !== latestLeaderboardRequestIdRef.current) {
         return { success: false, error_code: 'STALE_REQUEST' };
       }
+
+      // Guard 2: Session Identity Guard (Blocker 1 - Must verify targetSessionId matches current activeSessionId)
+      if (!activeSessionIdRef.current || targetSessionId !== activeSessionIdRef.current) {
+        return { success: false, error_code: 'STALE_SESSION' };
+      }
+
       if (res.success && Array.isArray(res.data?.leaderboard)) {
         setLeaderboardData(res.data.leaderboard);
         setLeaderboardError(null);
@@ -211,18 +278,25 @@ export function CompetitionHostPage() {
         return { success: false, error_code: res.error_code || 'RPC_ERROR', message: errMsg };
       }
     } catch (_err) {
-      if (requestId === latestLeaderboardRequestIdRef.current) {
+      if (
+        requestId === latestLeaderboardRequestIdRef.current &&
+        activeSessionIdRef.current &&
+        targetSessionId === activeSessionIdRef.current
+      ) {
         const netErrMsg = 'Lỗi mạng khi tải bảng xếp hạng.';
         setLeaderboardError(netErrMsg);
         showToast(netErrMsg, 'error');
       }
       return { success: false, error_code: 'NETWORK_ERROR', message: 'Lỗi mạng khi tải bảng xếp hạng.' };
     } finally {
-      if (requestId === latestLeaderboardRequestIdRef.current) {
+      if (
+        requestId === latestLeaderboardRequestIdRef.current &&
+        (!activeSessionIdRef.current || targetSessionId === activeSessionIdRef.current)
+      ) {
         setIsLeaderboardLoading(false);
       }
     }
-  }, [activeSessionId]);
+  }, []);
 
   // Trigger Leaderboard fetch when opening panel
   useEffect(() => {
@@ -245,14 +319,22 @@ export function CompetitionHostPage() {
   }, [snapshot?.status, activeSessionId, fetchLeaderboard]);
 
   // Safe question results fetcher (fail-closed, no busy loop)
-  const fetchResultsSafely = useCallback(async (sessionId = activeSessionId) => {
+  const fetchResultsSafely = useCallback(async (sessionIdParam) => {
+    const sessionId = (typeof sessionIdParam === 'string' && sessionIdParam)
+      ? sessionIdParam
+      : activeSessionIdRef.current;
     if (!sessionId || isFetchingResultsRef.current) return { success: false, error_code: 'BUSY_OR_INVALID' };
     isFetchingResultsRef.current = true;
     setIsResultsLoading(true);
     try {
       const res = await getHostQuestionResults(sessionId);
       if (res.success && res.data && res.data.question_closed === true) {
-        if (snapshotRef.current?.current_question_id && res.data.question_id === snapshotRef.current.current_question_id) {
+        if (
+          activeSessionIdRef.current &&
+          sessionId === activeSessionIdRef.current &&
+          snapshotRef.current?.current_question_id &&
+          res.data.question_id === snapshotRef.current.current_question_id
+        ) {
           setQuestionResults(res.data);
           setHostViewMode('QUESTION_RESULTS');
           return { success: true, data: res.data };
@@ -270,7 +352,7 @@ export function CompetitionHostPage() {
       isFetchingResultsRef.current = false;
       setIsResultsLoading(false);
     }
-  }, [activeSessionId]);
+  }, []);
 
   // Countdown Timer & Natural Expiry Detection (Local display only + bounded 2-attempt clock-skew auto fetch)
   useEffect(() => {
@@ -424,7 +506,14 @@ export function CompetitionHostPage() {
       });
 
       if (res.success && res.data?.session?.id) {
-        setActiveSessionId(res.data.session.id);
+        const newSessionId = res.data.session.id;
+        activeSessionIdRef.current = newSessionId;
+        setActiveSessionId(newSessionId);
+        try {
+          if (typeof window !== 'undefined' && isValidSessionUUID(newSessionId)) {
+            window.sessionStorage?.setItem(HOST_SESSION_STORAGE_KEY, newSessionId);
+          }
+        } catch (_e) {}
         setCreatedQuestionCount(questions.length);
         setSnapshot(res.data.session);
         setHostViewMode('LIVE_QUESTION');
@@ -596,6 +685,15 @@ export function CompetitionHostPage() {
   };
 
   const handleResetToSetup = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+        if (window.location.search) {
+          window.history?.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (_e) {}
+    activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setQuestions(DEFAULT_QUESTIONS);
     setLeaderboardData([]);
@@ -696,9 +794,20 @@ export function CompetitionHostPage() {
 
         {/* Polling Error Notice */}
         {pollingError && (
-          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-            <span>{pollingError}</span>
+          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span>{pollingError}</span>
+            </div>
+            {activeSessionId && (
+              <button
+                type="button"
+                onClick={handleResetToSetup}
+                className="text-xs font-bold text-amber-900 underline hover:no-underline ml-2 flex-shrink-0"
+              >
+                Về trang tạo phòng
+              </button>
+            )}
           </div>
         )}
 
