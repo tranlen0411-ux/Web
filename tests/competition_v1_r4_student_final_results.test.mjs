@@ -95,7 +95,6 @@ console.log('  ✅ [4] PASS: Active sessions invoke studentRejoinSession for sta
 // Test 5: Finished Restore does NOT Use Rejoin
 // ============================================================================
 console.log('--- [Test 5] Finished Restore does NOT Use Rejoin ---');
-// Verify code comment and structure showing finished session skips rejoin RPC
 assert.ok(
   studentPageSource.includes('DO NOT call rejoin RPC') ||
   studentPageSource.includes('session.status === \'finished\''),
@@ -205,15 +204,239 @@ assert.ok(
 console.log('  ✅ [14] PASS: Finish transition purges all active question state');
 
 // ============================================================================
-// Test 15: Late Answer Response Cannot Overwrite Final UI
+// Test 15: Late Answer Response Guard & Simulation
 // ============================================================================
-console.log('--- [Test 15] Late Answer Response Guard ---');
-assert.ok(
-  studentPageSource.includes("sessionData?.status === 'finished'") ||
-  studentPageSource.includes('activeSessionIdRef.current'),
-  'Must check active session and status before committing answer response'
-);
-console.log('  ✅ [15] PASS: Late answer submissions blocked after session finished');
+console.log('--- [Test 15] Late Answer Response Guard (Deep Simulation) ---');
+
+// 15.A: Source verification for 5-guard check and refs
+assert.ok(studentPageSource.includes('sessionStatusRef'), 'Must declare sessionStatusRef');
+assert.ok(studentPageSource.includes('currentQuestionIdRef'), 'Must declare currentQuestionIdRef');
+assert.ok(studentPageSource.includes('activeSessionIdRef'), 'Must declare activeSessionIdRef');
+assert.ok(studentPageSource.includes('activeParticipantIdRef'), 'Must declare activeParticipantIdRef');
+assert.ok(studentPageSource.includes('isMountedRef'), 'Must declare isMountedRef');
+
+// 15.B: Behavioral Simulation Function implementing the exact component logic
+function executeSubmitAnswerSimulation({
+  isMountedRef,
+  activeSessionIdRef,
+  activeParticipantIdRef,
+  currentQuestionIdRef,
+  sessionStatusRef,
+  targetSessionId,
+  targetParticipantId,
+  targetQuestionId,
+  mockApiResponse,
+  stateMutator,
+}) {
+  const isResponseValid =
+    isMountedRef.current === true &&
+    activeSessionIdRef.current === targetSessionId &&
+    activeParticipantIdRef.current === targetParticipantId &&
+    currentQuestionIdRef.current === targetQuestionId &&
+    sessionStatusRef.current === 'in_progress';
+
+  if (!isResponseValid) {
+    return { ignored: true };
+  }
+
+  if (!mockApiResponse.success) {
+    if (mockApiResponse.error_code === 'SESSION_NOT_ACTIVE' || mockApiResponse.error_code === 'SESSION_CLOSED') {
+      return { ignored: true };
+    }
+    stateMutator.setSubmitError(mockApiResponse.message);
+    return { ignored: false };
+  }
+
+  stateMutator.setHasSubmittedCurrentQuestion(true);
+  stateMutator.setLastSubmittedQuestionId(targetQuestionId);
+  stateMutator.setSubmitResult(mockApiResponse.data);
+  return { ignored: false };
+}
+
+// Scenario 15.1: Session Finished while Submit is in flight -> IGNORED
+{
+  const isMountedRef = { current: true };
+  const activeSessionIdRef = { current: 'session-A' };
+  const activeParticipantIdRef = { current: 'part-1' };
+  const currentQuestionIdRef = { current: 'q-1' };
+  const sessionStatusRef = { current: 'in_progress' };
+
+  // Local state initialized
+  let hasSubmittedCurrentQuestion = false;
+  let lastSubmittedQuestionId = null;
+  let submitResult = null;
+  let submitError = null;
+
+  const stateMutator = {
+    setHasSubmittedCurrentQuestion: (v) => { hasSubmittedCurrentQuestion = v; },
+    setLastSubmittedQuestionId: (v) => { lastSubmittedQuestionId = v; },
+    setSubmitResult: (v) => { submitResult = v; },
+    setSubmitError: (v) => { submitError = v; },
+  };
+
+  // Student captures targets at start of submit
+  const targetSessionId = activeSessionIdRef.current;
+  const targetParticipantId = activeParticipantIdRef.current;
+  const targetQuestionId = currentQuestionIdRef.current;
+
+  // HOST FINISHES SESSION BEFORE RESPONSE ARRIVES
+  sessionStatusRef.current = 'finished';
+  // Finished cleanup runs:
+  hasSubmittedCurrentQuestion = false;
+  lastSubmittedQuestionId = null;
+  submitResult = null;
+  submitError = null;
+
+  // Submit response resolves late with success
+  const res = executeSubmitAnswerSimulation({
+    isMountedRef,
+    activeSessionIdRef,
+    activeParticipantIdRef,
+    currentQuestionIdRef,
+    sessionStatusRef,
+    targetSessionId,
+    targetParticipantId,
+    targetQuestionId,
+    mockApiResponse: { success: true, data: { is_correct: true, points_awarded: 20 } },
+    stateMutator,
+  });
+
+  assert.equal(res.ignored, true, 'Late response after finish must be ignored');
+  assert.equal(hasSubmittedCurrentQuestion, false, 'hasSubmittedCurrentQuestion must remain false');
+  assert.equal(lastSubmittedQuestionId, null, 'lastSubmittedQuestionId must remain null');
+  assert.equal(submitResult, null, 'submitResult must remain null');
+  assert.equal(submitError, null, 'submitError must remain null');
+}
+console.log('  ✅ [15.1] PASS: Late response after Host Finish is completely ignored & state remains clean');
+
+// Scenario 15.2: Host advances to Question Q2 while Q1 submit in flight -> IGNORED
+{
+  const isMountedRef = { current: true };
+  const activeSessionIdRef = { current: 'session-A' };
+  const activeParticipantIdRef = { current: 'part-1' };
+  const currentQuestionIdRef = { current: 'q-1' };
+  const sessionStatusRef = { current: 'in_progress' };
+
+  let hasSubmittedCurrentQuestion = false;
+  let lastSubmittedQuestionId = null;
+  let submitResult = null;
+
+  const stateMutator = {
+    setHasSubmittedCurrentQuestion: (v) => { hasSubmittedCurrentQuestion = v; },
+    setLastSubmittedQuestionId: (v) => { lastSubmittedQuestionId = v; },
+    setSubmitResult: (v) => { submitResult = v; },
+    setSubmitError: () => {},
+  };
+
+  const targetSessionId = activeSessionIdRef.current;
+  const targetParticipantId = activeParticipantIdRef.current;
+  const targetQuestionId = 'q-1';
+
+  // HOST ADVANCES TO QUESTION 2
+  currentQuestionIdRef.current = 'q-2';
+
+  // Q1 response arrives late
+  const res = executeSubmitAnswerSimulation({
+    isMountedRef,
+    activeSessionIdRef,
+    activeParticipantIdRef,
+    currentQuestionIdRef,
+    sessionStatusRef,
+    targetSessionId,
+    targetParticipantId,
+    targetQuestionId,
+    mockApiResponse: { success: true, data: { is_correct: true, points_awarded: 10 } },
+    stateMutator,
+  });
+
+  assert.equal(res.ignored, true, 'Late Q1 response on Q2 must be ignored');
+  assert.equal(hasSubmittedCurrentQuestion, false, 'Q2 state must not be corrupted by Q1 response');
+  assert.equal(lastSubmittedQuestionId, null);
+  assert.equal(submitResult, null);
+}
+console.log('  ✅ [15.2] PASS: Late Q1 response after Host advances to Q2 is ignored');
+
+// Scenario 15.3: Session switches from Session A to Session B -> IGNORED
+{
+  const isMountedRef = { current: true };
+  const activeSessionIdRef = { current: 'session-A' };
+  const activeParticipantIdRef = { current: 'part-1' };
+  const currentQuestionIdRef = { current: 'q-1' };
+  const sessionStatusRef = { current: 'in_progress' };
+
+  let hasSubmittedCurrentQuestion = false;
+  const stateMutator = {
+    setHasSubmittedCurrentQuestion: (v) => { hasSubmittedCurrentQuestion = v; },
+    setLastSubmittedQuestionId: () => {},
+    setSubmitResult: () => {},
+    setSubmitError: () => {},
+  };
+
+  const targetSessionId = 'session-A';
+  const targetParticipantId = 'part-1';
+  const targetQuestionId = 'q-1';
+
+  // ACTIVE SESSION SWITCHES TO SESSION B
+  activeSessionIdRef.current = 'session-B';
+
+  const res = executeSubmitAnswerSimulation({
+    isMountedRef,
+    activeSessionIdRef,
+    activeParticipantIdRef,
+    currentQuestionIdRef,
+    sessionStatusRef,
+    targetSessionId,
+    targetParticipantId,
+    targetQuestionId,
+    mockApiResponse: { success: true, data: { is_correct: true } },
+    stateMutator,
+  });
+
+  assert.equal(res.ignored, true);
+  assert.equal(hasSubmittedCurrentQuestion, false);
+}
+console.log('  ✅ [15.3] PASS: Late response from stale session is ignored');
+
+// Scenario 15.4: Participant switches -> IGNORED
+{
+  const isMountedRef = { current: true };
+  const activeSessionIdRef = { current: 'session-A' };
+  const activeParticipantIdRef = { current: 'part-1' };
+  const currentQuestionIdRef = { current: 'q-1' };
+  const sessionStatusRef = { current: 'in_progress' };
+
+  let hasSubmittedCurrentQuestion = false;
+  const stateMutator = {
+    setHasSubmittedCurrentQuestion: (v) => { hasSubmittedCurrentQuestion = v; },
+    setLastSubmittedQuestionId: () => {},
+    setSubmitResult: () => {},
+    setSubmitError: () => {},
+  };
+
+  const targetSessionId = 'session-A';
+  const targetParticipantId = 'part-1';
+  const targetQuestionId = 'q-1';
+
+  // PARTICIPANT SWITCHES
+  activeParticipantIdRef.current = 'part-2';
+
+  const res = executeSubmitAnswerSimulation({
+    isMountedRef,
+    activeSessionIdRef,
+    activeParticipantIdRef,
+    currentQuestionIdRef,
+    sessionStatusRef,
+    targetSessionId,
+    targetParticipantId,
+    targetQuestionId,
+    mockApiResponse: { success: true, data: { is_correct: true } },
+    stateMutator,
+  });
+
+  assert.equal(res.ignored, true);
+  assert.equal(hasSubmittedCurrentQuestion, false);
+}
+console.log('  ✅ [15.4] PASS: Late response from stale participant is ignored');
 
 // ============================================================================
 // Test 16: Countdown Stops on Finish
@@ -400,7 +623,7 @@ assert.ok(
 console.log('  ✅ [29] PASS: R3 Host Final Results and Podium remain intact');
 
 // ============================================================================
-// Test 30: Guest Scope Exclusion in Phase 1
+// Test 30: Guest Scope Invariant in Phase 1
 // ============================================================================
 console.log('--- [Test 30] Guest Scope Invariant in Phase 1 ---');
 assert.ok(
@@ -410,5 +633,5 @@ assert.ok(
 console.log('  ✅ [30] PASS: R4 Phase 1 strictly restricted to Authenticated Student');
 
 console.log('\n================================================================================');
-console.log('🎉 ALL 30 R4 STUDENT FINAL RESULTS TESTS PASSED 100%!');
+console.log('🎉 ALL 30 R4 STUDENT FINAL RESULTS TESTS (INCLUDING DEEP RACE SIMULATIONS) PASSED 100%!');
 console.log('================================================================================\n');

@@ -134,6 +134,8 @@ export const CompetitionStudentPage = () => {
   // Guards & Refs
   const activeSessionIdRef = useRef(sessionId);
   const activeParticipantIdRef = useRef(participantId);
+  const sessionStatusRef = useRef(sessionData?.status);
+  const currentQuestionIdRef = useRef(currentQuestion?.id || null);
   const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
   const isMountedRef = useRef(true);
 
@@ -150,6 +152,15 @@ export const CompetitionStudentPage = () => {
     participantId,
     enabled: Boolean(sessionId && participantId),
   });
+
+  // Authoritative Status & Question Sync Effects for Async Race Protection
+  useEffect(() => {
+    sessionStatusRef.current = sessionData?.status;
+  }, [sessionData?.status]);
+
+  useEffect(() => {
+    currentQuestionIdRef.current = currentQuestion?.id || null;
+  }, [currentQuestion?.id]);
 
   // Role Gate: Prevent teacher/admin from accidental student participation
   const isStudentRole = profile?.role === 'student';
@@ -462,7 +473,7 @@ export const CompetitionStudentPage = () => {
     }
   };
 
-  // Handle Submit Answer with Stale & Terminal Guards
+  // Handle Submit Answer with Stale, Question Advance, & Terminal Guards
   const handleSubmitAnswer = async () => {
     if (
       !selectedOptionId ||
@@ -476,24 +487,34 @@ export const CompetitionStudentPage = () => {
 
     setIsSubmitting(true);
     setSubmitError(null);
-    const targetSessionId = sessionId;
+    const targetSessionId = activeSessionIdRef.current;
+    const targetParticipantId = activeParticipantIdRef.current;
     const targetQuestionId = currentQuestion.id;
 
     try {
       const res = await studentSubmitAnswer({
         sessionId: targetSessionId,
         questionId: targetQuestionId,
-        participantId,
+        participantId: targetParticipantId,
         guestToken: null,
         selectedOptionIds: [selectedOptionId],
       });
 
-      // Stale Session / Unmount Guard: ignore if session or question changed
-      if (
-        !isMountedRef.current ||
-        activeSessionIdRef.current !== targetSessionId ||
-        sessionData?.status === 'finished'
-      ) {
+      // Strict Authoritative Invariants Guard:
+      // Response is ONLY valid and committed if:
+      // 1. Component is mounted
+      // 2. Active session is STILL targetSessionId
+      // 3. Active participant is STILL targetParticipantId
+      // 4. Current question is STILL targetQuestionId
+      // 5. Session status is STILL in_progress
+      const isResponseValid =
+        isMountedRef.current === true &&
+        activeSessionIdRef.current === targetSessionId &&
+        activeParticipantIdRef.current === targetParticipantId &&
+        currentQuestionIdRef.current === targetQuestionId &&
+        sessionStatusRef.current === 'in_progress';
+
+      if (!isResponseValid) {
         return;
       }
 
@@ -515,7 +536,13 @@ export const CompetitionStudentPage = () => {
       setSubmitResult(res.data);
       refreshAuthoritativeState();
     } catch (err) {
-      if (isMountedRef.current && activeSessionIdRef.current === targetSessionId) {
+      if (
+        isMountedRef.current === true &&
+        activeSessionIdRef.current === targetSessionId &&
+        activeParticipantIdRef.current === targetParticipantId &&
+        currentQuestionIdRef.current === targetQuestionId &&
+        sessionStatusRef.current === 'in_progress'
+      ) {
         setSubmitError(err.message || 'Lỗi khi gửi câu trả lời.');
       }
     } finally {
