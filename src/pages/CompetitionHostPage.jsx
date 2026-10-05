@@ -126,7 +126,11 @@ export function CompetitionHostPage() {
     snapshotRef.current = snapshot;
   }, [snapshot]);
 
-  // Track current question ID changes to reset to LIVE_QUESTION and clear questionResults
+  // Safe question results fetcher (fail-closed, no busy loop)
+  const isFetchingResultsRef = useRef(false);
+  const autoResultAttemptRef = useRef(null);
+
+  // Track current question ID changes to reset to LIVE_QUESTION, clear questionResults, and reset auto attempt guard
   const currentQuestionId = snapshot?.current_question_id;
   const prevQuestionIdRef = useRef(currentQuestionId);
 
@@ -135,6 +139,7 @@ export function CompetitionHostPage() {
       prevQuestionIdRef.current = currentQuestionId;
       setQuestionResults(null);
       setHostViewMode('LIVE_QUESTION');
+      autoResultAttemptRef.current = null;
     }
   }, [currentQuestionId]);
 
@@ -203,7 +208,6 @@ export function CompetitionHostPage() {
   }, [isLeaderboardOpen, activeSessionId]);
 
   // Safe question results fetcher (fail-closed, no busy loop)
-  const isFetchingResultsRef = useRef(false);
   const fetchResultsSafely = useCallback(async (sessionId = activeSessionId) => {
     if (!sessionId || isFetchingResultsRef.current) return;
     isFetchingResultsRef.current = true;
@@ -226,7 +230,7 @@ export function CompetitionHostPage() {
     }
   }, [activeSessionId]);
 
-  // Countdown Timer & Natural Expiry Detection
+  // Countdown Timer & Natural Expiry Detection (Local display only + one-shot result attempt)
   useEffect(() => {
     if (!snapshot?.question_deadline || snapshot.status !== 'in_progress') {
       setTimeLeftSeconds(null);
@@ -239,9 +243,13 @@ export function CompetitionHostPage() {
       const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
       setTimeLeftSeconds(remaining);
 
-      // When countdown reaches 0, trigger attempt to fetch authoritative results
+      // When countdown reaches 0, trigger at most ONE automatic attempt per question deadline
       if (remaining === 0 && hostViewMode === 'LIVE_QUESTION' && !isFetchingResultsRef.current && !questionResults) {
-        fetchResultsSafely(activeSessionId);
+        const attemptKey = `${snapshot.current_question_id}:${snapshot.question_deadline}`;
+        if (autoResultAttemptRef.current !== attemptKey) {
+          autoResultAttemptRef.current = attemptKey;
+          fetchResultsSafely(activeSessionId);
+        }
       }
     };
 
@@ -362,6 +370,7 @@ export function CompetitionHostPage() {
         setSnapshot(res.data.session);
         setHostViewMode('LIVE_QUESTION');
         setQuestionResults(null);
+        autoResultAttemptRef.current = null;
         showToast('Tạo phòng thi thành công! Mã phòng đã sẵn sàng.', 'success');
       } else {
         setSetupError(res.message || 'Không thể tạo phòng thi. Vui lòng thử lại.');
@@ -382,6 +391,7 @@ export function CompetitionHostPage() {
       if (res.success) {
         setHostViewMode('LIVE_QUESTION');
         setQuestionResults(null);
+        autoResultAttemptRef.current = null;
         showToast('Đã bắt đầu phòng thi! Câu hỏi đầu tiên đã kích hoạt.', 'success');
         await refreshNow();
       } else {
@@ -457,6 +467,7 @@ export function CompetitionHostPage() {
       if (res.success) {
         setQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
+        autoResultAttemptRef.current = null;
         showToast('Đã chuyển sang câu hỏi tiếp theo!', 'success');
         await refreshNow();
         if (isLeaderboardOpen) {
@@ -480,6 +491,7 @@ export function CompetitionHostPage() {
       if (res.success) {
         setQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
+        autoResultAttemptRef.current = null;
         showToast('Phòng thi đã kết thúc và tính toán thứ hạng hoàn tất!', 'success');
         await refreshNow();
         fetchLeaderboard();
@@ -502,6 +514,7 @@ export function CompetitionHostPage() {
       if (res.success) {
         setQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
+        autoResultAttemptRef.current = null;
         showToast('Đã hủy phòng thi thành công.', 'info');
         await refreshNow();
       } else {
@@ -529,6 +542,7 @@ export function CompetitionHostPage() {
     setIsLeaderboardOpen(false);
     setQuestionResults(null);
     setHostViewMode('LIVE_QUESTION');
+    autoResultAttemptRef.current = null;
   };
 
   // Helper status badge styling
