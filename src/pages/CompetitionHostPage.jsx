@@ -23,7 +23,9 @@ import {
   Award,
   StopCircle,
   CheckCircle2,
-  PieChart
+  PieChart,
+  Flame,
+  Star
 } from 'lucide-react';
 import {
   hostCreateSession,
@@ -85,9 +87,98 @@ const DEFAULT_QUESTIONS = [
   }
 ];
 
+// Storage Key for Host Session Persistence (Scoped strictly to Host Competition)
+export const HOST_SESSION_STORAGE_KEY = 'competition_host_active_session_id';
+
+// Strict UUID format validator (RFC 4122)
+export const isValidSessionUUID = (id) => {
+  return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+};
+
+// Error classification helper: Distinguishes authoritative failures (403/404/not-found) from transient errors (5xx/network)
+export const isAuthoritativeSessionFailure = (errorOrDetails) => {
+  if (!errorOrDetails) return false;
+  if (typeof errorOrDetails === 'string') {
+    const lower = errorOrDetails.toLowerCase();
+    return (
+      lower.includes('không tồn tại') ||
+      lower.includes('not found') ||
+      lower.includes('không có quyền') ||
+      lower.includes('permission denied') ||
+      lower.includes('unauthorized') ||
+      lower.includes('forbidden') ||
+      lower.includes('invalid session')
+    );
+  }
+  const code = errorOrDetails.error_code || errorOrDetails.code;
+  const status = errorOrDetails.status;
+  const msg = (errorOrDetails.message || '').toLowerCase();
+
+  // Explicit authoritative error codes
+  if (
+    code === 'NOT_FOUND' ||
+    code === 'SESSION_NOT_FOUND' ||
+    code === 'FORBIDDEN' ||
+    code === 'UNAUTHORIZED' ||
+    code === 'FORBIDDEN_OR_NOT_FOUND' ||
+    code === 'INVALID_SESSION' ||
+    code === 'INVALID_SESSION_ID' ||
+    code === '42501' ||
+    code === 'PGRST116'
+  ) {
+    return true;
+  }
+
+  // Explicit HTTP status codes for auth / not found
+  if (status === 401 || status === 403 || status === 404) {
+    return true;
+  }
+
+  // Text message check for authoritative rejection
+  if (
+    msg.includes('không tồn tại') ||
+    msg.includes('not found') ||
+    msg.includes('không có quyền') ||
+    msg.includes('permission denied') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden')
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+// Safe initial session resolver (Query param -> sessionStorage -> null)
+export const getInitialActiveSessionId = () => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlSession = urlParams.get('sessionId') || urlParams.get('session_id');
+    if (urlSession && isValidSessionUUID(urlSession)) {
+      return urlSession.trim();
+    }
+    const stored = window.sessionStorage?.getItem(HOST_SESSION_STORAGE_KEY);
+    if (stored && isValidSessionUUID(stored)) {
+      return stored.trim();
+    }
+    if (stored) {
+      // Discard invalid / non-UUID entries
+      window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+    }
+  } catch (_e) {
+    // Fail safe
+  }
+  return null;
+};
+
 export function CompetitionHostPage() {
   // Navigation & Session State
-  const [activeSessionId, setActiveSessionId] = useState(null);
+  const initialResolvedId = getInitialActiveSessionId();
+  const [activeSessionId, setActiveSessionId] = useState(initialResolvedId);
+  const activeSessionIdRef = useRef(activeSessionId);
+  const restoredSessionPendingValidationRef = useRef(Boolean(initialResolvedId));
+
   const [createdQuestionCount, setCreatedQuestionCount] = useState(3);
   const [notification, setNotification] = useState(null);
   const [actionPending, setActionPending] = useState(false);
@@ -97,11 +188,65 @@ export function CompetitionHostPage() {
   const [isLeaderboardLoading, setIsLeaderboardLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Host View Mode State (R2: LIVE_QUESTION, QUESTION_RESULTS, LEADERBOARD)
+  // Auto show notification banner
+  const showToast = useCallback((message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification(null);
+    }, 4000);
+  }, []);
+
+  // Fail-closed helper for invalid / unauthorized restored sessions
+  const clearRestoredSessionAndReturnToSetup = useCallback((failureReason) => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+        if (window.location.search) {
+          window.history?.replaceState({}, '', window.location.pathname);
+        }
+      }
+    } catch (_e) {}
+
+    activeSessionIdRef.current = null;
+    setActiveSessionId(null);
+    restoredSessionPendingValidationRef.current = false;
+    setQuestions(DEFAULT_QUESTIONS);
+    setLeaderboardData([]);
+    setLeaderboardError(null);
+    setIsLeaderboardOpen(false);
+    setQuestionResults(null);
+    setHostViewMode('LIVE_QUESTION');
+    autoResultAttemptRef.current = null;
+    setTimeLeftSeconds(null);
+
+    if (failureReason) {
+      showToast(failureReason, 'error');
+    }
+  }, [showToast]);
+
+  // Synchronize activeSessionIdRef immediately and update sessionStorage persistence
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+    try {
+      if (typeof window !== 'undefined') {
+        if (activeSessionId && isValidSessionUUID(activeSessionId)) {
+          window.sessionStorage?.setItem(HOST_SESSION_STORAGE_KEY, activeSessionId);
+        } else {
+          window.sessionStorage?.removeItem(HOST_SESSION_STORAGE_KEY);
+        }
+      }
+    } catch (_e) {
+      // Fail safe
+    }
+  }, [activeSessionId]);
+
+  // Host View Mode State (R3: LIVE_QUESTION, QUESTION_RESULTS, LEADERBOARD, FINAL_RESULTS)
   const [hostViewMode, setHostViewMode] = useState('LIVE_QUESTION');
   const [questionResults, setQuestionResults] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
+  const [leaderboardError, setLeaderboardError] = useState(null);
+  const latestLeaderboardRequestIdRef = useRef(0);
 
   // Setup Form State
   const [title, setTitle] = useState('Đấu Trường Tri Thức V1');
@@ -117,9 +262,34 @@ export function CompetitionHostPage() {
     submissionStats,
     isLoading: isPollingLoading,
     error: pollingError,
+    errorDetails: pollingErrorDetails,
     refreshNow,
     setSnapshot
   } = useHostCompetitionPolling(activeSessionId);
+
+  // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
+  useEffect(() => {
+    if (!restoredSessionPendingValidationRef.current || !activeSessionId) {
+      return;
+    }
+
+    // Case 1: Initial authoritative snapshot successfully loaded and verified
+    if (snapshot && snapshot.id === activeSessionId) {
+      restoredSessionPendingValidationRef.current = false;
+      return;
+    }
+
+    // Case 2: Authoritative failure returned during initial restoration
+    if (pollingErrorDetails || pollingError) {
+      const errInfo = pollingErrorDetails || { message: pollingError };
+      if (isAuthoritativeSessionFailure(errInfo)) {
+        clearRestoredSessionAndReturnToSetup(
+          errInfo.message || 'Phòng thi không tồn tại hoặc bạn không có quyền quản trị.'
+        );
+      }
+      // If transient (offline, timeout, 5xx), do NOT clear session; keep session for Host retry/reconnect
+    }
+  }, [snapshot, activeSessionId, pollingErrorDetails, pollingError, clearRestoredSessionAndReturnToSetup]);
 
   const snapshotRef = useRef(snapshot);
   useEffect(() => {
@@ -137,19 +307,13 @@ export function CompetitionHostPage() {
   useEffect(() => {
     if (prevQuestionIdRef.current !== currentQuestionId) {
       prevQuestionIdRef.current = currentQuestionId;
-      setQuestionResults(null);
-      setHostViewMode('LIVE_QUESTION');
-      autoResultAttemptRef.current = null;
+      if (snapshotRef.current?.status !== 'finished') {
+        setQuestionResults(null);
+        setHostViewMode('LIVE_QUESTION');
+        autoResultAttemptRef.current = null;
+      }
     }
   }, [currentQuestionId]);
-
-  // Auto show notification banner
-  const showToast = (message, type = 'info') => {
-    setNotification({ message, type });
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
-  };
 
   // Determine current active state
   const currentStatus = snapshot?.status || (activeSessionId ? 'waiting' : 'setup');
@@ -182,40 +346,105 @@ export function CompetitionHostPage() {
     questionResults?.question_id === snapshot.current_question_id
   );
 
-  // Load Leaderboard data on demand
-  const fetchLeaderboard = async () => {
-    if (!activeSessionId) return;
+  // Load Leaderboard data on demand with session matching and stale response safety (Blocker 1 & Race Guard)
+  const fetchLeaderboard = useCallback(async (targetSessionIdParam) => {
+    const targetSessionId = (typeof targetSessionIdParam === 'string' && targetSessionIdParam)
+      ? targetSessionIdParam
+      : activeSessionIdRef.current;
+
+    if (!targetSessionId || typeof targetSessionId !== 'string') {
+      return { success: false, error_code: 'NO_SESSION' };
+    }
+
+    // Pre-flight check against activeSessionIdRef
+    if (activeSessionIdRef.current && targetSessionId !== activeSessionIdRef.current) {
+      return { success: false, error_code: 'STALE_SESSION' };
+    }
+
+    const requestId = ++latestLeaderboardRequestIdRef.current;
     setIsLeaderboardLoading(true);
+    setLeaderboardError(null);
     try {
-      const res = await getLeaderboardSnapshot({ sessionId: activeSessionId });
+      const res = await getLeaderboardSnapshot({ sessionId: targetSessionId });
+
+      // Guard 1: Request ID race check
+      if (requestId !== latestLeaderboardRequestIdRef.current) {
+        return { success: false, error_code: 'STALE_REQUEST' };
+      }
+
+      // Guard 2: Session Identity Guard (Blocker 1 - Must verify targetSessionId matches current activeSessionId)
+      if (!activeSessionIdRef.current || targetSessionId !== activeSessionIdRef.current) {
+        return { success: false, error_code: 'STALE_SESSION' };
+      }
+
       if (res.success && Array.isArray(res.data?.leaderboard)) {
         setLeaderboardData(res.data.leaderboard);
+        setLeaderboardError(null);
+        return { success: true, data: res.data.leaderboard };
       } else {
-        showToast(res.message || 'Chưa thể tải dữ liệu bảng xếp hạng.', 'error');
+        const errMsg = res.message || 'Chưa thể tải dữ liệu bảng xếp hạng.';
+        setLeaderboardError(errMsg);
+        showToast(errMsg, 'error');
+        return { success: false, error_code: res.error_code || 'RPC_ERROR', message: errMsg };
       }
     } catch (_err) {
-      showToast('Lỗi mạng khi tải bảng xếp hạng.', 'error');
+      if (
+        requestId === latestLeaderboardRequestIdRef.current &&
+        activeSessionIdRef.current &&
+        targetSessionId === activeSessionIdRef.current
+      ) {
+        const netErrMsg = 'Lỗi mạng khi tải bảng xếp hạng.';
+        setLeaderboardError(netErrMsg);
+        showToast(netErrMsg, 'error');
+      }
+      return { success: false, error_code: 'NETWORK_ERROR', message: 'Lỗi mạng khi tải bảng xếp hạng.' };
     } finally {
-      setIsLeaderboardLoading(false);
+      if (
+        requestId === latestLeaderboardRequestIdRef.current &&
+        (!activeSessionIdRef.current || targetSessionId === activeSessionIdRef.current)
+      ) {
+        setIsLeaderboardLoading(false);
+      }
     }
-  };
+  }, []);
 
   // Trigger Leaderboard fetch when opening panel
   useEffect(() => {
     if (isLeaderboardOpen && activeSessionId) {
-      fetchLeaderboard();
+      fetchLeaderboard(activeSessionId);
     }
-  }, [isLeaderboardOpen, activeSessionId]);
+  }, [isLeaderboardOpen, activeSessionId, fetchLeaderboard]);
+
+  // Finished session sync guard (Refresh, Reconnect, or Remote Finish)
+  useEffect(() => {
+    if (snapshot?.status === 'finished') {
+      setHostViewMode('FINAL_RESULTS');
+      setQuestionResults(null);
+      setTimeLeftSeconds(null);
+      autoResultAttemptRef.current = null;
+      if (activeSessionId) {
+        fetchLeaderboard(activeSessionId);
+      }
+    }
+  }, [snapshot?.status, activeSessionId, fetchLeaderboard]);
 
   // Safe question results fetcher (fail-closed, no busy loop)
-  const fetchResultsSafely = useCallback(async (sessionId = activeSessionId) => {
+  const fetchResultsSafely = useCallback(async (sessionIdParam) => {
+    const sessionId = (typeof sessionIdParam === 'string' && sessionIdParam)
+      ? sessionIdParam
+      : activeSessionIdRef.current;
     if (!sessionId || isFetchingResultsRef.current) return { success: false, error_code: 'BUSY_OR_INVALID' };
     isFetchingResultsRef.current = true;
     setIsResultsLoading(true);
     try {
       const res = await getHostQuestionResults(sessionId);
       if (res.success && res.data && res.data.question_closed === true) {
-        if (snapshotRef.current?.current_question_id && res.data.question_id === snapshotRef.current.current_question_id) {
+        if (
+          activeSessionIdRef.current &&
+          sessionId === activeSessionIdRef.current &&
+          snapshotRef.current?.current_question_id &&
+          res.data.question_id === snapshotRef.current.current_question_id
+        ) {
           setQuestionResults(res.data);
           setHostViewMode('QUESTION_RESULTS');
           return { success: true, data: res.data };
@@ -233,7 +462,7 @@ export function CompetitionHostPage() {
       isFetchingResultsRef.current = false;
       setIsResultsLoading(false);
     }
-  }, [activeSessionId]);
+  }, []);
 
   // Countdown Timer & Natural Expiry Detection (Local display only + bounded 2-attempt clock-skew auto fetch)
   useEffect(() => {
@@ -387,7 +616,15 @@ export function CompetitionHostPage() {
       });
 
       if (res.success && res.data?.session?.id) {
-        setActiveSessionId(res.data.session.id);
+        const newSessionId = res.data.session.id;
+        restoredSessionPendingValidationRef.current = false;
+        activeSessionIdRef.current = newSessionId;
+        setActiveSessionId(newSessionId);
+        try {
+          if (typeof window !== 'undefined' && isValidSessionUUID(newSessionId)) {
+            window.sessionStorage?.setItem(HOST_SESSION_STORAGE_KEY, newSessionId);
+          }
+        } catch (_e) {}
         setCreatedQuestionCount(questions.length);
         setSnapshot(res.data.session);
         setHostViewMode('LIVE_QUESTION');
@@ -512,11 +749,12 @@ export function CompetitionHostPage() {
       const res = await hostFinishSession(activeSessionId);
       if (res.success) {
         setQuestionResults(null);
-        setHostViewMode('LIVE_QUESTION');
+        setTimeLeftSeconds(null);
         autoResultAttemptRef.current = null;
         showToast('Phòng thi đã kết thúc và tính toán thứ hạng hoàn tất!', 'success');
         await refreshNow();
-        fetchLeaderboard();
+        await fetchLeaderboard(activeSessionId);
+        setHostViewMode('FINAL_RESULTS');
       } else {
         showToast(res.message || 'Không thể kết thúc phòng thi.', 'error');
       }
@@ -558,13 +796,7 @@ export function CompetitionHostPage() {
   };
 
   const handleResetToSetup = () => {
-    setActiveSessionId(null);
-    setQuestions(DEFAULT_QUESTIONS);
-    setLeaderboardData([]);
-    setIsLeaderboardOpen(false);
-    setQuestionResults(null);
-    setHostViewMode('LIVE_QUESTION');
-    autoResultAttemptRef.current = null;
+    clearRestoredSessionAndReturnToSetup();
   };
 
   // Helper status badge styling
@@ -656,9 +888,20 @@ export function CompetitionHostPage() {
 
         {/* Polling Error Notice */}
         {pollingError && (
-          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-            <span>{pollingError}</span>
+          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span>{pollingError}</span>
+            </div>
+            {activeSessionId && (
+              <button
+                type="button"
+                onClick={handleResetToSetup}
+                className="text-xs font-bold text-amber-900 underline hover:no-underline ml-2 flex-shrink-0"
+              >
+                Về trang tạo phòng
+              </button>
+            )}
           </div>
         )}
 
@@ -1584,77 +1827,415 @@ export function CompetitionHostPage() {
         )}
 
         {/* ============================================================ */}
-        {/* STATE E: FINISHED SCREEN                                     */}
+        {/* STATE E: FINISHED SCREEN & PODIUM CEREMONY (FINAL_RESULTS)   */}
         {/* ============================================================ */}
         {currentStatus === 'finished' && snapshot && (
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center space-y-6">
-            <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 mx-auto shadow-md">
-              <Trophy className="w-8 h-8" />
-            </div>
+          <div className="space-y-6">
+            {/* Top Banner with Trophy & Session Meta */}
+            <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+              <div className="absolute -top-12 -right-12 w-48 h-48 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+              <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-black/10 rounded-full blur-2xl pointer-events-none" />
 
-            <div>
-              <h2 className="text-2xl font-black text-slate-800">Đấu Trường Đã Hoàn Thành!</h2>
-              <p className="text-xs text-slate-500 mt-1">Phiên thi đấu "{snapshot.title}" đã kết thúc và tính toán thứ hạng.</p>
-            </div>
+              <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-6 text-center sm:text-left">
+                <div className="flex flex-col sm:flex-row items-center gap-5">
+                  <div className="w-20 h-20 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-inner flex-shrink-0">
+                    <Trophy className="w-10 h-10 text-amber-200 animate-pulse" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-white/20 backdrop-blur-xs text-white border border-white/30">
+                      <Crown className="w-3.5 h-3.5 text-amber-200" />
+                      Lễ Trao Giải &amp; Bục Vinh Danh
+                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">{snapshot.title}</h2>
+                    <p className="text-xs sm:text-sm text-amber-100/90">
+                      Mã phòng: <span className="font-mono font-bold text-white bg-black/20 px-2 py-0.5 rounded">{snapshot.room_code}</span> • Tổng số thí sinh: <span className="font-bold text-white">{participants.length}</span>
+                    </p>
+                  </div>
+                </div>
 
-            {/* Final Leaderboard Display */}
-            <div className="max-w-2xl mx-auto text-left space-y-3">
-              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 border-b border-slate-100 pb-2">
-                <Award className="w-4 h-4 text-amber-500" />
-                Bảng Xếp Hạng Chung Cuộc
-              </h3>
-
-              {leaderboardData.length === 0 ? (
-                <div className="text-center py-6 text-xs text-slate-400">
+                <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={fetchLeaderboard}
-                    className="text-amber-600 hover:underline font-semibold"
+                    disabled={isLeaderboardLoading}
+                    onClick={() => fetchLeaderboard(activeSessionId)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white font-bold text-xs backdrop-blur-xs border border-white/30 transition disabled:opacity-50"
                   >
-                    Bấm vào đây để tải bảng xếp hạng
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLeaderboardLoading ? 'animate-spin' : ''}`} />
+                    Làm Mới
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetToSetup}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white text-slate-900 font-bold text-xs hover:bg-slate-100 shadow-md transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Tạo Đấu Trường Mới
                   </button>
                 </div>
-              ) : (
-                <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                  {leaderboardData.map((item) => (
-                    <div key={item.participant_id} className="p-3.5 flex items-center justify-between bg-white hover:bg-slate-50 transition">
-                      <div className="flex items-center gap-3">
-                        <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-                          item.rank === 1
-                            ? 'bg-amber-400 text-white'
-                            : item.rank === 2
-                            ? 'bg-slate-300 text-slate-700'
-                            : item.rank === 3
-                            ? 'bg-amber-700 text-white'
-                            : 'bg-slate-100 text-slate-500'
-                        }`}>
-                          {item.rank <= 3 ? <Crown className="w-3.5 h-3.5" /> : item.rank}
-                        </span>
-                        <div>
-                          <span className="text-sm font-bold text-slate-800 block">{item.display_name}</span>
-                          <span className="text-[11px] text-slate-400">Đúng {item.correct_count || 0} câu</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-extrabold text-amber-600 block">{item.total_score || 0} điểm</span>
-                        <span className="text-[10px] text-slate-400">{((item.total_response_time_ms || 0) / 1000).toFixed(1)}s</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={handleResetToSetup}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-md transition"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Tạo Đấu Trường Mới
-              </button>
-            </div>
+            {/* Error State Banner */}
+            {leaderboardError && leaderboardData.length === 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border border-red-200 p-8 text-center space-y-4">
+                <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-600 mx-auto border border-red-200">
+                  <AlertTriangle className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">Không thể tải dữ liệu bảng xếp hạng</h3>
+                  <p className="text-xs text-red-600 mt-1">{leaderboardError}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fetchLeaderboard(activeSessionId)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-md transition"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Thử Lại Ngay
+                </button>
+              </div>
+            )}
+
+            {/* Loading State Banner */}
+            {isLeaderboardLoading && leaderboardData.length === 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center space-y-4">
+                <RefreshCw className="w-10 h-10 text-amber-500 animate-spin mx-auto" />
+                <h3 className="text-lg font-bold text-slate-800">Đang tải bảng xếp hạng chung cuộc...</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">Hệ thống đang đồng bộ điểm số và tính toán thứ hạng chính thức từ máy chủ.</p>
+              </div>
+            )}
+
+            {/* Empty State Banner (0 Participants) */}
+            {!isLeaderboardLoading && !leaderboardError && leaderboardData.length === 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center space-y-4">
+                <div className="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 mx-auto">
+                  <Users className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-bold text-slate-700">Chưa có dữ liệu thí sinh</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">Không có kết quả nộp bài hoặc không có thí sinh nào tham gia phiên thi này.</p>
+                <div className="pt-2 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => fetchLeaderboard(activeSessionId)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-semibold"
+                  >
+                    Tải Lại
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Main Podium & Leaderboard Stage */}
+            {leaderboardData.length > 0 && (() => {
+              const goldGroup = leaderboardData.filter(item => item.rank === 1);
+              const silverGroup = leaderboardData.filter(item => item.rank === 2);
+              const bronzeGroup = leaderboardData.filter(item => item.rank === 3);
+
+              return (
+                <div className="space-y-6">
+                  {/* Stepped Podium Section */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 space-y-8">
+                    <div className="text-center space-y-1 border-b border-slate-100 pb-4">
+                      <h3 className="text-xl font-black text-slate-800 flex items-center justify-center gap-2">
+                        <Award className="w-6 h-6 text-amber-500" />
+                        BỤC VINH DANH TOP 3
+                      </h3>
+                      <p className="text-xs text-slate-500">Tôn vinh những thí sinh xuất sắc nhất của đấu trường</p>
+                    </div>
+
+                    {/* Stepped Podium Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end max-w-4xl mx-auto pt-4 pb-2">
+
+                      {/* 2. SILVER PODIUM (Left on desktop) */}
+                      <div className="order-2 md:order-1 flex flex-col items-center">
+                        {silverGroup.length > 0 ? (
+                          <div className="w-full space-y-3 flex flex-col items-center mb-3">
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                              <Medal className="w-3.5 h-3.5 text-slate-500" />
+                              HẠNG NHÌ (SILVER)
+                            </div>
+                            {silverGroup.map((p) => (
+                              <div
+                                key={p.participant_id}
+                                className="w-full bg-gradient-to-b from-slate-50 to-white rounded-2xl border-2 border-slate-300 p-4 text-center shadow-md space-y-2"
+                              >
+                                <div className="relative inline-block mx-auto">
+                                  {p.avatar_url ? (
+                                    <img
+                                      src={p.avatar_url}
+                                      alt={p.display_name}
+                                      className="w-14 h-14 rounded-full object-cover ring-4 ring-slate-300 shadow-md mx-auto"
+                                    />
+                                  ) : (
+                                    <div className="w-14 h-14 rounded-full bg-slate-300 text-slate-700 font-black text-lg flex items-center justify-center ring-4 ring-slate-200 shadow-md mx-auto">
+                                      {p.display_name?.charAt(0)?.toUpperCase() || 'H'}
+                                    </div>
+                                  )}
+                                  <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-slate-400 text-white font-black text-xs flex items-center justify-center shadow">
+                                    2
+                                  </span>
+                                </div>
+                                <div>
+                                  <h4 className="font-extrabold text-sm text-slate-800 truncate" title={p.display_name}>
+                                    {p.display_name}
+                                  </h4>
+                                  <span className="text-base font-black text-slate-700 block">
+                                    {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center justify-center gap-2 pt-1 border-t border-slate-100 font-medium">
+                                  <span>Đúng {p.correct_count ?? 0} câu</span>
+                                  <span>•</span>
+                                  <span className="font-mono">{((p.total_response_time_ms ?? 0) / 1000).toFixed(1)}s</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="w-full text-center py-6 px-4 bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl mb-3">
+                            <span className="text-xs text-slate-400 font-medium italic">
+                              {goldGroup.length > 1 ? 'Đồng hạng 1 (Không có Hạng Nhì)' : 'Chưa có dữ liệu'}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Stepped Base 2 */}
+                        <div className="w-full h-32 sm:h-36 bg-gradient-to-t from-slate-400 to-slate-300 rounded-t-2xl shadow-md border-t-4 border-slate-200 flex flex-col items-center justify-center text-white">
+                          <span className="text-4xl font-black font-mono tracking-wider drop-shadow-sm">2</span>
+                          <span className="text-[11px] font-bold uppercase tracking-widest text-slate-100 mt-1">HẠNG NHÌ</span>
+                        </div>
+                      </div>
+
+                      {/* 1. GOLD PODIUM (Center - Highest) */}
+                      <div className="order-1 md:order-2 flex flex-col items-center -mt-4">
+                        {goldGroup.length > 0 ? (
+                          <div className="w-full space-y-3 flex flex-col items-center mb-3">
+                            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-black bg-gradient-to-r from-amber-400 to-amber-600 text-white shadow-md border border-amber-300 animate-pulse">
+                              <Crown className="w-4 h-4 text-amber-200" />
+                              QUÁN QUÂN (GOLD)
+                            </div>
+                            {goldGroup.map((p) => (
+                              <div
+                                key={p.participant_id}
+                                className="w-full bg-gradient-to-b from-amber-50/80 to-white rounded-2xl border-2 border-amber-400 p-5 text-center shadow-lg space-y-2 ring-2 ring-amber-300/50"
+                              >
+                                <div className="relative inline-block mx-auto">
+                                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-amber-500">
+                                    <Crown className="w-6 h-6" />
+                                  </div>
+                                  {p.avatar_url ? (
+                                    <img
+                                      src={p.avatar_url}
+                                      alt={p.display_name}
+                                      className="w-16 h-16 rounded-full object-cover ring-4 ring-amber-400 shadow-lg mx-auto mt-2"
+                                    />
+                                  ) : (
+                                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 text-white font-black text-xl flex items-center justify-center ring-4 ring-amber-300 shadow-lg mx-auto mt-2">
+                                      {p.display_name?.charAt(0)?.toUpperCase() || 'H'}
+                                    </div>
+                                  )}
+                                  <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-amber-500 text-white font-black text-xs flex items-center justify-center shadow">
+                                    1
+                                  </span>
+                                </div>
+                                <div>
+                                  <h4 className="font-black text-base text-slate-900 truncate" title={p.display_name}>
+                                    {p.display_name}
+                                  </h4>
+                                  <span className="text-xl font-black text-amber-600 block">
+                                    {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-600 flex items-center justify-center gap-2 pt-1.5 border-t border-amber-100 font-semibold">
+                                  <span>Đúng {p.correct_count ?? 0} câu</span>
+                                  <span>•</span>
+                                  <span className="font-mono">{((p.total_response_time_ms ?? 0) / 1000).toFixed(1)}s</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="w-full text-center py-6 px-4 bg-amber-50/50 border border-dashed border-amber-200 rounded-2xl mb-3">
+                            <span className="text-xs text-amber-700 font-medium italic">Chưa có quán quân</span>
+                          </div>
+                        )}
+
+                        {/* Stepped Base 1 */}
+                        <div className="w-full h-44 sm:h-52 bg-gradient-to-t from-amber-500 to-amber-400 rounded-t-2xl shadow-xl border-t-4 border-amber-300 flex flex-col items-center justify-center text-white">
+                          <span className="text-5xl font-black font-mono tracking-wider drop-shadow-md">1</span>
+                          <span className="text-xs font-black uppercase tracking-widest text-amber-100 mt-1">QUÁN QUÂN</span>
+                        </div>
+                      </div>
+
+                      {/* 3. BRONZE PODIUM (Right on desktop) */}
+                      <div className="order-3 md:order-3 flex flex-col items-center">
+                        {bronzeGroup.length > 0 ? (
+                          <div className="w-full space-y-3 flex flex-col items-center mb-3">
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                              <Medal className="w-3.5 h-3.5 text-amber-700" />
+                              HẠNG BA (BRONZE)
+                            </div>
+                            {bronzeGroup.map((p) => (
+                              <div
+                                key={p.participant_id}
+                                className="w-full bg-gradient-to-b from-amber-50/40 to-white rounded-2xl border-2 border-amber-700/40 p-4 text-center shadow-md space-y-2"
+                              >
+                                <div className="relative inline-block mx-auto">
+                                  {p.avatar_url ? (
+                                    <img
+                                      src={p.avatar_url}
+                                      alt={p.display_name}
+                                      className="w-14 h-14 rounded-full object-cover ring-4 ring-amber-700/40 shadow-md mx-auto"
+                                    />
+                                  ) : (
+                                    <div className="w-14 h-14 rounded-full bg-amber-800 text-white font-black text-lg flex items-center justify-center ring-4 ring-amber-700/30 shadow-md mx-auto">
+                                      {p.display_name?.charAt(0)?.toUpperCase() || 'H'}
+                                    </div>
+                                  )}
+                                  <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-amber-800 text-white font-black text-xs flex items-center justify-center shadow">
+                                    3
+                                  </span>
+                                </div>
+                                <div>
+                                  <h4 className="font-extrabold text-sm text-slate-800 truncate" title={p.display_name}>
+                                    {p.display_name}
+                                  </h4>
+                                  <span className="text-base font-black text-amber-900 block">
+                                    {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center justify-center gap-2 pt-1 border-t border-slate-100 font-medium">
+                                  <span>Đúng {p.correct_count ?? 0} câu</span>
+                                  <span>•</span>
+                                  <span className="font-mono">{((p.total_response_time_ms ?? 0) / 1000).toFixed(1)}s</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="w-full text-center py-6 px-4 bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl mb-3">
+                            <span className="text-xs text-slate-400 font-medium italic">
+                              {silverGroup.length > 1 ? 'Đồng hạng 2 (Không có Hạng Ba)' : 'Chưa có dữ liệu'}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Stepped Base 3 */}
+                        <div className="w-full h-24 sm:h-28 bg-gradient-to-t from-amber-800 to-amber-700 rounded-t-2xl shadow-md border-t-4 border-amber-600 flex flex-col items-center justify-center text-white">
+                          <span className="text-3xl font-black font-mono tracking-wider drop-shadow-sm">3</span>
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-amber-100 mt-1">HẠNG BA</span>
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+
+                  {/* Full Leaderboard List Section */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 space-y-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                          <BarChart3 className="w-5 h-5 text-sky-500" />
+                          Bảng Xếp Hạng Toàn Bộ Thí Sinh ({leaderboardData.length})
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Danh sách thứ hạng chính thức từ máy chủ được xếp theo Tổng Điểm, Số Câu Đúng và Thời Gian Phản Hồi</p>
+                      </div>
+
+                      <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl">
+                        Thứ hạng máy chủ (Authoritative)
+                      </div>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/40">
+                      {leaderboardData.map((item) => {
+                        const isTop1 = item.rank === 1;
+                        const isTop2 = item.rank === 2;
+                        const isTop3 = item.rank === 3;
+
+                        return (
+                          <div
+                            key={item.participant_id}
+                            className={`p-4 flex items-center justify-between transition ${
+                              isTop1
+                                ? 'bg-amber-50/50 hover:bg-amber-50/80'
+                                : isTop2
+                                ? 'bg-slate-50/80 hover:bg-slate-100/80'
+                                : isTop3
+                                ? 'bg-amber-50/20 hover:bg-amber-50/40'
+                                : 'bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3.5 min-w-0">
+                              <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black flex-shrink-0 shadow-2xs ${
+                                isTop1
+                                  ? 'bg-amber-400 text-white ring-2 ring-amber-300'
+                                  : isTop2
+                                  ? 'bg-slate-300 text-slate-800 ring-2 ring-slate-200'
+                                  : isTop3
+                                  ? 'bg-amber-700 text-white ring-2 ring-amber-600'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}>
+                                {isTop1 ? <Crown className="w-4 h-4" /> : isTop2 || isTop3 ? <Medal className="w-4 h-4" /> : item.rank}
+                              </span>
+
+                              <div className="w-9 h-9 rounded-full bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center flex-shrink-0 overflow-hidden border border-slate-200">
+                                {item.avatar_url ? (
+                                  <img src={item.avatar_url} alt={item.display_name} className="w-full h-full object-cover" />
+                                ) : (
+                                  item.display_name?.charAt(0)?.toUpperCase() || 'H'
+                                )}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-slate-800 truncate block">
+                                    {item.display_name}
+                                  </span>
+                                  {isTop1 && (
+                                    <span className="text-[10px] font-extrabold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-300 hidden sm:inline-block">
+                                      Quán Quân
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                                  <span>Đúng {item.correct_count ?? 0} câu</span>
+                                  <span>•</span>
+                                  <span className="font-mono">{(item.total_response_time_ms ? (item.total_response_time_ms / 1000).toFixed(1) : '0.0')}s</span>
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="text-right flex-shrink-0 pl-3">
+                              <span className="text-base font-black text-amber-600 block">
+                                {item.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                Hạng {item.rank}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Bottom Reset Action */}
+                  <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-xs text-slate-400">
+                      Phiên thi đấu đã kết thúc hoàn toàn • CSDL đã hoàn tất lưu trữ
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResetToSetup}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold text-sm shadow-md transition"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      Tạo Đấu Trường Mới
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

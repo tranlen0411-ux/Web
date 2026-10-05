@@ -35,6 +35,7 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
   const [submissionStats, setSubmissionStats] = useState(DEFAULT_SUBMISSION_STATS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [errorDetails, setErrorDetails] = useState(null);
 
   const status = snapshot?.status || initialStatus;
   const isTerminal = status === 'finished' || status === 'cancelled';
@@ -77,9 +78,16 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
         hasSnapshotRef.current = true;
         setSnapshot(snapRes.data);
         setError(null);
+        setErrorDetails(null);
       } else if (!snapRes.success && !hasSnapshotRef.current) {
         // Only set error if no previous valid snapshot exists
-        setError(snapRes.message || 'Không thể tải thông tin phòng thi.');
+        const errMsg = snapRes.message || 'Không thể tải thông tin phòng thi.';
+        setError(errMsg);
+        setErrorDetails({
+          error_code: snapRes.error_code || 'RPC_ERROR',
+          status: snapRes.status,
+          message: errMsg,
+        });
       }
 
       if (partRes.success && Array.isArray(partRes.data)) {
@@ -103,7 +111,12 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
 
     } catch (err) {
       if (isMountedRef.current && !hasSnapshotRef.current) {
-        setError(err.message || 'Lỗi mạng khi cập nhật dữ liệu phòng thi.');
+        const errMsg = err.message || 'Lỗi mạng khi cập nhật dữ liệu phòng thi.';
+        setError(errMsg);
+        setErrorDetails({
+          error_code: 'CLIENT_EXCEPTION',
+          message: errMsg,
+        });
       }
     } finally {
       isFetchingRef.current = false;
@@ -167,6 +180,8 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
       setSnapshot(null);
       setParticipants([]);
       setSubmissionStats(DEFAULT_SUBMISSION_STATS);
+      setError(null);
+      setErrorDetails(null);
       hasSnapshotRef.current = false;
     }
   }, [sessionId]);
@@ -245,6 +260,7 @@ export function useHostCompetitionPolling(sessionId, initialStatus = 'waiting') 
     submissionStats,
     isLoading,
     error,
+    errorDetails,
     refreshNow,
     setSnapshot: setSnapshotPublic,
   };
