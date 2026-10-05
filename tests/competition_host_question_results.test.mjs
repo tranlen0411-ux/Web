@@ -364,9 +364,9 @@ console.log('  ✅ [3.B] PASS: multiple_choice correctly displays option breakdo
 
 
 // ============================================================================
-// Test 4: Regression Test - One-Shot Countdown Zero Guard & Manual Action
+// Test 4: Regression Test - Bounded 2-Attempt Clock-Skew Guard & Manual Action
 // ============================================================================
-console.log('\n--- [Test 4] One-Shot Countdown Zero Guard & Repeated Fetch Prevention ---');
+console.log('\n--- [Test 4] Bounded 2-Attempt Clock-Skew Guard & Repeated Fetch Prevention ---');
 
 class MockHostCountdownComponent {
   constructor({ sessionId = 'sess-reg-1', initialQuestionId = 'q-101', deadline = '2026-10-05T08:00:30.000Z' }) {
@@ -395,7 +395,7 @@ class MockHostCountdownComponent {
   }
 
   async fetchResultsSafely(sessionId = this.sessionId) {
-    if (!sessionId || this.isFetchingResultsRef.current) return;
+    if (!sessionId || this.isFetchingResultsRef.current) return { success: false, error_code: 'BUSY_OR_INVALID' };
     this.isFetchingResultsRef.current = true;
     this.rpcCalls.push({
       timestamp: Date.now(),
@@ -409,10 +409,16 @@ class MockHostCountdownComponent {
         if (this.snapshot.current_question_id && res.data.question_id === this.snapshot.current_question_id) {
           this.questionResults = res.data;
           this.hostViewMode = 'QUESTION_RESULTS';
+          return { success: true, data: res.data };
         }
+        return { success: false, error_code: 'QUESTION_ID_MISMATCH' };
       } else if (res.error_code === 'QUESTION_STILL_ACTIVE') {
         // Skew protection: remain LIVE_QUESTION, do not leak or loop
+        return { success: false, error_code: 'QUESTION_STILL_ACTIVE' };
       }
+      return { success: false, error_code: res.error_code || 'ERROR' };
+    } catch (_err) {
+      return { success: false, error_code: 'NETWORK_ERROR' };
     } finally {
       this.isFetchingResultsRef.current = false;
     }
@@ -429,11 +435,26 @@ class MockHostCountdownComponent {
     const remaining = Math.max(0, Math.ceil((deadline - fakeCurrentTime) / 1000));
     this.timeLeftSeconds = remaining;
 
-    // When countdown reaches 0, trigger at most ONE automatic attempt per question deadline
+    // When countdown reaches 0, trigger at most TWO bounded automatic attempts for clock skew
     if (remaining === 0 && this.hostViewMode === 'LIVE_QUESTION' && !this.isFetchingResultsRef.current && !this.questionResults) {
       const attemptKey = `${this.snapshot.current_question_id}:${this.snapshot.question_deadline}`;
-      if (this.autoResultAttemptRef.current !== attemptKey) {
-        this.autoResultAttemptRef.current = attemptKey;
+      const guard = this.autoResultAttemptRef.current;
+
+      if (!guard || guard.key !== attemptKey) {
+        // Attempt #1 on initial countdown zero
+        this.autoResultAttemptRef.current = {
+          key: attemptKey,
+          attempts: 1,
+          canRetryOnSkew: false
+        };
+        const res = await this.fetchResultsSafely(this.sessionId);
+        if (this.autoResultAttemptRef.current?.key === attemptKey) {
+          this.autoResultAttemptRef.current.canRetryOnSkew = (res?.error_code === 'QUESTION_STILL_ACTIVE');
+        }
+      } else if (guard.attempts < 2 && guard.canRetryOnSkew) {
+        // Attempt #2 on subsequent countdown tick for clock skew
+        guard.attempts = 2;
+        guard.canRetryOnSkew = false;
         await this.fetchResultsSafely(this.sessionId);
       }
     }
@@ -457,93 +478,152 @@ class MockHostCountdownComponent {
   }
 }
 
-// 4.A: Countdown reaches zero -> auto result fetch fires exactly once
+// 4.A: Clock-Skew Eventual Success (Attempt #1 QUESTION_STILL_ACTIVE -> Attempt #2 Success)
 const deadlineTime = new Date('2026-10-05T08:00:30.000Z').getTime();
-const hostComp = new MockHostCountdownComponent({
-  sessionId: 'sess-test',
+const hostCompSkew = new MockHostCountdownComponent({
+  sessionId: 'sess-test-skew',
   initialQuestionId: 'q-1',
   deadline: new Date(deadlineTime).toISOString()
 });
 
-// Configure backend to return QUESTION_STILL_ACTIVE at deadline
-hostComp.setMockRpcResponse(async () => ({
+let skewAttemptCount = 0;
+hostCompSkew.setMockRpcResponse(async () => {
+  skewAttemptCount++;
+  if (skewAttemptCount === 1) {
+    return { success: false, error_code: 'QUESTION_STILL_ACTIVE', message: 'Question is still active on server' };
+  }
+  return {
+    success: true,
+    data: {
+      ...mockQ1Results,
+      session_id: 'sess-test-skew',
+      question_id: 'q-1',
+      question_closed: true
+    }
+  };
+});
+
+// Tick at remaining = 5s
+await hostCompSkew.triggerCountdownTick(deadlineTime - 5000);
+assert.equal(hostCompSkew.timeLeftSeconds, 5);
+assert.equal(hostCompSkew.rpcCalls.length, 0, 'No RPC call when countdown > 0');
+
+// Tick 1 at remaining = 0s (Attempt #1 fails with QUESTION_STILL_ACTIVE)
+await hostCompSkew.triggerCountdownTick(deadlineTime);
+assert.equal(hostCompSkew.timeLeftSeconds, 0);
+assert.equal(hostCompSkew.rpcCalls.length, 1, 'Attempt #1 MUST fire at countdown zero');
+assert.equal(hostCompSkew.hostViewMode, 'LIVE_QUESTION', 'Must remain LIVE_QUESTION on attempt #1 clock skew');
+assert.equal(hostCompSkew.questionResults, null);
+
+// Tick 2 at remaining = 0s (1s later, Attempt #2 fires and succeeds)
+await hostCompSkew.triggerCountdownTick(deadlineTime + 1000);
+assert.equal(hostCompSkew.timeLeftSeconds, 0);
+assert.equal(hostCompSkew.rpcCalls.length, 2, 'Attempt #2 MUST fire on next tick for clock skew');
+assert.equal(hostCompSkew.hostViewMode, 'QUESTION_RESULTS', 'Transitions to QUESTION_RESULTS on attempt #2 success');
+assert.equal(hostCompSkew.questionResults.question_id, 'q-1');
+
+// Tick 3 at remaining = 0s (2s later, no further RPC calls)
+await hostCompSkew.triggerCountdownTick(deadlineTime + 2000);
+assert.equal(hostCompSkew.rpcCalls.length, 2, 'No further RPC calls after attempt #2 success');
+console.log('  ✅ [4.A] PASS: Clock-skew retry succeeds on attempt #2 and transitions to QUESTION_RESULTS');
+
+
+// 4.B: Double Active Failure (Attempt #1 & #2 both return QUESTION_STILL_ACTIVE -> Halt)
+const hostCompDoubleFail = new MockHostCountdownComponent({
+  sessionId: 'sess-test-double-fail',
+  initialQuestionId: 'q-1',
+  deadline: new Date(deadlineTime).toISOString()
+});
+
+hostCompDoubleFail.setMockRpcResponse(async () => ({
   success: false,
   error_code: 'QUESTION_STILL_ACTIVE',
   message: 'Question is still active on server'
 }));
 
-// Tick at remaining = 5s
-await hostComp.triggerCountdownTick(deadlineTime - 5000);
-assert.equal(hostComp.timeLeftSeconds, 5);
-assert.equal(hostComp.rpcCalls.length, 0, 'No RPC call when countdown > 0');
+// Tick 1 (Attempt #1)
+await hostCompDoubleFail.triggerCountdownTick(deadlineTime);
+assert.equal(hostCompDoubleFail.rpcCalls.length, 1);
+assert.equal(hostCompDoubleFail.hostViewMode, 'LIVE_QUESTION');
 
-// Tick 1 at remaining = 0s (countdown reaches 0)
-await hostComp.triggerCountdownTick(deadlineTime);
-assert.equal(hostComp.timeLeftSeconds, 0);
-assert.equal(hostComp.rpcCalls.length, 1, 'Auto fetch MUST fire exactly once when countdown hits 0');
-assert.equal(hostComp.hostViewMode, 'LIVE_QUESTION', 'Must remain LIVE_QUESTION on QUESTION_STILL_ACTIVE');
-assert.equal(hostComp.questionResults, null, 'questionResults must remain null');
-console.log('  ✅ [4.A] PASS: Auto result fetch fires exactly once upon reaching countdown zero');
+// Tick 2 (Attempt #2)
+await hostCompDoubleFail.triggerCountdownTick(deadlineTime + 1000);
+assert.equal(hostCompDoubleFail.rpcCalls.length, 2);
+assert.equal(hostCompDoubleFail.hostViewMode, 'LIVE_QUESTION');
 
-// 4.B: Subsequent ticks at zero (seconds 1, 2, 3 after deadline) do NOT fire additional RPCs
-await hostComp.triggerCountdownTick(deadlineTime + 1000);
-assert.equal(hostComp.timeLeftSeconds, 0);
-assert.equal(hostComp.rpcCalls.length, 1, 'Tick at +1s must NOT trigger a second auto RPC call');
+// Subsequent 5 simulated ticks at zero: RPC count MUST stay strictly at 2
+for (let i = 2; i <= 6; i++) {
+  await hostCompDoubleFail.triggerCountdownTick(deadlineTime + i * 1000);
+  assert.equal(hostCompDoubleFail.rpcCalls.length, 2, `Tick +${i}s must NOT fire additional RPC`);
+}
+assert.equal(hostCompDoubleFail.hostViewMode, 'LIVE_QUESTION', 'Remains fail-closed without busy loop');
+console.log('  ✅ [4.B] PASS: Double QUESTION_STILL_ACTIVE failure halts automatic attempts at exactly 2');
 
-await hostComp.triggerCountdownTick(deadlineTime + 2000);
-assert.equal(hostComp.timeLeftSeconds, 0);
-assert.equal(hostComp.rpcCalls.length, 1, 'Tick at +2s must NOT trigger a third auto RPC call');
 
-await hostComp.triggerCountdownTick(deadlineTime + 3000);
-assert.equal(hostComp.timeLeftSeconds, 0);
-assert.equal(hostComp.rpcCalls.length, 1, 'Tick at +3s must NOT trigger a fourth auto RPC call');
-console.log('  ✅ [4.B] PASS: Subsequent zero-ticks suppressed by one-shot guard (no repeated fetch loop)');
-
-// 4.C: Explicit manual Host action still works and calls RPC
-hostComp.setMockRpcResponse(async () => ({
+// 4.C: Manual Check After Two Auto Failures
+hostCompDoubleFail.setMockRpcResponse(async () => ({
   success: true,
   data: {
     ...mockQ1Results,
-    session_id: 'sess-test',
+    session_id: 'sess-test-double-fail',
     question_id: 'q-1',
     question_closed: true
   }
 }));
 
-await hostComp.triggerManualResultCheck();
-assert.equal(hostComp.rpcCalls.length, 2, 'Manual Host click MUST bypass one-shot auto guard and call RPC');
-assert.equal(hostComp.hostViewMode, 'QUESTION_RESULTS', 'Manual check transitions to QUESTION_RESULTS');
-assert.equal(hostComp.questionResults.question_id, 'q-1');
-console.log('  ✅ [4.C] PASS: Manual Host result check executes without being blocked by auto guard');
+await hostCompDoubleFail.triggerManualResultCheck();
+assert.equal(hostCompDoubleFail.rpcCalls.length, 3, 'Manual Host click MUST execute even after 2 auto failures');
+assert.equal(hostCompDoubleFail.hostViewMode, 'QUESTION_RESULTS');
+assert.equal(hostCompDoubleFail.questionResults.question_id, 'q-1');
+console.log('  ✅ [4.C] PASS: Manual Host result check works seamlessly after auto attempts are exhausted');
 
-// 4.D: Advancing to next question resets guard and allows auto fetch for new question
+
+// 4.D: Question Transition Resets Bounded Retry Guard
 const nextDeadlineTime = deadlineTime + 60000;
-hostComp.onQuestionChange('q-2', new Date(nextDeadlineTime).toISOString());
-assert.equal(hostComp.hostViewMode, 'LIVE_QUESTION');
-assert.equal(hostComp.questionResults, null);
-assert.equal(hostComp.autoResultAttemptRef.current, null, 'autoResultAttemptRef must be reset on question change');
+hostCompDoubleFail.onQuestionChange('q-2', new Date(nextDeadlineTime).toISOString());
+assert.equal(hostCompDoubleFail.hostViewMode, 'LIVE_QUESTION');
+assert.equal(hostCompDoubleFail.questionResults, null);
+assert.equal(hostCompDoubleFail.autoResultAttemptRef.current, null, 'autoResultAttemptRef must reset on question change');
 
-// Tick at remaining = 0 for Q2
-hostComp.setMockRpcResponse(async () => ({
+// Q2 receives its own first auto attempt
+hostCompDoubleFail.setMockRpcResponse(async () => ({
   success: true,
   data: {
     ...mockQ1Results,
-    session_id: 'sess-test',
+    session_id: 'sess-test-double-fail',
     question_id: 'q-2',
     question_order: 2,
     question_closed: true
   }
 }));
 
-await hostComp.triggerCountdownTick(nextDeadlineTime);
-assert.equal(hostComp.rpcCalls.length, 3, 'Q2 zero tick must trigger auto fetch for Q2');
-assert.equal(hostComp.hostViewMode, 'QUESTION_RESULTS');
-assert.equal(hostComp.questionResults.question_id, 'q-2');
+await hostCompDoubleFail.triggerCountdownTick(nextDeadlineTime);
+assert.equal(hostCompDoubleFail.rpcCalls.length, 4, 'Q2 receives its own first auto attempt');
+assert.equal(hostCompDoubleFail.hostViewMode, 'QUESTION_RESULTS');
+assert.equal(hostCompDoubleFail.questionResults.question_id, 'q-2');
+console.log('  ✅ [4.D] PASS: Question change resets guard cleanly and permits Q2 auto attempts');
 
-// Subsequent zero tick for Q2 suppressed
-await hostComp.triggerCountdownTick(nextDeadlineTime + 1000);
-assert.equal(hostComp.rpcCalls.length, 3, 'Subsequent zero tick for Q2 is suppressed');
-console.log('  ✅ [4.D] PASS: Question change resets guard cleanly and allows one-shot fetch for next question');
+
+// 4.E: Non-Skew Errors (e.g. NETWORK_ERROR) Fail-Closed Without Second Auto Attempt
+const hostCompNetErr = new MockHostCountdownComponent({
+  sessionId: 'sess-test-net-err',
+  initialQuestionId: 'q-1',
+  deadline: new Date(deadlineTime).toISOString()
+});
+
+hostCompNetErr.setMockRpcResponse(async () => {
+  throw new Error('Connection refused');
+});
+
+// Tick 1 (Attempt #1 network error)
+await hostCompNetErr.triggerCountdownTick(deadlineTime);
+assert.equal(hostCompNetErr.rpcCalls.length, 1);
+assert.equal(hostCompNetErr.hostViewMode, 'LIVE_QUESTION');
+
+// Tick 2 (Subsequent tick should NOT retry network error)
+await hostCompNetErr.triggerCountdownTick(deadlineTime + 1000);
+assert.equal(hostCompNetErr.rpcCalls.length, 1, 'Network error must NOT trigger automatic attempt #2');
+console.log('  ✅ [4.E] PASS: Non-skew errors (network/auth) fail-closed without automatic attempt #2');
 
 console.log('\n================================================================================');
 console.log('🎉 ALL COMPETITION V1 HOST QUESTION RESULTS FRONTEND TESTS PASSED!');

@@ -209,7 +209,7 @@ export function CompetitionHostPage() {
 
   // Safe question results fetcher (fail-closed, no busy loop)
   const fetchResultsSafely = useCallback(async (sessionId = activeSessionId) => {
-    if (!sessionId || isFetchingResultsRef.current) return;
+    if (!sessionId || isFetchingResultsRef.current) return { success: false, error_code: 'BUSY_OR_INVALID' };
     isFetchingResultsRef.current = true;
     setIsResultsLoading(true);
     try {
@@ -218,19 +218,24 @@ export function CompetitionHostPage() {
         if (snapshotRef.current?.current_question_id && res.data.question_id === snapshotRef.current.current_question_id) {
           setQuestionResults(res.data);
           setHostViewMode('QUESTION_RESULTS');
+          return { success: true, data: res.data };
         }
+        return { success: false, error_code: 'QUESTION_ID_MISMATCH' };
       } else if (res.error_code === 'QUESTION_STILL_ACTIVE') {
         // Skew protection: Question still active on server, fail-closed without rapid retry loop
+        return { success: false, error_code: 'QUESTION_STILL_ACTIVE' };
       }
+      return { success: false, error_code: res.error_code || 'ERROR' };
     } catch (_err) {
       // Network error, fail closed
+      return { success: false, error_code: 'NETWORK_ERROR' };
     } finally {
       isFetchingResultsRef.current = false;
       setIsResultsLoading(false);
     }
   }, [activeSessionId]);
 
-  // Countdown Timer & Natural Expiry Detection (Local display only + one-shot result attempt)
+  // Countdown Timer & Natural Expiry Detection (Local display only + bounded 2-attempt clock-skew auto fetch)
   useEffect(() => {
     if (!snapshot?.question_deadline || snapshot.status !== 'in_progress') {
       setTimeLeftSeconds(null);
@@ -243,11 +248,28 @@ export function CompetitionHostPage() {
       const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
       setTimeLeftSeconds(remaining);
 
-      // When countdown reaches 0, trigger at most ONE automatic attempt per question deadline
+      // When countdown reaches 0, trigger at most TWO bounded automatic attempts for clock skew
       if (remaining === 0 && hostViewMode === 'LIVE_QUESTION' && !isFetchingResultsRef.current && !questionResults) {
         const attemptKey = `${snapshot.current_question_id}:${snapshot.question_deadline}`;
-        if (autoResultAttemptRef.current !== attemptKey) {
-          autoResultAttemptRef.current = attemptKey;
+        const guard = autoResultAttemptRef.current;
+
+        if (!guard || guard.key !== attemptKey) {
+          // Attempt #1 on initial countdown zero
+          autoResultAttemptRef.current = {
+            key: attemptKey,
+            attempts: 1,
+            canRetryOnSkew: false
+          };
+          fetchResultsSafely(activeSessionId).then((res) => {
+            // Permit attempt #2 ONLY if attempt #1 specifically failed with QUESTION_STILL_ACTIVE
+            if (autoResultAttemptRef.current?.key === attemptKey) {
+              autoResultAttemptRef.current.canRetryOnSkew = (res?.error_code === 'QUESTION_STILL_ACTIVE');
+            }
+          });
+        } else if (guard.attempts < 2 && guard.canRetryOnSkew) {
+          // Attempt #2 on subsequent countdown tick for clock skew
+          guard.attempts = 2;
+          guard.canRetryOnSkew = false;
           fetchResultsSafely(activeSessionId);
         }
       }
