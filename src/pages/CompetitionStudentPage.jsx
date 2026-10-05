@@ -131,11 +131,9 @@ export const CompetitionStudentPage = () => {
   const [submitError, setSubmitError] = useState(null);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
 
-  // Guards & Refs
+  // Guards & Independent Refs
   const activeSessionIdRef = useRef(sessionId);
   const activeParticipantIdRef = useRef(participantId);
-  const sessionStatusRef = useRef(sessionData?.status);
-  const currentQuestionIdRef = useRef(currentQuestion?.id || null);
   const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
   const isMountedRef = useRef(true);
 
@@ -152,6 +150,10 @@ export const CompetitionStudentPage = () => {
     participantId,
     enabled: Boolean(sessionId && participantId),
   });
+
+  // Authoritative Status & Question Refs (Declared after hook destructuring to eliminate TDZ ReferenceError)
+  const sessionStatusRef = useRef(sessionData?.status);
+  const currentQuestionIdRef = useRef(currentQuestion?.id || null);
 
   // Authoritative Status & Question Sync Effects for Async Race Protection
   useEffect(() => {

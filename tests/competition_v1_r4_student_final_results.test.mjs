@@ -208,12 +208,30 @@ console.log('  ✅ [14] PASS: Finish transition purges all active question state
 // ============================================================================
 console.log('--- [Test 15] Late Answer Response Guard (Deep Simulation) ---');
 
-// 15.A: Source verification for 5-guard check and refs
+// 15.A: Source verification for 5-guard check and refs ordering (TDZ Elimination)
 assert.ok(studentPageSource.includes('sessionStatusRef'), 'Must declare sessionStatusRef');
 assert.ok(studentPageSource.includes('currentQuestionIdRef'), 'Must declare currentQuestionIdRef');
 assert.ok(studentPageSource.includes('activeSessionIdRef'), 'Must declare activeSessionIdRef');
 assert.ok(studentPageSource.includes('activeParticipantIdRef'), 'Must declare activeParticipantIdRef');
 assert.ok(studentPageSource.includes('isMountedRef'), 'Must declare isMountedRef');
+
+// Strict TDZ Ordering Check: hook destructuring MUST appear before sessionStatusRef and currentQuestionIdRef
+const hookIndex = studentPageSource.indexOf('useStudentCompetitionRealtime({');
+const sessionStatusRefIndex = studentPageSource.indexOf('const sessionStatusRef = useRef(sessionData?.status)');
+const currentQuestionIdRefIndex = studentPageSource.indexOf('const currentQuestionIdRef = useRef(currentQuestion?.id');
+
+assert.ok(hookIndex !== -1, 'useStudentCompetitionRealtime call must exist');
+assert.ok(sessionStatusRefIndex !== -1, 'sessionStatusRef declaration must exist');
+assert.ok(currentQuestionIdRefIndex !== -1, 'currentQuestionIdRef declaration must exist');
+assert.ok(
+  hookIndex < sessionStatusRefIndex,
+  'useStudentCompetitionRealtime must be declared BEFORE sessionStatusRef to avoid TDZ ReferenceError'
+);
+assert.ok(
+  hookIndex < currentQuestionIdRefIndex,
+  'useStudentCompetitionRealtime must be declared BEFORE currentQuestionIdRef to avoid TDZ ReferenceError'
+);
+console.log('  ✅ [15.0] PASS: Hook destructuring strictly precedes statusRef & questionRef (Zero TDZ risk)');
 
 // 15.B: Behavioral Simulation Function implementing the exact component logic
 function executeSubmitAnswerSimulation({
