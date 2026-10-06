@@ -706,8 +706,13 @@ async function runR7TestSuite() {
     'HostQuestionAnalyticsView must track latestRequestIdRef'
   );
   assert.ok(
-    analyticsViewSource.includes('currentSessionIdRef'),
-    'HostQuestionAnalyticsView must track currentSessionIdRef'
+    analyticsViewSource.includes('currentSessionIdRef = useRef(sessionId)') &&
+    analyticsViewSource.includes('currentSessionIdRef.current = sessionId;'),
+    'HostQuestionAnalyticsView must synchronize currentSessionIdRef synchronously in render'
+  );
+  assert.ok(
+    !analyticsViewSource.includes('currentSessionIdRef.current = sessionId;\n  }, [sessionId]);'),
+    'HostQuestionAnalyticsView must not rely on passive useEffect for session ref'
   );
   assert.ok(
     analyticsViewSource.includes('requestId !== latestRequestIdRef.current') ||
@@ -720,12 +725,17 @@ async function runR7TestSuite() {
   );
   recordPass('Analytics request has request identity / stale-response guard');
 
-  // Test 46: Old session response cannot overwrite newer session analytics
+  // Test 46: Old session response cannot overwrite newer session analytics or null session
   let latestRequestId = 0;
   let currentSessionId = '11111111-1111-4111-8111-111111111111';
   let activeState = null;
 
   async function mockHostAnalyticsFetch(targetSessionId, simulatedDelayMs, payload) {
+    if (!targetSessionId) {
+      latestRequestId += 1;
+      activeState = null;
+      return;
+    }
     const reqId = ++latestRequestId;
     const reqSessionId = targetSessionId;
 
@@ -737,15 +747,23 @@ async function runR7TestSuite() {
     activeState = payload;
   }
 
-  // Session A request starts (takes 60ms)
+  // Subtest 46a: Session A -> Session B race
   const reqA = mockHostAnalyticsFetch('11111111-1111-4111-8111-111111111111', 60, { session: 'A_OLD' });
-  // Session switches to Session B, fast fetch starts (takes 10ms)
+  // Synchronous render update to B
   currentSessionId = '22222222-2222-4222-8222-222222222222';
   const reqB = mockHostAnalyticsFetch('22222222-2222-4222-8222-222222222222', 10, { session: 'B_NEW' });
 
   await Promise.all([reqA, reqB]);
   assert.deepEqual(activeState, { session: 'B_NEW' }, 'Old session response A must not overwrite newer session B analytics');
-  recordPass('Old session response cannot overwrite newer session analytics');
+
+  // Subtest 46b: Session B -> null session transition invalidation
+  const reqB2 = mockHostAnalyticsFetch('22222222-2222-4222-8222-222222222222', 60, { session: 'B_LATE' });
+  // Synchronous render update to null
+  currentSessionId = null;
+  await mockHostAnalyticsFetch(null, 0, null);
+  await reqB2;
+  assert.equal(activeState, null, 'Stale response B must not overwrite null session state');
+  recordPass('Old session response cannot overwrite newer session analytics or null session');
 
   // Test 47: Analytics payload remains absent from localStorage/sessionStorage
   assert.ok(

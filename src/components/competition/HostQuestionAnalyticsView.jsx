@@ -27,13 +27,11 @@ export const HostQuestionAnalyticsView = ({
 
   const latestRequestIdRef = useRef(0);
   const currentSessionIdRef = useRef(sessionId);
-
-  useEffect(() => {
-    currentSessionIdRef.current = sessionId;
-  }, [sessionId]);
+  currentSessionIdRef.current = sessionId;
 
   const fetchAnalytics = useCallback(async () => {
     if (!sessionId) {
+      latestRequestIdRef.current += 1;
       setIsLoading(false);
       setAnalyticsData(null);
       setError(null);
