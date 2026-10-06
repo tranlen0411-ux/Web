@@ -30,64 +30,13 @@ export const StudentQuestionReviewView = ({
   onRetry,
   onBack,
 }) => {
-  // Filter State: 'ALL' | 'CORRECT' | 'INCORRECT' | 'UNANSWERED'
+  // 1. Hooks (unconditionally called on every render)
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [pendingScrollTargetId, setPendingScrollTargetId] = useState(null);
 
-  if (isLoading) {
-    return (
-      <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-        <div className="w-16 h-16 bg-sky-100 rounded-3xl flex items-center justify-center mx-auto mb-4 border-2 border-sky-300">
-          <RefreshCw className="w-8 h-8 text-sky-600 animate-spin" />
-        </div>
-        <h2 className="text-xl font-black text-slate-800 mb-2">Đang tải chi tiết bài làm...</h2>
-        <p className="text-sm font-semibold text-slate-500">Vui lòng chờ trong giây lát.</p>
-      </div>
-    );
-  }
-
-  if (error || !reviewData || !Array.isArray(reviewData.questions)) {
-    return (
-      <div className="max-w-2xl mx-auto px-4 py-12">
-        <div className="bg-white rounded-3xl border-4 border-rose-200 shadow-md p-8 text-center">
-          <div className="w-16 h-16 bg-rose-100 rounded-2xl flex items-center justify-center mx-auto mb-4 border-2 border-rose-300">
-            <AlertCircle className="w-8 h-8 text-rose-600" />
-          </div>
-          <h2 className="text-2xl font-black text-rose-950 mb-2">
-            Không Thể Tải Dữ Liệu Xem Lại
-          </h2>
-          <p className="text-slate-600 font-semibold mb-6 text-sm">
-            {error || 'Đã xảy ra lỗi khi tải danh sách câu hỏi xem lại.'}
-          </p>
-          <div className="flex items-center justify-center gap-4">
-            <button
-              type="button"
-              onClick={onBack}
-              className="px-6 py-3 border-2 border-slate-300 hover:border-slate-400 text-slate-700 font-bold text-sm rounded-xl transition-all"
-            >
-              Quay lại bảng thành tích
-            </button>
-            {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="px-6 py-3 bg-sky-500 hover:bg-sky-600 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center gap-2"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>Thử tải lại</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const questions = reviewData.questions;
-  const totalQuestions = questions.length;
-  const correctCount = questions.filter(q => q.student_answer?.is_correct === true).length;
-  const totalPointsAwarded = questions.reduce((sum, q) => sum + (parseFloat(q.student_answer?.points_awarded) || 0), 0);
-  const totalMaxPoints = questions.reduce((sum, q) => sum + (parseFloat(q.points) || 0), 0);
+  const questions = Array.isArray(reviewData?.questions)
+    ? reviewData.questions
+    : [];
 
   // R6 Counts Calculation
   const filterCounts = useMemo(() => {
@@ -161,6 +110,61 @@ export const StudentQuestionReviewView = ({
       }
     }
   }, [filteredQuestions]);
+
+  // 2. Conditional Returns (strictly AFTER all hooks have been declared)
+  if (isLoading) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-16 text-center">
+        <div className="w-16 h-16 bg-sky-100 rounded-3xl flex items-center justify-center mx-auto mb-4 border-2 border-sky-300">
+          <RefreshCw className="w-8 h-8 text-sky-600 animate-spin" />
+        </div>
+        <h2 className="text-xl font-black text-slate-800 mb-2">Đang tải chi tiết bài làm...</h2>
+        <p className="text-sm font-semibold text-slate-500">Vui lòng chờ trong giây lát.</p>
+      </div>
+    );
+  }
+
+  if (error || !reviewData || !Array.isArray(reviewData.questions)) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-12">
+        <div className="bg-white rounded-3xl border-4 border-rose-200 shadow-md p-8 text-center">
+          <div className="w-16 h-16 bg-rose-100 rounded-2xl flex items-center justify-center mx-auto mb-4 border-2 border-rose-300">
+            <AlertCircle className="w-8 h-8 text-rose-600" />
+          </div>
+          <h2 className="text-2xl font-black text-rose-950 mb-2">
+            Không Thể Tải Dữ Liệu Xem Lại
+          </h2>
+          <p className="text-slate-600 font-semibold mb-6 text-sm">
+            {error || 'Đã xảy ra lỗi khi tải danh sách câu hỏi xem lại.'}
+          </p>
+          <div className="flex items-center justify-center gap-4">
+            <button
+              type="button"
+              onClick={onBack}
+              className="px-6 py-3 border-2 border-slate-300 hover:border-slate-400 text-slate-700 font-bold text-sm rounded-xl transition-all"
+            >
+              Quay lại bảng thành tích
+            </button>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="px-6 py-3 bg-sky-500 hover:bg-sky-600 text-white font-bold text-sm rounded-xl shadow-md transition-all flex items-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Thử tải lại</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const totalQuestions = questions.length;
+  const correctCount = filterCounts.correct;
+  const totalPointsAwarded = questions.reduce((sum, q) => sum + (parseFloat(q.student_answer?.points_awarded) || 0), 0);
+  const totalMaxPoints = questions.reduce((sum, q) => sum + (parseFloat(q.points) || 0), 0);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 sm:py-8">

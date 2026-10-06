@@ -199,7 +199,26 @@ async function runR6TestSuite() {
   assert.ok(reviewViewSource.includes('Không có câu hỏi nào trong mục này'), 'Friendly empty filter message');
   recordPass('Empty filter results display user-friendly reset view');
 
-  // 4.4 R5 Explanation and Correct Answer rendering preserved
+  // 4.4 Rules of Hooks Invariant: All hooks declared before any conditional return
+  const compStartIdx = reviewViewSource.indexOf('export const StudentQuestionReviewView');
+  const firstIfReturnIdx = reviewViewSource.indexOf('if (isLoading)');
+  const lastHookIdx = Math.max(
+    reviewViewSource.lastIndexOf('useMemo'),
+    reviewViewSource.lastIndexOf('useEffect'),
+    reviewViewSource.lastIndexOf('useCallback'),
+    reviewViewSource.lastIndexOf('useState')
+  );
+
+  assert.ok(compStartIdx > 0, 'Component function located');
+  assert.ok(firstIfReturnIdx > 0, 'Loading conditional return located');
+  assert.ok(lastHookIdx > 0, 'Hook declarations located');
+  assert.ok(
+    lastHookIdx < firstIfReturnIdx,
+    `Rules of Hooks violation: last hook at index ${lastHookIdx} must precede first conditional return at index ${firstIfReturnIdx}`
+  );
+  recordPass('Rules of Hooks strictly satisfied: ALL hooks (useState, useMemo, useEffect, useCallback) precede conditional returns');
+
+  // 4.5 R5 Explanation and Correct Answer rendering preserved
   assert.ok(reviewViewSource.includes('q.explanation'), 'Explanation card preserved');
   assert.ok(reviewViewSource.includes('Lời Giải Thích / Hướng Dẫn'), 'Explanation header preserved');
   assert.ok(reviewViewSource.includes('Đáp án đúng'), 'Correct answer indicator preserved');
