@@ -41,6 +41,8 @@ import {
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
 import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
+import { HostExportControls } from '../components/competition/HostExportControls.jsx';
+import { HostPrintableReport } from '../components/competition/HostPrintableReport.jsx';
 
 // Default starter questions for quick session creation
 const DEFAULT_QUESTIONS = [
@@ -217,6 +219,7 @@ export function CompetitionHostPage() {
     setLeaderboardError(null);
     setIsLeaderboardOpen(false);
     setQuestionResults(null);
+    setExportAnalyticsData(null);
     setHostViewMode('LIVE_QUESTION');
     setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;
@@ -246,6 +249,7 @@ export function CompetitionHostPage() {
   // Host View Mode State (R3: LIVE_QUESTION, QUESTION_RESULTS, LEADERBOARD, FINAL_RESULTS)
   const [hostViewMode, setHostViewMode] = useState('LIVE_QUESTION');
   const [finishedTab, setFinishedTab] = useState('PODIUM'); // 'PODIUM' | 'ANALYTICS'
+  const [exportAnalyticsData, setExportAnalyticsData] = useState(null);
   const [questionResults, setQuestionResults] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
@@ -1870,7 +1874,13 @@ export function CompetitionHostPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3">
+                  <HostExportControls
+                    sessionTitle={snapshot.title}
+                    roomCode={snapshot.room_code}
+                    leaderboardData={leaderboardData}
+                    analyticsData={exportAnalyticsData}
+                  />
                   <button
                     type="button"
                     disabled={isLeaderboardLoading}
@@ -2295,6 +2305,7 @@ export function CompetitionHostPage() {
               <HostQuestionAnalyticsView
                 sessionId={activeSessionId}
                 onBackToPodium={() => setFinishedTab('PODIUM')}
+                onAnalyticsDataChange={setExportAnalyticsData}
               />
             )}
           </div>
@@ -2413,6 +2424,15 @@ export function CompetitionHostPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Print Layout (Hidden on Screen, Visible on Print) */}
+        {currentStatus === 'finished' && snapshot && (
+          <HostPrintableReport
+            session={snapshot}
+            leaderboardData={leaderboardData}
+            analyticsData={exportAnalyticsData}
+          />
         )}
 
       </div>

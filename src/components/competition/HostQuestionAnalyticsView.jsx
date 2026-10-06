@@ -19,7 +19,8 @@ import { getHostQuestionAnalytics } from '../../services/competitionClient.js';
 
 export const HostQuestionAnalyticsView = ({
   sessionId,
-  onBackToPodium
+  onBackToPodium,
+  onAnalyticsDataChange = null
 }) => {
   const [analyticsData, setAnalyticsData] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -35,6 +36,7 @@ export const HostQuestionAnalyticsView = ({
       setIsLoading(false);
       setAnalyticsData(null);
       setError(null);
+      onAnalyticsDataChange?.(null);
       return;
     }
 
@@ -44,6 +46,7 @@ export const HostQuestionAnalyticsView = ({
     setIsLoading(true);
     setError(null);
     setAnalyticsData(null);
+    onAnalyticsDataChange?.(null);
 
     const res = await getHostQuestionAnalytics(requestSessionId);
 
@@ -56,11 +59,13 @@ export const HostQuestionAnalyticsView = ({
 
     if (res.success && res.data) {
       setAnalyticsData(res.data);
+      onAnalyticsDataChange?.(res.data);
     } else {
       setError(res.message || 'Không thể tải dữ liệu phân tích câu hỏi.');
+      onAnalyticsDataChange?.(null);
     }
     setIsLoading(false);
-  }, [sessionId]);
+  }, [sessionId, onAnalyticsDataChange]);
 
   useEffect(() => {
     fetchAnalytics();
