@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -11,7 +11,9 @@ import {
   RefreshCw,
   AlertCircle,
   Check,
-  X
+  X,
+  ListFilter,
+  Layers,
 } from 'lucide-react';
 
 /**
@@ -28,6 +30,10 @@ export const StudentQuestionReviewView = ({
   onRetry,
   onBack,
 }) => {
+  // Filter State: 'ALL' | 'CORRECT' | 'INCORRECT' | 'UNANSWERED'
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [pendingScrollTargetId, setPendingScrollTargetId] = useState(null);
+
   if (isLoading) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-16 text-center">
@@ -83,6 +89,79 @@ export const StudentQuestionReviewView = ({
   const totalPointsAwarded = questions.reduce((sum, q) => sum + (parseFloat(q.student_answer?.points_awarded) || 0), 0);
   const totalMaxPoints = questions.reduce((sum, q) => sum + (parseFloat(q.points) || 0), 0);
 
+  // R6 Counts Calculation
+  const filterCounts = useMemo(() => {
+    let correct = 0;
+    let incorrect = 0;
+    let unanswered = 0;
+
+    for (const q of questions) {
+      if (!q.student_answer) {
+        unanswered++;
+      } else if (q.student_answer.is_correct === true) {
+        correct++;
+      } else {
+        incorrect++;
+      }
+    }
+
+    return {
+      all: questions.length,
+      correct,
+      incorrect,
+      unanswered,
+    };
+  }, [questions]);
+
+  // R6 Filtered Questions
+  const filteredQuestions = useMemo(() => {
+    if (statusFilter === 'CORRECT') {
+      return questions.filter(q => q.student_answer?.is_correct === true);
+    }
+    if (statusFilter === 'INCORRECT') {
+      return questions.filter(q => q.student_answer && q.student_answer.is_correct === false);
+    }
+    if (statusFilter === 'UNANSWERED') {
+      return questions.filter(q => !q.student_answer);
+    }
+    return questions;
+  }, [questions, statusFilter]);
+
+  // Scroll to pending target when filter updates to ALL
+  useEffect(() => {
+    if (pendingScrollTargetId) {
+      const animFrame = requestAnimationFrame(() => {
+        const el = document.getElementById(pendingScrollTargetId);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        setPendingScrollTargetId(null);
+      });
+      return () => cancelAnimationFrame(animFrame);
+    }
+  }, [pendingScrollTargetId, filteredQuestions]);
+
+  // Handler for Quick Question Jump
+  const handleJumpToQuestion = useCallback((targetQuestion) => {
+    const targetId = `review-question-${targetQuestion.question_id || targetQuestion.question_order}`;
+    
+    // Check if target question is currently visible in filteredQuestions
+    const isVisible = filteredQuestions.some(
+      q => (q.question_id && q.question_id === targetQuestion.question_id) || q.question_order === targetQuestion.question_order
+    );
+
+    if (!isVisible) {
+      // Auto switch filter to ALL, then scroll
+      setStatusFilter('ALL');
+      setPendingScrollTargetId(targetId);
+    } else {
+      const el = document.getElementById(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [filteredQuestions]);
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 sm:py-8">
       {/* Top Action & Navigation Bar */}
@@ -90,7 +169,7 @@ export const StudentQuestionReviewView = ({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-slate-200 hover:border-slate-300 rounded-2xl text-slate-700 font-black text-sm shadow-sm active:scale-95 transition-all"
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-slate-200 hover:border-slate-300 rounded-2xl text-slate-700 font-black text-sm shadow-sm active:scale-95 transition-all focus:outline-none focus:ring-2 focus:ring-slate-400"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Quay Lại Bảng Thành Tích</span>
@@ -139,9 +218,181 @@ export const StudentQuestionReviewView = ({
         </div>
       </div>
 
+      {/* R6 Feature 1: Filter Tab Bar */}
+      <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm p-4 sm:p-5 mb-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+          <div className="inline-flex items-center gap-2 text-slate-800 font-black text-sm">
+            <ListFilter className="w-4 h-4 text-indigo-600" />
+            <span>Bộ Lọc Trạng Thái Câu Hỏi</span>
+          </div>
+
+          <div className="text-xs font-bold text-slate-500">
+            Hiển thị: <span className="text-slate-800 font-black">{filteredQuestions.length}/{totalQuestions}</span> câu
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Bộ lọc trạng thái câu hỏi">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            aria-pressed={statusFilter === 'ALL'}
+            className={`px-4 py-2 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
+              statusFilter === 'ALL'
+                ? 'bg-indigo-600 text-white shadow-sm scale-[1.02]'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border border-slate-200'
+            }`}
+          >
+            <span>Tất cả</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+              statusFilter === 'ALL' ? 'bg-indigo-700/80 text-white' : 'bg-slate-200 text-slate-700'
+            }`}>
+              {filterCounts.all}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('CORRECT')}
+            aria-pressed={statusFilter === 'CORRECT'}
+            className={`px-4 py-2 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-emerald-400 ${
+              statusFilter === 'CORRECT'
+                ? 'bg-emerald-600 text-white shadow-sm scale-[1.02]'
+                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100/80 border border-emerald-200'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            <span>Đúng</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+              statusFilter === 'CORRECT' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-200 text-emerald-900'
+            }`}>
+              {filterCounts.correct}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('INCORRECT')}
+            aria-pressed={statusFilter === 'INCORRECT'}
+            className={`px-4 py-2 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-rose-400 ${
+              statusFilter === 'INCORRECT'
+                ? 'bg-rose-600 text-white shadow-sm scale-[1.02]'
+                : 'bg-rose-50 text-rose-800 hover:bg-rose-100/80 border border-rose-200'
+            }`}
+          >
+            <XCircle className="w-4 h-4" />
+            <span>Sai</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+              statusFilter === 'INCORRECT' ? 'bg-rose-700/80 text-white' : 'bg-rose-200 text-rose-900'
+            }`}>
+              {filterCounts.incorrect}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('UNANSWERED')}
+            aria-pressed={statusFilter === 'UNANSWERED'}
+            className={`px-4 py-2 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-slate-400 ${
+              statusFilter === 'UNANSWERED'
+                ? 'bg-slate-700 text-white shadow-sm scale-[1.02]'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border border-slate-200'
+            }`}
+          >
+            <HelpCircle className="w-4 h-4" />
+            <span>Chưa trả lời</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+              statusFilter === 'UNANSWERED' ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
+            }`}>
+              {filterCounts.unanswered}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* R6 Feature 2: Quick Question Navigation Grid */}
+      <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-sm p-4 sm:p-5 mb-8">
+        <div className="flex items-center justify-between gap-3 mb-3 pb-2 border-b border-slate-100">
+          <div className="inline-flex items-center gap-2 text-slate-800 font-black text-sm">
+            <Layers className="w-4 h-4 text-sky-600" />
+            <span>Điều Hướng Nhanh Câu Hỏi</span>
+          </div>
+
+          <div className="flex items-center gap-3 text-xs font-bold text-slate-500">
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> Đúng
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> Sai
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-400 inline-block" /> Chưa làm
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Danh sách điều hướng nhanh từng câu hỏi">
+          {questions.map((q, idx) => {
+            const studentAns = q.student_answer;
+            const isAnswered = studentAns !== null && studentAns !== undefined;
+            const isCorrect = isAnswered && studentAns.is_correct === true;
+            const qNum = q.question_order || idx + 1;
+
+            const statusText = !isAnswered ? 'Chưa trả lời' : isCorrect ? 'Đúng' : 'Sai';
+            const ariaLabel = `Câu ${qNum} — ${statusText}`;
+
+            let buttonClass = 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200';
+            let iconElement = <HelpCircle className="w-3 h-3 text-slate-500 shrink-0" />;
+
+            if (isAnswered && isCorrect) {
+              buttonClass = 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100';
+              iconElement = <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />;
+            } else if (isAnswered && !isCorrect) {
+              buttonClass = 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100';
+              iconElement = <XCircle className="w-3 h-3 text-rose-600 shrink-0" />;
+            }
+
+            return (
+              <button
+                key={q.question_id || idx}
+                type="button"
+                onClick={() => handleJumpToQuestion(q)}
+                aria-label={ariaLabel}
+                title={ariaLabel}
+                className={`min-w-[44px] h-10 px-2.5 py-1.5 rounded-xl border-2 font-black text-xs sm:text-sm flex items-center justify-center gap-1 transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-sky-400 ${buttonClass}`}
+              >
+                <span>{qNum}</span>
+                {iconElement}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filter Empty State */}
+      {filteredQuestions.length === 0 && (
+        <div className="bg-slate-50 rounded-3xl border-2 border-dashed border-slate-300 p-12 text-center my-6">
+          <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center mx-auto mb-3 text-slate-500">
+            <ListFilter className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-black text-slate-700 mb-1">
+            Không có câu hỏi nào trong mục này
+          </h3>
+          <p className="text-xs font-semibold text-slate-500 mb-4">
+            Bạn có thể chuyển sang bộ lọc khác hoặc xem toàn bộ bài thi.
+          </p>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-sm transition-all"
+          >
+            Xem tất cả ({filterCounts.all} câu)
+          </button>
+        </div>
+      )}
+
       {/* Questions List */}
       <div className="space-y-6">
-        {questions.map((q, qIdx) => {
+        {filteredQuestions.map((q, qIdx) => {
           const studentAns = q.student_answer;
           const isAnswered = studentAns !== null && studentAns !== undefined;
           const isCorrect = isAnswered && studentAns.is_correct === true;
@@ -152,10 +403,13 @@ export const StudentQuestionReviewView = ({
           const correctOptionIds = q.correct_answer?.option_ids || (correctOptionId ? [correctOptionId] : []);
           const acceptedAnswers = q.correct_answer?.accepted_answers || [];
 
+          const targetDomId = `review-question-${q.question_id || q.question_order || qIdx + 1}`;
+
           return (
             <div
               key={q.question_id || qIdx}
-              className={`bg-white rounded-3xl border-3 shadow-sm overflow-hidden transition-all ${
+              id={targetDomId}
+              className={`bg-white rounded-3xl border-3 shadow-sm overflow-hidden transition-all scroll-mt-24 ${
                 !isAnswered
                   ? 'border-slate-200'
                   : isCorrect
@@ -342,7 +596,7 @@ export const StudentQuestionReviewView = ({
         <button
           type="button"
           onClick={onBack}
-          className="px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center gap-2"
+          className="px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-slate-400"
         >
           <ArrowLeft className="w-5 h-5" />
           <span>Quay Về Bảng Thành Tích</span>
@@ -351,3 +605,4 @@ export const StudentQuestionReviewView = ({
     </div>
   );
 };
+
