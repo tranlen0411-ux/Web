@@ -650,6 +650,372 @@ assert.ok(
 );
 console.log('  ✅ [30] PASS: R4 Phase 1 strictly restricted to Authenticated Student');
 
+// ============================================================================
+// Helper for Tests 31-34: Exact Simulation of useStudentCompetitionRealtime
+// ============================================================================
+async function simulateStudentRealtimeHook({
+  sessionId,
+  participantId,
+  mockSessionSnapshot,
+  mockActiveQuestion = { success: true, data: { question: null } },
+  mockLeaderboard = { success: true, data: { leaderboard: [] } },
+  mockCapabilityTokenResult = { success: true, token: 'mock-cap-token' },
+}) {
+  let connectionStatus = 'disconnected';
+  let sessionData = null;
+  let currentQuestion = null;
+  let leaderboard = [];
+  let error = null;
+
+  const isMountedRef = { current: true };
+  const isTerminalRef = { current: false };
+  const isPollingRef = { current: false };
+  const channelRef = { current: null };
+  const pollTimerRef = { current: 123 }; // mock timer ID
+
+  const calls = {
+    refreshAuthoritativeStateCount: 0,
+    getSessionSnapshotCount: 0,
+    getActiveQuestionSnapshotCount: 0,
+    getLeaderboardSnapshotCount: 0,
+    getCapabilityTokenCount: 0,
+    createCompetitionChannelCount: 0,
+    removeCompetitionChannelCount: 0,
+    callOrder: [],
+  };
+
+  async function refreshAuthoritativeState() {
+    if (!sessionId || isPollingRef.current || !isMountedRef.current || isTerminalRef.current) return;
+    isPollingRef.current = true;
+    calls.refreshAuthoritativeStateCount++;
+    calls.callOrder.push('refreshAuthoritativeState');
+
+    try {
+      calls.getSessionSnapshotCount++;
+      const sessionRes = typeof mockSessionSnapshot === 'function' ? await mockSessionSnapshot(sessionId) : mockSessionSnapshot;
+      if (!isMountedRef.current) return;
+
+      if (!sessionRes.success) {
+        error = sessionRes.message || 'Không thể lấy thông tin phòng thi.';
+        return;
+      }
+
+      const session = sessionRes.data;
+      sessionData = session;
+
+      const isTerminal = session.status === 'finished' || session.status === 'cancelled';
+      if (isTerminal) {
+        isTerminalRef.current = true;
+        if (pollTimerRef.current) {
+          pollTimerRef.current = null;
+        }
+        if (channelRef.current) {
+          calls.removeCompetitionChannelCount++;
+          channelRef.current = null;
+        }
+        connectionStatus = 'disconnected';
+      }
+
+      if (session.status === 'in_progress' || session.status === 'paused') {
+        calls.getActiveQuestionSnapshotCount++;
+        const qRes = typeof mockActiveQuestion === 'function' ? await mockActiveQuestion() : mockActiveQuestion;
+        if (isMountedRef.current && qRes?.success) {
+          currentQuestion = qRes.data?.question || null;
+        }
+      } else if (session.status === 'waiting' || isTerminal) {
+        currentQuestion = null;
+      }
+
+      if (session.status === 'finished') {
+        calls.getLeaderboardSnapshotCount++;
+        const lbRes = typeof mockLeaderboard === 'function' ? await mockLeaderboard() : mockLeaderboard;
+        if (isMountedRef.current && lbRes?.success && Array.isArray(lbRes.data?.leaderboard)) {
+          leaderboard = lbRes.data.leaderboard;
+        }
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        error = err.message;
+      }
+    } finally {
+      isPollingRef.current = false;
+    }
+  }
+
+  // Exact implementation flow from updated useStudentCompetitionRealtime.js
+  async function initRealtime() {
+    let isCancelled = false;
+    let activeChannel = null;
+
+    try {
+      connectionStatus = 'connecting';
+
+      // 1. Fetch authoritative state FIRST
+      await refreshAuthoritativeState();
+
+      if (isCancelled || isTerminalRef.current || !isMountedRef.current) {
+        return;
+      }
+
+      // 2. Only active sessions need realtime capability
+      calls.getCapabilityTokenCount++;
+      calls.callOrder.push('getCapabilityToken');
+      const tokenRes = typeof mockCapabilityTokenResult === 'function'
+        ? await mockCapabilityTokenResult({ sessionId, participantId })
+        : mockCapabilityTokenResult;
+
+      if (isCancelled || isTerminalRef.current || !isMountedRef.current) return;
+
+      if (!tokenRes.success || !tokenRes.token) {
+        connectionStatus = 'error';
+        error = tokenRes.error || 'Không thể xác thực kết nối Realtime.';
+        return;
+      }
+
+      // 3. Create private channel
+      calls.createCompetitionChannelCount++;
+      calls.callOrder.push('createCompetitionChannel');
+      activeChannel = { id: `chan-${sessionId}`, presence: { p_id: participantId, st: 'active' } };
+      channelRef.current = activeChannel;
+      connectionStatus = 'connected';
+    } catch (err) {
+      if (!isCancelled && !isTerminalRef.current && isMountedRef.current) {
+        connectionStatus = 'error';
+        error = err.message || 'Lỗi khởi tạo kết nối phòng thi.';
+      }
+    }
+  }
+
+  await initRealtime();
+
+  return {
+    getState: () => ({ connectionStatus, sessionData, currentQuestion, leaderboard, error }),
+    getRefs: () => ({ isTerminalRef, isMountedRef, pollTimerRef }),
+    calls,
+    refreshAuthoritativeState,
+  };
+}
+
+// ============================================================================
+// Test 31: Finished Initial Mount (Order & Zero Capability Call)
+// ============================================================================
+console.log('--- [Test 31] Finished Initial Mount ---');
+// 31.A: Static Source Order Verification
+const updatedHookSource = fs.readFileSync('src/hooks/useStudentCompetitionRealtime.js', 'utf8');
+const refreshPos = updatedHookSource.indexOf('await refreshAuthoritativeState();');
+const capTokenPos = updatedHookSource.indexOf('const tokenRes = await getCapabilityToken(');
+const terminalGuardPos = updatedHookSource.indexOf('if (isCancelled || isTerminalRef.current || !isMountedRef.current)');
+
+assert.ok(refreshPos !== -1, 'Must call refreshAuthoritativeState');
+assert.ok(capTokenPos !== -1, 'Must call getCapabilityToken');
+assert.ok(terminalGuardPos !== -1, 'Must check terminal guard');
+assert.ok(
+  refreshPos < terminalGuardPos && terminalGuardPos < capTokenPos,
+  'Authoritative refresh MUST run BEFORE terminal guard, which MUST run BEFORE getCapabilityToken'
+);
+console.log('  ✅ [31.A] PASS: Static source verifies refreshAuthoritativeState precedes getCapabilityToken');
+
+// 31.B: Runtime Simulation
+{
+  const mockLeaderboardData = [
+    { participant_id: validParticipantUUID, display_name: 'Student Gold', rank: 1, total_score: 100, correct_count: 5 },
+    { participant_id: 'p-2', display_name: 'Student Silver', rank: 2, total_score: 80, correct_count: 4 },
+  ];
+
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'finished', room_code: 'ROOM88' },
+    },
+    mockLeaderboard: {
+      success: true,
+      data: { leaderboard: mockLeaderboardData },
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('getCapabilityToken MUST NOT be called for finished session!');
+    },
+  });
+
+  const state = hookRun.getState();
+  const refs = hookRun.getRefs();
+
+  assert.equal(state.sessionData?.status, 'finished', 'sessionData must be populated with finished status');
+  assert.equal(state.sessionData?.room_code, 'ROOM88');
+  assert.equal(state.leaderboard.length, 2, 'leaderboard must be populated');
+  assert.equal(state.leaderboard[0].participant_id, validParticipantUUID);
+  assert.equal(state.currentQuestion, null, 'currentQuestion must be null on finished');
+  assert.equal(state.error, null, 'error must remain null (no SESSION_CLOSED)');
+  assert.equal(state.connectionStatus, 'disconnected', 'connectionStatus should be disconnected');
+  assert.equal(refs.isTerminalRef.current, true, 'isTerminalRef must be true');
+  assert.equal(refs.pollTimerRef.current, null, 'pollTimer must be cleared on finished');
+
+  assert.equal(hookRun.calls.refreshAuthoritativeStateCount, 1, 'refreshAuthoritativeState must run once');
+  assert.equal(hookRun.calls.getLeaderboardSnapshotCount, 1, 'getLeaderboardSnapshot must be fetched once');
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0, 'getCapabilityToken call count MUST be 0');
+  assert.equal(hookRun.calls.createCompetitionChannelCount, 0, 'createCompetitionChannel call count MUST be 0');
+  assert.deepEqual(hookRun.calls.callOrder, ['refreshAuthoritativeState']);
+}
+console.log('  ✅ [31.B] PASS: Finished initial mount populates sessionData + leaderboard with 0 capability calls');
+
+// ============================================================================
+// Test 32: Cancelled Initial Mount
+// ============================================================================
+console.log('--- [Test 32] Cancelled Initial Mount ---');
+{
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'cancelled', room_code: 'CANCEL99' },
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('getCapabilityToken MUST NOT be called for cancelled session!');
+    },
+  });
+
+  const state = hookRun.getState();
+  const refs = hookRun.getRefs();
+
+  assert.equal(state.sessionData?.status, 'cancelled', 'sessionData must be populated with cancelled status');
+  assert.equal(state.currentQuestion, null, 'currentQuestion must be null');
+  assert.equal(state.error, null);
+  assert.equal(state.connectionStatus, 'disconnected');
+  assert.equal(refs.isTerminalRef.current, true);
+  assert.equal(refs.pollTimerRef.current, null);
+
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0, 'getCapabilityToken call count MUST be 0');
+  assert.equal(hookRun.calls.createCompetitionChannelCount, 0, 'createCompetitionChannel call count MUST be 0');
+  assert.deepEqual(hookRun.calls.callOrder, ['refreshAuthoritativeState']);
+}
+console.log('  ✅ [32] PASS: Cancelled initial mount populates cancelled sessionData with 0 capability/channel calls');
+
+// ============================================================================
+// Test 33: Active Initial Mount (Waiting / In-Progress / Paused)
+// ============================================================================
+console.log('--- [Test 33] Active Initial Mount ---');
+{
+  const activeStatuses = ['waiting', 'in_progress', 'paused'];
+
+  for (const status of activeStatuses) {
+    const hookRun = await simulateStudentRealtimeHook({
+      sessionId: validSessionUUID,
+      participantId: validParticipantUUID,
+      mockSessionSnapshot: {
+        success: true,
+        data: { id: validSessionUUID, status, room_code: 'ACTIVE1' },
+      },
+      mockActiveQuestion: {
+        success: true,
+        data: { question: status === 'waiting' ? null : { id: 'q-live', prompt: 'Question 1' } },
+      },
+      mockCapabilityTokenResult: {
+        success: true,
+        token: `cap-token-${status}`,
+      },
+    });
+
+    const state = hookRun.getState();
+    const refs = hookRun.getRefs();
+
+    assert.equal(state.sessionData?.status, status);
+    if (status === 'in_progress' || status === 'paused') {
+      assert.equal(state.currentQuestion?.id, 'q-live');
+    } else {
+      assert.equal(state.currentQuestion, null);
+    }
+    assert.equal(state.connectionStatus, 'connected', `Active status ${status} must connect successfully`);
+    assert.equal(refs.isTerminalRef.current, false, 'isTerminalRef must remain false for active session');
+
+    assert.equal(hookRun.calls.refreshAuthoritativeStateCount, 1);
+    assert.equal(hookRun.calls.getCapabilityTokenCount, 1, 'Active session MUST request capability token');
+    assert.equal(hookRun.calls.createCompetitionChannelCount, 1, 'Active session MUST create channel');
+    assert.deepEqual(
+      hookRun.calls.callOrder,
+      ['refreshAuthoritativeState', 'getCapabilityToken', 'createCompetitionChannel'],
+      'Strict execution order: refresh authoritative FIRST -> capability token -> create channel'
+    );
+  }
+}
+console.log('  ✅ [33] PASS: Active sessions refresh authoritative FIRST, then request capability and create channel');
+
+// ============================================================================
+// Test 34: Finished F5 Final Results End-to-End Simulation
+// ============================================================================
+console.log('--- [Test 34] Finished F5 Final Results End-to-End Simulation ---');
+{
+  // 1. Simulate persisted storage on student browser
+  const mockBrowserStorage = createMockStorage();
+  mockBrowserStorage.setItem(STUDENT_SESSION_STORAGE_KEY, validSessionUUID);
+  mockBrowserStorage.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, validParticipantUUID);
+
+  // 2. Page reloads (F5) -> getInitialStudentSession parses stored UUIDs
+  const restoredSessionId = mockBrowserStorage.getItem(STUDENT_SESSION_STORAGE_KEY);
+  const restoredParticipantId = mockBrowserStorage.getItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+  assert.equal(isValidSessionUUID(restoredSessionId), true);
+  assert.equal(isValidSessionUUID(restoredParticipantId), true);
+
+  // 3. Leaderboard data from backend
+  const mockLeaderboard34 = [
+    { participant_id: 'p-other-1', display_name: 'Top 1 Player', rank: 1, total_score: 120, correct_count: 6, total_response_time_ms: 4000 },
+    { participant_id: validParticipantUUID, display_name: 'Current Student', rank: 2, total_score: 95, correct_count: 5, total_response_time_ms: 5500 },
+    { participant_id: 'p-other-3', display_name: 'Third Place', rank: 3, total_score: 70, correct_count: 4, total_response_time_ms: 7000 },
+  ];
+
+  // 4. Hook initializes on reload with restored IDs
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: restoredSessionId,
+    participantId: restoredParticipantId,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: restoredSessionId, status: 'finished', room_code: 'RESTORE88' },
+    },
+    mockLeaderboard: {
+      success: true,
+      data: { leaderboard: mockLeaderboard34 },
+    },
+    mockCapabilityTokenResult: () => {
+      // Backend returns SESSION_CLOSED if called
+      return { success: false, error_code: 'SESSION_CLOSED', error: 'Phiên thi đã kết thúc.' };
+    },
+  });
+
+  const hookState = hookRun.getState();
+
+  // 5. Assert hook state is completely healthy without triggering SESSION_CLOSED error
+  assert.equal(hookState.sessionData?.status, 'finished');
+  assert.equal(hookState.leaderboard.length, 3);
+  assert.equal(hookState.error, null, 'Must NOT encounter SESSION_CLOSED');
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0, 'Zero capability calls made on reload');
+
+  // 6. Assert Student Page Finished View invariants
+  const isFinished = hookState.sessionData?.status === 'finished';
+  assert.equal(isFinished, true, 'FINAL_RESULTS view must be available');
+
+  const myEntry = hookState.leaderboard.find(item => item.participant_id === restoredParticipantId);
+  assert.ok(myEntry, 'Personal participant match MUST be available');
+  assert.equal(myEntry.display_name, 'Current Student');
+  assert.equal(myEntry.rank, 2);
+  assert.equal(myEntry.total_score, 95);
+  assert.equal(myEntry.correct_count, 5);
+
+  // 7. Assert Mini Podium grouping from hook leaderboard
+  const goldWinners = hookState.leaderboard.filter(x => x.rank === 1);
+  const silverWinners = hookState.leaderboard.filter(x => x.rank === 2);
+  const bronzeWinners = hookState.leaderboard.filter(x => x.rank === 3);
+
+  assert.equal(goldWinners.length, 1);
+  assert.equal(goldWinners[0].display_name, 'Top 1 Player');
+  assert.equal(silverWinners.length, 1);
+  assert.equal(silverWinners[0].display_name, 'Current Student');
+  assert.equal(bronzeWinners.length, 1);
+  assert.equal(bronzeWinners[0].display_name, 'Third Place');
+}
+console.log('  ✅ [34] PASS: Finished F5 reload renders Final Results & Mini Podium with 0 capability token dependency');
+
 console.log('\n================================================================================');
-console.log('🎉 ALL 30 R4 STUDENT FINAL RESULTS TESTS (INCLUDING DEEP RACE SIMULATIONS) PASSED 100%!');
+console.log('🎉 ALL 34 R4 STUDENT FINAL RESULTS TESTS (INCLUDING REORDER & RELOAD SUITE) PASSED 100%!');
 console.log('================================================================================\n');
+

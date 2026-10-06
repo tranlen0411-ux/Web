@@ -137,9 +137,16 @@ export function useStudentCompetitionRealtime({
       try {
         setConnectionStatus('connecting');
 
-        // 1. Obtain capability token (in-memory only)
+        // 1. Fetch authoritative state FIRST (handles terminal states without needing realtime capability)
+        await refreshAuthoritativeState();
+
+        if (isCancelled || isTerminalRef.current || !isMountedRef.current) {
+          return;
+        }
+
+        // 2. Only active sessions need realtime capability token (in-memory only)
         const tokenRes = await getCapabilityToken({ sessionId, participantId });
-        if (isCancelled || isTerminalRef.current) return;
+        if (isCancelled || isTerminalRef.current || !isMountedRef.current) return;
 
         if (!tokenRes.success || !tokenRes.token) {
           setConnectionStatus('error');
@@ -147,7 +154,7 @@ export function useStudentCompetitionRealtime({
           return;
         }
 
-        // 2. Create private Realtime channel with presence contract: { p_id: participantId, st: 'active' }
+        // 3. Create private Realtime channel with presence contract: { p_id: participantId, st: 'active' }
         activeChannel = createCompetitionChannel({
           sessionId,
           participantId,
@@ -161,7 +168,7 @@ export function useStudentCompetitionRealtime({
           },
         });
 
-        if (isCancelled || isTerminalRef.current) {
+        if (isCancelled || isTerminalRef.current || !isMountedRef.current) {
           if (activeChannel) {
             removeCompetitionChannel(activeChannel, sessionId, participantId);
           }
@@ -170,11 +177,8 @@ export function useStudentCompetitionRealtime({
 
         channelRef.current = activeChannel;
         setConnectionStatus('connected');
-
-        // Initial authoritative state fetch
-        await refreshAuthoritativeState();
       } catch (err) {
-        if (!isCancelled && !isTerminalRef.current) {
+        if (!isCancelled && !isTerminalRef.current && isMountedRef.current) {
           setConnectionStatus('error');
           setError(err.message || 'Lỗi khởi tạo kết nối phòng thi.');
         }
