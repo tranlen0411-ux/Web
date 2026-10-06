@@ -56,6 +56,47 @@ export function useStudentCompetitionRealtime({
     sessionDataRef.current = sessionData;
   }, [sessionData]);
 
+  // Stable Final Leaderboard Refresh Callback (Permits retry on finished sessions without realtime channel)
+  const refreshFinalLeaderboard = useCallback(async () => {
+    if (!sessionId || !participantId || !isMountedRef.current) {
+      return { success: false, message: 'Thiếu thông tin phiên thi.' };
+    }
+
+    try {
+      const lbRes = await getLeaderboardSnapshot({
+        sessionId,
+        participantId,
+      });
+
+      if (!isMountedRef.current) {
+        return { success: false };
+      }
+
+      if (lbRes.success && Array.isArray(lbRes.data?.leaderboard)) {
+        setLeaderboard(lbRes.data.leaderboard);
+        setError(null);
+        return { success: true, data: lbRes.data };
+      }
+
+      setError(lbRes.message || 'Không thể tải bảng xếp hạng chung cuộc.');
+      return {
+        success: false,
+        error_code: lbRes.error_code,
+        status: lbRes.status,
+        message: lbRes.message,
+      };
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(err.message || 'Lỗi mạng khi tải bảng xếp hạng chung cuộc.');
+      }
+      return {
+        success: false,
+        error_code: 'CLIENT_EXCEPTION',
+        message: err.message,
+      };
+    }
+  }, [sessionId, participantId]);
+
   // Stable Authoritative State Refresh Callback (Depends strictly on sessionId & participantId)
   const refreshAuthoritativeState = useCallback(async () => {
     if (!sessionId || isPollingRef.current || !isMountedRef.current || isTerminalRef.current) return;
@@ -106,10 +147,7 @@ export function useStudentCompetitionRealtime({
 
       // 3. Fetch Leaderboard Snapshot if session is finished
       if (session.status === 'finished') {
-        const lbRes = await getLeaderboardSnapshot({ sessionId, participantId });
-        if (isMountedRef.current && lbRes.success && Array.isArray(lbRes.data?.leaderboard)) {
-          setLeaderboard(lbRes.data.leaderboard);
-        }
+        await refreshFinalLeaderboard();
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -118,7 +156,7 @@ export function useStudentCompetitionRealtime({
     } finally {
       isPollingRef.current = false;
     }
-  }, [sessionId, participantId]);
+  }, [sessionId, participantId, refreshFinalLeaderboard]);
 
   // Main Realtime & Polling Lifecycle Effect
   useEffect(() => {
@@ -228,5 +266,6 @@ export function useStudentCompetitionRealtime({
     leaderboard,
     error,
     refreshAuthoritativeState,
+    refreshFinalLeaderboard,
   };
 }

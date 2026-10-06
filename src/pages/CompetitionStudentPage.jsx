@@ -145,11 +145,14 @@ export const CompetitionStudentPage = () => {
     leaderboard,
     error: realtimeError,
     refreshAuthoritativeState,
+    refreshFinalLeaderboard,
   } = useStudentCompetitionRealtime({
     sessionId,
     participantId,
     enabled: Boolean(sessionId && participantId),
   });
+
+  const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 
   // Authoritative Status & Question Refs (Declared after hook destructuring to eliminate TDZ ReferenceError)
   const sessionStatusRef = useRef(sessionData?.status);
@@ -240,6 +243,28 @@ export const CompetitionStudentPage = () => {
     }
   }, [showToast]);
 
+  // Manual Retry Handler for Final Leaderboard on Transient Failures
+  const handleRetryLeaderboard = useCallback(async () => {
+    if (isRetryingLeaderboard) return;
+    setIsRetryingLeaderboard(true);
+    try {
+      const res = await refreshFinalLeaderboard();
+      if (!res.success) {
+        if (isStudentAuthOrPermanentError(res.error_code, res.status)) {
+          clearRestoredSessionAndReturnToJoin(getFriendlyErrorMessage(res.error_code, res.message));
+        } else {
+          showToast('Lỗi mạng khi tải bảng xếp hạng. Vui lòng thử lại.', 'warning');
+        }
+      } else {
+        showToast('Đã tải thành công bảng xếp hạng!', 'success');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsRetryingLeaderboard(false);
+      }
+    }
+  }, [refreshFinalLeaderboard, isRetryingLeaderboard, clearRestoredSessionAndReturnToJoin, showToast]);
+
   // Synchronize activeSessionIdRef & activeParticipantIdRef with sessionStorage persistence
   useEffect(() => {
     activeSessionIdRef.current = sessionId;
@@ -321,7 +346,11 @@ export const CompetitionStudentPage = () => {
           if (!lbRes.success) {
             if (isStudentAuthOrPermanentError(lbRes.error_code, lbRes.status)) {
               clearRestoredSessionAndReturnToJoin('Bạn không có quyền xem kết quả phòng thi này.');
+            } else {
+              // Transient error: preserve session, allow retry via button
+              showToast('Chưa tải được bảng xếp hạng chung cuộc. Bạn có thể nhấn nút thử lại.', 'warning');
             }
+            restoredSessionPendingValidationRef.current = false;
             return;
           }
 
@@ -921,8 +950,19 @@ export const CompetitionStudentPage = () => {
               </div>
             </div>
           ) : (
-            <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 mb-8 text-sm font-semibold text-slate-600">
-              Đang tải kết quả cá nhân của bạn...
+            <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 mb-8 text-center sm:text-left flex flex-col sm:flex-row items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-slate-600">
+                Đang tải kết quả cá nhân của bạn...
+              </span>
+              <button
+                type="button"
+                onClick={handleRetryLeaderboard}
+                disabled={isRetryingLeaderboard}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs rounded-xl transition-all shadow-sm active:scale-95 inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRetryingLeaderboard ? 'animate-spin' : ''}`} />
+                <span>{isRetryingLeaderboard ? 'Đang tải...' : 'Thử tải lại'}</span>
+              </button>
             </div>
           )}
 
@@ -1036,8 +1076,19 @@ export const CompetitionStudentPage = () => {
 
             <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
               {!Array.isArray(leaderboard) || leaderboard.length === 0 ? (
-                <div className="p-8 text-center text-sm font-bold text-slate-500">
-                  Đang tải bảng xếp hạng...
+                <div className="p-8 text-center">
+                  <div className="text-sm font-bold text-slate-500 mb-3">
+                    {realtimeError || 'Chưa tải được bảng xếp hạng chung cuộc hoặc đang tải...'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRetryLeaderboard}
+                    disabled={isRetryingLeaderboard}
+                    className="px-5 py-2.5 bg-sky-500 hover:bg-sky-600 text-white font-bold text-sm rounded-xl transition-all shadow-sm active:scale-95 inline-flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isRetryingLeaderboard ? 'animate-spin' : ''}`} />
+                    <span>{isRetryingLeaderboard ? 'Đang tải...' : 'Thử tải lại kết quả'}</span>
+                  </button>
                 </div>
               ) : (
                 leaderboard.map((item, idx) => {

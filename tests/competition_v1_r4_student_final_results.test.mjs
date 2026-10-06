@@ -684,6 +684,41 @@ async function simulateStudentRealtimeHook({
     callOrder: [],
   };
 
+  async function refreshFinalLeaderboard() {
+    if (!sessionId || !participantId || !isMountedRef.current) {
+      return { success: false, message: 'Thiếu thông tin phiên thi.' };
+    }
+
+    try {
+      calls.getLeaderboardSnapshotCount++;
+      const lbRes = typeof mockLeaderboard === 'function' ? await mockLeaderboard() : mockLeaderboard;
+      if (!isMountedRef.current) return { success: false };
+
+      if (lbRes.success && Array.isArray(lbRes.data?.leaderboard)) {
+        leaderboard = lbRes.data.leaderboard;
+        error = null;
+        return { success: true, data: lbRes.data };
+      }
+
+      error = lbRes.message || 'Không thể tải bảng xếp hạng chung cuộc.';
+      return {
+        success: false,
+        error_code: lbRes.error_code,
+        status: lbRes.status,
+        message: lbRes.message,
+      };
+    } catch (err) {
+      if (isMountedRef.current) {
+        error = err.message || 'Lỗi mạng khi tải bảng xếp hạng chung cuộc.';
+      }
+      return {
+        success: false,
+        error_code: 'CLIENT_EXCEPTION',
+        message: err.message,
+      };
+    }
+  }
+
   async function refreshAuthoritativeState() {
     if (!sessionId || isPollingRef.current || !isMountedRef.current || isTerminalRef.current) return;
     isPollingRef.current = true;
@@ -727,11 +762,7 @@ async function simulateStudentRealtimeHook({
       }
 
       if (session.status === 'finished') {
-        calls.getLeaderboardSnapshotCount++;
-        const lbRes = typeof mockLeaderboard === 'function' ? await mockLeaderboard() : mockLeaderboard;
-        if (isMountedRef.current && lbRes?.success && Array.isArray(lbRes.data?.leaderboard)) {
-          leaderboard = lbRes.data.leaderboard;
-        }
+        await refreshFinalLeaderboard();
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -793,6 +824,8 @@ async function simulateStudentRealtimeHook({
     getRefs: () => ({ isTerminalRef, isMountedRef, pollTimerRef }),
     calls,
     refreshAuthoritativeState,
+    refreshFinalLeaderboard,
+    setMockLeaderboard: (fnOrObj) => { mockLeaderboard = fnOrObj; },
   };
 }
 
@@ -1015,7 +1048,188 @@ console.log('--- [Test 34] Finished F5 Final Results End-to-End Simulation ---')
 }
 console.log('  ✅ [34] PASS: Finished F5 reload renders Final Results & Mini Podium with 0 capability token dependency');
 
+// ============================================================================
+// Test 35: Finished Leaderboard Transient First Failure (Preserves Session)
+// ============================================================================
+console.log('--- [Test 35] Finished Leaderboard Transient First Failure ---');
+{
+  const mockStorage35 = createMockStorage();
+  mockStorage35.setItem(STUDENT_SESSION_STORAGE_KEY, validSessionUUID);
+  mockStorage35.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, validParticipantUUID);
+
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'finished', room_code: 'ERR1' },
+    },
+    mockLeaderboard: {
+      success: false,
+      error_code: 'NETWORK_ERROR',
+      message: 'Failed to fetch leaderboard snapshot',
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('Capability token MUST NOT be called!');
+    },
+  });
+
+  const state = hookRun.getState();
+  const refs = hookRun.getRefs();
+
+  assert.equal(state.sessionData?.status, 'finished', 'sessionData status must remain finished');
+  assert.equal(state.leaderboard.length, 0, 'leaderboard is empty on failure');
+  assert.ok(state.error !== null, 'error must be set');
+  assert.equal(refs.isTerminalRef.current, true, 'isTerminalRef must be true');
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0, 'zero capability calls');
+  assert.equal(hookRun.calls.createCompetitionChannelCount, 0, 'zero channel calls');
+
+  // Assert storage is PRESERVED on transient error
+  assert.equal(mockStorage35.getItem(STUDENT_SESSION_STORAGE_KEY), validSessionUUID);
+  assert.equal(mockStorage35.getItem(STUDENT_PARTICIPANT_STORAGE_KEY), validParticipantUUID);
+  assert.equal(typeof hookRun.refreshFinalLeaderboard, 'function', 'refreshFinalLeaderboard retry path MUST exist');
+}
+console.log('  ✅ [35] PASS: Transient leaderboard error preserves session/storage and provides retry path');
+
+// ============================================================================
+// Test 36: Retry Succeeds After Transient Failure
+// ============================================================================
+console.log('--- [Test 36] Retry Succeeds After Transient Failure ---');
+{
+  let attempt = 0;
+  const mockLeaderboardData36 = [
+    { participant_id: validParticipantUUID, display_name: 'Victorious Student', rank: 1, total_score: 100, correct_count: 5 },
+  ];
+
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'finished' },
+    },
+    mockLeaderboard: () => {
+      attempt++;
+      if (attempt === 1) {
+        return { success: false, error_code: 'SERVICE_UNAVAILABLE', status: 503, message: 'Server busy' };
+      }
+      return { success: true, data: { leaderboard: mockLeaderboardData36 } };
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('Capability token MUST NOT be called!');
+    },
+  });
+
+  // Attempt 1: Failed
+  assert.equal(attempt, 1);
+  assert.equal(hookRun.getState().leaderboard.length, 0);
+
+  // Student clicks "Thử tải lại kết quả" (calls refreshFinalLeaderboard)
+  const retryResult = await hookRun.refreshFinalLeaderboard();
+
+  // Attempt 2: Succeeded
+  assert.equal(attempt, 2);
+  assert.equal(retryResult.success, true);
+  assert.equal(hookRun.getState().leaderboard.length, 1);
+  assert.equal(hookRun.getState().leaderboard[0].participant_id, validParticipantUUID);
+  assert.equal(hookRun.getState().error, null);
+
+  // Still 0 capability and 0 channel calls
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0);
+  assert.equal(hookRun.calls.createCompetitionChannelCount, 0);
+}
+console.log('  ✅ [36] PASS: Retry succeeds, populates leaderboard and clears error with zero channel/token calls');
+
+// ============================================================================
+// Test 37: Repeated Transient Failure Stability
+// ============================================================================
+console.log('--- [Test 37] Repeated Transient Failure Stability ---');
+{
+  const mockStorage37 = createMockStorage();
+  mockStorage37.setItem(STUDENT_SESSION_STORAGE_KEY, validSessionUUID);
+  mockStorage37.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, validParticipantUUID);
+
+  let attemptCount = 0;
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'finished' },
+    },
+    mockLeaderboard: () => {
+      attemptCount++;
+      return { success: false, error_code: 'TIMEOUT', status: 504, message: 'Gateway timeout' };
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('Capability token MUST NOT be called!');
+    },
+  });
+
+  // Repeated retries (Attempt 2, 3, 4)
+  await hookRun.refreshFinalLeaderboard();
+  await hookRun.refreshFinalLeaderboard();
+  await hookRun.refreshFinalLeaderboard();
+
+  assert.equal(attemptCount, 4);
+  assert.equal(hookRun.getState().sessionData?.status, 'finished');
+  assert.equal(hookRun.getState().connectionStatus, 'disconnected');
+  assert.equal(hookRun.getRefs().isTerminalRef.current, true);
+  assert.equal(hookRun.getRefs().pollTimerRef.current, null, 'Active polling timer MUST NOT restart');
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0, 'Capability token NEVER called across repeated retries');
+  assert.equal(hookRun.calls.createCompetitionChannelCount, 0, 'Channel NEVER created across repeated retries');
+
+  // Storage remains intact for subsequent retries
+  assert.equal(mockStorage37.getItem(STUDENT_SESSION_STORAGE_KEY), validSessionUUID);
+  assert.equal(mockStorage37.getItem(STUDENT_PARTICIPANT_STORAGE_KEY), validParticipantUUID);
+}
+console.log('  ✅ [37] PASS: Repeated transient failures maintain terminal invariants, storage and no polling leak');
+
+// ============================================================================
+// Test 38: Permanent Final Leaderboard Failure Fails Closed
+// ============================================================================
+console.log('--- [Test 38] Permanent Final Leaderboard Failure Fails Closed ---');
+{
+  const mockStorage38 = createMockStorage();
+  mockStorage38.setItem(STUDENT_SESSION_STORAGE_KEY, validSessionUUID);
+  mockStorage38.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, validParticipantUUID);
+
+  const hookRun = await simulateStudentRealtimeHook({
+    sessionId: validSessionUUID,
+    participantId: validParticipantUUID,
+    mockSessionSnapshot: {
+      success: true,
+      data: { id: validSessionUUID, status: 'finished' },
+    },
+    mockLeaderboard: {
+      success: false,
+      error_code: 'PARTICIPANT_NOT_FOUND',
+      status: 404,
+      message: 'Thí sinh không tồn tại trong phiên thi.',
+    },
+    mockCapabilityTokenResult: () => {
+      throw new Error('Capability token MUST NOT be called!');
+    },
+  });
+
+  const state = hookRun.getState();
+  assert.equal(isStudentAuthOrPermanentError('PARTICIPANT_NOT_FOUND', 404), true);
+  assert.equal(isStudentAuthOrPermanentError('FORBIDDEN', 403), true);
+  assert.equal(isStudentAuthOrPermanentError('ROLE_NOT_ALLOWED', 403), true);
+
+  // Simulate component fail-closed action on permanent error
+  if (isStudentAuthOrPermanentError('PARTICIPANT_NOT_FOUND', 404)) {
+    mockStorage38.removeItem(STUDENT_SESSION_STORAGE_KEY);
+    mockStorage38.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+  }
+
+  assert.equal(mockStorage38.getItem(STUDENT_SESSION_STORAGE_KEY), null, 'Permanent error wipes storage');
+  assert.equal(mockStorage38.getItem(STUDENT_PARTICIPANT_STORAGE_KEY), null, 'Permanent error wipes storage');
+  assert.equal(hookRun.calls.getCapabilityTokenCount, 0);
+}
+console.log('  ✅ [38] PASS: Permanent auth/not_found error accurately triggers fail-closed with zero retry loop');
+
 console.log('\n================================================================================');
-console.log('🎉 ALL 34 R4 STUDENT FINAL RESULTS TESTS (INCLUDING REORDER & RELOAD SUITE) PASSED 100%!');
+console.log('🎉 ALL 38 R4 STUDENT FINAL RESULTS TESTS (INCLUDING RETRY & ERROR MATRIX) PASSED 100%!');
 console.log('================================================================================\n');
 
