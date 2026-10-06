@@ -211,6 +211,7 @@ export function CompetitionHostPage() {
     setActiveSessionId(null);
     restoredSessionPendingValidationRef.current = false;
     setQuestions(DEFAULT_QUESTIONS);
+    setReviewEnabled(false);
     setLeaderboardData([]);
     setLeaderboardError(null);
     setIsLeaderboardOpen(false);
@@ -252,6 +253,7 @@ export function CompetitionHostPage() {
   const [title, setTitle] = useState('Đấu Trường Tri Thức V1');
   const [description, setDescription] = useState('Phòng thi đấu vui học dành cho các bạn học sinh.');
   const [maxParticipants, setMaxParticipants] = useState(30);
+  const [reviewEnabled, setReviewEnabled] = useState(false);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [setupError, setSetupError] = useState(null);
 
@@ -604,6 +606,7 @@ export function CompetitionHostPage() {
         description: description.trim() || null,
         mode: 'individual',
         maxParticipants: parseInt(maxParticipants, 10) || 30,
+        reviewEnabled: Boolean(reviewEnabled),
         questions: questions.map((q, idx) => ({
           question_order: idx + 1,
           question_text: q.question_text.trim(),
@@ -969,9 +972,20 @@ export function CompetitionHostPage() {
                 />
               </div>
 
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center justify-between text-xs text-slate-600">
-                <span>Chế độ thi đấu: <strong className="text-slate-800">Cá nhân (Individual)</strong></span>
-                <span>Phần thưởng: <strong className="text-slate-800">Tắt (Off)</strong></span>
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
+                <div className="flex items-center gap-4">
+                  <span>Chế độ thi đấu: <strong className="text-slate-800">Cá nhân (Individual)</strong></span>
+                  <span>Phần thưởng: <strong className="text-slate-800">Tắt (Off)</strong></span>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none text-slate-700 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={reviewEnabled}
+                    onChange={(e) => setReviewEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer border-slate-300"
+                  />
+                  <span>Cho phép học sinh xem lại bài làm sau khi kết thúc</span>
+                </label>
               </div>
             </div>
 
