@@ -758,8 +758,8 @@ export async function getHostQuestionResults(sessionId) {
  * - Uses Option A Final Session Roster semantics
  */
 export async function getHostQuestionAnalytics(sessionId) {
-  if (!sessionId) {
-    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  if (!isValidSessionUUID(sessionId)) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không hợp lệ.' };
   }
   try {
     const { data, error } = await supabase.rpc('competition_host_get_question_analytics', {

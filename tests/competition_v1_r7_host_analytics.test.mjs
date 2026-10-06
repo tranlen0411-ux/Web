@@ -675,6 +675,91 @@ async function runR7TestSuite() {
   );
   recordPass('PostgreSQL RANK() semantics unchanged');
 
+  // ============================================================================
+  // TEST SECTION 8: CLIENT HARDENING & STALE RESPONSE GUARDS
+  // ============================================================================
+  console.log('\n--- Test Section 8: Client Hardening & Stale Response Guards ---');
+
+  // Test 43: Invalid session UUID is rejected before RPC invocation
+  const malformedUuids = ['not-a-uuid', '', '12345', null, undefined, 'zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz'];
+  for (const badId of malformedUuids) {
+    const res = await getHostQuestionAnalytics(badId);
+    assert.equal(res.success, false, `Bad UUID ${badId} must fail locally`);
+    assert.equal(res.error_code, 'INVALID_SESSION_ID', `Bad UUID ${badId} must return INVALID_SESSION_ID`);
+  }
+  recordPass('Invalid session UUID is rejected before RPC invocation');
+
+  // Test 44: getHostQuestionAnalytics uses existing isValidSessionUUID helper
+  assert.ok(
+    clientLibSource.includes('!isValidSessionUUID(sessionId)'),
+    'getHostQuestionAnalytics must call isValidSessionUUID(sessionId)'
+  );
+  assert.equal(isValidSessionUUID('11111111-1111-4111-8111-111111111111'), true);
+  assert.equal(isValidSessionUUID('invalid-uuid'), false);
+  assert.equal(isValidSessionUUID(''), false);
+  assert.equal(isValidSessionUUID(null), false);
+  recordPass('getHostQuestionAnalytics uses existing isValidSessionUUID helper');
+
+  // Test 45: Analytics request has request identity / stale-response guard
+  assert.ok(
+    analyticsViewSource.includes('latestRequestIdRef'),
+    'HostQuestionAnalyticsView must track latestRequestIdRef'
+  );
+  assert.ok(
+    analyticsViewSource.includes('currentSessionIdRef'),
+    'HostQuestionAnalyticsView must track currentSessionIdRef'
+  );
+  assert.ok(
+    analyticsViewSource.includes('requestId !== latestRequestIdRef.current') ||
+    analyticsViewSource.includes('requestSessionId !== currentSessionIdRef.current'),
+    'HostQuestionAnalyticsView must verify request identity before mutating state'
+  );
+  assert.ok(
+    analyticsViewSource.includes('setAnalyticsData(null)'),
+    'HostQuestionAnalyticsView clears stale analyticsData on new fetch initiation'
+  );
+  recordPass('Analytics request has request identity / stale-response guard');
+
+  // Test 46: Old session response cannot overwrite newer session analytics
+  let latestRequestId = 0;
+  let currentSessionId = '11111111-1111-4111-8111-111111111111';
+  let activeState = null;
+
+  async function mockHostAnalyticsFetch(targetSessionId, simulatedDelayMs, payload) {
+    const reqId = ++latestRequestId;
+    const reqSessionId = targetSessionId;
+
+    await new Promise(r => setTimeout(r, simulatedDelayMs));
+
+    if (reqId !== latestRequestId || reqSessionId !== currentSessionId) {
+      return; // Drop stale response
+    }
+    activeState = payload;
+  }
+
+  // Session A request starts (takes 60ms)
+  const reqA = mockHostAnalyticsFetch('11111111-1111-4111-8111-111111111111', 60, { session: 'A_OLD' });
+  // Session switches to Session B, fast fetch starts (takes 10ms)
+  currentSessionId = '22222222-2222-4222-8222-222222222222';
+  const reqB = mockHostAnalyticsFetch('22222222-2222-4222-8222-222222222222', 10, { session: 'B_NEW' });
+
+  await Promise.all([reqA, reqB]);
+  assert.deepEqual(activeState, { session: 'B_NEW' }, 'Old session response A must not overwrite newer session B analytics');
+  recordPass('Old session response cannot overwrite newer session analytics');
+
+  // Test 47: Analytics payload remains absent from localStorage/sessionStorage
+  assert.ok(
+    !analyticsViewSource.includes('localStorage') &&
+    !analyticsViewSource.includes('sessionStorage'),
+    'HostQuestionAnalyticsView must not persist analytics payload in web storage'
+  );
+  assert.ok(
+    !clientLibSource.includes('localStorage.setItem') ||
+    !clientLibSource.includes('competition_host_get_question_analytics'),
+    'competitionClient must not write analytics payload to localStorage'
+  );
+  recordPass('Analytics payload remains absent from localStorage/sessionStorage');
+
   console.log('\n================================================================================');
   console.log(`🎉 ALL ${testIndex} COMPETITION V1 R7 TESTS PASSED SUCCESSFULLY!`);
   console.log('================================================================================\n');

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   BarChart3,
   TrendingDown,
@@ -25,12 +25,37 @@ export const HostQuestionAnalyticsView = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const latestRequestIdRef = useRef(0);
+  const currentSessionIdRef = useRef(sessionId);
+
+  useEffect(() => {
+    currentSessionIdRef.current = sessionId;
+  }, [sessionId]);
+
   const fetchAnalytics = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      setIsLoading(false);
+      setAnalyticsData(null);
+      setError(null);
+      return;
+    }
+
+    const requestId = ++latestRequestIdRef.current;
+    const requestSessionId = sessionId;
+
     setIsLoading(true);
     setError(null);
+    setAnalyticsData(null);
 
-    const res = await getHostQuestionAnalytics(sessionId);
+    const res = await getHostQuestionAnalytics(requestSessionId);
+
+    if (
+      requestId !== latestRequestIdRef.current ||
+      requestSessionId !== currentSessionIdRef.current
+    ) {
+      return;
+    }
+
     if (res.success && res.data) {
       setAnalyticsData(res.data);
     } else {
