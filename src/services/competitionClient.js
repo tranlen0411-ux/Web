@@ -343,6 +343,7 @@ export async function hostCreateSession({
   teams = [],
   rewardEnabled = false,
   rewardConfig = {},
+  reviewEnabled = false,
 }) {
   try {
     const { data, error } = await supabase.rpc('competition_host_create_session', {
@@ -354,6 +355,7 @@ export async function hostCreateSession({
       p_teams: teams,
       p_reward_enabled: rewardEnabled,
       p_reward_config: rewardConfig,
+      p_review_enabled: reviewEnabled,
     });
 
     if (error) return normalizeResponse(null, error.message);
@@ -568,6 +570,30 @@ export async function studentSubmitAnswer({
   }
 }
 
+/**
+ * Student: Reads authoritative question review after session finished (if review_enabled).
+ * RPC: public.competition_student_get_review
+ */
+export async function studentGetReview({
+  sessionId,
+  participantId,
+}) {
+  if (!sessionId || !participantId) {
+    return { success: false, error_code: 'INVALID_PARAMS', message: 'Thiếu sessionId hoặc participantId hợp lệ.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_student_get_review', {
+      p_session_id: sessionId,
+      p_participant_id: participantId,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể tải dữ liệu xem lại bài thi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
 // ============================================================================
 // 5. SNAPSHOT / READ CLIENT METHODS
 // ============================================================================
@@ -602,7 +628,7 @@ export async function getSessionSnapshot(sessionId) {
   try {
     const { data, error, status } = await supabase
       .from('competition_sessions')
-      .select('id, room_code, title, description, mode, status, max_participants, current_question_index, current_question_id, question_deadline, started_at, ended_at')
+      .select('id, room_code, title, description, mode, status, max_participants, current_question_index, current_question_id, question_deadline, review_enabled, started_at, ended_at')
       .eq('id', sessionId)
       .maybeSingle();
 

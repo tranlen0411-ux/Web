@@ -17,6 +17,7 @@ import {
   Medal,
   Flame,
   Zap,
+  BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import {
@@ -25,8 +26,10 @@ import {
   studentSubmitAnswer,
   getLeaderboardSnapshot,
   getSessionSnapshot,
+  studentGetReview,
 } from '../services/competitionClient.js';
 import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRealtime.js';
+import { StudentQuestionReviewView } from '../components/competition/StudentQuestionReviewView.jsx';
 
 // ============================================================================
 // STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT)
@@ -154,6 +157,12 @@ export const CompetitionStudentPage = () => {
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 
+  // Review Mode Local State (R5)
+  const [studentViewMode, setStudentViewMode] = useState('FINAL_SUMMARY'); // 'FINAL_SUMMARY' | 'QUESTION_REVIEW'
+  const [reviewData, setReviewData] = useState(null);
+  const [isReviewLoading, setIsReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState(null);
+
   // Authoritative Status & Question Refs (Declared after hook destructuring to eliminate TDZ ReferenceError)
   const sessionStatusRef = useRef(sessionData?.status);
   const currentQuestionIdRef = useRef(currentQuestion?.id || null);
@@ -236,12 +245,59 @@ export const CompetitionStudentPage = () => {
     setTimeLeftSeconds(null);
     setRoomCode('');
     setIsRestoring(false);
+    setStudentViewMode('FINAL_SUMMARY');
+    setReviewData(null);
+    setIsReviewLoading(false);
+    setReviewError(null);
 
     if (failureReason) {
       setJoinError(failureReason);
       showToast(failureReason, 'error');
     }
   }, [showToast]);
+
+  // Handler to fetch and open Question Review Mode (R5)
+  const handleOpenReview = useCallback(async () => {
+    const currentSessionId = activeSessionIdRef.current;
+    const currentParticipantId = activeParticipantIdRef.current;
+    if (!currentSessionId || !currentParticipantId) return;
+
+    setStudentViewMode('QUESTION_REVIEW');
+    setIsReviewLoading(true);
+    setReviewError(null);
+
+    try {
+      const res = await studentGetReview({
+        sessionId: currentSessionId,
+        participantId: currentParticipantId,
+      });
+
+      if (!isMountedRef.current) return;
+
+      if (!res.success) {
+        if (res.error_code === 'SESSION_NOT_FINISHED') {
+          setReviewError('Phiên thi chưa kết thúc, chưa thể xem lại bài thi.');
+        } else if (res.error_code === 'REVIEW_NOT_ALLOWED') {
+          setReviewError('Giáo viên không mở tính năng xem lại bài làm cho phòng thi này.');
+        } else if (isStudentAuthOrPermanentError(res.error_code, res.status)) {
+          clearRestoredSessionAndReturnToJoin(getFriendlyErrorMessage(res.error_code, res.message));
+        } else {
+          setReviewError(res.message || 'Lỗi mạng khi tải chi tiết bài làm. Vui lòng thử lại.');
+        }
+        return;
+      }
+
+      setReviewData(res.data);
+    } catch (err) {
+      if (isMountedRef.current) {
+        setReviewError(err.message || 'Lỗi kết nối khi tải bài làm.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsReviewLoading(false);
+      }
+    }
+  }, [clearRestoredSessionAndReturnToJoin]);
 
   // Manual Retry Handler for Final Leaderboard on Transient Failures
   const handleRetryLeaderboard = useCallback(async () => {
@@ -609,6 +665,10 @@ export const CompetitionStudentPage = () => {
     setTimeLeftSeconds(null);
     setRoomCode('');
     setJoinError(null);
+    setStudentViewMode('FINAL_SUMMARY');
+    setReviewData(null);
+    setIsReviewLoading(false);
+    setReviewError(null);
   };
 
   // Option Letter Helpers
@@ -848,6 +908,19 @@ export const CompetitionStudentPage = () => {
 
   // 6. FINISHED STATE: STUDENT FINAL RESULTS & MINI PODIUM (State G)
   if (sessionData?.status === 'finished') {
+    // 6A. REVIEW SUB-VIEW (R5)
+    if (studentViewMode === 'QUESTION_REVIEW') {
+      return (
+        <StudentQuestionReviewView
+          reviewData={reviewData}
+          isLoading={isReviewLoading}
+          error={reviewError}
+          onRetry={handleOpenReview}
+          onBack={() => setStudentViewMode('FINAL_SUMMARY')}
+        />
+      );
+    }
+
     // Motivational Message for Student Personal Achievement
     const getMotivationalBadge = (rank) => {
       if (rank === 1) {
@@ -1136,14 +1209,27 @@ export const CompetitionStudentPage = () => {
             </div>
           </div>
 
-          {/* Action Exit Button */}
-          <button
-            onClick={handleExit}
-            className="px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center gap-2"
-          >
-            <LogOut className="w-5 h-5" />
-            <span>Quay Về Trang Chủ</span>
-          </button>
+          {/* Action Buttons (Review & Exit) */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            {sessionData?.review_enabled === true && (
+              <button
+                type="button"
+                onClick={handleOpenReview}
+                className="w-full sm:w-auto px-8 py-3.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center justify-center gap-2"
+              >
+                <BookOpen className="w-5 h-5" />
+                <span>Xem Lại Bài Làm</span>
+              </button>
+            )}
+
+            <button
+              onClick={handleExit}
+              className="w-full sm:w-auto px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-5 h-5" />
+              <span>Quay Về Trang Chủ</span>
+            </button>
+          </div>
         </div>
       </div>
     );
