@@ -40,6 +40,7 @@ import {
   getLeaderboardSnapshot
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
+import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
 
 // Default starter questions for quick session creation
 const DEFAULT_QUESTIONS = [
@@ -217,6 +218,7 @@ export function CompetitionHostPage() {
     setIsLeaderboardOpen(false);
     setQuestionResults(null);
     setHostViewMode('LIVE_QUESTION');
+    setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;
     setTimeLeftSeconds(null);
 
@@ -243,6 +245,7 @@ export function CompetitionHostPage() {
 
   // Host View Mode State (R3: LIVE_QUESTION, QUESTION_RESULTS, LEADERBOARD, FINAL_RESULTS)
   const [hostViewMode, setHostViewMode] = useState('LIVE_QUESTION');
+  const [finishedTab, setFinishedTab] = useState('PODIUM'); // 'PODIUM' | 'ANALYTICS'
   const [questionResults, setQuestionResults] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
@@ -1889,7 +1892,41 @@ export function CompetitionHostPage() {
               </div>
             </div>
 
-            {/* Error State Banner */}
+            {/* R7 Sub-Navigation Tabs: Kết Quả Chung vs Phân Tích Câu Hỏi */}
+            <div className="flex items-center gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 w-fit max-w-full">
+              <button
+                type="button"
+                onClick={() => setFinishedTab('PODIUM')}
+                className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition shadow-2xs ${
+                  finishedTab === 'PODIUM'
+                    ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+                aria-pressed={finishedTab === 'PODIUM'}
+              >
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <span>Kết Quả Chung</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFinishedTab('ANALYTICS')}
+                className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition shadow-2xs ${
+                  finishedTab === 'ANALYTICS'
+                    ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+                aria-pressed={finishedTab === 'ANALYTICS'}
+              >
+                <BarChart3 className="w-4 h-4 text-sky-500" />
+                <span>Phân Tích Câu Hỏi</span>
+              </button>
+            </div>
+
+            {/* TAB 1: KẾT QUẢ CHUNG (BỤC VINH DANH & BẢNG XẾP HẠNG) */}
+            {finishedTab === 'PODIUM' && (
+              <>
+                {/* Error State Banner */}
             {leaderboardError && leaderboardData.length === 0 && (
               <div className="bg-white rounded-2xl shadow-sm border border-red-200 p-8 text-center space-y-4">
                 <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-600 mx-auto border border-red-200">
@@ -2250,6 +2287,16 @@ export function CompetitionHostPage() {
                 </div>
               );
             })()}
+              </>
+            )}
+
+            {/* TAB 2: PHÂN TÍCH CÂU HỎI (HOST QUESTION ANALYTICS) */}
+            {finishedTab === 'ANALYTICS' && (
+              <HostQuestionAnalyticsView
+                sessionId={activeSessionId}
+                onBackToPodium={() => setFinishedTab('PODIUM')}
+              />
+            )}
           </div>
         )}
 

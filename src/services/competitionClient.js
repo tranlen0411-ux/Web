@@ -748,6 +748,31 @@ export async function getHostQuestionResults(sessionId) {
   }
 }
 
+/**
+ * Reads sanitized aggregate question difficulty & accuracy analytics for Host.
+ * RPC: public.competition_host_get_question_analytics
+ *
+ * Security & Data Minimization:
+ * - Gated server-side: accessible only by session Host or Admin after session status = 'finished'
+ * - Server-side aggregation only (zero raw student answer rows, zero PII)
+ * - Uses Option A Final Session Roster semantics
+ */
+export async function getHostQuestionAnalytics(sessionId) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_host_get_question_analytics', {
+      p_session_id: sessionId,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể lấy dữ liệu phân tích câu hỏi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
 // ============================================================================
 // 6. STUDENT STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT)
 // ============================================================================
