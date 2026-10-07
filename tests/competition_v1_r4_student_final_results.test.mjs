@@ -612,8 +612,8 @@ allowedKeys.forEach(k => {
   assert.ok(!k.includes('secret'));
   assert.ok(!k.includes('password'));
 });
-assert.ok(!studentPageSource.includes('setItem(') || !studentPageSource.includes('guest_token'));
-console.log('  ✅ [27] PASS: Zero sensitive tokens persisted to web storage');
+assert.ok(!studentPageSource.includes('setItem(') || !studentPageSource.includes('capability_token'));
+console.log('  ✅ [27] PASS: Zero sensitive capability tokens persisted to web storage');
 
 // ============================================================================
 // Test 28: R2 Regression Safety
