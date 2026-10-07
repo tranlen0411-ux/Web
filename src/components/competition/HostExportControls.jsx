@@ -15,7 +15,9 @@ export function HostExportControls({
   roomCode = '',
   leaderboardData = [],
   analyticsData = null,
-  onPrint = null
+  onPrint = null,
+  isAnonymized = false,
+  onAnonymizedChange = null
 }) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [successToast, setSuccessToast] = useState(null);
@@ -49,7 +51,8 @@ export function HostExportControls({
     const csv = buildLeaderboardCsv({
       title: sessionTitle,
       roomCode,
-      leaderboardData
+      leaderboardData,
+      isAnonymized
     });
     const filename = `dau-truong-${safeCode}-bang-xep-hang-${timestamp}.csv`;
     downloadCsv(csv, filename);
@@ -78,7 +81,8 @@ export function HostExportControls({
       title: sessionTitle,
       roomCode,
       leaderboardData,
-      analyticsData
+      analyticsData,
+      isAnonymized
     });
     const filename = `dau-truong-${safeCode}-bao-cao-${timestamp}.xlsx`;
     downloadCompetitionXlsx(wb, filename);
@@ -96,6 +100,20 @@ export function HostExportControls({
 
   return (
     <div className="relative inline-flex flex-wrap items-center gap-2 print:hidden" ref={dropdownRef}>
+      {/* 0. Checkbox: Ẩn tên thí sinh */}
+      <label
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs cursor-pointer select-none focus-within:ring-2 focus-within:ring-white/50"
+        title="Khi bật, tên thí sinh trong file xuất và bản in sẽ được thay bằng Thí sinh 1, Thí sinh 2..."
+      >
+        <input
+          type="checkbox"
+          checked={isAnonymized}
+          onChange={(e) => onAnonymizedChange?.(e.target.checked)}
+          className="w-3.5 h-3.5 rounded border-white/40 text-amber-500 focus:ring-0 focus:ring-offset-0 bg-white/20 cursor-pointer"
+        />
+        <span>Ẩn tên thí sinh</span>
+      </label>
+
       {/* 1. CSV Dropdown */}
       <div className="relative">
         <button
