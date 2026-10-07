@@ -129,6 +129,71 @@ export function filterLeaderboardByRank(leaderboardData, topN = 'all') {
 }
 
 /**
+ * Calculates deterministic Top N selection summary and boundary tie details.
+ * Pure helper derived strictly from authoritative backend ranks.
+ */
+export function getTopNSelectionSummary(leaderboardData, topN = 'all') {
+  if (!Array.isArray(leaderboardData)) {
+    const isAll = topN === 'all' || topN === null || topN === undefined;
+    const numLimit = !isAll && Number.isFinite(Number(topN)) && Number(topN) > 0 ? Number(topN) : 'all';
+    return {
+      topN: numLimit,
+      selectedCount: 0,
+      hasBoundaryTie: false,
+      extraDueToTie: 0,
+      boundaryRank: null,
+      label: ''
+    };
+  }
+
+  if (topN === 'all' || topN === null || topN === undefined) {
+    return {
+      topN: 'all',
+      selectedCount: leaderboardData.length,
+      hasBoundaryTie: false,
+      extraDueToTie: 0,
+      boundaryRank: null,
+      label: `Tất cả ${leaderboardData.length} thí sinh`
+    };
+  }
+
+  const numericLimit = Number(topN);
+  if (!Number.isFinite(numericLimit) || numericLimit <= 0) {
+    return {
+      topN: 'all',
+      selectedCount: leaderboardData.length,
+      hasBoundaryTie: false,
+      extraDueToTie: 0,
+      boundaryRank: null,
+      label: `Tất cả ${leaderboardData.length} thí sinh`
+    };
+  }
+
+  const selectedRows = filterLeaderboardByRank(leaderboardData, numericLimit);
+  const selectedCount = selectedRows.length;
+  const boundaryRows = selectedRows.filter(
+    (row) => row && Number(row.rank) === numericLimit
+  );
+  const hasBoundaryTie = boundaryRows.length > 1;
+  const extraDueToTie = hasBoundaryTie ? Math.max(boundaryRows.length - 1, 0) : 0;
+  const boundaryRank = hasBoundaryTie ? numericLimit : null;
+
+  let label = `${selectedCount} thí sinh`;
+  if (hasBoundaryTie) {
+    label = `${selectedCount} thí sinh (+${extraDueToTie} đồng hạng)`;
+  }
+
+  return {
+    topN: numericLimit,
+    selectedCount,
+    hasBoundaryTie,
+    extraDueToTie,
+    boundaryRank,
+    label
+  };
+}
+
+/**
  * Builds plain-text leaderboard summary for copying to clipboard.
  * Preserves backend rank ties and respects current anonymization mode. Zero PII.
  */

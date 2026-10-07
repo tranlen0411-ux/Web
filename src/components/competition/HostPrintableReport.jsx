@@ -1,5 +1,11 @@
 import React from 'react';
-import { formatQuestionType, formatOptionDistribution, getExportDisplayName, filterLeaderboardByRank } from '../../utils/competitionExport.js';
+import {
+  formatQuestionType,
+  formatOptionDistribution,
+  getExportDisplayName,
+  filterLeaderboardByRank,
+  getTopNSelectionSummary
+} from '../../utils/competitionExport.js';
 
 export function HostPrintableReport({
   session = {},
@@ -23,6 +29,7 @@ export function HostPrintableReport({
 
   const questions = Array.isArray(analyticsData?.questions) ? analyticsData.questions : [];
   const displayedLeaderboard = filterLeaderboardByRank(leaderboardData, topN);
+  const topNSummary = getTopNSelectionSummary(leaderboardData, topN);
   const pageOrientation = printOrientation === 'landscape' ? 'landscape' : 'portrait';
 
   return (
@@ -79,7 +86,11 @@ export function HostPrintableReport({
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">2. Bảng Xếp Hạng Chung Cuộc</h2>
           {topN !== 'all' && (
-            <span className="text-[11px] font-semibold text-slate-500">(Đang lọc: Top {topN})</span>
+            <span className="text-[11px] font-semibold text-slate-500">
+              {topNSummary.hasBoundaryTie
+                ? `(Đang lọc: Top ${topN} • ${topNSummary.selectedCount} thí sinh • +${topNSummary.extraDueToTie} đồng hạng)`
+                : `(Đang lọc: Top ${topN} • ${topNSummary.selectedCount} thí sinh)`}
+            </span>
           )}
         </div>
         <table className="w-full text-left text-xs border-collapse border border-slate-300">
