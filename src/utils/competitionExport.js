@@ -63,7 +63,7 @@ export function formatOptionDistribution(question) {
     return question.option_distribution.map((opt) => {
       const isCorrect = opt.is_correct_option ?? opt.is_correct ?? false;
       const correctTag = isCorrect ? ' [Đúng]' : '';
-      const text = opt.option_text || 'Lựa chọn';
+      const text = sanitizeForFormulaInjection(opt.option_text || 'Lựa chọn');
       const count = opt.selection_count ?? 0;
       const percent = opt.selection_percent ?? 0;
       return `${text}: ${count} (${percent}%)${correctTag}`;
@@ -274,7 +274,7 @@ export function buildCompetitionWorkbook({
       Number(q.accuracy_percent ?? 0),
       Number(q.average_points ?? 0),
       Number((Number(q.average_response_time_ms || 0) / 1000).toFixed(2)),
-      formatOptionDistribution(q)
+      sanitizeForFormulaInjection(formatOptionDistribution(q))
     ]);
   }
 

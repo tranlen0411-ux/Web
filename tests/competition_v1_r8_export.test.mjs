@@ -561,5 +561,227 @@ describe('COMPETITION V1 R8 — HOST EXPORT & LEADERBOARD AUDIT SUITE', () => {
       const m12Path = path.resolve('supabase/migrations/20261007000001_competition_v1_host_question_analytics.sql');
       assert.equal(fs.existsSync(m12Path), true);
     });
+
+    // --------------------------------------------------------------------------
+    // Tests 61-65: Pre-PR Hardening — XLSX Option Distribution Formula Injection
+    // --------------------------------------------------------------------------
+    it('61. XLSX analytics option_distribution sanitizes option text beginning with "="', () => {
+      const analyticsWithEquals = {
+        summary: { total_questions: 1, final_roster_count: 5, overall_accuracy_percent: 60 },
+        questions: [
+          {
+            question_order: 1,
+            question_type: 'single_choice',
+            question_text: 'Formula injection test equals',
+            points: 10,
+            final_roster_count: 5,
+            answered_count: 5,
+            unanswered_count: 0,
+            correct_count: 3,
+            incorrect_count: 2,
+            accuracy_percent: 60,
+            average_points: 6,
+            average_response_time_ms: 2000,
+            option_distribution: [
+              { option_text: '=HYPERLINK("http://evil.com","Click")', selection_count: 3, selection_percent: 60, is_correct_option: true },
+              { option_text: 'Phương án thường', selection_count: 2, selection_percent: 40, is_correct_option: false }
+            ]
+          }
+        ]
+      };
+      const wb = buildCompetitionWorkbook({
+        title: 'Bảo Mật',
+        roomCode: 'SEC01',
+        leaderboardData: [{ rank: 1, display_name: 'User 1', total_score: 10, correct_count: 1, total_response_time_ms: 1000 }],
+        analyticsData: analyticsWithEquals
+      });
+      const sheet = wb.Sheets['Phan Tich Cau Hoi'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const qRow = rows.find(r => r[0] === 1);
+      const distCell = qRow[12];
+      assert.equal(typeof distCell, 'string');
+      assert.equal(distCell.includes("'=HYPERLINK"), true, 'Cell must sanitize "=" with leading apostrophe');
+    });
+
+    it('62. XLSX analytics option_distribution sanitizes option text beginning with "+"', () => {
+      const analyticsWithPlus = {
+        summary: { total_questions: 1, final_roster_count: 5, overall_accuracy_percent: 60 },
+        questions: [
+          {
+            question_order: 1,
+            question_type: 'single_choice',
+            question_text: 'Formula injection test plus',
+            points: 10,
+            final_roster_count: 5,
+            answered_count: 5,
+            unanswered_count: 0,
+            correct_count: 3,
+            incorrect_count: 2,
+            accuracy_percent: 60,
+            average_points: 6,
+            average_response_time_ms: 2000,
+            option_distribution: [
+              { option_text: '+CMD|calc', selection_count: 3, selection_percent: 60, is_correct_option: true }
+            ]
+          }
+        ]
+      };
+      const wb = buildCompetitionWorkbook({
+        title: 'Bảo Mật',
+        roomCode: 'SEC02',
+        leaderboardData: [{ rank: 1, display_name: 'User 1', total_score: 10, correct_count: 1, total_response_time_ms: 1000 }],
+        analyticsData: analyticsWithPlus
+      });
+      const sheet = wb.Sheets['Phan Tich Cau Hoi'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const qRow = rows.find(r => r[0] === 1);
+      const distCell = qRow[12];
+      assert.equal(distCell.includes("'+CMD|calc"), true, 'Cell must sanitize "+" with leading apostrophe');
+    });
+
+    it('63. XLSX analytics option_distribution sanitizes option text beginning with "-"', () => {
+      const analyticsWithMinus = {
+        summary: { total_questions: 1, final_roster_count: 5, overall_accuracy_percent: 60 },
+        questions: [
+          {
+            question_order: 1,
+            question_type: 'single_choice',
+            question_text: 'Formula injection test minus',
+            points: 10,
+            final_roster_count: 5,
+            answered_count: 5,
+            unanswered_count: 0,
+            correct_count: 3,
+            incorrect_count: 2,
+            accuracy_percent: 60,
+            average_points: 6,
+            average_response_time_ms: 2000,
+            option_distribution: [
+              { option_text: '-2+3+cmd|calc', selection_count: 3, selection_percent: 60, is_correct_option: true }
+            ]
+          }
+        ]
+      };
+      const wb = buildCompetitionWorkbook({
+        title: 'Bảo Mật',
+        roomCode: 'SEC03',
+        leaderboardData: [{ rank: 1, display_name: 'User 1', total_score: 10, correct_count: 1, total_response_time_ms: 1000 }],
+        analyticsData: analyticsWithMinus
+      });
+      const sheet = wb.Sheets['Phan Tich Cau Hoi'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const qRow = rows.find(r => r[0] === 1);
+      const distCell = qRow[12];
+      assert.equal(distCell.includes("'-2+3+cmd|calc"), true, 'Cell must sanitize "-" with leading apostrophe');
+    });
+
+    it('64. XLSX analytics option_distribution sanitizes option text beginning with "@"', () => {
+      const analyticsWithAt = {
+        summary: { total_questions: 1, final_roster_count: 5, overall_accuracy_percent: 60 },
+        questions: [
+          {
+            question_order: 1,
+            question_type: 'single_choice',
+            question_text: 'Formula injection test at',
+            points: 10,
+            final_roster_count: 5,
+            answered_count: 5,
+            unanswered_count: 0,
+            correct_count: 3,
+            incorrect_count: 2,
+            accuracy_percent: 60,
+            average_points: 6,
+            average_response_time_ms: 2000,
+            option_distribution: [
+              { option_text: '@SUM(A1:B10)', selection_count: 3, selection_percent: 60, is_correct_option: true }
+            ]
+          }
+        ]
+      };
+      const wb = buildCompetitionWorkbook({
+        title: 'Bảo Mật',
+        roomCode: 'SEC04',
+        leaderboardData: [{ rank: 1, display_name: 'User 1', total_score: 10, correct_count: 1, total_response_time_ms: 1000 }],
+        analyticsData: analyticsWithAt
+      });
+      const sheet = wb.Sheets['Phan Tich Cau Hoi'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const qRow = rows.find(r => r[0] === 1);
+      const distCell = qRow[12];
+      assert.equal(distCell.includes("'@SUM(A1:B10)"), true, 'Cell must sanitize "@" with leading apostrophe');
+    });
+
+    it('65. XLSX option text with leading whitespace then "=" is safe', () => {
+      const analyticsWithSpaces = {
+        summary: { total_questions: 1, final_roster_count: 5, overall_accuracy_percent: 60 },
+        questions: [
+          {
+            question_order: 1,
+            question_type: 'single_choice',
+            question_text: 'Formula injection test leading spaces',
+            points: 10,
+            final_roster_count: 5,
+            answered_count: 5,
+            unanswered_count: 0,
+            correct_count: 3,
+            incorrect_count: 2,
+            accuracy_percent: 60,
+            average_points: 6,
+            average_response_time_ms: 2000,
+            option_distribution: [
+              { option_text: '   =1+1', selection_count: 3, selection_percent: 60, is_correct_option: true }
+            ]
+          }
+        ]
+      };
+      const wb = buildCompetitionWorkbook({
+        title: 'Bảo Mật',
+        roomCode: 'SEC05',
+        leaderboardData: [{ rank: 1, display_name: 'User 1', total_score: 10, correct_count: 1, total_response_time_ms: 1000 }],
+        analyticsData: analyticsWithSpaces
+      });
+      const sheet = wb.Sheets['Phan Tich Cau Hoi'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      const qRow = rows.find(r => r[0] === 1);
+      const distCell = qRow[12];
+      assert.equal(distCell.includes("'   =1+1"), true, 'Cell must sanitize leading whitespace then "=" with leading apostrophe');
+    });
+
+    // --------------------------------------------------------------------------
+    // Tests 66-70: Pre-PR Hardening — Print Isolation, Availability & Invariants
+    // --------------------------------------------------------------------------
+    it('66. Print button requires BOTH leaderboard and analytics data', () => {
+      const controlsContent = fs.readFileSync(path.resolve('src/components/competition/HostExportControls.jsx'), 'utf8');
+      assert.equal(controlsContent.includes('disabled={!hasLeaderboard || !hasAnalytics}'), true, 'Print button must be disabled without both leaderboard and analytics');
+      assert.equal(controlsContent.includes('Vui lòng mở tab Phân tích câu hỏi trước để in báo cáo đầy đủ'), true);
+      assert.equal(controlsContent.includes('Chưa có dữ liệu bảng xếp hạng'), true);
+      assert.equal(controlsContent.includes('In báo cáo hoặc Lưu dạng PDF'), true);
+    });
+
+    it('67. Normal application content has print:hidden isolation', () => {
+      const hostPageContent = fs.readFileSync(path.resolve('src/pages/CompetitionHostPage.jsx'), 'utf8');
+      assert.equal(hostPageContent.includes('className="py-8 px-4 sm:px-6 lg:px-8 print:hidden"'), true, 'Main host page UI container must be isolated with print:hidden');
+    });
+
+    it('68. HostPrintableReport remains hidden on screen and visible in print', () => {
+      const reportContent = fs.readFileSync(path.resolve('src/components/competition/HostPrintableReport.jsx'), 'utf8');
+      assert.equal(reportContent.includes('className="hidden print:block'), true, 'HostPrintableReport root must have hidden print:block classes');
+    });
+
+    it('69. Hardcoded "Trang 1 / 1" no longer exists', () => {
+      const reportContent = fs.readFileSync(path.resolve('src/components/competition/HostPrintableReport.jsx'), 'utf8');
+      assert.equal(reportContent.includes('Trang 1 / 1'), false, 'Hardcoded page counter must be removed');
+      assert.equal(reportContent.includes('Tài liệu nội bộ dành cho Giáo viên'), true, 'Truthful static footer signoff must be present');
+    });
+
+    it('70. No additional analytics RPC/fetch is introduced', () => {
+      const controlsContent = fs.readFileSync(path.resolve('src/components/competition/HostExportControls.jsx'), 'utf8');
+      const reportContent = fs.readFileSync(path.resolve('src/components/competition/HostPrintableReport.jsx'), 'utf8');
+      assert.equal(controlsContent.includes('getHostQuestionAnalytics'), false);
+      assert.equal(reportContent.includes('getHostQuestionAnalytics'), false);
+      assert.equal(controlsContent.includes('competition_host_get_question_analytics'), false);
+      assert.equal(reportContent.includes('competition_host_get_question_analytics'), false);
+    });
   });
 });
+

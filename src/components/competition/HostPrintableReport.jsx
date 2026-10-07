@@ -138,7 +138,7 @@ export function HostPrintableReport({
       {/* 5. Footer Signoff */}
       <div className="pt-4 border-t border-slate-300 flex justify-between items-center text-[10px] text-slate-500">
         <div>Hệ thống Kho Trò Chơi Học Vui - Đấu Trường Trực Tuyến</div>
-        <div>Trang 1 / 1 (Tài liệu nội bộ dành cho Giáo viên)</div>
+        <div>Tài liệu nội bộ dành cho Giáo viên</div>
       </div>
     </div>
   );

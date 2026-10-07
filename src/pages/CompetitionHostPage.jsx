@@ -828,8 +828,10 @@ export function CompetitionHostPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-50">
+      {/* Normal On-Screen Competition Host UI (Hidden in Print Mode) */}
+      <div className="py-8 px-4 sm:px-6 lg:px-8 print:hidden">
+        <div className="max-w-6xl mx-auto space-y-6">
 
         {/* Top Header */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -2426,16 +2428,18 @@ export function CompetitionHostPage() {
           </div>
         )}
 
-        {/* Print Layout (Hidden on Screen, Visible on Print) */}
-        {currentStatus === 'finished' && snapshot && (
-          <HostPrintableReport
-            session={snapshot}
-            leaderboardData={leaderboardData}
-            analyticsData={exportAnalyticsData}
-          />
-        )}
-
+        </div>
       </div>
+
+      {/* Print Layout (Hidden on Screen, Visible on Print) */}
+      {currentStatus === 'finished' && snapshot && (
+        <HostPrintableReport
+          session={snapshot}
+          leaderboardData={leaderboardData}
+          analyticsData={exportAnalyticsData}
+        />
+      )}
+
     </div>
   );
 }

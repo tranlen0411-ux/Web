@@ -171,9 +171,15 @@ export function HostExportControls({
       {/* 3. Print / Save as PDF */}
       <button
         type="button"
-        disabled={!hasLeaderboard}
+        disabled={!hasLeaderboard || !hasAnalytics}
         onClick={handlePrint}
-        title={!hasLeaderboard ? 'Chưa có dữ liệu để in báo cáo' : 'In báo cáo hoặc Lưu dạng PDF'}
+        title={
+          !hasAnalytics
+            ? 'Vui lòng mở tab Phân tích câu hỏi trước để in báo cáo đầy đủ'
+            : !hasLeaderboard
+            ? 'Chưa có dữ liệu bảng xếp hạng'
+            : 'In báo cáo hoặc Lưu dạng PDF'
+        }
         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-slate-900 hover:bg-slate-100 disabled:opacity-50 font-bold text-xs shadow-md transition disabled:cursor-not-allowed"
       >
         <Printer className="w-3.5 h-3.5 text-slate-700" />
