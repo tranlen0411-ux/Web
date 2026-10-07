@@ -141,7 +141,7 @@ export function getTopNSelectionSummary(leaderboardData, topN = 'all') {
       selectedCount: 0,
       hasBoundaryTie: false,
       extraDueToTie: 0,
-      boundaryRank: numLimit === 'all' ? null : numLimit,
+      boundaryRank: null,
       label: ''
     };
   }
@@ -169,10 +169,14 @@ export function getTopNSelectionSummary(leaderboardData, topN = 'all') {
     };
   }
 
-  const filtered = filterLeaderboardByRank(leaderboardData, numericLimit);
-  const selectedCount = filtered.length;
-  const hasBoundaryTie = selectedCount > numericLimit;
-  const extraDueToTie = hasBoundaryTie ? (selectedCount - numericLimit) : 0;
+  const selectedRows = filterLeaderboardByRank(leaderboardData, numericLimit);
+  const selectedCount = selectedRows.length;
+  const boundaryRows = selectedRows.filter(
+    (row) => row && Number(row.rank) === numericLimit
+  );
+  const hasBoundaryTie = boundaryRows.length > 1;
+  const extraDueToTie = hasBoundaryTie ? Math.max(boundaryRows.length - 1, 0) : 0;
+  const boundaryRank = hasBoundaryTie ? numericLimit : null;
 
   let label = `${selectedCount} thí sinh`;
   if (hasBoundaryTie) {
@@ -184,7 +188,7 @@ export function getTopNSelectionSummary(leaderboardData, topN = 'all') {
     selectedCount,
     hasBoundaryTie,
     extraDueToTie,
-    boundaryRank: numericLimit,
+    boundaryRank,
     label
   };
 }

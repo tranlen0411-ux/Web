@@ -83,15 +83,15 @@ const sampleAnalytics = {
 test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', async (t) => {
 
   // ============================================================================
-  // GROUP 1: PURE SUMMARY HELPER UNIT TESTS (18 tests)
+  // GROUP 1: PURE SUMMARY HELPER UNIT TESTS & BOUNDARY HARDENING (22 tests)
   // ============================================================================
-  await t.test('Group 1: Pure Summary Helper Unit Tests', async (t1) => {
+  await t.test('Group 1: Pure Summary Helper Unit Tests & Boundary Hardening', async (t1) => {
     await t1.test('1. non-array safe: null returns clean 0 count summary', () => {
       const s = getTopNSelectionSummary(null, 3);
       assert.equal(s.selectedCount, 0);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.boundaryRank, 3);
+      assert.equal(s.boundaryRank, null);
       assert.equal(s.topN, 3);
     });
 
@@ -100,9 +100,11 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s1.selectedCount, 0);
       assert.equal(s1.topN, 'all');
       assert.equal(s1.hasBoundaryTie, false);
+      assert.equal(s1.boundaryRank, null);
 
       const s2 = getTopNSelectionSummary(12345, 'all');
       assert.equal(s2.selectedCount, 0);
+      assert.equal(s2.boundaryRank, null);
     });
 
     await t1.test('3. all mode returns full count and no tie warning', () => {
@@ -120,7 +122,8 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.selectedCount, 0);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.boundaryRank, 3);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '0 thí sinh');
     });
 
     await t1.test('5. Top 3 normal ranks [1, 2, 3]', () => {
@@ -129,7 +132,7 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.selectedCount, 3);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.boundaryRank, 3);
+      assert.equal(s.boundaryRank, null);
       assert.equal(s.label, '3 thí sinh');
     });
 
@@ -139,11 +142,11 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.selectedCount, 3);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.boundaryRank, 3);
+      assert.equal(s.boundaryRank, null);
       assert.equal(s.label, '3 thí sinh');
     });
 
-    await t1.test('7. Top 3 ranks [1, 2, 3, 3, 5] (real boundary tie)', () => {
+    await t1.test('7. Top 3 ranks [1, 2, 3, 3, 5] (actual boundary tie at rank 3)', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 3 }, { rank: 5 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.selectedCount, 4);
@@ -153,7 +156,79 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.label, '4 thí sinh (+1 đồng hạng)');
     });
 
-    await t1.test('8. Top 2 ranks [1, 2, 2, 4] (boundary tie at rank 2)', () => {
+    await t1.test('8. Top 3 ranks [1, 2, 3, 3, 3, 6] (boundary tie with 3 participants)', () => {
+      const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 3 }, { rank: 3 }, { rank: 6 }];
+      const s = getTopNSelectionSummary(lb, 3);
+      assert.equal(s.selectedCount, 5);
+      assert.equal(s.hasBoundaryTie, true);
+      assert.equal(s.extraDueToTie, 2);
+      assert.equal(s.boundaryRank, 3);
+      assert.equal(s.label, '5 thí sinh (+2 đồng hạng)');
+    });
+
+    await t1.test('9. Required Case 1: [1, 1, 1, 1, 5], Top 3 => rank gap, no boundary tie', () => {
+      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 5 }];
+      const s = getTopNSelectionSummary(lb, 3);
+      assert.equal(s.selectedCount, 4);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '4 thí sinh');
+    });
+
+    await t1.test('10. Required Case 2: [1, 1, 1, 1, 5], Top 5 => rank 5 count 1, no boundary tie', () => {
+      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 5 }];
+      const s = getTopNSelectionSummary(lb, 5);
+      assert.equal(s.selectedCount, 5);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '5 thí sinh');
+    });
+
+    await t1.test('11. Required Case 5: [1, 1, 3, 4], Top 3 => rank 3 count 1, no boundary tie', () => {
+      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 3 }, { rank: 4 }];
+      const s = getTopNSelectionSummary(lb, 3);
+      assert.equal(s.selectedCount, 3);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '3 thí sinh');
+    });
+
+    await t1.test('12. Required Case 6: [1, 1, 1, 4], Top 3 => rank 3 count 0, no boundary tie', () => {
+      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 4 }];
+      const s = getTopNSelectionSummary(lb, 3);
+      assert.equal(s.selectedCount, 3);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '3 thí sinh');
+    });
+
+    await t1.test('13. Required Case 7: 10 rows rank 1 then rank 11, Top 10 => no boundary tie', () => {
+      const lb = [];
+      for (let i = 0; i < 10; i++) lb.push({ rank: 1 });
+      lb.push({ rank: 11 });
+      const s = getTopNSelectionSummary(lb, 10);
+      assert.equal(s.selectedCount, 10);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '10 thí sinh');
+    });
+
+    await t1.test('14. Required Case 8: 4 rows rank 1 then rank 5, Top 3 => selectedCount 4, no boundary tie', () => {
+      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 5 }];
+      const s = getTopNSelectionSummary(lb, 3);
+      assert.equal(s.selectedCount, 4);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
+      assert.equal(s.label, '4 thí sinh');
+    });
+
+    await t1.test('15. Top 2 ranks [1, 2, 2, 4] (boundary tie at rank 2)', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 2 }, { rank: 4 }];
       const s = getTopNSelectionSummary(lb, 2);
       assert.equal(s.selectedCount, 3);
@@ -163,7 +238,7 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.label, '3 thí sinh (+1 đồng hạng)');
     });
 
-    await t1.test('9. Top 5 boundary tie [1, 2, 3, 4, 5, 5, 7]', () => {
+    await t1.test('16. Top 5 boundary tie [1, 2, 3, 4, 5, 5, 7]', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 4 }, { rank: 5 }, { rank: 5 }, { rank: 7 }];
       const s = getTopNSelectionSummary(lb, 5);
       assert.equal(s.selectedCount, 6);
@@ -173,7 +248,7 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.label, '6 thí sinh (+1 đồng hạng)');
     });
 
-    await t1.test('10. Top 10 boundary tie [1..9, 10, 10, 10, 13]', () => {
+    await t1.test('17. Top 10 boundary tie [1..9, 10, 10, 10, 13]', () => {
       const lb = [
         { rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 4 }, { rank: 5 },
         { rank: 6 }, { rank: 7 }, { rank: 8 }, { rank: 9 },
@@ -187,67 +262,46 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       assert.equal(s.label, '12 thí sinh (+2 đồng hạng)');
     });
 
-    await t1.test('11. rank gap [1, 1, 3, 4] on Top 3', () => {
-      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 3 }, { rank: 4 }];
-      const s = getTopNSelectionSummary(lb, 3);
-      assert.equal(s.selectedCount, 3);
-      assert.equal(s.hasBoundaryTie, false);
-      assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.label, '3 thí sinh');
-    });
-
-    await t1.test('12. rank gap [1, 1, 1, 4] on Top 3', () => {
-      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 4 }];
-      const s = getTopNSelectionSummary(lb, 3);
-      assert.equal(s.selectedCount, 3);
-      assert.equal(s.hasBoundaryTie, false);
-      assert.equal(s.extraDueToTie, 0);
-      assert.equal(s.label, '3 thí sinh');
-    });
-
-    await t1.test('13. missing rank rows handled safely', () => {
+    await t1.test('18. missing rank rows handled safely', () => {
       const lb = [{ rank: 1 }, { rank: null }, { rank: undefined }, { rank: 2 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.selectedCount, 2);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
     });
 
-    await t1.test('14. string numeric rank e.g. "3" parsed safely', () => {
+    await t1.test('19. string numeric rank e.g. "3" parsed safely', () => {
       const lb = [{ rank: '1' }, { rank: '2' }, { rank: '3' }, { rank: '3' }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.selectedCount, 4);
       assert.equal(s.hasBoundaryTie, true);
       assert.equal(s.extraDueToTie, 1);
+      assert.equal(s.boundaryRank, 3);
     });
 
-    await t1.test('15. invalid rank string excluded from count', () => {
+    await t1.test('20. invalid rank string excluded from count', () => {
       const lb = [{ rank: 1 }, { rank: 'invalid' }, { rank: NaN }, { rank: 2 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.selectedCount, 2);
+      assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
     });
 
-    await t1.test('16. source array not mutated', () => {
+    await t1.test('21. source array not mutated', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }];
       const copy = JSON.stringify(lb);
       getTopNSelectionSummary(lb, 3);
       assert.equal(JSON.stringify(lb), copy);
     });
 
-    await t1.test('17. row objects not mutated', () => {
+    await t1.test('22. row objects not mutated', () => {
       const row = { rank: 1, total_score: 100 };
       const lb = [row];
       getTopNSelectionSummary(lb, 1);
       assert.equal(row.rank, 1);
       assert.equal(row.total_score, 100);
-    });
-
-    await t1.test('18. rank values not recalculated', () => {
-      const lb = [{ rank: 1 }, { rank: 1 }, { rank: 1 }, { rank: 1 }];
-      const s = getTopNSelectionSummary(lb, 3);
-      assert.equal(s.selectedCount, 4);
-      assert.equal(s.hasBoundaryTie, true);
-      assert.equal(s.extraDueToTie, 1);
     });
   });
 
@@ -255,32 +309,37 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
   // GROUP 2: TIE EXPLANATION & SEMANTICS (8 tests)
   // ============================================================================
   await t.test('Group 2: Tie Explanation & Semantics', async (t2) => {
-    await t2.test('19. no boundary tie => no false "+N đồng hạng" warning in label', () => {
+    await t2.test('23. no boundary tie => no false "+N đồng hạng" warning in label', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
       assert.ok(!s.label.includes('đồng hạng'));
     });
 
-    await t2.test('20. real boundary tie => correct extra count in label', () => {
+    await t2.test('24. real boundary tie => correct extra count in label', () => {
       const lb = [{ rank: 1 }, { rank: 2 }, { rank: 3 }, { rank: 3 }, { rank: 3 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.hasBoundaryTie, true);
       assert.equal(s.extraDueToTie, 2);
+      assert.equal(s.boundaryRank, 3);
       assert.equal(s.label, '5 thí sinh (+2 đồng hạng)');
     });
 
-    await t2.test('21. boundary rank matches numericLimit', () => {
+    await t2.test('25. boundary rank matches numericLimit when tie present', () => {
       const s3 = getTopNSelectionSummary(sampleLeaderboard, 3);
+      assert.equal(s3.hasBoundaryTie, true);
       assert.equal(s3.boundaryRank, 3);
       const s5 = getTopNSelectionSummary(sampleLeaderboard, 5);
-      assert.equal(s5.boundaryRank, 5);
+      assert.equal(s5.hasBoundaryTie, false);
+      assert.equal(s5.boundaryRank, null);
       const s10 = getTopNSelectionSummary(sampleLeaderboard, 10);
-      assert.equal(s10.boundaryRank, 10);
+      assert.equal(s10.hasBoundaryTie, false);
+      assert.equal(s10.boundaryRank, null);
     });
 
-    await t2.test('22. selectedCount exactly equals filterLeaderboardByRank count', () => {
+    await t2.test('26. selectedCount exactly equals filterLeaderboardByRank count', () => {
       for (const n of [3, 5, 10, 'all']) {
         const s = getTopNSelectionSummary(sampleLeaderboard, n);
         const filtered = filterLeaderboardByRank(sampleLeaderboard, n);
@@ -288,31 +347,34 @@ test('COMPETITION V1 R11 — TIE INDICATOR & EXPORT TRANSPARENCY TEST SUITE', as
       }
     });
 
-    await t2.test('23. all mode produces clean label without tie notation', () => {
+    await t2.test('27. all mode produces clean label without tie notation', () => {
       const s = getTopNSelectionSummary(sampleLeaderboard, 'all');
       assert.equal(s.hasBoundaryTie, false);
+      assert.equal(s.boundaryRank, null);
       assert.equal(s.label, 'Tất cả 6 thí sinh');
     });
 
-    await t2.test('24. Top N selectedCount is consistent across repeated calls', () => {
+    await t2.test('28. Top N selectedCount is consistent across repeated calls', () => {
       const s1 = getTopNSelectionSummary(sampleLeaderboard, 3);
       const s2 = getTopNSelectionSummary(sampleLeaderboard, 3);
       assert.deepEqual(s1, s2);
     });
 
-    await t2.test('25. gap ranking is not falsely described as boundary tie', () => {
+    await t2.test('29. gap ranking is not falsely described as boundary tie', () => {
       const lb = [{ rank: 1 }, { rank: 1 }, { rank: 3 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
     });
 
-    await t2.test('26. duplicated rank below boundary does not trigger false boundary tie', () => {
+    await t2.test('30. duplicated rank below boundary does not trigger false boundary tie', () => {
       const lb = [{ rank: 1 }, { rank: 1 }, { rank: 2 }, { rank: 4 }];
       const s = getTopNSelectionSummary(lb, 3);
       assert.equal(s.selectedCount, 3);
       assert.equal(s.hasBoundaryTie, false);
       assert.equal(s.extraDueToTie, 0);
+      assert.equal(s.boundaryRank, null);
     });
   });
 
