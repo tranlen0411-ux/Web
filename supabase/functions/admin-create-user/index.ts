@@ -65,9 +65,10 @@ serve(async (req) => {
     }
 
     const targetRole = role === 'teacher' ? 'teacher' : 'student';
-    const targetGrade = parseInt(gradeLevel) || 1;
+    const parsedGrade = parseInt(gradeLevel);
+    const targetGrade = (!isNaN(parsedGrade) && parsedGrade >= 1 && parsedGrade <= 5) ? parsedGrade : 1;
 
-    // 5. Tạo Auth User bằng Supabase Admin API
+    // 5. Tạo Auth User bằng Supabase Admin API (duy nhất 1 lần)
     const { data: authData, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: email.trim().toLowerCase(),
       password: password,
@@ -79,8 +80,8 @@ serve(async (req) => {
       },
     });
 
-    if (createError) {
-      return new Response(JSON.stringify({ success: false, message: createError.message }), {
+    if (createError || !authData?.user) {
+      return new Response(JSON.stringify({ success: false, message: createError?.message || 'Không thể tạo tài khoản Auth.' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -88,25 +89,118 @@ serve(async (req) => {
 
     const newUserId = authData.user.id;
 
-    // 6. Đợi Trigger handle_new_user() xong và cập nhật vai trò / khối lớp chính xác
+    // 6. Đợi Trigger handle_new_user() hoàn tất trước khi cập nhật hồ sơ
     await new Promise((res) => setTimeout(res, 500));
 
-    await supabaseAdmin
-      .from('profiles')
-      .update({
-        full_name: fullName.trim(),
-        role: targetRole,
-        grade_level: targetGrade,
-        is_disabled: false,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', newUserId);
+    // 7. Cập nhật hồ sơ (Profile) kèm sinh student_code duy nhất cho Học sinh (Student)
+    let assignedStudentCode: string | null = null;
+    let profileUpdateSuccess = false;
+    let lastProfileError: any = null;
 
+    if (targetRole === 'teacher') {
+      // Đối với Giáo viên: Không gán student_code
+      const { error: teacherProfErr } = await supabaseAdmin
+        .from('profiles')
+        .upsert({
+          id: newUserId,
+          email: email.trim().toLowerCase(),
+          full_name: fullName.trim(),
+          role: 'teacher',
+          grade_level: targetGrade,
+          student_code: null,
+          is_disabled: false,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (!teacherProfErr) {
+        profileUpdateSuccess = true;
+      } else {
+        lastProfileError = teacherProfErr;
+      }
+    } else {
+      // Đối với Học sinh: Sinh student_code dạng HS<grade>-<4 chữ số ngẫu nhiên>, retry tối đa 5 lần nếu trùng mã (Postgres 23505)
+      const prefix = `HS${targetGrade}`;
+
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        const randomCodeNum = 1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000);
+        const studentCode = `${prefix}-${randomCodeNum}`;
+
+        const { error: studentProfErr } = await supabaseAdmin
+          .from('profiles')
+          .upsert({
+            id: newUserId,
+            email: email.trim().toLowerCase(),
+            full_name: fullName.trim(),
+            role: 'student',
+            grade_level: targetGrade,
+            student_code: studentCode,
+            is_disabled: false,
+            updated_at: new Date().toISOString(),
+          });
+
+        if (!studentProfErr) {
+          assignedStudentCode = studentCode;
+          profileUpdateSuccess = true;
+          break;
+        }
+
+        lastProfileError = studentProfErr;
+
+        // Nếu gặp lỗi vi phạm ràng buộc UNIQUE (23505), thử lại với mã mới cho CÙNG Auth user UUID
+        if (studentProfErr.code === '23505' && attempt < 5) {
+          continue;
+        }
+
+        // Lỗi khác hoặc đã hết 5 lần thử -> Dừng vòng lặp để thực hiện bồi hoàn an toàn
+        break;
+      }
+    }
+
+    // 8. Xử lý bồi hoàn an toàn tuần tự (Sequential Compensation Safety) nếu cập nhật Profile thất bại
+    if (!profileUpdateSuccess) {
+      // 8.1. Thu hồi tài khoản Auth trước
+      const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newUserId);
+      if (delAuthErr) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            code: 'CLEANUP_FAILED',
+            message: 'Tạo tài khoản thất bại và không thể dọn dẹp tài khoản Auth mồ côi.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 8.2. Chỉ khi xóa Auth thành công mới tiến hành dọn dẹp Profile (nếu chưa bị xóa phân tầng)
+      const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newUserId);
+      if (delProfErr) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            code: 'CLEANUP_FAILED',
+            message: 'Tạo tài khoản thất bại và không thể hoàn tất dọn dẹp hồ sơ.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 8.3. Dọn dẹp hoàn tất an toàn -> Trả về lỗi tạo hồ sơ ban đầu
+      return new Response(
+        JSON.stringify({
+          success: false,
+          message: lastProfileError?.message || 'Không thể khởi tạo hồ sơ người dùng sau các lần thử.',
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 9. Trả về kết quả thành công
     return new Response(
       JSON.stringify({
         success: true,
         message: 'Tạo tài khoản mới thành công!',
         user: authData.user,
+        studentCode: assignedStudentCode || undefined,
       }),
       {
         status: 200,
