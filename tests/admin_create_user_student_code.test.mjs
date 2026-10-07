@@ -43,8 +43,9 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   // Check 5: Check max 5 retries
   assert(sourceCode.includes('attempt <= 5') && sourceCode.includes('attempt < 5'), 'Static: Enforces maximum 5 retry attempts');
 
-  // Check 6: Check compensation cleanup on profile failure
-  assert(sourceCode.includes('deleteUser(newUserId)') && sourceCode.includes('CLEANUP_FAILED'), 'Static: Implements compensation cleanup and returns CLEANUP_FAILED on failure');
+  // Check 6: Check compensation cleanup handles BOTH delAuthErr and delProfErr
+  assert(sourceCode.includes('delAuthErr || delProfErr') || (sourceCode.includes('delAuthErr') && sourceCode.includes('delProfErr')), 'Static: Implements compensation cleanup checking both Auth and Profile deletion errors');
+  assert(sourceCode.includes('CLEANUP_FAILED'), 'Static: Returns CLEANUP_FAILED on failure');
 
   // Check 7: Check Admin authorization gate intact
   assert(sourceCode.includes("callerProfile?.role !== 'admin'"), 'Static: Admin authorization check remains intact');
@@ -62,7 +63,7 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   // =========================================================================
   // 2. LOGICAL SIMULATION WITH IN-MEMORY POSTGRESQL (PGLITE)
   // =========================================================================
-  console.log('\n--- 2. LOGICAL SIMULATION WITH PGLITE (POSTGRESQL UNIQUE CONSTRAINT) ---');
+  console.log('\n--- 2. LOGICAL SIMULATION WITH PGLITE (POSTGRESQL UNIQUE CONSTRAINT & COMPENSATION SAFETY) ---');
 
   const db = new PGlite();
 
@@ -94,7 +95,9 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
     gradeLevel = 1,
     mockCollisionCodes = [], // Specific codes to force collision
     mockFailNon23505 = false,
-    mockFailCleanup = false,
+    mockAuthDeleteError = null,
+    mockProfileDeleteError = null,
+    mockProfileCascadeAbsent = false, // simulates profile already deleted by auth cascade before explicit profile delete
   }) {
     // 1. Auth check
     if (callerRole !== 'admin') {
@@ -184,16 +187,35 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
 
     // 4. Compensation Safety
     if (!profileUpdateSuccess) {
-      if (mockFailCleanup) {
-        return {
-          status: 500,
-          body: { success: false, code: 'CLEANUP_FAILED', message: 'Tạo tài khoản thất bại và không thể dọn dẹp tài khoản Auth mồ côi.' }
-        };
+      // 4.1 Delete Auth user
+      let delAuthErr = mockAuthDeleteError;
+      if (!delAuthErr) {
+        authUserExists = false;
       }
 
-      // Cleanup
-      authUserExists = false;
-      await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
+      // 4.2 Delete Profile
+      let delProfErr = mockProfileDeleteError;
+      if (!delProfErr) {
+        if (mockProfileCascadeAbsent) {
+          // Row was already deleted by cascade: delete query matches 0 rows, error is NULL
+          await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
+        } else {
+          await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
+        }
+      }
+
+      // 4.3 Check both cleanup errors
+      if (delAuthErr || delProfErr) {
+        return {
+          status: 500,
+          body: {
+            success: false,
+            code: 'CLEANUP_FAILED',
+            message: 'Tạo tài khoản thất bại và không thể dọn dẹp dữ liệu khởi tạo không hoàn chỉnh.'
+          },
+          meta: { authCreatedCount, retryAttempts, authUserExists, delAuthErr, delProfErr }
+        };
+      }
 
       return {
         status: 400,
@@ -201,7 +223,7 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
           success: false,
           message: lastProfileError?.message || 'Không thể khởi tạo hồ sơ người dùng sau các lần thử.'
         },
-        meta: { authCreatedCount, retryAttempts, authUserExists }
+        meta: { authCreatedCount, retryAttempts, authUserExists, delAuthErr, delProfErr }
       };
     }
 
@@ -287,25 +309,66 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   assert(resNon23505.status === 400 && resNon23505.body.success === false, 'Test 6.1: Lỗi non-23505 dừng ngay lập tức');
   assert(resNon23505.meta.retryAttempts === 1, 'Test 6.2: Không vô ích thử lại khi gặp lỗi non-23505 (chỉ 1 attempt)');
 
-  // Test 7: Cleanup failure returns CLEANUP_FAILED with 500 status
-  const resCleanupFail = await simulateAdminCreateUser({
-    email: 'hs_cleanup_fail@school.vn',
-    fullName: 'Hoc Sinh Loi Cleanup',
+  // =========================================================================
+  // 3. EXTENDED COMPENSATION CLEANUP ERROR HANDLING (PHASE 2 REVIEW HARDENING)
+  // =========================================================================
+  console.log('\n--- 3. EXTENDED COMPENSATION CLEANUP SCENARIOS ---');
+
+  // Scenario A: Auth delete failure => CLEANUP_FAILED / HTTP 500
+  const resAuthDeleteFail = await simulateAdminCreateUser({
+    email: 'hs_auth_del_fail@school.vn',
+    fullName: 'Hoc Sinh Loi Auth Cleanup',
     role: 'student',
     gradeLevel: 1,
     mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
-    mockFailCleanup: true
+    mockAuthDeleteError: { message: 'Auth service network failure during delete' }
   });
-  assert(resCleanupFail.status === 500 && resCleanupFail.body.code === 'CLEANUP_FAILED', 'Test 7: Khi xóa dọn Auth thất bại trả về lỗi CLEANUP_FAILED với status 500');
+  assert(resAuthDeleteFail.status === 500 && resAuthDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario A: Auth delete error kích hoạt CLEANUP_FAILED với status 500');
 
-  // Test 8: Non-admin authorization blocked with 403
+  // Scenario B: Profile delete returns an actual error => CLEANUP_FAILED / HTTP 500
+  const resProfileDeleteFail = await simulateAdminCreateUser({
+    email: 'hs_prof_del_fail@school.vn',
+    fullName: 'Hoc Sinh Loi Profile Cleanup',
+    role: 'student',
+    gradeLevel: 1,
+    mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
+    mockProfileDeleteError: { message: 'PostgREST profile delete permission denied' }
+  });
+  assert(resProfileDeleteFail.status === 500 && resProfileDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario B: Profile delete error kích hoạt CLEANUP_FAILED với status 500');
+
+  // Scenario C: Both cleanup calls succeed => original terminal create failure returned safely (HTTP 400)
+  const resBothCleanupOk = await simulateAdminCreateUser({
+    email: 'hs_clean_ok@school.vn',
+    fullName: 'Hoc Sinh Dọn Dẹp Thành Công',
+    role: 'student',
+    gradeLevel: 1,
+    mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
+    mockAuthDeleteError: null,
+    mockProfileDeleteError: null
+  });
+  assert(resBothCleanupOk.status === 400 && resBothCleanupOk.body.success === false && resBothCleanupOk.body.code === undefined, 'Scenario C: Cả Auth và Profile dọn dẹp thành công -> trả về lỗi tạo tài khoản gốc (HTTP 400)');
+
+  // Scenario D: Profile already absent after Auth cascade, with no Supabase error => must NOT be treated as cleanup failure
+  const resCascadeAbsent = await simulateAdminCreateUser({
+    email: 'hs_cascade_absent@school.vn',
+    fullName: 'Hoc Sinh Cascade Absent',
+    role: 'student',
+    gradeLevel: 1,
+    mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
+    mockProfileCascadeAbsent: true,
+    mockAuthDeleteError: null,
+    mockProfileDeleteError: null
+  });
+  assert(resCascadeAbsent.status === 400 && resCascadeAbsent.body.success === false && resCascadeAbsent.body.code === undefined, 'Scenario D: Profile đã bị cascade xóa trước (0 rows deleted, no error) không bị coi là lỗi dọn dẹp');
+
+  // Test 11: Non-admin authorization blocked with 403
   const resNonAdmin = await simulateAdminCreateUser({
     callerRole: 'student',
     email: 'fake_admin@school.vn',
     fullName: 'Fake Admin',
     role: 'student'
   });
-  assert(resNonAdmin.status === 403, 'Test 8: Non-admin caller bị chặn 403 Forbidden');
+  assert(resNonAdmin.status === 403, 'Test 11: Non-admin caller bị chặn 403 Forbidden');
 
   console.log(`\n🎉 TẤT CẢ ${passedTests}/${totalTests} TESTS ĐÃ PASS XUẤT SẮC!`);
   return { passedTests, totalTests };

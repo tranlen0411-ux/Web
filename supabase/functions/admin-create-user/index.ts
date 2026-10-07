@@ -161,12 +161,12 @@ serve(async (req) => {
       const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newUserId);
       const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newUserId);
 
-      if (delAuthErr) {
+      if (delAuthErr || delProfErr) {
         return new Response(
           JSON.stringify({
             success: false,
             code: 'CLEANUP_FAILED',
-            message: 'Tạo tài khoản thất bại và không thể dọn dẹp tài khoản Auth mồ côi.',
+            message: 'Tạo tài khoản thất bại và không thể dọn dẹp dữ liệu khởi tạo không hoàn chỉnh.',
           }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
