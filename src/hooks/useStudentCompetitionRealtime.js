@@ -32,6 +32,7 @@ import {
 export function useStudentCompetitionRealtime({
   sessionId,
   participantId,
+  guestToken = null,
   enabled = true,
 }) {
   const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -66,6 +67,7 @@ export function useStudentCompetitionRealtime({
       const lbRes = await getLeaderboardSnapshot({
         sessionId,
         participantId,
+        guestToken,
       });
 
       if (!isMountedRef.current) {
@@ -95,7 +97,7 @@ export function useStudentCompetitionRealtime({
         message: err.message,
       };
     }
-  }, [sessionId, participantId]);
+  }, [sessionId, participantId, guestToken]);
 
   // Stable Authoritative State Refresh Callback (Depends strictly on sessionId & participantId)
   const refreshAuthoritativeState = useCallback(async () => {
@@ -134,7 +136,7 @@ export function useStudentCompetitionRealtime({
 
       // 2. Fetch Active Sanitized Question via RPC
       if (session.status === 'in_progress' || session.status === 'paused') {
-        const qRes = await getActiveQuestionSnapshot({ sessionId, participantId });
+        const qRes = await getActiveQuestionSnapshot({ sessionId, participantId, guestToken });
         if (isMountedRef.current && qRes.success) {
           const activeQ = qRes.data?.question || null;
           currentQuestionRef.current = activeQ;
@@ -156,7 +158,7 @@ export function useStudentCompetitionRealtime({
     } finally {
       isPollingRef.current = false;
     }
-  }, [sessionId, participantId, refreshFinalLeaderboard]);
+  }, [sessionId, participantId, guestToken, refreshFinalLeaderboard]);
 
   // Main Realtime & Polling Lifecycle Effect
   useEffect(() => {
@@ -183,7 +185,7 @@ export function useStudentCompetitionRealtime({
         }
 
         // 2. Only active sessions need realtime capability token (in-memory only)
-        const tokenRes = await getCapabilityToken({ sessionId, participantId });
+        const tokenRes = await getCapabilityToken({ sessionId, participantId, guestToken });
         if (isCancelled || isTerminalRef.current || !isMountedRef.current) return;
 
         if (!tokenRes.success || !tokenRes.token) {
@@ -257,7 +259,7 @@ export function useStudentCompetitionRealtime({
         removeCompetitionChannel(activeChannel, sessionId, participantId);
       }
     };
-  }, [sessionId, participantId, enabled, refreshAuthoritativeState]);
+  }, [sessionId, participantId, guestToken, enabled, refreshAuthoritativeState]);
 
   return {
     connectionStatus,

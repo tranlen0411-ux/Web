@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Gamepad2,
   Sparkles,
@@ -18,6 +19,7 @@ import {
   Flame,
   Zap,
   BookOpen,
+  User,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import {
@@ -32,11 +34,16 @@ import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRea
 import { StudentQuestionReviewView } from '../components/competition/StudentQuestionReviewView.jsx';
 
 // ============================================================================
-// STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT)
+// STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT & GUEST KEYS)
 // ============================================================================
 
 export const STUDENT_SESSION_STORAGE_KEY = 'competition_student_session_id';
 export const STUDENT_PARTICIPANT_STORAGE_KEY = 'competition_student_participant_id';
+
+export const COMPETITION_GUEST_SESSION_ID_KEY = 'competition_guest_session_id';
+export const COMPETITION_GUEST_PARTICIPANT_ID_KEY = 'competition_guest_participant_id';
+export const COMPETITION_GUEST_TOKEN_KEY = 'competition_guest_token';
+export const COMPETITION_GUEST_DISPLAY_NAME_KEY = 'competition_guest_display_name';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -45,7 +52,49 @@ export const isValidUUID = (value) => {
   return UUID_REGEX.test(value.trim());
 };
 
-// Safe initial session resolver (Query param -> sessionStorage -> null)
+/**
+ * Generate client-side Guest token using CSPRNG only (crypto.getRandomValues).
+ * 32 random bytes encoded as hex => 64 hex characters.
+ * Non-CSPRNG generators are strictly forbidden.
+ */
+export const generateGuestToken = () => {
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const array = new Uint8Array(32);
+    window.crypto.getRandomValues(array);
+    return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return null;
+};
+
+/**
+ * Retrieves existing stable guest token from sessionStorage or generates a new one.
+ * Stable per tab to preserve PostgreSQL brute-force rate-limiting consistency.
+ */
+export const getOrCreateGuestToken = () => {
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = window.sessionStorage?.getItem(COMPETITION_GUEST_TOKEN_KEY);
+      if (stored && typeof stored === 'string' && stored.trim().length >= 32) {
+        return stored.trim();
+      }
+      const fresh = generateGuestToken();
+      if (fresh) {
+        window.sessionStorage?.setItem(COMPETITION_GUEST_TOKEN_KEY, fresh);
+      }
+      return fresh;
+    }
+  } catch (_e) {
+    // Fail safe
+  }
+  return generateGuestToken();
+};
+
+// Safe initial session resolver for Authenticated Students
 export const getInitialStudentSession = () => {
   try {
     if (typeof window === 'undefined') return { sessionId: null, participantId: null };
@@ -59,7 +108,6 @@ export const getInitialStudentSession = () => {
     const storedParticipant = window.sessionStorage?.getItem(STUDENT_PARTICIPANT_STORAGE_KEY);
     const validStoredParticipant = storedParticipant && isValidUUID(storedParticipant) ? storedParticipant.trim() : null;
 
-    // Session resolution priority: valid URL session OR valid stored session
     const resolvedSessionId = validUrlSession || validStoredSession;
     const resolvedParticipantId = validStoredParticipant;
 
@@ -77,6 +125,49 @@ export const getInitialStudentSession = () => {
     // Fail safe
   }
   return { sessionId: null, participantId: null };
+};
+
+// Safe initial session resolver for Public Guests (sessionStorage ONLY)
+export const getInitialGuestSession = () => {
+  try {
+    if (typeof window === 'undefined') {
+      return { sessionId: null, participantId: null, guestToken: null, displayName: null };
+    }
+    const storedSession = window.sessionStorage?.getItem(COMPETITION_GUEST_SESSION_ID_KEY);
+    const validStoredSession = storedSession && isValidUUID(storedSession) ? storedSession.trim() : null;
+
+    const storedParticipant = window.sessionStorage?.getItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
+    const validStoredParticipant = storedParticipant && isValidUUID(storedParticipant) ? storedParticipant.trim() : null;
+
+    const storedToken = window.sessionStorage?.getItem(COMPETITION_GUEST_TOKEN_KEY);
+    const validStoredToken = storedToken && typeof storedToken === 'string' && storedToken.trim().length >= 32 ? storedToken.trim() : null;
+
+    const storedDisplayName = window.sessionStorage?.getItem(COMPETITION_GUEST_DISPLAY_NAME_KEY) || null;
+
+    if (validStoredSession && validStoredParticipant && validStoredToken) {
+      return {
+        sessionId: validStoredSession,
+        participantId: validStoredParticipant,
+        guestToken: validStoredToken,
+        displayName: storedDisplayName,
+      };
+    }
+  } catch (_e) {
+    // Fail safe
+  }
+  return { sessionId: null, participantId: null, guestToken: null, displayName: null };
+};
+
+// Auto-fill room code from URL query (?room= or ?roomCode=)
+export const getRoomCodeFromUrl = () => {
+  try {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('room') || params.get('roomCode') || params.get('room_code') || '';
+    return code.trim().toUpperCase();
+  } catch (_e) {
+    return '';
+  }
 };
 
 // Fail-closed vs Transient Network classification
@@ -99,6 +190,7 @@ export const isStudentAuthOrPermanentError = (errorCode, status) => {
     code === 'FORBIDDEN' ||
     code === 'ROLE_NOT_ALLOWED' ||
     code === 'SESSION_NOT_JOINABLE' ||
+    code === 'ROOM_FULL' ||
     code.includes('PERMISSION') ||
     code.includes('NOT_FOUND')
   ) {
@@ -108,24 +200,33 @@ export const isStudentAuthOrPermanentError = (errorCode, status) => {
 };
 
 // ============================================================================
-// MAIN COMPONENT: CompetitionStudentPage (R4 Student Final Results)
+// MAIN COMPONENT: CompetitionStudentPage (R4 Student / Public Guest Results)
 // ============================================================================
 
-export const CompetitionStudentPage = () => {
+export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
+  const location = useLocation();
+  const isGuestMode = Boolean(isPublicJoin || (typeof window !== 'undefined' && location?.pathname?.startsWith('/competition/join')));
   const { user, profile } = useAuth();
 
   // Session & Identity State
-  const initialSession = useMemo(() => getInitialStudentSession(), []);
+  const initialSession = useMemo(() => {
+    return isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
+  }, [isGuestMode]);
+
   const [sessionId, setSessionId] = useState(initialSession.sessionId);
   const [participantId, setParticipantId] = useState(initialSession.participantId);
-  const [participantInfo, setParticipantInfo] = useState(null);
+  const [guestToken, setGuestToken] = useState(initialSession.guestToken || null);
+  const [guestDisplayName, setGuestDisplayName] = useState(initialSession.displayName || '');
+  const [participantInfo, setParticipantInfo] = useState(
+    initialSession.displayName ? { display_name: initialSession.displayName } : null
+  );
   const [isJoining, setIsJoining] = useState(false);
   const [isRestoring, setIsRestoring] = useState(Boolean(initialSession.sessionId && initialSession.participantId));
   const [joinError, setJoinError] = useState(null);
   const [notification, setNotification] = useState(null);
 
   // Question & Submission Local State
-  const [roomCode, setRoomCode] = useState('');
+  const [roomCode, setRoomCode] = useState(() => getRoomCodeFromUrl());
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedCurrentQuestion, setHasSubmittedCurrentQuestion] = useState(false);
@@ -140,7 +241,7 @@ export const CompetitionStudentPage = () => {
   const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
   const isMountedRef = useRef(true);
 
-  // Private Realtime Hook
+  // Private Realtime Hook (Propagates guestToken when in Guest Mode)
   const {
     connectionStatus,
     sessionData,
@@ -152,22 +253,22 @@ export const CompetitionStudentPage = () => {
   } = useStudentCompetitionRealtime({
     sessionId,
     participantId,
+    guestToken: isGuestMode ? guestToken : null,
     enabled: Boolean(sessionId && participantId),
   });
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 
-  // Review Mode Local State (R5)
+  // Review Mode Local State (R5 - Authenticated Student Only)
   const [studentViewMode, setStudentViewMode] = useState('FINAL_SUMMARY'); // 'FINAL_SUMMARY' | 'QUESTION_REVIEW'
   const [reviewData, setReviewData] = useState(null);
   const [isReviewLoading, setIsReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
 
-  // Authoritative Status & Question Refs (Declared after hook destructuring to eliminate TDZ ReferenceError)
+  // Authoritative Status & Question Refs
   const sessionStatusRef = useRef(sessionData?.status);
   const currentQuestionIdRef = useRef(currentQuestion?.id || null);
 
-  // Authoritative Status & Question Sync Effects for Async Race Protection
   useEffect(() => {
     sessionStatusRef.current = sessionData?.status;
   }, [sessionData?.status]);
@@ -176,8 +277,16 @@ export const CompetitionStudentPage = () => {
     currentQuestionIdRef.current = currentQuestion?.id || null;
   }, [currentQuestion?.id]);
 
-  // Role Gate: Prevent teacher/admin from accidental student participation
+  // Role Gate: Prevent teacher/admin from accidental student participation on /competition route
   const isStudentRole = profile?.role === 'student';
+
+  // URL Query Sync for room code
+  useEffect(() => {
+    const urlCode = getRoomCodeFromUrl();
+    if (urlCode && !roomCode) {
+      setRoomCode(urlCode);
+    }
+  }, []);
 
   // Format error messages to concise Vietnamese
   const getFriendlyErrorMessage = (code, rawMessage) => {
@@ -223,8 +332,14 @@ export const CompetitionStudentPage = () => {
   const clearRestoredSessionAndReturnToJoin = useCallback((failureReason) => {
     try {
       if (typeof window !== 'undefined') {
-        window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
-        window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        if (isGuestMode) {
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
+        } else {
+          window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+          window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        }
         if (window.location.search) {
           window.history?.replaceState({}, '', window.location.pathname);
         }
@@ -243,7 +358,6 @@ export const CompetitionStudentPage = () => {
     setSubmitResult(null);
     setSubmitError(null);
     setTimeLeftSeconds(null);
-    setRoomCode('');
     setIsRestoring(false);
     setStudentViewMode('FINAL_SUMMARY');
     setReviewData(null);
@@ -254,10 +368,11 @@ export const CompetitionStudentPage = () => {
       setJoinError(failureReason);
       showToast(failureReason, 'error');
     }
-  }, [showToast]);
+  }, [isGuestMode, showToast]);
 
-  // Handler to fetch and open Question Review Mode (R5)
+  // Handler to fetch and open Question Review Mode (R5 - Authenticated Student ONLY)
   const handleOpenReview = useCallback(async () => {
+    if (isGuestMode) return; // Invariant: Guest MUST NOT call studentGetReview
     const currentSessionId = activeSessionIdRef.current;
     const currentParticipantId = activeParticipantIdRef.current;
     if (!currentSessionId || !currentParticipantId) return;
@@ -297,7 +412,7 @@ export const CompetitionStudentPage = () => {
         setIsReviewLoading(false);
       }
     }
-  }, [clearRestoredSessionAndReturnToJoin]);
+  }, [isGuestMode, clearRestoredSessionAndReturnToJoin]);
 
   // Manual Retry Handler for Final Leaderboard on Transient Failures
   const handleRetryLeaderboard = useCallback(async () => {
@@ -321,31 +436,49 @@ export const CompetitionStudentPage = () => {
     }
   }, [refreshFinalLeaderboard, isRetryingLeaderboard, clearRestoredSessionAndReturnToJoin, showToast]);
 
-  // Synchronize activeSessionIdRef & activeParticipantIdRef with sessionStorage persistence
+  // Synchronize active refs & sessionStorage persistence
   useEffect(() => {
     activeSessionIdRef.current = sessionId;
     activeParticipantIdRef.current = participantId;
 
     try {
       if (typeof window !== 'undefined') {
-        if (sessionId && isValidUUID(sessionId)) {
-          window.sessionStorage?.setItem(STUDENT_SESSION_STORAGE_KEY, sessionId);
+        if (isGuestMode) {
+          if (sessionId && isValidUUID(sessionId) && participantId && isValidUUID(participantId) && guestToken) {
+            window.sessionStorage?.setItem(COMPETITION_GUEST_SESSION_ID_KEY, sessionId);
+            window.sessionStorage?.setItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY, participantId);
+            window.sessionStorage?.setItem(COMPETITION_GUEST_TOKEN_KEY, guestToken);
+            if (guestDisplayName || participantInfo?.display_name) {
+              window.sessionStorage?.setItem(
+                COMPETITION_GUEST_DISPLAY_NAME_KEY,
+                guestDisplayName || participantInfo?.display_name || ''
+              );
+            }
+          } else {
+            window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
+            window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
+            window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
+          }
         } else {
-          window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
-        }
+          if (sessionId && isValidUUID(sessionId)) {
+            window.sessionStorage?.setItem(STUDENT_SESSION_STORAGE_KEY, sessionId);
+          } else {
+            window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+          }
 
-        if (participantId && isValidUUID(participantId)) {
-          window.sessionStorage?.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, participantId);
-        } else {
-          window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+          if (participantId && isValidUUID(participantId)) {
+            window.sessionStorage?.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, participantId);
+          } else {
+            window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+          }
         }
       }
     } catch (_e) {
       // Fail safe
     }
-  }, [sessionId, participantId]);
+  }, [sessionId, participantId, guestToken, guestDisplayName, participantInfo?.display_name, isGuestMode]);
 
-  // Lifecycle Mount Guard
+  // Mount Guard
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -353,12 +486,12 @@ export const CompetitionStudentPage = () => {
     };
   }, []);
 
-  // Initial Restore & Authoritative Validation Effect (Authenticated Student)
+  // Initial Restore & Authoritative Validation Effect (Handles F5 for both Student & Guest)
   useEffect(() => {
     let isCancelled = false;
 
     async function validateAndRestoreSession() {
-      const initial = getInitialStudentSession();
+      const initial = isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
       if (!initial.sessionId || !initial.participantId) {
         setIsRestoring(false);
         return;
@@ -373,7 +506,6 @@ export const CompetitionStudentPage = () => {
           if (isStudentAuthOrPermanentError(sessionRes.error_code, sessionRes.status)) {
             clearRestoredSessionAndReturnToJoin('Phiên thi không tồn tại hoặc bạn không có quyền truy cập.');
           } else {
-            // Transient error: preserve session state for retry
             showToast('Đang kết nối lại phòng thi...', 'warning');
           }
           return;
@@ -391,10 +523,17 @@ export const CompetitionStudentPage = () => {
         if (session.status === 'finished') {
           setSessionId(initial.sessionId);
           setParticipantId(initial.participantId);
+          if (isGuestMode && initial.guestToken) {
+            setGuestToken(initial.guestToken);
+          }
+          if (isGuestMode && initial.displayName) {
+            setGuestDisplayName(initial.displayName);
+          }
 
           const lbRes = await getLeaderboardSnapshot({
             sessionId: initial.sessionId,
             participantId: initial.participantId,
+            guestToken: isGuestMode ? initial.guestToken : null,
           });
 
           if (isCancelled || !isMountedRef.current) return;
@@ -403,7 +542,6 @@ export const CompetitionStudentPage = () => {
             if (isStudentAuthOrPermanentError(lbRes.error_code, lbRes.status)) {
               clearRestoredSessionAndReturnToJoin('Bạn không có quyền xem kết quả phòng thi này.');
             } else {
-              // Transient error: preserve session, allow retry via button
               showToast('Chưa tải được bảng xếp hạng chung cuộc. Bạn có thể nhấn nút thử lại.', 'warning');
             }
             restoredSessionPendingValidationRef.current = false;
@@ -422,6 +560,9 @@ export const CompetitionStudentPage = () => {
               display_name: matched.display_name,
               avatar_url: matched.avatar_url,
             });
+            if (isGuestMode && matched.display_name) {
+              setGuestDisplayName(matched.display_name);
+            }
           }
 
           restoredSessionPendingValidationRef.current = false;
@@ -432,7 +573,7 @@ export const CompetitionStudentPage = () => {
         const rejoinRes = await studentRejoinSession({
           sessionId: initial.sessionId,
           participantId: initial.participantId,
-          guestToken: null,
+          guestToken: isGuestMode ? initial.guestToken : null,
         });
 
         if (isCancelled || !isMountedRef.current) return;
@@ -455,6 +596,12 @@ export const CompetitionStudentPage = () => {
         setSessionId(initial.sessionId);
         setParticipantId(initial.participantId);
         setParticipantInfo(returnedPart);
+        if (isGuestMode && initial.guestToken) {
+          setGuestToken(initial.guestToken);
+        }
+        if (isGuestMode && (returnedPart.display_name || initial.displayName)) {
+          setGuestDisplayName(returnedPart.display_name || initial.displayName);
+        }
         restoredSessionPendingValidationRef.current = false;
       } catch (err) {
         // Transient error during restore: do not clear session
@@ -470,7 +617,7 @@ export const CompetitionStudentPage = () => {
     return () => {
       isCancelled = true;
     };
-  }, [clearRestoredSessionAndReturnToJoin, showToast]);
+  }, [clearRestoredSessionAndReturnToJoin, showToast, isGuestMode]);
 
   // Clean local question & submission state when session transitions to finished
   useEffect(() => {
@@ -515,11 +662,29 @@ export const CompetitionStudentPage = () => {
     return () => clearInterval(interval);
   }, [sessionData?.question_deadline, sessionData?.status]);
 
-  // Handle Join Session
+  // Handle Join Session (Student or Guest)
   const handleJoin = async (e) => {
     e?.preventDefault();
     const cleanCode = roomCode.trim().toUpperCase();
     if (!cleanCode || isJoining) return;
+
+    let cleanDisplayName = '';
+    let activeGuestToken = null;
+
+    if (isGuestMode) {
+      cleanDisplayName = guestDisplayName.trim();
+      if (!cleanDisplayName) {
+        setJoinError('Vui lòng nhập tên hiển thị của bạn.');
+        return;
+      }
+      activeGuestToken = guestToken || getOrCreateGuestToken();
+      if (!activeGuestToken) {
+        setJoinError('Không thể tạo mã định danh khách an toàn. Vui lòng thử lại.');
+        return;
+      }
+    } else {
+      cleanDisplayName = profile?.full_name || 'Học sinh';
+    }
 
     setIsJoining(true);
     setJoinError(null);
@@ -527,9 +692,9 @@ export const CompetitionStudentPage = () => {
     try {
       const res = await studentJoinSession({
         roomCode: cleanCode,
-        displayName: profile?.full_name || 'Học sinh',
-        avatarUrl: profile?.avatar_url || null,
-        guestToken: null, // Authenticated student uses no guest token
+        displayName: cleanDisplayName,
+        avatarUrl: isGuestMode ? null : (profile?.avatar_url || null),
+        guestToken: isGuestMode ? activeGuestToken : null,
       });
 
       if (!res.success) {
@@ -548,9 +713,12 @@ export const CompetitionStudentPage = () => {
         return;
       }
 
+      if (isGuestMode) {
+        setGuestToken(activeGuestToken);
+      }
       setSessionId(newSessionId);
       setParticipantId(newParticipantId);
-      setParticipantInfo(part || { display_name: profile?.full_name || 'Học sinh' });
+      setParticipantInfo(part || { display_name: cleanDisplayName });
     } catch (err) {
       setJoinError(err.message || 'Không thể kết nối đến máy chủ.');
     } finally {
@@ -583,17 +751,10 @@ export const CompetitionStudentPage = () => {
         sessionId: targetSessionId,
         questionId: targetQuestionId,
         participantId: targetParticipantId,
-        guestToken: null,
+        guestToken: isGuestMode ? guestToken : null,
         selectedOptionIds: [selectedOptionId],
       });
 
-      // Strict Authoritative Invariants Guard:
-      // Response is ONLY valid and committed if:
-      // 1. Component is mounted
-      // 2. Active session is STILL targetSessionId
-      // 3. Active participant is STILL targetParticipantId
-      // 4. Current question is STILL targetQuestionId
-      // 5. Session status is STILL in_progress
       const isResponseValid =
         isMountedRef.current === true &&
         activeSessionIdRef.current === targetSessionId &&
@@ -643,8 +804,14 @@ export const CompetitionStudentPage = () => {
   const handleExit = () => {
     try {
       if (typeof window !== 'undefined') {
-        window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
-        window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        if (isGuestMode) {
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
+        } else {
+          window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
+          window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
+        }
         if (window.location.search) {
           window.history?.replaceState({}, '', window.location.pathname);
         }
@@ -695,12 +862,23 @@ export const CompetitionStudentPage = () => {
     return Array.isArray(leaderboard) ? leaderboard.filter((item) => item.rank === 3) : [];
   }, [leaderboard]);
 
+  // Active display name and avatar letter for current participant
+  const activeDisplayName = useMemo(() => {
+    if (participantInfo?.display_name) return participantInfo.display_name;
+    if (isGuestMode) return guestDisplayName || 'Khách';
+    return profile?.full_name || 'Học sinh';
+  }, [participantInfo?.display_name, isGuestMode, guestDisplayName, profile?.full_name]);
+
+  const activeAvatarLetter = useMemo(() => {
+    return (activeDisplayName.charAt(0) || 'H').toUpperCase();
+  }, [activeDisplayName]);
+
   // ==========================================================================
   // VIEW RENDERERS
   // ==========================================================================
 
-  // 1. NON-STUDENT ROLE NOTICE
-  if (profile && !isStudentRole) {
+  // 1. NON-STUDENT ROLE NOTICE (Only for Authenticated Student route)
+  if (!isGuestMode && profile && !isStudentRole) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12">
         <div className="bg-amber-50 border-4 border-amber-300 rounded-3xl p-8 shadow-sm text-center">
@@ -712,7 +890,7 @@ export const CompetitionStudentPage = () => {
           </h2>
           <p className="text-base text-amber-900 font-medium mb-6 leading-relaxed">
             Tài khoản hiện tại của bạn có vai trò <span className="font-bold underline">{profile.role === 'teacher' ? 'Giáo viên' : 'Quản trị viên'}</span>.
-            Để tham gia thi đấu với tư cách thí sinh, vui lòng đăng nhập bằng tài khoản Học sinh.
+            Để tham gia thi đấu với tư cách thí sinh, vui lòng đăng nhập bằng tài khoản Học sinh hoặc truy cập đường link phòng công khai.
           </p>
           <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-200/80 rounded-xl text-amber-900 font-bold text-sm">
             <ShieldCheck className="w-4 h-4" /> Giáo viên vui lòng sử dụng trang Quản Trị Đấu Trường (Host) để tạo và điều hành phòng thi.
@@ -765,25 +943,29 @@ export const CompetitionStudentPage = () => {
             Đấu Trường Trực Tuyến <Sparkles className="w-6 h-6 text-amber-500 fill-amber-400" />
           </h1>
           <p className="text-slate-600 font-medium mb-8 text-sm sm:text-base">
-            Nhập mã phòng do giáo viên cung cấp để tham gia tranh tài cùng các bạn!
+            {isGuestMode
+              ? 'Nhập mã phòng và tên hiển thị để tham gia tranh tài trực tiếp mà không cần tài khoản!'
+              : 'Nhập mã phòng do giáo viên cung cấp để tham gia tranh tài cùng các bạn!'}
           </p>
 
-          {/* Student Profile Identity Card */}
-          <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-4 mb-6 flex items-center gap-4 text-left">
-            <div className="w-12 h-12 rounded-full bg-sky-200 border-2 border-sky-400 flex items-center justify-center font-black text-sky-800 text-lg overflow-hidden shrink-0">
-              {profile?.avatar_url ? (
-                <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
-              ) : (
-                profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'HS'
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-bold text-sky-600 uppercase tracking-wider">Học sinh tham gia</div>
-              <div className="text-base font-black text-slate-800 truncate">
-                {profile?.full_name || 'Học sinh'}
+          {/* Student Profile Identity Card (Authenticated Only) */}
+          {!isGuestMode && (
+            <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-4 mb-6 flex items-center gap-4 text-left">
+              <div className="w-12 h-12 rounded-full bg-sky-200 border-2 border-sky-400 flex items-center justify-center font-black text-sky-800 text-lg overflow-hidden shrink-0">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'HS'
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-sky-600 uppercase tracking-wider">Học sinh tham gia</div>
+                <div className="text-base font-black text-slate-800 truncate">
+                  {profile?.full_name || 'Học sinh'}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Error Banner */}
           {joinError && (
@@ -807,13 +989,32 @@ export const CompetitionStudentPage = () => {
                 placeholder="VD: ABC123XYZ"
                 maxLength={20}
                 disabled={isJoining}
-                className="w-full px-5 py-4 text-center text-2xl font-black tracking-widest uppercase bg-slate-50 border-3 border-slate-300 rounded-2xl focus:bg-white focus:border-sky-500 focus:outline-none transition-all placeholder:text-slate-300 placeholder:normal-case placeholder:text-base placeholder:tracking-normal"
+                className="w-full px-5 py-4 text-center text-2xl font-black tracking-widest uppercase bg-slate-50 border-3 border-slate-300 rounded-2xl focus:bg-white focus:border-sky-500 focus:outline-none transition-all placeholder:text-slate-300 placeholder:normal-case placeholder:text-base placeholder:tracking-normal font-mono"
               />
             </div>
 
+            {/* Guest Display Name Input (Guest Mode Only) */}
+            {isGuestMode && (
+              <div>
+                <label htmlFor="guest-display-name-input" className="block text-left text-sm font-black text-slate-700 mb-2">
+                  Tên Của Bạn <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="guest-display-name-input"
+                  type="text"
+                  value={guestDisplayName}
+                  onChange={(e) => setGuestDisplayName(e.target.value)}
+                  placeholder="VD: Nguyễn Văn A"
+                  maxLength={50}
+                  disabled={isJoining}
+                  className="w-full px-5 py-3.5 text-base font-bold bg-slate-50 border-3 border-slate-300 rounded-2xl focus:bg-white focus:border-sky-500 focus:outline-none transition-all placeholder:text-slate-300"
+                />
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={isJoining || !roomCode.trim()}
+              disabled={isJoining || !roomCode.trim() || (isGuestMode && !guestDisplayName.trim())}
               className="w-full py-4 px-6 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-black text-lg rounded-2xl shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 active:scale-[0.99]"
             >
               {isJoining ? (
@@ -823,7 +1024,7 @@ export const CompetitionStudentPage = () => {
                 </>
               ) : (
                 <>
-                  <span>Vào Đấu Trường</span>
+                  <span>{isGuestMode ? 'Vào phòng thi' : 'Vào Đấu Trường'}</span>
                   <ArrowRight className="w-6 h-6" />
                 </>
               )}
@@ -847,7 +1048,7 @@ export const CompetitionStudentPage = () => {
                 {connectionStatus === 'connected' ? 'Đã kết nối' : 'Đang đồng bộ...'}
               </span>
             </div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-100 rounded-full text-sky-800 text-xs font-black">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-100 rounded-full text-sky-800 text-xs font-black font-mono">
               Phòng: {sessionData.room_code}
             </div>
           </div>
@@ -875,19 +1076,19 @@ export const CompetitionStudentPage = () => {
             </p>
           </div>
 
-          {/* Student Identity Footer */}
+          {/* Identity Footer */}
           <div className="flex items-center justify-between pt-4 border-t-2 border-slate-100">
             <div className="flex items-center gap-3 text-left">
               <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-sky-300 flex items-center justify-center font-bold text-sky-700 text-sm overflow-hidden">
-                {profile?.avatar_url ? (
+                {!isGuestMode && profile?.avatar_url ? (
                   <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
-                  profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'HS'
+                  activeAvatarLetter
                 )}
               </div>
               <div>
-                <div className="text-xs text-slate-500 font-bold">Thí sinh</div>
-                <div className="text-sm font-black text-slate-800">{participantInfo?.display_name || profile?.full_name}</div>
+                <div className="text-xs text-slate-500 font-bold">{isGuestMode ? 'Khách tham gia' : 'Thí sinh'}</div>
+                <div className="text-sm font-black text-slate-800">{activeDisplayName}</div>
               </div>
             </div>
 
@@ -906,10 +1107,10 @@ export const CompetitionStudentPage = () => {
   // 5. PAUSED STATE BANNER
   const isPaused = sessionData?.status === 'paused';
 
-  // 6. FINISHED STATE: STUDENT FINAL RESULTS & MINI PODIUM (State G)
+  // 6. FINISHED STATE: STUDENT/GUEST FINAL RESULTS & MINI PODIUM (State G)
   if (sessionData?.status === 'finished') {
-    // 6A. REVIEW SUB-VIEW (R5)
-    if (studentViewMode === 'QUESTION_REVIEW') {
+    // 6A. REVIEW SUB-VIEW (R5 - Authenticated Students Only)
+    if (!isGuestMode && studentViewMode === 'QUESTION_REVIEW') {
       return (
         <StudentQuestionReviewView
           reviewData={reviewData}
@@ -921,7 +1122,7 @@ export const CompetitionStudentPage = () => {
       );
     }
 
-    // Motivational Message for Student Personal Achievement
+    // Motivational Message for Personal Achievement
     const getMotivationalBadge = (rank) => {
       if (rank === 1) {
         return {
@@ -965,7 +1166,7 @@ export const CompetitionStudentPage = () => {
             Đấu Trường Đã Hoàn Thành! 🏆
           </h1>
           <p className="text-slate-600 font-semibold mb-8 text-base">
-            Chúc mừng tất cả các bạn học sinh đã tham gia và nỗ lực hết mình!
+            Chúc mừng tất cả các bạn đã tham gia và nỗ lực hết mình!
           </p>
 
           {/* Personal Achievement Highlight Card */}
@@ -974,15 +1175,19 @@ export const CompetitionStudentPage = () => {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 pb-4 border-b-2 border-amber-200/70">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-full bg-amber-200 border-2 border-amber-400 flex items-center justify-center font-black text-amber-900 text-lg overflow-hidden shrink-0">
-                    {profile?.avatar_url ? (
+                    {!isGuestMode && profile?.avatar_url ? (
                       <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
-                      profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'HS'
+                      activeAvatarLetter
                     )}
                   </div>
                   <div>
-                    <div className="text-xs font-bold text-amber-700 uppercase tracking-wider">Thành tích của bạn</div>
-                    <div className="text-lg font-black text-amber-950 truncate">{profile?.full_name || 'Học sinh'}</div>
+                    <div className="text-xs font-bold text-amber-700 uppercase tracking-wider">
+                      {isGuestMode ? 'Thành tích của bạn (Khách)' : 'Thành tích của bạn'}
+                    </div>
+                    <div className="text-lg font-black text-amber-950 truncate">
+                      {activeDisplayName}
+                    </div>
                   </div>
                 </div>
 
@@ -1165,14 +1370,14 @@ export const CompetitionStudentPage = () => {
                 </div>
               ) : (
                 leaderboard.map((item, idx) => {
-                  const isCurrentStudent = item.participant_id === participantId;
+                  const isCurrentParticipant = item.participant_id === participantId;
                   const rankDisplay = item.rank !== null && item.rank !== undefined ? `#${item.rank}` : '—';
 
                   return (
                     <div
                       key={item.participant_id || idx}
                       className={`px-5 py-3.5 flex items-center justify-between transition-colors ${
-                        isCurrentStudent ? 'bg-amber-100/80 font-black' : 'hover:bg-slate-50'
+                        isCurrentParticipant ? 'bg-amber-100/80 font-black' : 'hover:bg-slate-50'
                       }`}
                     >
                       <div className="w-16 flex items-center gap-1.5 font-black text-sm text-slate-700">
@@ -1191,7 +1396,7 @@ export const CompetitionStudentPage = () => {
                           )}
                         </div>
                         <span className="truncate text-sm font-bold text-slate-800">
-                          {item.display_name} {isCurrentStudent && <span className="text-xs text-amber-800 font-black ml-1">(Bạn)</span>}
+                          {item.display_name} {isCurrentParticipant && <span className="text-xs text-amber-800 font-black ml-1">(Bạn)</span>}
                         </span>
                       </div>
 
@@ -1211,7 +1416,8 @@ export const CompetitionStudentPage = () => {
 
           {/* Action Buttons (Review & Exit) */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            {sessionData?.review_enabled === true && (
+            {/* Review Action: Authenticated Students ONLY (Guest review is strictly forbidden) */}
+            {!isGuestMode && sessionData?.review_enabled === true && (
               <button
                 type="button"
                 onClick={handleOpenReview}
@@ -1227,7 +1433,7 @@ export const CompetitionStudentPage = () => {
               className="w-full sm:w-auto px-8 py-3.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-base rounded-2xl transition-all shadow-md active:scale-95 inline-flex items-center justify-center gap-2"
             >
               <LogOut className="w-5 h-5" />
-              <span>Quay Về Trang Chủ</span>
+              <span>{isGuestMode ? 'Rời Phòng Thi' : 'Quay Về Trang Chủ'}</span>
             </button>
           </div>
         </div>

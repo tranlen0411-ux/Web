@@ -190,6 +190,7 @@ export function CompetitionHostPage() {
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [isLeaderboardLoading, setIsLeaderboardLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   // Auto show notification banner
   const showToast = useCallback((message, type = 'info') => {
@@ -811,6 +812,27 @@ export function CompetitionHostPage() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  const handleCopyInviteLink = (code) => {
+    if (!code) return;
+    const inviteUrl = `${window.location.origin}/competition/join?room=${encodeURIComponent(code)}`;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(inviteUrl);
+    } else {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = inviteUrl;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } catch (_e) {}
+    }
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
   const handleResetToSetup = () => {
     clearRestoredSessionAndReturnToSetup();
   };
@@ -1160,14 +1182,24 @@ export function CompetitionHostPage() {
                   <div className="text-3xl font-black text-amber-700 tracking-wider my-1 font-mono">
                     {snapshot.room_code}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyRoomCode(snapshot.room_code)}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800 hover:text-amber-900 bg-white/80 px-2.5 py-1 rounded-lg border border-amber-300 shadow-xs"
-                  >
-                    <Copy className="w-3 h-3" />
-                    {copiedCode ? 'Đã sao chép!' : 'Sao chép mã'}
-                  </button>
+                  <div className="flex items-center justify-center gap-2 flex-wrap mt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyRoomCode(snapshot.room_code)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800 hover:text-amber-900 bg-white/80 px-2.5 py-1 rounded-lg border border-amber-300 shadow-xs transition-colors"
+                    >
+                      <Copy className="w-3 h-3" />
+                      {copiedCode ? 'Đã sao chép!' : 'Sao chép mã'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyInviteLink(snapshot.room_code)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800 hover:text-amber-900 bg-white/80 px-2.5 py-1 rounded-lg border border-amber-300 shadow-xs transition-colors"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      {copiedLink ? 'Đã sao chép link!' : 'Sao chép link mời'}
+                    </button>
+                  </div>
                 </div>
               </div>
 

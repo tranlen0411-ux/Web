@@ -101,6 +101,7 @@ function AppRoutes() {
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
+          <Route path="/competition/join" element={<CompetitionStudentPage isPublicJoin={true} />} />
 
           <Route
             path="/materials"
