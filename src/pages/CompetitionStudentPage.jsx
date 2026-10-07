@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, Navigate } from 'react-router-dom';
 import {
   Gamepad2,
   Sparkles,
@@ -206,12 +206,15 @@ export const isStudentAuthOrPermanentError = (errorCode, status) => {
 export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const location = useLocation();
   const isGuestMode = Boolean(isPublicJoin || (typeof window !== 'undefined' && location?.pathname?.startsWith('/competition/join')));
-  const { user, profile } = useAuth();
+  const { user, profile, loading } = useAuth();
 
   // Session & Identity State
   const initialSession = useMemo(() => {
+    if (isGuestMode && (loading || user)) {
+      return { sessionId: null, participantId: null, guestToken: null, displayName: null };
+    }
     return isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
-  }, [isGuestMode]);
+  }, [isGuestMode, loading, user]);
 
   const [sessionId, setSessionId] = useState(initialSession.sessionId);
   const [participantId, setParticipantId] = useState(initialSession.participantId);
@@ -241,7 +244,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
   const isMountedRef = useRef(true);
 
-  // Private Realtime Hook (Propagates guestToken when in Guest Mode)
+  // Private Realtime Hook (Propagates guestToken when in Guest Mode without authenticated user)
   const {
     connectionStatus,
     sessionData,
@@ -253,8 +256,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   } = useStudentCompetitionRealtime({
     sessionId,
     participantId,
-    guestToken: isGuestMode ? guestToken : null,
-    enabled: Boolean(sessionId && participantId),
+    guestToken: isGuestMode && !user ? guestToken : null,
+    enabled: Boolean(sessionId && participantId && !(isGuestMode && user)),
   });
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
@@ -491,6 +494,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     let isCancelled = false;
 
     async function validateAndRestoreSession() {
+      // Auth loading race protection: do not restore guest session while auth is still loading
+      if (loading) return;
+      // Do not restore guest session if user is logged in
+      if (isGuestMode && user) return;
+
       const initial = isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
       if (!initial.sessionId || !initial.participantId) {
         setIsRestoring(false);
@@ -617,7 +625,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     return () => {
       isCancelled = true;
     };
-  }, [clearRestoredSessionAndReturnToJoin, showToast, isGuestMode]);
+  }, [clearRestoredSessionAndReturnToJoin, showToast, isGuestMode, loading, user]);
 
   // Clean local question & submission state when session transitions to finished
   useEffect(() => {
@@ -665,6 +673,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   // Handle Join Session (Student or Guest)
   const handleJoin = async (e) => {
     e?.preventDefault();
+    if (loading) return; // Auth loading race guard
+    if (isGuestMode && user) return; // Prevent logged-in users from guest join
+
     const cleanCode = roomCode.trim().toUpperCase();
     if (!cleanCode || isJoining) return;
 
@@ -877,7 +888,72 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   // VIEW RENDERERS
   // ==========================================================================
 
-  // 1. NON-STUDENT ROLE NOTICE (Only for Authenticated Student route)
+  // 1. AUTH LOADING GUARD (Public route must wait for auth state before evaluation)
+  if (isGuestMode && loading) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-20 text-center">
+        <div className="w-16 h-16 bg-amber-100 rounded-3xl flex items-center justify-center mx-auto mb-4 border-2 border-amber-300 shadow-sm">
+          <RefreshCw className="w-8 h-8 text-amber-600 animate-spin" />
+        </div>
+        <h2 className="text-xl font-black text-slate-800 mb-2">Đang xác thực thông tin...</h2>
+        <p className="text-sm font-semibold text-slate-500">Vui lòng chờ trong giây lát.</p>
+      </div>
+    );
+  }
+
+  // 2. CASE 2: AUTHENTICATED STUDENT OPENS INVITE LINK -> REDIRECT TO AUTHENTICATED STUDENT ROUTE
+  if (isGuestMode && !loading && user && profile?.role === 'student') {
+    const cleanCode = roomCode.trim().toUpperCase();
+    const targetUrl = cleanCode ? `/competition?room=${encodeURIComponent(cleanCode)}` : '/competition';
+    return <Navigate to={targetUrl} replace />;
+  }
+
+  // 3. CASE 3: AUTHENTICATED ADMIN / TEACHER OPENS INVITE LINK -> DISPLAY FRIENDLY INCOGNITO NOTICE
+  if (isGuestMode && !loading && user && (profile?.role === 'admin' || profile?.role === 'teacher')) {
+    const roleLabel = profile?.role === 'admin' ? 'Quản trị viên' : 'Giáo viên';
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-12">
+        <div className="bg-amber-50 border-4 border-amber-300 rounded-3xl p-8 shadow-sm text-center">
+          <div className="w-16 h-16 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4 border-2 border-amber-400">
+            <AlertCircle className="w-8 h-8 text-amber-700" />
+          </div>
+          <h2 className="text-2xl font-black text-amber-950 mb-3">
+            Thông Báo Truy Cập Đường Link Khách
+          </h2>
+          <p className="text-base text-amber-900 font-medium mb-6 leading-relaxed">
+            Bạn đang đăng nhập bằng tài khoản <span className="font-bold underline">{roleLabel}</span>.
+            Để tham gia hoặc thử nghiệm đường link phòng thi với tư cách Khách, vui lòng mở liên kết này trong <span className="font-black text-amber-950">cửa sổ ẩn danh (Incognito)</span> hoặc trên một thiết bị/trình duyệt chưa đăng nhập.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.location.href = profile?.role === 'admin' ? '/admin' : '/teacher';
+                }
+              }}
+              className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white font-black text-sm rounded-xl transition-all shadow-sm active:scale-95"
+            >
+              Về Bảng Điều Khiển
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.location.href = '/competition/host';
+                }
+              }}
+              className="px-6 py-3 bg-white border-2 border-amber-300 hover:bg-amber-100/50 text-amber-900 font-bold text-sm rounded-xl transition-all"
+            >
+              Trang Quản Trị Phòng Thi (Host)
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. NON-STUDENT ROLE NOTICE (Only for Authenticated /competition route)
   if (!isGuestMode && profile && !isStudentRole) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12">
@@ -900,7 +976,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 2. RESTORING LOADING STATE
+  // 5. RESTORING LOADING STATE
   if (isRestoring && !sessionData) {
     return (
       <div className="max-w-md mx-auto px-4 py-20 text-center">
@@ -913,7 +989,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 3. JOIN VIEW (State A & B: When no active session)
+  // 6. JOIN VIEW (State A & B: When no active session)
   if (!sessionId) {
     return (
       <div className="max-w-xl mx-auto px-4 py-8">
@@ -1035,7 +1111,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 4. LOBBY VIEW (State C: Session Waiting)
+  // 7. LOBBY VIEW (State C: Session Waiting)
   if (sessionData?.status === 'waiting') {
     return (
       <div className="max-w-2xl mx-auto px-4 py-8">
@@ -1104,12 +1180,12 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 5. PAUSED STATE BANNER
+  // 8. PAUSED STATE BANNER
   const isPaused = sessionData?.status === 'paused';
 
-  // 6. FINISHED STATE: STUDENT/GUEST FINAL RESULTS & MINI PODIUM (State G)
+  // 9. FINISHED STATE: STUDENT/GUEST FINAL RESULTS & MINI PODIUM (State G)
   if (sessionData?.status === 'finished') {
-    // 6A. REVIEW SUB-VIEW (R5 - Authenticated Students Only)
+    // 9A. REVIEW SUB-VIEW (R5 - Authenticated Students Only)
     if (!isGuestMode && studentViewMode === 'QUESTION_REVIEW') {
       return (
         <StudentQuestionReviewView
@@ -1441,7 +1517,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 7. CANCELLED STATE (State H)
+  // 10. CANCELLED STATE (State H)
   if (sessionData?.status === 'cancelled') {
     return (
       <div className="max-w-xl mx-auto px-4 py-12">
@@ -1466,7 +1542,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     );
   }
 
-  // 8. ACTIVE QUESTION & SUBMITTED STATE (State D, E, F)
+  // 11. ACTIVE QUESTION & SUBMITTED STATE (State D, E, F)
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       {/* Paused Banner */}

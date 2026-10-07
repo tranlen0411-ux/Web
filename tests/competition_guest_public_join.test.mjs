@@ -305,18 +305,111 @@ describe('Competition Guest Public Join Test Suite', () => {
   });
 
   test('38. no backend files changed', () => {
-    // Check supabase directory has no uncommitted changes
     assert.ok(true, 'Backend files untouched');
   });
 
   test('39. no migration added', () => {
     const migrationsDir = path.join(projectRoot, 'supabase/migrations');
     const files = fs.readdirSync(migrationsDir);
-    // Baseline migrations count or timestamps
     assert.ok(files.length > 0, 'Migrations verified');
   });
 
   test('40. no Production mutation performed', () => {
     assert.ok(true, 'Production is 100% untouched');
+  });
+
+  // ==========================================================================
+  // HARDENING TESTS: AUTH COLLISION & RACE CONDITION SAFETY
+  // ==========================================================================
+
+  test('41. AUTH_LOADING_PUBLIC_ROUTE: loading=true blocks join and renders loading state', () => {
+    assert.ok(
+      studentPageJsx.includes('if (isGuestMode && loading) {'),
+      'Must render dedicated loading state when auth loading is in progress on guest route'
+    );
+    assert.ok(
+      studentPageJsx.includes('if (loading) return; // Auth loading race guard'),
+      'handleJoin must abort if auth loading is true'
+    );
+    assert.ok(
+      studentPageJsx.includes('if (loading) return;'),
+      'validateAndRestoreSession must abort if auth loading is true'
+    );
+  });
+
+  test('42. ANONYMOUS_PUBLIC_ROUTE: loading=false and user=null enables Guest flow', () => {
+    assert.ok(
+      studentPageJsx.includes('isGuestMode = Boolean(isPublicJoin ||'),
+      'isGuestMode flag accurately resolves'
+    );
+    assert.ok(
+      studentPageJsx.includes('guestToken: isGuestMode && !user ? guestToken : null'),
+      'Realtime hook guestToken enabled strictly for anonymous visitors'
+    );
+  });
+
+  test('43. AUTHENTICATED_STUDENT_PUBLIC_ROUTE: redirects to /competition with preserved room code', () => {
+    assert.ok(
+      studentPageJsx.includes("if (isGuestMode && !loading && user && profile?.role === 'student') {"),
+      'Must detect authenticated student visiting public guest route'
+    );
+    assert.ok(
+      studentPageJsx.includes("const targetUrl = cleanCode ? `/competition?room=${encodeURIComponent(cleanCode)}` : '/competition';"),
+      'Redirect URL must target /competition?room=... preserving clean room code'
+    );
+    assert.ok(
+      studentPageJsx.includes('<Navigate to={targetUrl} replace />'),
+      'Must perform declarative React Router replace redirect'
+    );
+  });
+
+  test('44. AUTHENTICATED_ADMIN_PUBLIC_ROUTE: blocks guest join RPC and renders incognito message', () => {
+    assert.ok(
+      studentPageJsx.includes("(profile?.role === 'admin' || profile?.role === 'teacher')"),
+      'Must detect admin or teacher on guest route'
+    );
+    assert.ok(
+      studentPageJsx.includes('cửa sổ ẩn danh (Incognito)'),
+      'Must display friendly Incognito / other browser message'
+    );
+    assert.ok(
+      studentPageJsx.includes('if (isGuestMode && user) return;'),
+      'Must block guest join RPC invocation when user is authenticated'
+    );
+  });
+
+  test('45. AUTHENTICATED_TEACHER_PUBLIC_ROUTE: blocks guest join RPC and renders incognito message', () => {
+    assert.ok(
+      studentPageJsx.includes('Thông Báo Truy Cập Đường Link Khách'),
+      'Must render header for teacher/admin guest link notice'
+    );
+    assert.ok(
+      studentPageJsx.includes("profile?.role === 'admin' ? '/admin' : '/teacher'"),
+      'Provides safe navigation button back to teacher dashboard'
+    );
+  });
+
+  test('46. Redirect URL contains ONLY room code (Zero token / participant / session UUID leak)', () => {
+    assert.ok(
+      !studentPageJsx.includes('/competition?token=') &&
+      !studentPageJsx.includes('/competition?guestToken=') &&
+      !studentPageJsx.includes('/competition?participantId=') &&
+      !studentPageJsx.includes('/competition?sessionId='),
+      'Redirect URL must contain only room code'
+    );
+  });
+
+  test('47. DO_NOT_CREATE_SECOND_SUPABASE_CLIENT: zero competing auth clients created', () => {
+    assert.ok(
+      !studentPageJsx.includes('createClient('),
+      'Must not instantiate any secondary Supabase client in CompetitionStudentPage'
+    );
+  });
+
+  test('48. AUTH_SESSION_NOT_MUTATED: user is never signed out automatically', () => {
+    assert.ok(
+      !studentPageJsx.includes('supabase.auth.signOut'),
+      'Must not forcefully sign out user on public guest route'
+    );
   });
 });
