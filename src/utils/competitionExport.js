@@ -108,6 +108,62 @@ export function getExportDisplayName(row, index, isAnonymized = false) {
 }
 
 /**
+ * Pure filter for leaderboard rows based on backend rank.
+ * Preserves exact original row ordering and tie groups. Zero rank recalculation.
+ */
+export function filterLeaderboardByRank(leaderboardData, topN = 'all') {
+  if (!Array.isArray(leaderboardData)) return [];
+  if (topN === 'all' || topN === null || topN === undefined) {
+    return [...leaderboardData];
+  }
+  const numericLimit = Number(topN);
+  if (!Number.isFinite(numericLimit) || numericLimit <= 0) {
+    return [...leaderboardData];
+  }
+  return leaderboardData.filter((row) => {
+    if (!row || typeof row !== 'object') return false;
+    if (row.rank === null || row.rank === undefined) return false;
+    const rankNum = Number(row.rank);
+    return Number.isFinite(rankNum) && rankNum <= numericLimit;
+  });
+}
+
+/**
+ * Builds plain-text leaderboard summary for copying to clipboard.
+ * Preserves backend rank ties and respects current anonymization mode. Zero PII.
+ */
+export function buildLeaderboardClipboardText({
+  title = 'Đấu Trường Tri Thức',
+  leaderboardData = [],
+  topN = 'all',
+  isAnonymized = false
+}) {
+  const safeTitle = (title || 'Đấu Trường Tri Thức').trim();
+  const filtered = filterLeaderboardByRank(leaderboardData, topN);
+
+  const lines = [`KẾT QUẢ ĐẤU TRƯỜNG: ${safeTitle}`];
+
+  if (filtered.length === 0) {
+    lines.push('(Chưa có dữ liệu bảng xếp hạng)');
+    return lines.join('\n');
+  }
+
+  for (let index = 0; index < filtered.length; index++) {
+    const row = filtered[index];
+    const rank = row?.rank;
+    const displayName = getExportDisplayName(row, index, isAnonymized);
+    const score = Number(row?.total_score || 0);
+    if (rank === null || rank === undefined || rank === '') {
+      lines.push(`${displayName} — ${score} điểm`);
+    } else {
+      lines.push(`${rank}. ${displayName} — ${score} điểm`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Calculates deterministic column widths for an XLSX worksheet AoA.
  * Safe for Unicode Vietnamese characters, numbers, nulls, and multiline cells.
  */
@@ -166,9 +222,11 @@ export function buildLeaderboardCsv({
   title = 'Đấu Trường Tri Thức',
   roomCode = '',
   leaderboardData = [],
+  topN = 'all',
   exportedAt = new Date().toLocaleString('vi-VN'),
   isAnonymized = false
 }) {
+  const filtered = filterLeaderboardByRank(leaderboardData, topN);
   const safeTitle = sanitizeForFormulaInjection(title);
   const safeRoomCode = sanitizeForFormulaInjection(roomCode);
   const safeExportedAt = sanitizeForFormulaInjection(exportedAt);
@@ -177,13 +235,13 @@ export function buildLeaderboardCsv({
     `\uFEFF"TÊN ĐẤU TRƯỜNG",${escapeCsvValue(safeTitle)}`,
     `"MÃ PHÒNG",${escapeCsvValue(safeRoomCode)}`,
     `"THỜI GIAN XUẤT",${escapeCsvValue(safeExportedAt)}`,
-    `"TỔNG SỐ THÍ SINH",${leaderboardData.length}`,
+    `"TỔNG SỐ THÍ SINH",${filtered.length}`,
     '',
     'Hạng,Tên Thí Sinh,Tổng Điểm,Số Câu Đúng,Thời Gian Phản Hồi (giây),Loại Thí Sinh'
   ];
 
-  for (let index = 0; index < leaderboardData.length; index++) {
-    const row = leaderboardData[index];
+  for (let index = 0; index < filtered.length; index++) {
+    const row = filtered[index];
     const rank = row.rank ?? '';
     const rawName = getExportDisplayName(row, index, isAnonymized);
     const name = escapeCsvValue(rawName);
@@ -277,10 +335,12 @@ export function buildCompetitionWorkbook({
   roomCode = '',
   leaderboardData = [],
   analyticsData = null,
+  topN = 'all',
   exportedAt = new Date().toLocaleString('vi-VN'),
   isAnonymized = false
 }) {
   const wb = XLSX.utils.book_new();
+  const filteredLeaderboard = filterLeaderboardByRank(leaderboardData, topN);
 
   // ----------------------------------------------------
   // Sheet 1: Bang Xep Hang
@@ -289,13 +349,13 @@ export function buildCompetitionWorkbook({
     ['TÊN ĐẤU TRƯỜNG', sanitizeForFormulaInjection(title)],
     ['MÃ PHÒNG', sanitizeForFormulaInjection(roomCode)],
     ['THỜI GIAN XUẤT', sanitizeForFormulaInjection(exportedAt)],
-    ['TỔNG SỐ THÍ SINH', leaderboardData.length],
+    ['TỔNG SỐ THÍ SINH', filteredLeaderboard.length],
     [],
     ['Hạng', 'Tên Thí Sinh', 'Tổng Điểm', 'Số Câu Đúng', 'Thời Gian Phản Hồi (giây)', 'Loại Thí Sinh']
   ];
 
-  for (let index = 0; index < leaderboardData.length; index++) {
-    const row = leaderboardData[index];
+  for (let index = 0; index < filteredLeaderboard.length; index++) {
+    const row = filteredLeaderboard[index];
     const rawName = getExportDisplayName(row, index, isAnonymized);
     leaderboardAoA.push([
       row.rank ?? '',
