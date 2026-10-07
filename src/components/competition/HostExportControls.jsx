@@ -7,6 +7,7 @@ import {
   buildCompetitionWorkbook,
   downloadCompetitionXlsx,
   buildLeaderboardClipboardText,
+  getTopNSelectionSummary,
   sanitizeFilenamePart,
   formatExportTimestamp
 } from '../../utils/competitionExport.js';
@@ -156,6 +157,8 @@ export function HostExportControls({
     }
   };
 
+  const topNSummary = getTopNSelectionSummary(leaderboardData, exportTopN);
+
   return (
     <div className="relative inline-flex flex-wrap items-center gap-2 print:hidden" ref={dropdownRef}>
       {/* 0. Checkbox: Ẩn tên thí sinh */}
@@ -172,28 +175,46 @@ export function HostExportControls({
         <span>Ẩn tên thí sinh</span>
       </label>
 
-      {/* 1. Selector: Phạm vi (Top N) */}
-      <label
-        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/20 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs select-none"
-        title="Lọc bảng xếp hạng theo thứ hạng thực tế (Top 3, 5, 10 hoặc Tất cả)"
-      >
-        <span className="text-white/80">Phạm vi:</span>
-        <select
-          value={String(exportTopN)}
-          onChange={(e) => {
-            const val = e.target.value;
-            const normalized = ['3', '5', '10'].includes(val) ? Number(val) : 'all';
-            onExportTopNChange?.(normalized);
-          }}
-          aria-label="Chọn phạm vi thứ hạng xuất báo cáo"
-          className="bg-slate-900/50 text-white border border-white/30 rounded-lg px-2 py-0.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+      {/* 1. Selector: Phạm vi (Top N) + Tie Indicator */}
+      <div className="inline-flex items-center gap-1.5">
+        <label
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/20 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs select-none"
+          title="Lọc bảng xếp hạng theo thứ hạng thực tế (Top 3, 5, 10 hoặc Tất cả)"
         >
-          <option value="all" className="bg-slate-800 text-white">Tất cả</option>
-          <option value="3" className="bg-slate-800 text-white">Top 3</option>
-          <option value="5" className="bg-slate-800 text-white">Top 5</option>
-          <option value="10" className="bg-slate-800 text-white">Top 10</option>
-        </select>
-      </label>
+          <span className="text-white/80">Phạm vi:</span>
+          <select
+            value={String(exportTopN)}
+            onChange={(e) => {
+              const val = e.target.value;
+              const normalized = ['3', '5', '10'].includes(val) ? Number(val) : 'all';
+              onExportTopNChange?.(normalized);
+            }}
+            aria-label="Chọn phạm vi thứ hạng xuất báo cáo"
+            className="bg-slate-900/50 text-white border border-white/30 rounded-lg px-2 py-0.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+          >
+            <option value="all" className="bg-slate-800 text-white">Tất cả</option>
+            <option value="3" className="bg-slate-800 text-white">Top 3</option>
+            <option value="5" className="bg-slate-800 text-white">Top 5</option>
+            <option value="10" className="bg-slate-800 text-white">Top 10</option>
+          </select>
+        </label>
+        {exportTopN !== 'all' && (
+          <span
+            className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition select-none backdrop-blur-xs ${
+              topNSummary.hasBoundaryTie
+                ? 'bg-amber-400/25 text-amber-200 border-amber-300/40'
+                : 'bg-white/15 text-white/90 border-white/20'
+            }`}
+            title={
+              topNSummary.hasBoundaryTie
+                ? `Bao gồm ${topNSummary.selectedCount} thí sinh do có ${topNSummary.extraDueToTie} thí sinh đồng hạng ở vị trí thứ ${topNSummary.boundaryRank}`
+                : `Bao gồm ${topNSummary.selectedCount} thí sinh`
+            }
+          >
+            {topNSummary.label}
+          </span>
+        )}
+      </div>
 
       {/* 2. Selector: Khổ in */}
       <label
