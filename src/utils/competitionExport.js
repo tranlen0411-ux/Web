@@ -150,10 +150,14 @@ export function buildLeaderboardClipboardText({
 
   for (let index = 0; index < filtered.length; index++) {
     const row = filtered[index];
-    const rank = row?.rank ?? (index + 1);
+    const rank = row?.rank;
     const displayName = getExportDisplayName(row, index, isAnonymized);
     const score = Number(row?.total_score || 0);
-    lines.push(`${rank}. ${displayName} — ${score} điểm`);
+    if (rank === null || rank === undefined || rank === '') {
+      lines.push(`${displayName} — ${score} điểm`);
+    } else {
+      lines.push(`${rank}. ${displayName} — ${score} điểm`);
+    }
   }
 
   return lines.join('\n');

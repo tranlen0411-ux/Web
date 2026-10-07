@@ -116,9 +116,10 @@ export function HostExportControls({
     } catch (_err) {
       // Fallback: temporary off-screen textarea
       let success = false;
+      let textarea = null;
       try {
         if (typeof document !== 'undefined') {
-          const textarea = document.createElement('textarea');
+          textarea = document.createElement('textarea');
           textarea.value = text;
           textarea.setAttribute('readonly', '');
           textarea.style.position = 'fixed';
@@ -129,10 +130,13 @@ export function HostExportControls({
           textarea.focus();
           textarea.select();
           success = document.execCommand('copy');
-          document.body.removeChild(textarea);
         }
       } catch (_fbErr) {
         success = false;
+      } finally {
+        if (textarea && textarea.parentNode) {
+          textarea.parentNode.removeChild(textarea);
+        }
       }
 
       if (success) {

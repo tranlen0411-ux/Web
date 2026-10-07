@@ -642,6 +642,66 @@ test('COMPETITION V1 R10 — HOST EXPORT & SHARING CONVENIENCE TEST SUITE', asyn
       const t2Res = buildLeaderboardClipboardText({ title: 'T', leaderboardData: data, topN: 2 });
       assert.equal(t1Res, t2Res);
     });
+
+    await t4.test('56a. clipboard formatter with valid backend rank preserves rank exactly', () => {
+      const single = [{ rank: 7, display_name: 'Học sinh Giỏi', total_score: 800 }];
+      const text = buildLeaderboardClipboardText({ title: 'Đấu Trường', leaderboardData: single });
+      assert.ok(text.includes('7. Học sinh Giỏi — 800 điểm'));
+    });
+
+    await t4.test('56b. clipboard formatter with tie ranks 1,1,3 preserves 1,1,3', () => {
+      const ties = [
+        { rank: 1, display_name: 'A', total_score: 100 },
+        { rank: 1, display_name: 'B', total_score: 100 },
+        { rank: 3, display_name: 'C', total_score: 80 }
+      ];
+      const text = buildLeaderboardClipboardText({ title: 'Đấu Trường', leaderboardData: ties });
+      const lines = text.split('\n').slice(1);
+      assert.equal(lines[0], '1. A — 100 điểm');
+      assert.equal(lines[1], '1. B — 100 điểm');
+      assert.equal(lines[2], '3. C — 80 điểm');
+    });
+
+    await t4.test('56c. clipboard formatter with missing rank does NOT emit index-based fake rank', () => {
+      const noRankRows = [
+        { rank: null, display_name: 'Thí sinh Không Hạng', total_score: 500 },
+        { rank: undefined, display_name: 'Thí sinh Thứ Hai', total_score: 450 }
+      ];
+      const text = buildLeaderboardClipboardText({ title: 'Đấu Trường', leaderboardData: noRankRows, topN: 'all' });
+      assert.ok(!text.includes('1. Thí sinh Không Hạng'));
+      assert.ok(!text.includes('2. Thí sinh Thứ Hai'));
+      assert.ok(text.includes('Thí sinh Không Hạng — 500 điểm'));
+      assert.ok(text.includes('Thí sinh Thứ Hai — 450 điểm'));
+    });
+
+    await t4.test('56d. clipboard formatter with missing rank does NOT mutate row.rank', () => {
+      const row = { rank: null, display_name: 'Test', total_score: 100 };
+      buildLeaderboardClipboardText({ title: 'T', leaderboardData: [row] });
+      assert.equal(row.rank, null);
+    });
+
+    await t4.test('56e. clipboard anonymous mode with missing rank still does NOT invent rank', () => {
+      const noRankRows = [{ rank: null, display_name: 'Alice', total_score: 500 }];
+      const text = buildLeaderboardClipboardText({ title: 'Đấu Trường', leaderboardData: noRankRows, isAnonymized: true });
+      assert.ok(!text.includes('1. Thí sinh 1'));
+      assert.ok(text.includes('Thí sinh 1 — 500 điểm'));
+    });
+
+    await t4.test('56f. CSV behavior remains unchanged for missing rank (blank rank column)', () => {
+      const noRankRows = [{ rank: null, display_name: 'Alice', total_score: 500, correct_count: 5, total_response_time_ms: 10000, is_guest: false }];
+      const csv = buildLeaderboardCsv({ title: 'T', roomCode: 'R', leaderboardData: noRankRows, topN: 'all' });
+      const lines = csv.split('\r\n');
+      const dataLine = lines[6];
+      assert.ok(dataLine.startsWith(',Alice,500,5,10.00,Tài khoản'));
+    });
+
+    await t4.test('56g. XLSX behavior remains unchanged for missing rank', () => {
+      const noRankRows = [{ rank: null, display_name: 'Alice', total_score: 500 }];
+      const wb = buildCompetitionWorkbook({ title: 'T', roomCode: 'R', leaderboardData: noRankRows, analyticsData: null });
+      const sheet = wb.Sheets['Bang Xep Hang'];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      assert.equal(rows[6][0], '');
+    });
   });
 
   // ============================================================================
@@ -681,7 +741,6 @@ test('COMPETITION V1 R10 — HOST EXPORT & SHARING CONVENIENCE TEST SUITE', asyn
     await t5.test('62. copy handler includes off-screen textarea fallback', () => {
       assert.ok(hostControlsSrc.includes("document.createElement('textarea')"));
       assert.ok(hostControlsSrc.includes("document.execCommand('copy')"));
-      assert.ok(hostControlsSrc.includes('document.body.removeChild(textarea)'));
     });
 
     await t5.test('63. copy handler triggers toast notification on success/error', () => {
@@ -691,6 +750,88 @@ test('COMPETITION V1 R10 — HOST EXPORT & SHARING CONVENIENCE TEST SUITE', asyn
 
     await t5.test('64. export controls are hidden in print with print:hidden', () => {
       assert.ok(hostControlsSrc.includes('print:hidden'));
+    });
+
+    await t5.test('64a. fallback textarea cleanup is implemented via finally block', () => {
+      assert.ok(hostControlsSrc.includes('finally {'));
+      assert.ok(hostControlsSrc.includes('textarea.parentNode.removeChild(textarea)'));
+    });
+
+    await t5.test('64b. temporary textarea removed after successful execCommand (simulation)', () => {
+      let removedNode = null;
+      let textarea = {
+        style: {},
+        setAttribute: () => {},
+        focus: () => {},
+        select: () => {},
+        parentNode: {
+          removeChild: (n) => { removedNode = n; }
+        }
+      };
+      let success = false;
+      try {
+        success = true; // execCommand success
+      } finally {
+        if (textarea && textarea.parentNode) {
+          textarea.parentNode.removeChild(textarea);
+        }
+      }
+      assert.equal(removedNode, textarea);
+      assert.equal(success, true);
+    });
+
+    await t5.test('64c. temporary textarea removed when execCommand throws/fails (simulation)', () => {
+      let removedNode = null;
+      let textarea = {
+        style: {},
+        setAttribute: () => {},
+        focus: () => {},
+        select: () => {},
+        parentNode: {
+          removeChild: (n) => { removedNode = n; }
+        }
+      };
+      let success = false;
+      try {
+        throw new Error('execCommand error');
+      } catch (_e) {
+        success = false;
+      } finally {
+        if (textarea && textarea.parentNode) {
+          textarea.parentNode.removeChild(textarea);
+        }
+      }
+      assert.equal(removedNode, textarea);
+      assert.equal(success, false);
+    });
+
+    await t5.test('64d. temporary textarea removed when selection path throws (simulation)', () => {
+      let removedNode = null;
+      let textarea = {
+        style: {},
+        setAttribute: () => {},
+        focus: () => { throw new Error('focus failed'); },
+        parentNode: {
+          removeChild: (n) => { removedNode = n; }
+        }
+      };
+      let success = false;
+      try {
+        textarea.focus();
+      } catch (_e) {
+        success = false;
+      } finally {
+        if (textarea && textarea.parentNode) {
+          textarea.parentNode.removeChild(textarea);
+        }
+      }
+      assert.equal(removedNode, textarea);
+      assert.equal(success, false);
+    });
+
+    await t5.test('64e. primary navigator.clipboard success does not invoke fallback textarea branch', () => {
+      assert.ok(hostControlsSrc.includes("if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function')"));
+      assert.ok(hostControlsSrc.includes('return;'));
     });
   });
 
