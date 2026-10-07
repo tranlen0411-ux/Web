@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Download, FileSpreadsheet, Printer, ChevronDown, FileText, CheckCircle2 } from 'lucide-react';
+import { Download, FileSpreadsheet, Printer, ChevronDown, FileText, CheckCircle2, Copy } from 'lucide-react';
 import {
   buildLeaderboardCsv,
   buildAnalyticsCsv,
   downloadCsv,
   buildCompetitionWorkbook,
   downloadCompetitionXlsx,
+  buildLeaderboardClipboardText,
   sanitizeFilenamePart,
   formatExportTimestamp
 } from '../../utils/competitionExport.js';
@@ -17,7 +18,11 @@ export function HostExportControls({
   analyticsData = null,
   onPrint = null,
   isAnonymized = false,
-  onAnonymizedChange = null
+  onAnonymizedChange = null,
+  exportTopN = 'all',
+  onExportTopNChange = null,
+  printOrientation = 'portrait',
+  onPrintOrientationChange = null
 }) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [successToast, setSuccessToast] = useState(null);
@@ -45,13 +50,14 @@ export function HostExportControls({
   const safeCode = sanitizeFilenamePart(roomCode, 'competition');
   const timestamp = formatExportTimestamp();
 
-  // Export Leaderboard CSV
+  // Export Leaderboard CSV (filtered by exportTopN)
   const handleExportLeaderboardCsv = () => {
     if (!hasLeaderboard) return;
     const csv = buildLeaderboardCsv({
       title: sessionTitle,
       roomCode,
       leaderboardData,
+      topN: exportTopN,
       isAnonymized
     });
     const filename = `dau-truong-${safeCode}-bang-xep-hang-${timestamp}.csv`;
@@ -60,7 +66,7 @@ export function HostExportControls({
     triggerToast('Đã xuất file Bảng xếp hạng (.csv)');
   };
 
-  // Export Analytics CSV
+  // Export Analytics CSV (always whole-session aggregate)
   const handleExportAnalyticsCsv = () => {
     if (!hasAnalytics) return;
     const csv = buildAnalyticsCsv({
@@ -74,7 +80,7 @@ export function HostExportControls({
     triggerToast('Đã xuất file Phân tích câu hỏi (.csv)');
   };
 
-  // Export Full XLSX Workbook
+  // Export Full XLSX Workbook (Sheet 1 filtered by exportTopN, Sheet 2 full analytics)
   const handleExportXlsx = () => {
     if (!hasLeaderboard || !hasAnalytics) return;
     const wb = buildCompetitionWorkbook({
@@ -82,11 +88,59 @@ export function HostExportControls({
       roomCode,
       leaderboardData,
       analyticsData,
+      topN: exportTopN,
       isAnonymized
     });
     const filename = `dau-truong-${safeCode}-bao-cao-${timestamp}.xlsx`;
     downloadCompetitionXlsx(wb, filename);
     triggerToast('Đã xuất file Báo cáo tổng hợp (.xlsx)');
+  };
+
+  // Copy Results to Clipboard
+  const handleCopyResults = async () => {
+    if (!hasLeaderboard) return;
+    const text = buildLeaderboardClipboardText({
+      title: sessionTitle,
+      leaderboardData,
+      topN: exportTopN,
+      isAnonymized
+    });
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(text);
+        triggerToast('Đã sao chép kết quả');
+        return;
+      }
+      throw new Error('Clipboard API not available');
+    } catch (_err) {
+      // Fallback: temporary off-screen textarea
+      let success = false;
+      try {
+        if (typeof document !== 'undefined') {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          textarea.style.top = '-9999px';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.focus();
+          textarea.select();
+          success = document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+      } catch (_fbErr) {
+        success = false;
+      }
+
+      if (success) {
+        triggerToast('Đã sao chép kết quả');
+      } else {
+        triggerToast('Không thể sao chép kết quả');
+      }
+    }
   };
 
   // Print / Save as PDF
@@ -103,7 +157,7 @@ export function HostExportControls({
       {/* 0. Checkbox: Ẩn tên thí sinh */}
       <label
         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs cursor-pointer select-none focus-within:ring-2 focus-within:ring-white/50"
-        title="Khi bật, tên thí sinh trong file xuất và bản in sẽ được thay bằng Thí sinh 1, Thí sinh 2..."
+        title="Khi bật, tên thí sinh trong file xuất, bản in và clipboard sẽ được thay bằng Thí sinh 1, Thí sinh 2..."
       >
         <input
           type="checkbox"
@@ -114,7 +168,50 @@ export function HostExportControls({
         <span>Ẩn tên thí sinh</span>
       </label>
 
-      {/* 1. CSV Dropdown */}
+      {/* 1. Selector: Phạm vi (Top N) */}
+      <label
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/20 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs select-none"
+        title="Lọc bảng xếp hạng theo thứ hạng thực tế (Top 3, 5, 10 hoặc Tất cả)"
+      >
+        <span className="text-white/80">Phạm vi:</span>
+        <select
+          value={String(exportTopN)}
+          onChange={(e) => {
+            const val = e.target.value;
+            const normalized = ['3', '5', '10'].includes(val) ? Number(val) : 'all';
+            onExportTopNChange?.(normalized);
+          }}
+          aria-label="Chọn phạm vi thứ hạng xuất báo cáo"
+          className="bg-slate-900/50 text-white border border-white/30 rounded-lg px-2 py-0.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+        >
+          <option value="all" className="bg-slate-800 text-white">Tất cả</option>
+          <option value="3" className="bg-slate-800 text-white">Top 3</option>
+          <option value="5" className="bg-slate-800 text-white">Top 5</option>
+          <option value="10" className="bg-slate-800 text-white">Top 10</option>
+        </select>
+      </label>
+
+      {/* 2. Selector: Khổ in */}
+      <label
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/20 text-white font-semibold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs select-none"
+        title="Chọn hướng giấy in báo cáo (Dọc hoặc Ngang)"
+      >
+        <span className="text-white/80">Khổ in:</span>
+        <select
+          value={printOrientation}
+          onChange={(e) => {
+            const val = e.target.value === 'landscape' ? 'landscape' : 'portrait';
+            onPrintOrientationChange?.(val);
+          }}
+          aria-label="Chọn hướng giấy in báo cáo"
+          className="bg-slate-900/50 text-white border border-white/30 rounded-lg px-2 py-0.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+        >
+          <option value="portrait" className="bg-slate-800 text-white">Dọc</option>
+          <option value="landscape" className="bg-slate-800 text-white">Ngang</option>
+        </select>
+      </label>
+
+      {/* 3. CSV Dropdown */}
       <div className="relative">
         <button
           type="button"
@@ -168,7 +265,7 @@ export function HostExportControls({
         )}
       </div>
 
-      {/* 2. Excel XLSX Export */}
+      {/* 4. Excel XLSX Export */}
       <button
         type="button"
         disabled={!hasLeaderboard || !hasAnalytics}
@@ -186,7 +283,19 @@ export function HostExportControls({
         <span>Xuất Excel (.xlsx)</span>
       </button>
 
-      {/* 3. Print / Save as PDF */}
+      {/* 5. Copy Results to Clipboard */}
+      <button
+        type="button"
+        disabled={!hasLeaderboard}
+        onClick={handleCopyResults}
+        title={!hasLeaderboard ? 'Chưa có dữ liệu bảng xếp hạng' : 'Sao chép kết quả bảng xếp hạng theo phạm vi đã chọn vào clipboard'}
+        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-bold text-xs backdrop-blur-xs border border-white/30 transition shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <Copy className="w-3.5 h-3.5 text-amber-300" />
+        <span>Sao chép kết quả</span>
+      </button>
+
+      {/* 6. Print / Save as PDF */}
       <button
         type="button"
         disabled={!hasLeaderboard || !hasAnalytics}

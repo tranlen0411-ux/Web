@@ -221,6 +221,8 @@ export function CompetitionHostPage() {
     setQuestionResults(null);
     setExportAnalyticsData(null);
     setIsAnonymizedExport(false);
+    setExportTopN('all');
+    setPrintOrientation('portrait');
     setHostViewMode('LIVE_QUESTION');
     setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;
@@ -252,6 +254,8 @@ export function CompetitionHostPage() {
   const [finishedTab, setFinishedTab] = useState('PODIUM'); // 'PODIUM' | 'ANALYTICS'
   const [exportAnalyticsData, setExportAnalyticsData] = useState(null);
   const [isAnonymizedExport, setIsAnonymizedExport] = useState(false);
+  const [exportTopN, setExportTopN] = useState('all');
+  const [printOrientation, setPrintOrientation] = useState('portrait');
   const [questionResults, setQuestionResults] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
@@ -1886,6 +1890,10 @@ export function CompetitionHostPage() {
                     analyticsData={exportAnalyticsData}
                     isAnonymized={isAnonymizedExport}
                     onAnonymizedChange={setIsAnonymizedExport}
+                    exportTopN={exportTopN}
+                    onExportTopNChange={setExportTopN}
+                    printOrientation={printOrientation}
+                    onPrintOrientationChange={setPrintOrientation}
                   />
                   <button
                     type="button"
@@ -2442,6 +2450,8 @@ export function CompetitionHostPage() {
           leaderboardData={leaderboardData}
           analyticsData={exportAnalyticsData}
           isAnonymized={isAnonymizedExport}
+          topN={exportTopN}
+          printOrientation={printOrientation}
         />
       )}
 

@@ -1,11 +1,13 @@
 import React from 'react';
-import { formatQuestionType, formatOptionDistribution, getExportDisplayName } from '../../utils/competitionExport.js';
+import { formatQuestionType, formatOptionDistribution, getExportDisplayName, filterLeaderboardByRank } from '../../utils/competitionExport.js';
 
 export function HostPrintableReport({
   session = {},
   leaderboardData = [],
   analyticsData = null,
-  isAnonymized = false
+  isAnonymized = false,
+  topN = 'all',
+  printOrientation = 'portrait'
 }) {
   const title = session.title || 'Đấu Trường Tri Thức';
   const roomCode = session.room_code || '---';
@@ -20,9 +22,21 @@ export function HostPrintableReport({
   };
 
   const questions = Array.isArray(analyticsData?.questions) ? analyticsData.questions : [];
+  const displayedLeaderboard = filterLeaderboardByRank(leaderboardData, topN);
+  const pageOrientation = printOrientation === 'landscape' ? 'landscape' : 'portrait';
 
   return (
     <div className="hidden print:block font-sans text-slate-900 bg-white p-4 max-w-4xl mx-auto space-y-6">
+      {/* Scoped Print Orientation Rule */}
+      <style>{`
+        @media print {
+          @page {
+            size: A4 ${pageOrientation};
+            margin: 12mm;
+          }
+        }
+      `}</style>
+
       {/* 1. Header Banner */}
       <div className="border-b-2 border-slate-900 pb-4 flex items-start justify-between">
         <div>
@@ -37,7 +51,7 @@ export function HostPrintableReport({
         </div>
       </div>
 
-      {/* 2. Executive Summary Metrics */}
+      {/* 2. Executive Summary Metrics (Whole-Session Invariant) */}
       <div className="border border-slate-300 rounded-lg p-3 bg-slate-50 space-y-2 break-inside-avoid">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">1. Tổng Quan Kết Quả</h2>
         <div className="grid grid-cols-4 gap-2 text-center text-xs">
@@ -60,9 +74,14 @@ export function HostPrintableReport({
         </div>
       </div>
 
-      {/* 3. Final Leaderboard Table (Multi-page safe: thead repeats, tr avoids split, parent container allows page break) */}
+      {/* 3. Final Leaderboard Table (Filtered by Top N if specified, Multi-page safe) */}
       <div className="space-y-2">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">2. Bảng Xếp Hạng Chung Cuộc</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">2. Bảng Xếp Hạng Chung Cuộc</h2>
+          {topN !== 'all' && (
+            <span className="text-[11px] font-semibold text-slate-500">(Đang lọc: Top {topN})</span>
+          )}
+        </div>
         <table className="w-full text-left text-xs border-collapse border border-slate-300">
           <thead className="[display:table-header-group] bg-slate-100 border-b border-slate-300">
             <tr>
@@ -75,12 +94,12 @@ export function HostPrintableReport({
             </tr>
           </thead>
           <tbody>
-            {leaderboardData.length === 0 ? (
+            {displayedLeaderboard.length === 0 ? (
               <tr>
                 <td colSpan={6} className="p-4 text-center text-slate-500 italic">Chưa có dữ liệu bảng xếp hạng.</td>
               </tr>
             ) : (
-              leaderboardData.map((row, index) => {
+              displayedLeaderboard.map((row, index) => {
                 const displayName = getExportDisplayName(row, index, isAnonymized);
                 return (
                   <tr
