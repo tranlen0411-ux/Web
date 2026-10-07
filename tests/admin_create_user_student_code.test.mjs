@@ -21,7 +21,7 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   }
 
   // =========================================================================
-  // 1. STATIC CODE AUDIT & INTEGRITY CHECKS
+  // 1. STATIC CODE AUDIT & PATTERN VERIFICATION
   // =========================================================================
   console.log('--- 1. STATIC CODE AUDIT & PATTERN VERIFICATION ---');
 
@@ -43,9 +43,13 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   // Check 5: Check max 5 retries
   assert(sourceCode.includes('attempt <= 5') && sourceCode.includes('attempt < 5'), 'Static: Enforces maximum 5 retry attempts');
 
-  // Check 6: Check compensation cleanup handles BOTH delAuthErr and delProfErr
-  assert(sourceCode.includes('delAuthErr || delProfErr') || (sourceCode.includes('delAuthErr') && sourceCode.includes('delProfErr')), 'Static: Implements compensation cleanup checking both Auth and Profile deletion errors');
-  assert(sourceCode.includes('CLEANUP_FAILED'), 'Static: Returns CLEANUP_FAILED on failure');
+  // Check 6: Check sequential compensation order
+  const delAuthIndex = sourceCode.indexOf('deleteUser(newUserId)');
+  const delProfIndex = sourceCode.indexOf(".from('profiles').delete()");
+  assert(delAuthIndex !== -1 && delProfIndex !== -1 && delAuthIndex < delProfIndex, 'Static: Auth delete executes strictly BEFORE Profile delete in compensation');
+  assert(sourceCode.includes('if (delAuthErr)'), 'Static: Immediately checks delAuthErr and halts before Profile delete');
+  assert(sourceCode.includes('if (delProfErr)'), 'Static: Checks delProfErr if Profile delete reports error');
+  assert(sourceCode.includes('CLEANUP_FAILED'), 'Static: Returns CLEANUP_FAILED on cleanup error');
 
   // Check 7: Check Admin authorization gate intact
   assert(sourceCode.includes("callerProfile?.role !== 'admin'"), 'Static: Admin authorization check remains intact');
@@ -185,36 +189,46 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
       }
     }
 
-    // 4. Compensation Safety
+    // 4. Sequential Compensation Safety
+    let profileDeleteCallCount = 0;
+
     if (!profileUpdateSuccess) {
-      // 4.1 Delete Auth user
-      let delAuthErr = mockAuthDeleteError;
-      if (!delAuthErr) {
-        authUserExists = false;
-      }
-
-      // 4.2 Delete Profile
-      let delProfErr = mockProfileDeleteError;
-      if (!delProfErr) {
-        if (mockProfileCascadeAbsent) {
-          // Row was already deleted by cascade: delete query matches 0 rows, error is NULL
-          await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
-        } else {
-          await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
-        }
-      }
-
-      // 4.3 Check both cleanup errors
-      if (delAuthErr || delProfErr) {
+      // 8.1 Delete Auth user first
+      const delAuthErr = mockAuthDeleteError;
+      if (delAuthErr) {
+        // Halt immediately: DO NOT execute Profile delete! Preserve profile consistency.
         return {
           status: 500,
           body: {
             success: false,
             code: 'CLEANUP_FAILED',
-            message: 'Tạo tài khoản thất bại và không thể dọn dẹp dữ liệu khởi tạo không hoàn chỉnh.'
+            message: 'Tạo tài khoản thất bại và không thể dọn dẹp tài khoản Auth mồ côi.'
           },
-          meta: { authCreatedCount, retryAttempts, authUserExists, delAuthErr, delProfErr }
+          meta: { authCreatedCount, retryAttempts, authUserExists, profileDeleteCallCount, newUserId }
         };
+      }
+
+      authUserExists = false;
+
+      // 8.2 ONLY execute Profile delete if Auth delete succeeded
+      profileDeleteCallCount++;
+      const delProfErr = mockProfileDeleteError;
+
+      if (delProfErr) {
+        return {
+          status: 500,
+          body: {
+            success: false,
+            code: 'CLEANUP_FAILED',
+            message: 'Tạo tài khoản thất bại và không thể hoàn tất dọn dẹp hồ sơ.'
+          },
+          meta: { authCreatedCount, retryAttempts, authUserExists, profileDeleteCallCount, newUserId }
+        };
+      }
+
+      // Execute DB delete (or cascade simulation)
+      if (!mockProfileCascadeAbsent) {
+        await db.query(`DELETE FROM public.profiles WHERE id = $1`, [newUserId]);
       }
 
       return {
@@ -223,7 +237,7 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
           success: false,
           message: lastProfileError?.message || 'Không thể khởi tạo hồ sơ người dùng sau các lần thử.'
         },
-        meta: { authCreatedCount, retryAttempts, authUserExists, delAuthErr, delProfErr }
+        meta: { authCreatedCount, retryAttempts, authUserExists, profileDeleteCallCount, newUserId }
       };
     }
 
@@ -235,7 +249,7 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
         user: { id: newUserId, email },
         studentCode: assignedStudentCode || undefined
       },
-      meta: { authCreatedCount, retryAttempts, authUserExists, newUserId, assignedStudentCode }
+      meta: { authCreatedCount, retryAttempts, authUserExists, newUserId, assignedStudentCode, profileDeleteCallCount }
     };
   }
 
@@ -310,31 +324,38 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
   assert(resNon23505.meta.retryAttempts === 1, 'Test 6.2: Không vô ích thử lại khi gặp lỗi non-23505 (chỉ 1 attempt)');
 
   // =========================================================================
-  // 3. EXTENDED COMPENSATION CLEANUP ERROR HANDLING (PHASE 2 REVIEW HARDENING)
+  // 3. EXTENDED COMPENSATION CLEANUP SCENARIOS (SEQUENTIAL ORDER INVARIANTS)
   // =========================================================================
-  console.log('\n--- 3. EXTENDED COMPENSATION CLEANUP SCENARIOS ---');
+  console.log('\n--- 3. EXTENDED COMPENSATION CLEANUP SCENARIOS & ORDER INVARIANTS ---');
 
-  // Scenario A: Auth delete failure => CLEANUP_FAILED / HTTP 500
+  // Scenario A: Auth delete failure => CLEANUP_FAILED / HTTP 500 & PROFILE DELETE NOT RUN
+  // Pre-insert a profile to verify it is NOT deleted when Auth delete fails
+  const authFailEmail = 'hs_auth_del_fail@school.vn';
   const resAuthDeleteFail = await simulateAdminCreateUser({
-    email: 'hs_auth_del_fail@school.vn',
+    email: authFailEmail,
     fullName: 'Hoc Sinh Loi Auth Cleanup',
     role: 'student',
     gradeLevel: 1,
     mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
     mockAuthDeleteError: { message: 'Auth service network failure during delete' }
   });
-  assert(resAuthDeleteFail.status === 500 && resAuthDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario A: Auth delete error kích hoạt CLEANUP_FAILED với status 500');
+  assert(resAuthDeleteFail.status === 500 && resAuthDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario A1: Auth delete error kích hoạt CLEANUP_FAILED với status 500');
+  assert(resAuthDeleteFail.meta.authUserExists === true, 'Scenario A2: Auth user vẫn tồn tại (chưa xóa được)');
+  assert(resAuthDeleteFail.meta.profileDeleteCallCount === 0, 'Scenario A3: Lệnh xóa Profile KHÔNG ĐƯỢC CHẠY khi xóa Auth thất bại (PROFILE_DELETE_NOT_RUN_AFTER_AUTH_DELETE_FAILURE: PASS)');
 
-  // Scenario B: Profile delete returns an actual error => CLEANUP_FAILED / HTTP 500
+  // Scenario B: Auth delete succeeds + Profile delete returns an actual error => CLEANUP_FAILED / HTTP 500
   const resProfileDeleteFail = await simulateAdminCreateUser({
     email: 'hs_prof_del_fail@school.vn',
     fullName: 'Hoc Sinh Loi Profile Cleanup',
     role: 'student',
     gradeLevel: 1,
     mockCollisionCodes: [existingCode, existingCode, existingCode, existingCode, existingCode],
+    mockAuthDeleteError: null,
     mockProfileDeleteError: { message: 'PostgREST profile delete permission denied' }
   });
-  assert(resProfileDeleteFail.status === 500 && resProfileDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario B: Profile delete error kích hoạt CLEANUP_FAILED với status 500');
+  assert(resProfileDeleteFail.status === 500 && resProfileDeleteFail.body.code === 'CLEANUP_FAILED', 'Scenario B1: Profile delete error kích hoạt CLEANUP_FAILED với status 500');
+  assert(resProfileDeleteFail.meta.authUserExists === false, 'Scenario B2: Auth user đã được xóa');
+  assert(resProfileDeleteFail.meta.profileDeleteCallCount === 1, 'Scenario B3: Profile delete được gọi đúng 1 lần sau khi Auth xóa thành công');
 
   // Scenario C: Both cleanup calls succeed => original terminal create failure returned safely (HTTP 400)
   const resBothCleanupOk = await simulateAdminCreateUser({
@@ -346,7 +367,9 @@ export async function runAdminCreateUserStudentCodeTestSuite() {
     mockAuthDeleteError: null,
     mockProfileDeleteError: null
   });
-  assert(resBothCleanupOk.status === 400 && resBothCleanupOk.body.success === false && resBothCleanupOk.body.code === undefined, 'Scenario C: Cả Auth và Profile dọn dẹp thành công -> trả về lỗi tạo tài khoản gốc (HTTP 400)');
+  assert(resBothCleanupOk.status === 400 && resBothCleanupOk.body.success === false && resBothCleanupOk.body.code === undefined, 'Scenario C1: Cả Auth và Profile dọn dẹp thành công -> trả về lỗi tạo tài khoản gốc (HTTP 400)');
+  assert(resBothCleanupOk.meta.authUserExists === false, 'Scenario C2: Auth user đã dọn sạch');
+  assert(resBothCleanupOk.meta.profileDeleteCallCount === 1, 'Scenario C3: Profile delete được gọi tuần tự');
 
   // Scenario D: Profile already absent after Auth cascade, with no Supabase error => must NOT be treated as cleanup failure
   const resCascadeAbsent = await simulateAdminCreateUser({

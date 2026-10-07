@@ -156,22 +156,35 @@ serve(async (req) => {
       }
     }
 
-    // 8. Xử lý bồi hoàn an toàn (Compensation Safety) nếu cập nhật Profile thất bại
+    // 8. Xử lý bồi hoàn an toàn tuần tự (Sequential Compensation Safety) nếu cập nhật Profile thất bại
     if (!profileUpdateSuccess) {
+      // 8.1. Thu hồi tài khoản Auth trước
       const { error: delAuthErr } = await supabaseAdmin.auth.admin.deleteUser(newUserId);
-      const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newUserId);
-
-      if (delAuthErr || delProfErr) {
+      if (delAuthErr) {
         return new Response(
           JSON.stringify({
             success: false,
             code: 'CLEANUP_FAILED',
-            message: 'Tạo tài khoản thất bại và không thể dọn dẹp dữ liệu khởi tạo không hoàn chỉnh.',
+            message: 'Tạo tài khoản thất bại và không thể dọn dẹp tài khoản Auth mồ côi.',
           }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
+      // 8.2. Chỉ khi xóa Auth thành công mới tiến hành dọn dẹp Profile (nếu chưa bị xóa phân tầng)
+      const { error: delProfErr } = await supabaseAdmin.from('profiles').delete().eq('id', newUserId);
+      if (delProfErr) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            code: 'CLEANUP_FAILED',
+            message: 'Tạo tài khoản thất bại và không thể hoàn tất dọn dẹp hồ sơ.',
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // 8.3. Dọn dẹp hoàn tất an toàn -> Trả về lỗi tạo hồ sơ ban đầu
       return new Response(
         JSON.stringify({
           success: false,
