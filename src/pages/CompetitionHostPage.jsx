@@ -220,6 +220,7 @@ export function CompetitionHostPage() {
     setIsLeaderboardOpen(false);
     setQuestionResults(null);
     setExportAnalyticsData(null);
+    setIsAnonymizedExport(false);
     setHostViewMode('LIVE_QUESTION');
     setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;

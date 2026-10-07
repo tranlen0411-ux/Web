@@ -544,4 +544,71 @@ test('COMPETITION V1 R9 — EXPORT UX & PRINT POLISH TEST SUITE', async (t) => {
       assert.ok(elapsed < 25, `Execution took ${elapsed.toFixed(2)}ms, expected < 25ms`);
     });
   });
+
+  // =========================================================================
+  // GROUP 7: Anonymization State Lifecycle & Reset Hardening
+  // =========================================================================
+  await t.test('Group 7: Anonymization State Lifecycle & Reset Hardening', async (t7) => {
+    const hostPagePath = path.resolve('src/pages/CompetitionHostPage.jsx');
+    const hostPageSource = fs.readFileSync(hostPagePath, 'utf8');
+
+    await t7.test('54. CompetitionHostPage reset helper includes setIsAnonymizedExport(false)', () => {
+      assert.ok(hostPageSource.includes('setIsAnonymizedExport(false);'),
+        'clearRestoredSessionAndReturnToSetup must invoke setIsAnonymizedExport(false)');
+    });
+
+    await t7.test('55. "Tạo Đấu Trường Mới" uses reset flow that clears anonymized mode', () => {
+      // handleResetToSetup calls clearRestoredSessionAndReturnToSetup which resets anonymized mode
+      assert.ok(hostPageSource.includes('const handleResetToSetup = () => {\n    clearRestoredSessionAndReturnToSetup();\n  };'),
+        'handleResetToSetup must delegate to clearRestoredSessionAndReturnToSetup');
+    });
+
+    await t7.test('56. fail-closed reset flow clears anonymized mode upon auth/permanent failure', () => {
+      assert.ok(hostPageSource.includes('clearRestoredSessionAndReturnToSetup(\n          errInfo.message || \'Phòng thi không tồn tại hoặc bạn không có quyền quản trị.\'\n        );'),
+        'Fail-closed guard must call clearRestoredSessionAndReturnToSetup');
+    });
+
+    await t7.test('57. no localStorage persistence for anonymized mode', () => {
+      assert.ok(!hostPageSource.includes('localStorage.setItem(\'isAnonymizedExport'), 'No localStorage persistence');
+      assert.ok(!hostPageSource.includes('localStorage.getItem(\'isAnonymizedExport'), 'No localStorage lookup');
+    });
+
+    await t7.test('58. no sessionStorage persistence for anonymized mode', () => {
+      assert.ok(!hostPageSource.includes('sessionStorage.setItem(\'isAnonymizedExport'), 'No sessionStorage persistence');
+      assert.ok(!hostPageSource.includes('sessionStorage.getItem(\'isAnonymizedExport'), 'No sessionStorage lookup');
+    });
+
+    await t7.test('59. default anonymized state remains false upon component init', () => {
+      assert.ok(hostPageSource.includes('const [isAnonymizedExport, setIsAnonymizedExport] = useState(false);'),
+        'Initial state must be false');
+    });
+
+    await t7.test('60. normal export behavior otherwise unchanged when isAnonymized is false', () => {
+      const normalData = [{ rank: 1, display_name: 'Nguyễn Văn A', total_score: 50, correct_count: 5, total_response_time_ms: 10000 }];
+      const csv = buildLeaderboardCsv({ leaderboardData: normalData, isAnonymized: false });
+      assert.ok(csv.includes('Nguyễn Văn A'));
+      assert.ok(!csv.includes('Thí sinh 1'));
+    });
+
+    await t7.test('61. anonymous CSV behavior replaces names with position labels', () => {
+      const anonData = [{ rank: 1, display_name: 'Nguyễn Văn A', total_score: 50, correct_count: 5, total_response_time_ms: 10000 }];
+      const csv = buildLeaderboardCsv({ leaderboardData: anonData, isAnonymized: true });
+      assert.ok(!csv.includes('Nguyễn Văn A'));
+      assert.ok(csv.includes('Thí sinh 1'));
+    });
+
+    await t7.test('62. anonymous XLSX behavior replaces names in Bang Xep Hang sheet', () => {
+      const anonData = [{ rank: 1, display_name: 'Nguyễn Văn A', total_score: 50, correct_count: 5, total_response_time_ms: 10000 }];
+      const wb = buildCompetitionWorkbook({ leaderboardData: anonData, isAnonymized: true });
+      const sheet = wb.Sheets['Bang Xep Hang'];
+      assert.equal(sheet['B7'].v, 'Thí sinh 1');
+    });
+
+    await t7.test('63. anonymous print behavior uses getExportDisplayName helper cleanly', () => {
+      const row = { display_name: 'Võ Văn B' };
+      assert.equal(getExportDisplayName(row, 0, true), 'Thí sinh 1');
+      assert.equal(getExportDisplayName(row, 1, true), 'Thí sinh 2');
+      assert.equal(getExportDisplayName(row, 0, false), 'Võ Văn B');
+    });
+  });
 });
