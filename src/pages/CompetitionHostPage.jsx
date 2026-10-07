@@ -250,6 +250,7 @@ export function CompetitionHostPage() {
   const [hostViewMode, setHostViewMode] = useState('LIVE_QUESTION');
   const [finishedTab, setFinishedTab] = useState('PODIUM'); // 'PODIUM' | 'ANALYTICS'
   const [exportAnalyticsData, setExportAnalyticsData] = useState(null);
+  const [isAnonymizedExport, setIsAnonymizedExport] = useState(false);
   const [questionResults, setQuestionResults] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
@@ -1882,6 +1883,8 @@ export function CompetitionHostPage() {
                     roomCode={snapshot.room_code}
                     leaderboardData={leaderboardData}
                     analyticsData={exportAnalyticsData}
+                    isAnonymized={isAnonymizedExport}
+                    onAnonymizedChange={setIsAnonymizedExport}
                   />
                   <button
                     type="button"
@@ -2437,6 +2440,7 @@ export function CompetitionHostPage() {
           session={snapshot}
           leaderboardData={leaderboardData}
           analyticsData={exportAnalyticsData}
+          isAnonymized={isAnonymizedExport}
         />
       )}
 

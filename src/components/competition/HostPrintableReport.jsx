@@ -1,10 +1,11 @@
 import React from 'react';
-import { formatQuestionType, formatOptionDistribution } from '../../utils/competitionExport.js';
+import { formatQuestionType, formatOptionDistribution, getExportDisplayName } from '../../utils/competitionExport.js';
 
 export function HostPrintableReport({
   session = {},
   leaderboardData = [],
-  analyticsData = null
+  analyticsData = null,
+  isAnonymized = false
 }) {
   const title = session.title || 'Đấu Trường Tri Thức';
   const roomCode = session.room_code || '---';
@@ -37,7 +38,7 @@ export function HostPrintableReport({
       </div>
 
       {/* 2. Executive Summary Metrics */}
-      <div className="border border-slate-300 rounded-lg p-3 bg-slate-50 space-y-2">
+      <div className="border border-slate-300 rounded-lg p-3 bg-slate-50 space-y-2 break-inside-avoid">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">1. Tổng Quan Kết Quả</h2>
         <div className="grid grid-cols-4 gap-2 text-center text-xs">
           <div className="p-2 border border-slate-200 bg-white rounded">
@@ -59,12 +60,12 @@ export function HostPrintableReport({
         </div>
       </div>
 
-      {/* 3. Final Leaderboard Table */}
-      <div className="space-y-2 break-inside-avoid">
+      {/* 3. Final Leaderboard Table (Multi-page safe: thead repeats, tr avoids split, parent container allows page break) */}
+      <div className="space-y-2">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">2. Bảng Xếp Hạng Chung Cuộc</h2>
         <table className="w-full text-left text-xs border-collapse border border-slate-300">
-          <thead>
-            <tr className="bg-slate-100 border-b border-slate-300">
+          <thead className="[display:table-header-group] bg-slate-100 border-b border-slate-300">
+            <tr>
               <th className="p-2 border-r border-slate-300 text-center w-12">Hạng</th>
               <th className="p-2 border-r border-slate-300">Tên thí sinh</th>
               <th className="p-2 border-r border-slate-300 text-right w-24">Tổng điểm</th>
@@ -79,18 +80,26 @@ export function HostPrintableReport({
                 <td colSpan={6} className="p-4 text-center text-slate-500 italic">Chưa có dữ liệu bảng xếp hạng.</td>
               </tr>
             ) : (
-              leaderboardData.map((row) => (
-                <tr key={row.participant_id || `${row.rank}-${row.display_name}`} className="border-b border-slate-200">
-                  <td className="p-2 border-r border-slate-200 text-center font-bold">{row.rank}</td>
-                  <td className="p-2 border-r border-slate-200 font-medium">{row.display_name}</td>
-                  <td className="p-2 border-r border-slate-200 text-right font-bold text-slate-900">{row.total_score}</td>
-                  <td className="p-2 border-r border-slate-200 text-center">{row.correct_count}</td>
-                  <td className="p-2 border-r border-slate-200 text-right">
-                    {((Number(row.total_response_time_ms || 0)) / 1000).toFixed(2)}s
-                  </td>
-                  <td className="p-2 text-center text-[11px] text-slate-600">{row.is_guest ? 'Khách' : 'Học sinh'}</td>
-                </tr>
-              ))
+              leaderboardData.map((row, index) => {
+                const displayName = getExportDisplayName(row, index, isAnonymized);
+                return (
+                  <tr
+                    key={row.participant_id || `${row.rank}-${index}`}
+                    className="border-b border-slate-200 break-inside-avoid [break-inside:avoid] [page-break-inside:avoid]"
+                  >
+                    <td className="p-2 border-r border-slate-200 text-center font-bold">{row.rank}</td>
+                    <td className="p-2 border-r border-slate-200 font-medium break-words [overflow-wrap:anywhere]">
+                      {displayName}
+                    </td>
+                    <td className="p-2 border-r border-slate-200 text-right font-bold text-slate-900">{row.total_score}</td>
+                    <td className="p-2 border-r border-slate-200 text-center">{row.correct_count}</td>
+                    <td className="p-2 border-r border-slate-200 text-right">
+                      {((Number(row.total_response_time_ms || 0)) / 1000).toFixed(2)}s
+                    </td>
+                    <td className="p-2 text-center text-[11px] text-slate-600">{row.is_guest ? 'Khách' : 'Học sinh'}</td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -98,11 +107,11 @@ export function HostPrintableReport({
 
       {/* 4. Question Difficulty & Accuracy Table (If Analytics Available) */}
       {questions.length > 0 && (
-        <div className="space-y-2 break-inside-avoid">
+        <div className="space-y-2">
           <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">3. Thống Kê Chi Tiết Từng Câu Hỏi</h2>
           <table className="w-full text-left text-[11px] border-collapse border border-slate-300">
-            <thead>
-              <tr className="bg-slate-100 border-b border-slate-300">
+            <thead className="[display:table-header-group] bg-slate-100 border-b border-slate-300">
+              <tr>
                 <th className="p-1.5 border-r border-slate-300 text-center w-10">STT</th>
                 <th className="p-1.5 border-r border-slate-300 w-20">Dạng câu</th>
                 <th className="p-1.5 border-r border-slate-300">Nội dung câu hỏi</th>
@@ -115,17 +124,22 @@ export function HostPrintableReport({
             </thead>
             <tbody>
               {questions.map((q) => (
-                <tr key={q.question_id || q.question_order} className="border-b border-slate-200 break-inside-avoid">
+                <tr
+                  key={q.question_id || q.question_order}
+                  className="border-b border-slate-200 break-inside-avoid [break-inside:avoid] [page-break-inside:avoid]"
+                >
                   <td className="p-1.5 border-r border-slate-200 text-center font-bold">{q.question_order}</td>
                   <td className="p-1.5 border-r border-slate-200 text-slate-600">{formatQuestionType(q.question_type)}</td>
-                  <td className="p-1.5 border-r border-slate-200 font-medium">{q.question_text}</td>
+                  <td className="p-1.5 border-r border-slate-200 font-medium break-words [overflow-wrap:anywhere] leading-normal">
+                    {q.question_text}
+                  </td>
                   <td className="p-1.5 border-r border-slate-200 text-center">{q.answered_count}</td>
                   <td className="p-1.5 border-r border-slate-200 text-center font-bold text-slate-800">{q.correct_count}</td>
                   <td className="p-1.5 border-r border-slate-200 text-right font-bold">{q.accuracy_percent}%</td>
                   <td className="p-1.5 border-r border-slate-200 text-right">
                     {((Number(q.average_response_time_ms || 0)) / 1000).toFixed(1)}s
                   </td>
-                  <td className="p-1.5 text-[10px] text-slate-600 leading-tight">
+                  <td className="p-1.5 text-[10px] text-slate-600 leading-tight break-words [overflow-wrap:anywhere]">
                     {formatOptionDistribution(q)}
                   </td>
                 </tr>
@@ -136,7 +150,7 @@ export function HostPrintableReport({
       )}
 
       {/* 5. Footer Signoff */}
-      <div className="pt-4 border-t border-slate-300 flex justify-between items-center text-[10px] text-slate-500">
+      <div className="pt-4 border-t border-slate-300 flex justify-between items-center text-[10px] text-slate-500 break-inside-avoid">
         <div>Hệ thống Kho Trò Chơi Học Vui - Đấu Trường Trực Tuyến</div>
         <div>Tài liệu nội bộ dành cho Giáo viên</div>
       </div>

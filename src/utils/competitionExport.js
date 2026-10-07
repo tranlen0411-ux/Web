@@ -97,6 +97,68 @@ export function formatExportTimestamp(date = new Date()) {
 }
 
 /**
+ * Resolves the display name for export and print.
+ * When isAnonymized is true, returns 'Thí sinh N' strictly based on array position.
+ */
+export function getExportDisplayName(row, index, isAnonymized = false) {
+  if (isAnonymized) {
+    return `Thí sinh ${index + 1}`;
+  }
+  return (row && row.display_name) ? row.display_name : 'Thí sinh';
+}
+
+/**
+ * Calculates deterministic column widths for an XLSX worksheet AoA.
+ * Safe for Unicode Vietnamese characters, numbers, nulls, and multiline cells.
+ */
+export function calculateWorksheetColumnWidths(aoaRows, options = {}) {
+  if (!Array.isArray(aoaRows) || aoaRows.length === 0) return [];
+
+  const minWidth = typeof options.minWidth === 'number' ? options.minWidth : 10;
+  const defaultMaxWidth = typeof options.defaultMaxWidth === 'number' ? options.defaultMaxWidth : 42;
+  const padding = typeof options.padding === 'number' ? options.padding : 3;
+  const columnMaxOverrides = options.columnMaxOverrides || {};
+
+  let maxCols = 0;
+  for (const row of aoaRows) {
+    if (Array.isArray(row) && row.length > maxCols) {
+      maxCols = row.length;
+    }
+  }
+
+  const colWidths = [];
+
+  for (let colIdx = 0; colIdx < maxCols; colIdx++) {
+    let maxCellLength = 0;
+    const colMax = typeof columnMaxOverrides[colIdx] === 'number'
+      ? columnMaxOverrides[colIdx]
+      : defaultMaxWidth;
+
+    for (const row of aoaRows) {
+      if (!Array.isArray(row) || colIdx >= row.length) continue;
+      const cell = row[colIdx];
+      if (cell === null || cell === undefined) continue;
+
+      const strVal = String(cell);
+      // Handle multiline strings safely
+      const lines = strVal.split(/\r\n|\r|\n/);
+      for (const line of lines) {
+        const charCount = Array.from(line).length;
+        if (charCount > maxCellLength) {
+          maxCellLength = charCount;
+        }
+      }
+    }
+
+    const calculatedWidth = Math.max(minWidth, maxCellLength + padding);
+    const finalWidth = Math.min(calculatedWidth, colMax);
+    colWidths.push({ wch: finalWidth });
+  }
+
+  return colWidths;
+}
+
+/**
  * Builds Leaderboard CSV string with UTF-8 BOM.
  * Preserves exact PostgreSQL backend rank (e.g. 1, 1, 3). Zero recalculation.
  */
@@ -104,7 +166,8 @@ export function buildLeaderboardCsv({
   title = 'Đấu Trường Tri Thức',
   roomCode = '',
   leaderboardData = [],
-  exportedAt = new Date().toLocaleString('vi-VN')
+  exportedAt = new Date().toLocaleString('vi-VN'),
+  isAnonymized = false
 }) {
   const safeTitle = sanitizeForFormulaInjection(title);
   const safeRoomCode = sanitizeForFormulaInjection(roomCode);
@@ -119,9 +182,11 @@ export function buildLeaderboardCsv({
     'Hạng,Tên Thí Sinh,Tổng Điểm,Số Câu Đúng,Thời Gian Phản Hồi (giây),Loại Thí Sinh'
   ];
 
-  for (const row of leaderboardData) {
+  for (let index = 0; index < leaderboardData.length; index++) {
+    const row = leaderboardData[index];
     const rank = row.rank ?? '';
-    const name = escapeCsvValue(row.display_name || 'Thí sinh');
+    const rawName = getExportDisplayName(row, index, isAnonymized);
+    const name = escapeCsvValue(rawName);
     const score = Number(row.total_score || 0);
     const correct = Number(row.correct_count || 0);
     const responseTimeSec = (Number(row.total_response_time_ms || 0) / 1000).toFixed(2);
@@ -212,7 +277,8 @@ export function buildCompetitionWorkbook({
   roomCode = '',
   leaderboardData = [],
   analyticsData = null,
-  exportedAt = new Date().toLocaleString('vi-VN')
+  exportedAt = new Date().toLocaleString('vi-VN'),
+  isAnonymized = false
 }) {
   const wb = XLSX.utils.book_new();
 
@@ -228,10 +294,12 @@ export function buildCompetitionWorkbook({
     ['Hạng', 'Tên Thí Sinh', 'Tổng Điểm', 'Số Câu Đúng', 'Thời Gian Phản Hồi (giây)', 'Loại Thí Sinh']
   ];
 
-  for (const row of leaderboardData) {
+  for (let index = 0; index < leaderboardData.length; index++) {
+    const row = leaderboardData[index];
+    const rawName = getExportDisplayName(row, index, isAnonymized);
     leaderboardAoA.push([
       row.rank ?? '',
-      sanitizeForFormulaInjection(row.display_name || 'Thí sinh'),
+      sanitizeForFormulaInjection(rawName),
       Number(row.total_score || 0),
       Number(row.correct_count || 0),
       Number((Number(row.total_response_time_ms || 0) / 1000).toFixed(2)),
@@ -240,6 +308,11 @@ export function buildCompetitionWorkbook({
   }
 
   const wsLeaderboard = XLSX.utils.aoa_to_sheet(leaderboardAoA);
+  wsLeaderboard['!cols'] = calculateWorksheetColumnWidths(leaderboardAoA, {
+    minWidth: 10,
+    defaultMaxWidth: 42,
+    padding: 3
+  });
   XLSX.utils.book_append_sheet(wb, wsLeaderboard, 'Bang Xep Hang');
 
   // ----------------------------------------------------
@@ -279,6 +352,15 @@ export function buildCompetitionWorkbook({
   }
 
   const wsAnalytics = XLSX.utils.aoa_to_sheet(analyticsAoA);
+  wsAnalytics['!cols'] = calculateWorksheetColumnWidths(analyticsAoA, {
+    minWidth: 10,
+    defaultMaxWidth: 42,
+    padding: 3,
+    columnMaxOverrides: {
+      2: 60, // Nội Dung Câu Hỏi max 60
+      12: 55 // Phân Bố Lựa Chọn max 55
+    }
+  });
   XLSX.utils.book_append_sheet(wb, wsAnalytics, 'Phan Tich Cau Hoi');
 
   return wb;
