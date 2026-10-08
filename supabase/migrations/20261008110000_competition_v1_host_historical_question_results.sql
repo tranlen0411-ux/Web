@@ -5,7 +5,9 @@
 -- Security Invariants:
 -- - Private helpers: SECURITY DEFINER, search_path = ''
 -- - Public wrappers: SECURITY INVOKER, search_path = ''
--- - Host ownership or Admin profile role strictly enforced
+-- - Direct table read/write revoked from PUBLIC, anon, authenticated
+-- - Direct execute of private snapshot helper revoked from PUBLIC, anon, authenticated
+-- - Host ownership or Admin profile role strictly enforced in all caller helpers
 -- - Immutable per-question result snapshots (competition_question_result_snapshots)
 -- - Never expose answer/correct result for a question that is still open/active
 -- - Fail-closed on unauthorized, missing question, active question, or missing historical snapshot
@@ -55,8 +57,10 @@ ALTER TABLE public.competition_question_result_snapshots ENABLE ROW LEVEL SECURI
 CREATE INDEX IF NOT EXISTS idx_competition_snapshots_session_order
     ON public.competition_question_result_snapshots(session_id, question_order);
 
+
 -- ------------------------------------------------------------
 -- 2. PRIVATE HELPER: competition_snapshot_question_result_internal
+-- Strictly Internal: No direct client execution grant
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION private.competition_snapshot_question_result_internal(
     p_session_id UUID,
@@ -247,19 +251,24 @@ BEGIN
     )
     ON CONFLICT (session_id, question_id) DO NOTHING;
 
+    -- Concurrency/Idempotency hardening: Always re-select the persisted snapshot row from table
+    SELECT * INTO v_snapshot
+    FROM public.competition_question_result_snapshots
+    WHERE session_id = p_session_id AND question_id = p_question_id;
+
     RETURN pg_catalog.jsonb_build_object(
         'success', true,
-        'session_id', p_session_id,
-        'question_id', p_question_id,
-        'question_order', v_question.question_order,
-        'closed_at', p_closed_at,
-        'total_eligible', v_total_eligible,
-        'submitted_count', v_submitted_count,
-        'unanswered_count', v_unanswered_count,
-        'correct_count', v_correct_count,
-        'incorrect_count', v_incorrect_count,
-        'correct_percentage', v_correct_percentage,
-        'distribution', v_distribution
+        'session_id', v_snapshot.session_id,
+        'question_id', v_snapshot.question_id,
+        'question_order', v_snapshot.question_order,
+        'closed_at', v_snapshot.closed_at,
+        'total_eligible', v_snapshot.total_eligible,
+        'submitted_count', v_snapshot.submitted_count,
+        'unanswered_count', v_snapshot.unanswered_count,
+        'correct_count', v_snapshot.correct_count,
+        'incorrect_count', v_snapshot.incorrect_count,
+        'correct_percentage', v_snapshot.correct_percentage,
+        'distribution', v_snapshot.distribution
     );
 END;
 $$;
@@ -402,16 +411,30 @@ BEGIN
 END;
 $$;
 
-
--- ------------------------------------------------------------
--- 4. UPDATED HELPER: competition_host_next_question (Persists Snapshot Before Next)
--- ------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.competition_host_next_question(
+CREATE OR REPLACE FUNCTION public.competition_host_close_question(
     p_session_id UUID
 )
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+    RETURN private.competition_host_close_question_internal(p_session_id);
+END;
+$$;
+
+
+-- ------------------------------------------------------------
+-- 4. UPDATED HELPER: competition_host_next_question (Materializes Snapshot Before Transition)
+-- Refactored to private SECURITY DEFINER + public SECURITY INVOKER
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION private.competition_host_next_question_internal(
+    p_session_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
@@ -543,6 +566,19 @@ BEGIN
             'time_limit_seconds', v_next_question.time_limit_seconds
         )
     );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.competition_host_next_question(
+    p_session_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+    RETURN private.competition_host_next_question_internal(p_session_id);
 END;
 $$;
 
@@ -685,6 +721,19 @@ BEGIN
         'status', 'finished',
         'ended_at', v_ended_at
     );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.competition_host_finish_session(
+    p_session_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+    RETURN private.competition_finish_session_internal(p_session_id);
 END;
 $$;
 
@@ -835,6 +884,19 @@ BEGIN
         'distribution', v_snapshot_res->'distribution',
         'total_questions', v_total_questions
     );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.competition_host_get_question_results(
+    p_session_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $$
+BEGIN
+    RETURN private.competition_host_get_question_results_internal(p_session_id);
 END;
 $$;
 
@@ -1036,7 +1098,7 @@ BEGIN
     END IF;
 
     -- 5. Load Question Record by exact question_order
-    SELECT id, session_id, question_order, question_type, question_text, options, correct_answer, points
+    SELECT id, session_id, question_order, question_type, question_text, options, points
     INTO v_question
     FROM public.competition_questions
     WHERE session_id = p_session_id
@@ -1150,10 +1212,54 @@ $$;
 -- ------------------------------------------------------------
 -- 9. PERMISSIONS & ROLE GRANTS
 -- ------------------------------------------------------------
+
+-- Strict Lock Down: Table Direct Access Revoked
+REVOKE ALL ON TABLE public.competition_question_result_snapshots FROM PUBLIC;
+REVOKE ALL ON TABLE public.competition_question_result_snapshots FROM anon;
+REVOKE ALL ON TABLE public.competition_question_result_snapshots FROM authenticated;
+
+-- Strict Lock Down: Private Snapshot Helper (No direct client execution)
 REVOKE EXECUTE ON FUNCTION private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ) FROM anon;
-GRANT EXECUTE ON FUNCTION private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ) TO authenticated;
+REVOKE EXECUTE ON FUNCTION private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ) FROM authenticated;
 
+-- Host Close Question Helpers
+REVOKE EXECUTE ON FUNCTION private.competition_host_close_question_internal(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.competition_host_close_question_internal(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION private.competition_host_close_question_internal(UUID) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.competition_host_close_question(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.competition_host_close_question(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.competition_host_close_question(UUID) TO authenticated;
+
+-- Host Next Question Helpers
+REVOKE EXECUTE ON FUNCTION private.competition_host_next_question_internal(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.competition_host_next_question_internal(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION private.competition_host_next_question_internal(UUID) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.competition_host_next_question(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.competition_host_next_question(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.competition_host_next_question(UUID) TO authenticated;
+
+-- Finish Session Helpers
+REVOKE EXECUTE ON FUNCTION private.competition_finish_session_internal(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.competition_finish_session_internal(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION private.competition_finish_session_internal(UUID) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.competition_host_finish_session(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.competition_host_finish_session(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.competition_host_finish_session(UUID) TO authenticated;
+
+-- Host Results Helpers
+REVOKE EXECUTE ON FUNCTION private.competition_host_get_question_results_internal(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.competition_host_get_question_results_internal(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION private.competition_host_get_question_results_internal(UUID) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.competition_host_get_question_results(UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.competition_host_get_question_results(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.competition_host_get_question_results(UUID) TO authenticated;
+
+-- Host Session Metadata Helpers
 REVOKE EXECUTE ON FUNCTION private.competition_host_get_session_metadata_internal(UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION private.competition_host_get_session_metadata_internal(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION private.competition_host_get_session_metadata_internal(UUID) TO authenticated;
@@ -1162,6 +1268,7 @@ REVOKE EXECUTE ON FUNCTION public.competition_host_get_session_metadata(UUID) FR
 REVOKE EXECUTE ON FUNCTION public.competition_host_get_session_metadata(UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION public.competition_host_get_session_metadata(UUID) TO authenticated;
 
+-- Host Historical Result by Order Helpers
 REVOKE EXECUTE ON FUNCTION private.competition_host_get_question_result_by_order_internal(UUID, INTEGER) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION private.competition_host_get_question_result_by_order_internal(UUID, INTEGER) FROM anon;
 GRANT EXECUTE ON FUNCTION private.competition_host_get_question_result_by_order_internal(UUID, INTEGER) TO authenticated;

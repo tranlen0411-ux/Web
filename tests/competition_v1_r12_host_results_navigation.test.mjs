@@ -658,6 +658,81 @@ test('COMPETITION V1 R12 — BACKEND PGLITE SECURITY & LOGIC TESTS', async (t) =
 
     assert.equal(countRows.total_rows, 1, 'Only 1 snapshot row can exist per question');
   });
+
+  // ============================================================================
+  // FINAL SECURITY BLOCKER TESTS
+  // ============================================================================
+  await t.test('SECURITY 1: Snapshot helper has NO direct execute privilege for authenticated, anon, or PUBLIC', async () => {
+    const authExec = (await db.query(`
+      SELECT has_function_privilege('authenticated', 'private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ)', 'execute') AS ok;
+    `)).rows[0].ok;
+
+    const anonExec = (await db.query(`
+      SELECT has_function_privilege('anon', 'private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ)', 'execute') AS ok;
+    `)).rows[0].ok;
+
+    const pubExec = (await db.query(`
+      SELECT has_function_privilege('public', 'private.competition_snapshot_question_result_internal(UUID, UUID, TIMESTAMPTZ)', 'execute') AS ok;
+    `)).rows[0].ok;
+
+    assert.equal(authExec, false, 'Authenticated role must NOT have direct execute on private snapshot helper');
+    assert.equal(anonExec, false, 'Anon role must NOT have direct execute on private snapshot helper');
+    assert.equal(pubExec, false, 'Public role must NOT have direct execute on private snapshot helper');
+  });
+
+  await t.test('SECURITY 2: Snapshot table direct access revoked from authenticated, anon, PUBLIC', async () => {
+    const authSelect = (await db.query(`
+      SELECT has_table_privilege('authenticated', 'public.competition_question_result_snapshots', 'select') AS ok;
+    `)).rows[0].ok;
+
+    const authInsert = (await db.query(`
+      SELECT has_table_privilege('authenticated', 'public.competition_question_result_snapshots', 'insert') AS ok;
+    `)).rows[0].ok;
+
+    const anonSelect = (await db.query(`
+      SELECT has_table_privilege('anon', 'public.competition_question_result_snapshots', 'select') AS ok;
+    `)).rows[0].ok;
+
+    assert.equal(authSelect, false, 'Authenticated must NOT have direct SELECT on snapshot table');
+    assert.equal(authInsert, false, 'Authenticated must NOT have direct INSERT on snapshot table');
+    assert.equal(anonSelect, false, 'Anon must NOT have direct SELECT on snapshot table');
+  });
+
+  await t.test('SECURITY 3: Next-question authorization checks (Host/Admin allowed, Student/Teacher denied)', async () => {
+    // Student next question => DENIED
+    await setAuthContext(studentId, 'authenticated');
+    const studentNext = await db.query(`SELECT public.competition_host_next_question('${lateSessId}') AS res;`);
+    assert.equal(studentNext.rows[0].res.success, false);
+    assert.equal(studentNext.rows[0].res.error_code, 'NOT_SESSION_HOST');
+
+    // Unrelated teacher next question => DENIED
+    await setAuthContext(otherTeacherId, 'authenticated');
+    const teacherNext = await db.query(`SELECT public.competition_host_next_question('${lateSessId}') AS res;`);
+    assert.equal(teacherNext.rows[0].res.success, false);
+    assert.equal(teacherNext.rows[0].res.error_code, 'NOT_SESSION_HOST');
+
+    // Anon next question => DENIED
+    await setAuthContext(null, 'anon');
+    const anonNext = await db.query(`SELECT public.competition_host_next_question('${lateSessId}') AS res;`);
+    assert.equal(anonNext.rows[0].res.success, false);
+    assert.equal(anonNext.rows[0].res.error_code, 'UNAUTHORIZED');
+
+    // Host next question on lateSessId (was at Q2, no more questions) => NO_MORE_QUESTIONS
+    await setAuthContext(hostId, 'authenticated');
+    const hostNext = await db.query(`SELECT public.competition_host_next_question('${lateSessId}') AS res;`);
+    assert.equal(hostNext.rows[0].res.success, false);
+    assert.equal(hostNext.rows[0].res.error_code, 'NO_MORE_QUESTIONS');
+  });
+
+  await t.test('SECURITY 4: Persisted snapshot re-select guarantee (Idempotency return hardening)', async () => {
+    // Calling internal snapshot helper directly from server-side context returns persisted snapshot identically
+    const q1Row = (await db.query(`SELECT id FROM public.competition_questions WHERE session_id = '${expSessId}' AND question_order = 1;`)).rows[0];
+    const snapA = (await db.query(`SELECT private.competition_snapshot_question_result_internal('${expSessId}', '${q1Row.id}', now()) AS res;`)).rows[0].res;
+    const snapB = (await db.query(`SELECT private.competition_snapshot_question_result_internal('${expSessId}', '${q1Row.id}', now()) AS res;`)).rows[0].res;
+    assert.equal(snapA.success, true);
+    assert.equal(snapB.success, true);
+    assert.deepEqual(snapA, snapB, 'Idempotent calls must return identical persisted snapshot data');
+  });
 });
 
 test('COMPETITION V1 R12 — FRONTEND & UX INVARIANTS STATIC ASSERTIONS', async (t) => {
