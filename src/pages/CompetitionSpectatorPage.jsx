@@ -13,7 +13,6 @@ import {
   getActiveQuestionSnapshot,
   getHostSubmissionStats,
   getHostQuestionResults,
-  getHostQuestionResultByOrder,
   getSessionParticipants,
   isValidSessionUUID
 } from '../services/competitionClient.js';
@@ -158,7 +157,7 @@ export function CompetitionSpectatorPage() {
           setLeaderboard(lbRes.value.data || []);
         }
         if (partRes.status === 'fulfilled' && partRes.value?.success) {
-          setParticipants(partRes.data || []);
+          setParticipants(partRes.value?.data || []);
         }
         if (resRes.status === 'fulfilled' && resRes.value?.success) {
           setQuestionResults(resRes.value.data);

@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -27,6 +27,14 @@ function isValidUUID(v) {
   return typeof v === 'string' && UUID_REGEX.test(v.trim());
 }
 
+// Logic helper simulating SpectatorLeaderboardView rank filtering
+function getPodiumGroups(leaderboard = []) {
+  const rank1 = leaderboard.filter((p) => Number(p.rank) === 1);
+  const rank2 = leaderboard.filter((p) => Number(p.rank) === 2);
+  const rank3 = leaderboard.filter((p) => Number(p.rank) === 3);
+  return { rank1, rank2, rank3 };
+}
+
 test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) => {
 
   await t.test('Group 1: Route, Access Control & Layout Guard', async (t) => {
@@ -35,24 +43,24 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     });
 
     await t.test('2. route requires teacher and admin roles', () => {
-      assert.match(appContent, /<Route\s+path="\/competition\/spectator"\s+element=\{\s*<ProtectedRoute\s+allowedRoles=\{\['admin',\s*'teacher'\]\}/);
+      assert.match(appContent, /<Route\s+path="\/competition\/spectator"\s+element={\s*<ProtectedRoute\s+allowedRoles={\['admin',\s*'teacher'\]}/);
     });
 
     await t.test('3. student is excluded from spectator allowedRoles', () => {
-      const match = appContent.match(/<Route\s+path="\/competition\/spectator"[\s\S]*?allowedRoles=\{([^}]+)\}/);
+      const match = appContent.match(/<Route\s+path="\/competition\/spectator"[\s\S]*?allowedRoles={([^}]+)}/);
       assert.ok(match, 'Route must have allowedRoles');
       assert.ok(!match[1].includes('student'), 'Student must NOT be allowed in Phase 1 spectator view');
     });
 
     await t.test('4. anonymous access is denied via ProtectedRoute', () => {
       assert.ok(appContent.includes('<ProtectedRoute allowedRoles='));
-      assert.match(appContent, /if \(!user\) \{\s*return <Navigate to="\/auth" replace \/>;\s*\}/);
+      assert.match(appContent, /if \(!user\) {\s*return <Navigate to="\/auth" replace \/>;\s*\}/);
     });
 
     await t.test('5. Navbar and Footer are hidden for spectator route', () => {
       assert.match(appContent, /const isSpectator = location\.pathname\.startsWith\('\/competition\/spectator'\)/);
-      assert.match(appContent, /\{!isSpectator && <Navbar \/>\}/);
-      assert.match(appContent, /\{!isSpectator && <Footer \/>\}/);
+      assert.match(appContent, /{!isSpectator && <Navbar \/>}/);
+      assert.match(appContent, /{!isSpectator && <Footer \/>}/);
     });
   });
 
@@ -128,7 +136,7 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     });
 
     await t.test('6c. Host page contains buttons to open spectator in waiting, in_progress, and finished', () => {
-      assert.match(hostContent, /onClick=\{\(\) => handleOpenSpectator\(snapshot\.id\)\}/);
+      assert.match(hostContent, /onClick={\(\) => handleOpenSpectator\(snapshot\.id\)}/);
       assert.match(hostContent, /Màn hình trình chiếu|Trình Chiếu Trực Tiếp|Trình Chiếu Kết Quả/);
     });
   });
@@ -141,7 +149,7 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     });
 
     await t.test('21-22. LIVE screen shows Question X / Y and countdown timer', () => {
-      assert.match(liveViewContent, /Câu \{snapshot\?\.current_question_index \|\| 1\} \/ \{effectiveTotalQuestions\}/);
+      assert.match(liveViewContent, /Câu {snapshot\?\.current_question_index \|\| 1} \/ {effectiveTotalQuestions}/);
       assert.match(liveViewContent, /timeLeftSeconds/);
       assert.match(liveViewContent, /Tiến độ nộp bài/);
     });
@@ -167,23 +175,83 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
       assert.match(resultsViewContent, /Đáp án đúng/);
     });
 
-    await t.test('12-14. leaderboard displays authoritative backend rank and preserves tie gaps', () => {
-      assert.match(leaderboardViewContent, /BẢNG XẾP HẠNG TRỰC TIẾP/);
-      assert.match(leaderboardViewContent, /#\{row\.rank\}/);
-      assert.ok(!leaderboardViewContent.includes('leaderboard.sort('), 'Leaderboard must not do client-side re-sorting');
-      assert.ok(!leaderboardViewContent.includes('rank = index + 1'), 'Leaderboard must not fabricate sequential ranks');
-    });
-
     await t.test('15 & 25. finished ceremony podium handles tie rank 1 safely', () => {
       assert.match(finishedViewContent, /KẾT QUẢ CHUNG CUỘC/);
       assert.match(finishedViewContent, /Vinh Danh Nhà Vô Địch/);
-      assert.match(finishedViewContent, /leaderboard\.filter\(\(p\) => p\.rank === 1\)/);
-      assert.match(finishedViewContent, /leaderboard\.filter\(\(p\) => p\.rank === 2\)/);
-      assert.match(finishedViewContent, /leaderboard\.filter\(\(p\) => p\.rank === 3\)/);
+      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 1)'));
+      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 2)'));
+      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 3)'));
     });
   });
 
-  await t.test('Group 6: Polling Lifecycle & Stale-Request Guard', async (t) => {
+  await t.test('Group 6: Live Leaderboard Tie-Safe Podium & Rank Gaps (Direct Review Fix 1)', async (t) => {
+    await t.test('A. preserves two Rank 1 rows (1, 1, 3)', () => {
+      const mockData = [
+        { rank: 1, display_name: 'Alpha', total_score: 100, correct_count: 5 },
+        { rank: 1, display_name: 'Beta', total_score: 100, correct_count: 5 },
+        { rank: 3, display_name: 'Gamma', total_score: 80, correct_count: 4 }
+      ];
+      const { rank1, rank2, rank3 } = getPodiumGroups(mockData);
+      assert.strictEqual(rank1.length, 2, 'Rank 1 must preserve both tied participants');
+      assert.strictEqual(rank1[0].display_name, 'Alpha');
+      assert.strictEqual(rank1[1].display_name, 'Beta');
+      assert.strictEqual(rank2.length, 0, 'Rank 2 must remain empty for 1,1,3 gap');
+      assert.strictEqual(rank3.length, 1, 'Rank 3 must have Gamma');
+      assert.strictEqual(rank3[0].display_name, 'Gamma');
+    });
+
+    await t.test('B. does not fabricate Rank 2 when backend returns 1, 1, 3', () => {
+      const mockData = [
+        { rank: 1, display_name: 'Alpha', total_score: 100 },
+        { rank: 1, display_name: 'Beta', total_score: 100 },
+        { rank: 3, display_name: 'Gamma', total_score: 80 }
+      ];
+      const { rank2 } = getPodiumGroups(mockData);
+      assert.strictEqual(rank2.length, 0, 'Rank 2 must not be fabricated from 1,1,3');
+    });
+
+    await t.test('C. preserves tied Rank 2 (1, 2, 2)', () => {
+      const mockData = [
+        { rank: 1, display_name: 'Winner', total_score: 100 },
+        { rank: 2, display_name: 'Silver A', total_score: 90 },
+        { rank: 2, display_name: 'Silver B', total_score: 90 },
+        { rank: 4, display_name: 'Fourth', total_score: 70 }
+      ];
+      const { rank1, rank2, rank3 } = getPodiumGroups(mockData);
+      assert.strictEqual(rank1.length, 1);
+      assert.strictEqual(rank2.length, 2, 'Rank 2 must preserve both tied participants');
+      assert.strictEqual(rank2[0].display_name, 'Silver A');
+      assert.strictEqual(rank2[1].display_name, 'Silver B');
+      assert.strictEqual(rank3.length, 0, 'Rank 3 is absent due to 1,2,2,4 gap');
+    });
+
+    await t.test('D. preserves three Rank 1 participants (1, 1, 1)', () => {
+      const mockData = [
+        { rank: 1, display_name: 'Champion 1', total_score: 100 },
+        { rank: 1, display_name: 'Champion 2', total_score: 100 },
+        { rank: 1, display_name: 'Champion 3', total_score: 100 }
+      ];
+      const { rank1, rank2, rank3 } = getPodiumGroups(mockData);
+      assert.strictEqual(rank1.length, 3, 'All three Rank 1 winners must be preserved');
+      assert.strictEqual(rank2.length, 0);
+      assert.strictEqual(rank3.length, 0);
+    });
+
+    await t.test('E. no find((p) => p.rank === 1) single-winner logic in SpectatorLeaderboardView', () => {
+      assert.ok(!leaderboardViewContent.includes('leaderboard.find('), 'Must not use find() for leaderboard podium');
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 1)'), 'Must filter Rank 1');
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 2)'), 'Must filter Rank 2');
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 3)'), 'Must filter Rank 3');
+    });
+
+    await t.test('F. no index-based re-ranking or client sorting', () => {
+      assert.ok(!leaderboardViewContent.includes('leaderboard.sort('), 'Leaderboard must not do client-side re-sorting');
+      assert.ok(!leaderboardViewContent.includes('rank = index + 1'), 'Leaderboard must not fabricate sequential ranks');
+      assert.match(leaderboardViewContent, /#{row.rank}/);
+    });
+  });
+
+  await t.test('Group 7: Polling, Promise.allSettled & Data Extraction (Direct Review Fix 2 & Cleanup)', async (t) => {
     await t.test('16. polling cadence is >= 2 seconds (2000ms for active, 3000ms for idle)', () => {
       assert.match(spectatorPageContent, /\(snapshot\?\.status === 'in_progress'\) \? 2000 : 3000/);
     });
@@ -198,9 +266,23 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
       assert.match(spectatorPageContent, /const currentRequestId = \+\+activeRequestIdRef\.current/);
       assert.match(spectatorPageContent, /if \(!isMountedRef\.current \|\| currentRequestId !== activeRequestIdRef\.current\) return/);
     });
+
+    await t.test('Fix 2. fulfilled Promise.allSettled participant response uses partRes.value.data', () => {
+      // Must use partRes.value?.data || [] in finished status handler
+      assert.match(spectatorPageContent, /if \(partRes\.status === 'fulfilled' && partRes\.value\?\.success\) {\s*setParticipants\(partRes\.value\?\.data \|\| \[\]\);/);
+      // Ensure no buggy partRes.data in finished handler
+      const finishedBlockMatch = spectatorPageContent.match(/currentSession.status === 'finished'[\s\S]*?setParticipants\(([^)]+)\)/);
+      assert.ok(finishedBlockMatch, 'Finished block must contain setParticipants');
+      assert.ok(!finishedBlockMatch[1].includes('partRes.data'), 'Finished block must not use partRes.data');
+      assert.ok(finishedBlockMatch[1].includes('partRes.value'), 'Finished block must use partRes.value');
+    });
+
+    await t.test('Cleanup. unused import getHostQuestionResultByOrder is removed', () => {
+      assert.ok(!spectatorPageContent.includes('getHostQuestionResultByOrder'), 'Spectator page must not import unused getHostQuestionResultByOrder');
+    });
   });
 
-  await t.test('Group 7: Fullscreen & Projector Ergonomics', async (t) => {
+  await t.test('Group 8: Fullscreen & Projector Ergonomics', async (t) => {
     await t.test('19. fullscreen button and browser Fullscreen API integration present', () => {
       assert.match(spectatorPageContent, /requestFullscreen/);
       assert.match(spectatorPageContent, /exitFullscreen/);
