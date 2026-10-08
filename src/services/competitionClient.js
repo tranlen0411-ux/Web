@@ -749,6 +749,41 @@ export async function getHostQuestionResults(sessionId) {
 }
 
 /**
+ * Reads sanitized historical or closed question results and answer distribution for Host by question order.
+ * RPC: public.competition_host_get_question_result_by_order
+ *
+ * Security:
+ * - Never queries public.competition_answers directly from client
+ * - Gated server-side: accessible only for closed/past questions or finished sessions
+ * - Excludes participant-level answer records, user_id, guest_token_hash
+ * - Authenticated Host or Admin only
+ */
+export async function getHostQuestionResultByOrder({
+  sessionId,
+  questionOrder,
+}) {
+  if (!sessionId) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
+  }
+  const numericOrder = typeof questionOrder === 'number' ? questionOrder : parseInt(questionOrder, 10);
+  if (isNaN(numericOrder) || numericOrder < 1) {
+    return { success: false, error_code: 'INVALID_QUESTION_ORDER', message: 'Thứ tự câu hỏi không hợp lệ.' };
+  }
+  try {
+    const { data, error } = await supabase.rpc('competition_host_get_question_result_by_order', {
+      p_session_id: sessionId,
+      p_question_order: numericOrder,
+    });
+
+    if (error) return normalizeResponse(null, error.message);
+    return normalizeResponse(data, 'Không thể lấy kết quả câu hỏi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
+
+/**
  * Reads sanitized aggregate question difficulty & accuracy analytics for Host.
  * RPC: public.competition_host_get_question_analytics
  *

@@ -37,6 +37,7 @@ import {
   hostCancelSession,
   hostCloseQuestion,
   getHostQuestionResults,
+  getHostQuestionResultByOrder,
   getLeaderboardSnapshot
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
@@ -220,6 +221,9 @@ export function CompetitionHostPage() {
     setLeaderboardError(null);
     setIsLeaderboardOpen(false);
     setQuestionResults(null);
+    setReviewedQuestionOrder(null);
+    setReviewedQuestionResults(null);
+    setAuthoritativeTotalQuestions(null);
     setExportAnalyticsData(null);
     setIsAnonymizedExport(false);
     setExportTopN('all');
@@ -258,6 +262,10 @@ export function CompetitionHostPage() {
   const [exportTopN, setExportTopN] = useState('all');
   const [printOrientation, setPrintOrientation] = useState('portrait');
   const [questionResults, setQuestionResults] = useState(null);
+  const [reviewedQuestionOrder, setReviewedQuestionOrder] = useState(null);
+  const [reviewedQuestionResults, setReviewedQuestionResults] = useState(null);
+  const [isHistoricalResultsLoading, setIsHistoricalResultsLoading] = useState(false);
+  const [authoritativeTotalQuestions, setAuthoritativeTotalQuestions] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
   const [leaderboardError, setLeaderboardError] = useState(null);
@@ -325,6 +333,8 @@ export function CompetitionHostPage() {
       prevQuestionIdRef.current = currentQuestionId;
       if (snapshotRef.current?.status !== 'finished') {
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
         autoResultAttemptRef.current = null;
       }
@@ -333,6 +343,15 @@ export function CompetitionHostPage() {
 
   // Determine current active state
   const currentStatus = snapshot?.status || (activeSessionId ? 'waiting' : 'setup');
+
+  const effectiveTotalQuestions = authoritativeTotalQuestions || createdQuestionCount || questions.length || 1;
+  const isFinalQuestion = Number(snapshot?.current_question_index) >= Number(effectiveTotalQuestions);
+  const isReviewingHistory = Boolean(
+    reviewedQuestionOrder !== null &&
+    (snapshot?.status === 'finished' || (snapshot?.current_question_index && reviewedQuestionOrder < snapshot.current_question_index))
+  );
+  const activeDisplayedResults = isReviewingHistory ? reviewedQuestionResults : questionResults;
+  const activeDisplayedOrder = reviewedQuestionOrder ?? snapshot?.current_question_index ?? 1;
 
   // UI Visibility Contract & Consistency Guard for Live Submission Stats (S2)
   const isSubmissionStatsAuthoritative = Boolean(
@@ -353,13 +372,12 @@ export function CompetitionHostPage() {
   const submittedList = activeStats.participants?.filter(p => p.submitted) || [];
   const notSubmittedList = activeStats.participants?.filter(p => !p.submitted) || [];
 
-  // Question Results Consistency Guard (R2 Section 18)
+  // Question Results Consistency Guard (R2 Section 18 + R12 Historical Review)
   const isQuestionResultsAuthoritative = Boolean(
     hostViewMode === 'QUESTION_RESULTS' &&
-    questionResults?.success &&
-    questionResults?.question_closed === true &&
-    snapshot?.current_question_id &&
-    questionResults?.question_id === snapshot.current_question_id
+    ((isReviewingHistory && reviewedQuestionResults?.success && reviewedQuestionResults?.question_closed === true) ||
+     (!isReviewingHistory && questionResults?.success && questionResults?.question_closed === true &&
+      snapshot?.current_question_id && questionResults?.question_id === snapshot.current_question_id))
   );
 
   // Load Leaderboard data on demand with session matching and stale response safety (Blocker 1 & Race Guard)
@@ -436,6 +454,8 @@ export function CompetitionHostPage() {
     if (snapshot?.status === 'finished') {
       setHostViewMode('FINAL_RESULTS');
       setQuestionResults(null);
+      setReviewedQuestionOrder(null);
+      setReviewedQuestionResults(null);
       setTimeLeftSeconds(null);
       autoResultAttemptRef.current = null;
       if (activeSessionId) {
@@ -461,7 +481,12 @@ export function CompetitionHostPage() {
           snapshotRef.current?.current_question_id &&
           res.data.question_id === snapshotRef.current.current_question_id
         ) {
+          if (res.data.total_questions) {
+            setAuthoritativeTotalQuestions(res.data.total_questions);
+          }
           setQuestionResults(res.data);
+          setReviewedQuestionOrder(null);
+          setReviewedQuestionResults(null);
           setHostViewMode('QUESTION_RESULTS');
           return { success: true, data: res.data };
         }
@@ -479,6 +504,78 @@ export function CompetitionHostPage() {
       setIsResultsLoading(false);
     }
   }, []);
+
+  // Historical Question Results Fetcher (Review Mode)
+  const fetchHistoricalResult = useCallback(async (orderToFetch) => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId || isHistoricalResultsLoading) return { success: false };
+    setIsHistoricalResultsLoading(true);
+    try {
+      const res = await getHostQuestionResultByOrder({
+        sessionId,
+        questionOrder: orderToFetch,
+      });
+
+      if (res.success && res.data) {
+        if (res.data.total_questions) {
+          setAuthoritativeTotalQuestions(res.data.total_questions);
+        }
+        setReviewedQuestionOrder(orderToFetch);
+        setReviewedQuestionResults(res.data);
+        setHostViewMode('QUESTION_RESULTS');
+        return { success: true, data: res.data };
+      } else {
+        showToast(res.message || 'Không thể tải kết quả câu hỏi này.', 'error');
+        return { success: false, error_code: res.error_code };
+      }
+    } catch (_err) {
+      showToast('Lỗi mạng khi tải kết quả câu hỏi.', 'error');
+      return { success: false, error_code: 'NETWORK_ERROR' };
+    } finally {
+      setIsHistoricalResultsLoading(false);
+    }
+  }, [isHistoricalResultsLoading, showToast]);
+
+  const handleReviewPrevQuestion = useCallback(() => {
+    const currentReviewOrder = reviewedQuestionOrder ?? snapshot?.current_question_index ?? 1;
+    const targetOrder = currentReviewOrder - 1;
+    if (targetOrder >= 1) {
+      fetchHistoricalResult(targetOrder);
+    }
+  }, [reviewedQuestionOrder, snapshot?.current_question_index, fetchHistoricalResult]);
+
+  const handleReviewNextQuestion = useCallback(() => {
+    const currentReviewOrder = reviewedQuestionOrder ?? snapshot?.current_question_index ?? 1;
+    const maxOrder = snapshot?.status === 'finished'
+      ? (authoritativeTotalQuestions || createdQuestionCount || 1)
+      : (snapshot?.current_question_index || 1);
+    const targetOrder = currentReviewOrder + 1;
+    if (targetOrder <= maxOrder) {
+      if (
+        snapshot?.status !== 'finished' &&
+        targetOrder === snapshot?.current_question_index &&
+        questionResults?.question_id === snapshot?.current_question_id
+      ) {
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
+        setHostViewMode('QUESTION_RESULTS');
+      } else {
+        fetchHistoricalResult(targetOrder);
+      }
+    }
+  }, [reviewedQuestionOrder, snapshot?.status, snapshot?.current_question_index, snapshot?.current_question_id, authoritativeTotalQuestions, createdQuestionCount, questionResults, fetchHistoricalResult]);
+
+  const handleReturnToCurrentQuestion = useCallback(() => {
+    setReviewedQuestionOrder(null);
+    setReviewedQuestionResults(null);
+    if (snapshot?.status === 'finished') {
+      setHostViewMode('FINAL_RESULTS');
+    } else if (questionResults && questionResults.question_id === snapshot?.current_question_id) {
+      setHostViewMode('QUESTION_RESULTS');
+    } else {
+      setHostViewMode('LIVE_QUESTION');
+    }
+  }, [snapshot?.status, snapshot?.current_question_id, questionResults]);
 
   // Countdown Timer & Natural Expiry Detection (Local display only + bounded 2-attempt clock-skew auto fetch)
   useEffect(() => {
@@ -643,9 +740,12 @@ export function CompetitionHostPage() {
           }
         } catch (_e) {}
         setCreatedQuestionCount(questions.length);
+        setAuthoritativeTotalQuestions(questions.length);
         setSnapshot(res.data.session);
         setHostViewMode('LIVE_QUESTION');
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         autoResultAttemptRef.current = null;
         showToast('Tạo phòng thi thành công! Mã phòng đã sẵn sàng.', 'success');
       } else {
@@ -667,6 +767,8 @@ export function CompetitionHostPage() {
       if (res.success) {
         setHostViewMode('LIVE_QUESTION');
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         autoResultAttemptRef.current = null;
         showToast('Đã bắt đầu phòng thi! Câu hỏi đầu tiên đã kích hoạt.', 'success');
         await refreshNow();
@@ -736,12 +838,14 @@ export function CompetitionHostPage() {
   };
 
   const handleNextQuestion = async () => {
-    if (!activeSessionId || actionPending) return;
+    if (!activeSessionId || actionPending || isFinalQuestion) return;
     setActionPending(true);
     try {
       const res = await hostNextQuestion(activeSessionId);
       if (res.success) {
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
         autoResultAttemptRef.current = null;
         showToast('Đã chuyển sang câu hỏi tiếp theo!', 'success');
@@ -766,6 +870,8 @@ export function CompetitionHostPage() {
       const res = await hostFinishSession(activeSessionId);
       if (res.success) {
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         setTimeLeftSeconds(null);
         autoResultAttemptRef.current = null;
         showToast('Phòng thi đã kết thúc và tính toán thứ hạng hoàn tất!', 'success');
@@ -790,6 +896,8 @@ export function CompetitionHostPage() {
       const res = await hostCancelSession(activeSessionId);
       if (res.success) {
         setQuestionResults(null);
+        setReviewedQuestionOrder(null);
+        setReviewedQuestionResults(null);
         setHostViewMode('LIVE_QUESTION');
         autoResultAttemptRef.current = null;
         showToast('Đã hủy phòng thi thành công.', 'info');
@@ -888,7 +996,7 @@ export function CompetitionHostPage() {
                 }`}
               >
                 <BarChart3 className="w-4 h-4" />
-                Bảng Xếp Hạng
+                Bảng Xếp Hạng Nhanh
               </button>
               <button
                 type="button"
@@ -1308,7 +1416,7 @@ export function CompetitionHostPage() {
                   <div className="text-right">
                     <span className="text-xs text-slate-400 block">Tiến độ câu hỏi</span>
                     <span className="text-lg font-black text-sky-700">
-                      Câu {snapshot.current_question_index || 1} / {createdQuestionCount}
+                      Câu {snapshot.current_question_index || 1} / {effectiveTotalQuestions}
                     </span>
                   </div>
                   <div className="text-right border-l border-slate-200 pl-4">
@@ -1352,7 +1460,7 @@ export function CompetitionHostPage() {
                 >
                   <BarChart3 className="w-3.5 h-3.5" />
                   Kết Quả Câu Hỏi
-                  {isResultsLoading && <RefreshCw className="w-3 h-3 animate-spin ml-1" />}
+                  {(isResultsLoading || isHistoricalResultsLoading) && <RefreshCw className="w-3 h-3 animate-spin ml-1" />}
                 </button>
 
                 <button
@@ -1368,7 +1476,7 @@ export function CompetitionHostPage() {
                   }`}
                 >
                   <Trophy className="w-3.5 h-3.5" />
-                  Bảng Xếp Hạng
+                  Bảng Xếp Hạng Trực Tiếp
                 </button>
               </div>
 
@@ -1408,15 +1516,32 @@ export function CompetitionHostPage() {
                   Kết Thúc Câu
                 </button>
 
-                <button
-                  type="button"
-                  disabled={actionPending}
-                  onClick={handleNextQuestion}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-sm transition disabled:opacity-50"
-                >
-                  <SkipForward className="w-4 h-4" />
-                  Câu Tiếp Theo
-                </button>
+                {isFinalQuestion ? (
+                  <button
+                    type="button"
+                    disabled={actionPending}
+                    onClick={() => setConfirmModal({
+                      type: 'finish',
+                      title: 'Xác nhận kết thúc phòng thi',
+                      message: 'Đây là câu cuối cùng. Bạn có muốn kết thúc trận đấu và tính bảng xếp hạng chung cuộc không?',
+                      onConfirm: handleFinishSession
+                    })}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition disabled:opacity-50"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    Kết Thúc Trận
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={actionPending}
+                    onClick={handleNextQuestion}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-sm transition disabled:opacity-50"
+                  >
+                    <SkipForward className="w-4 h-4" />
+                    Câu Tiếp Theo
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1579,33 +1704,80 @@ export function CompetitionHostPage() {
             )}
 
             {/* ============================================================ */}
-            {/* VIEW MODE 2: QUESTION_RESULTS (Kahoot-style R2)              */}
+            {/* VIEW MODE 2: QUESTION_RESULTS (Kahoot-style R2 + R12 Review) */}
             {/* ============================================================ */}
             {hostViewMode === 'QUESTION_RESULTS' && (
               <div className="space-y-6">
-                {isQuestionResultsAuthoritative ? (
+                {isQuestionResultsAuthoritative && activeDisplayedResults ? (
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-6">
-                    {/* Header & Question Text */}
-                    <div className="border-b border-slate-100 pb-4 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="px-3 py-1 rounded-lg bg-amber-500 text-white font-bold text-xs shadow-sm">
-                          Kết Quả Câu {questionResults.question_order} / {createdQuestionCount}
-                        </span>
+                    {/* Historical Review Badge & Return Button */}
+                    {isReviewingHistory && (
+                      <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2 text-indigo-900 font-bold">
+                          <Clock className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                          <span>Đang xem lại kết quả Câu {activeDisplayedOrder} — chỉ xem</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleReturnToCurrentQuestion}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition shadow-xs flex-shrink-0"
+                        >
+                          Trở Về Câu Hiện Tại
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Header & Question Text with Review Navigation */}
+                    <div className="border-b border-slate-100 pb-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          {/* ← Câu Trước */}
+                          <button
+                            type="button"
+                            disabled={isHistoricalResultsLoading || activeDisplayedOrder <= 1}
+                            onClick={handleReviewPrevQuestion}
+                            className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1"
+                            title="Xem kết quả câu hỏi trước"
+                          >
+                            ← Câu Trước
+                          </button>
+
+                          <span className="px-3 py-1 rounded-lg bg-amber-500 text-white font-bold text-xs shadow-sm">
+                            Kết Quả Câu {activeDisplayedOrder} / {effectiveTotalQuestions}
+                          </span>
+
+                          {/* Câu Sau → */}
+                          <button
+                            type="button"
+                            disabled={
+                              isHistoricalResultsLoading ||
+                              (snapshot?.status === 'finished'
+                                ? activeDisplayedOrder >= effectiveTotalQuestions
+                                : activeDisplayedOrder >= (snapshot?.current_question_index || 1))
+                            }
+                            onClick={handleReviewNextQuestion}
+                            className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1"
+                            title="Xem kết quả câu hỏi sau"
+                          >
+                            Câu Sau →
+                          </button>
+                        </div>
+
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <span className="bg-slate-100 px-2.5 py-1 rounded-lg font-semibold text-slate-700">
-                            {questionResults.question_type === 'single_choice' && 'Trắc nghiệm 1 đáp án'}
-                            {questionResults.question_type === 'multiple_choice' && 'Trắc nghiệm nhiều đáp án'}
-                            {questionResults.question_type === 'true_false' && 'Đúng / Sai'}
-                            {questionResults.question_type === 'short_answer' && 'Tự luận ngắn'}
+                            {activeDisplayedResults.question_type === 'single_choice' && 'Trắc nghiệm 1 đáp án'}
+                            {activeDisplayedResults.question_type === 'multiple_choice' && 'Trắc nghiệm nhiều đáp án'}
+                            {activeDisplayedResults.question_type === 'true_false' && 'Đúng / Sai'}
+                            {activeDisplayedResults.question_type === 'short_answer' && 'Tự luận ngắn'}
                           </span>
                           <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold">
-                            {questionResults.points} điểm
+                            {activeDisplayedResults.points} điểm
                           </span>
                         </div>
                       </div>
 
                       <h3 className="text-lg sm:text-xl font-bold text-slate-800 pt-1">
-                        {questionResults.question_text}
+                        {activeDisplayedResults.question_text}
                       </h3>
                     </div>
 
@@ -1615,10 +1787,10 @@ export function CompetitionHostPage() {
                       <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
                         <span className="text-xs text-slate-500 font-medium block">Số bài nộp</span>
                         <span className="text-xl font-black text-slate-800 mt-1 block">
-                          {questionResults.submitted_count} <span className="text-xs font-semibold text-slate-400">/ {questionResults.total_eligible}</span>
+                          {activeDisplayedResults.submitted_count} <span className="text-xs font-semibold text-slate-400">/ {activeDisplayedResults.total_eligible}</span>
                         </span>
                         <span className="text-[11px] text-slate-400 block mt-0.5">
-                          Chưa nộp: {questionResults.unanswered_count}
+                          Chưa nộp: {activeDisplayedResults.unanswered_count}
                         </span>
                       </div>
 
@@ -1628,7 +1800,7 @@ export function CompetitionHostPage() {
                           <CheckCircle2 className="w-3.5 h-3.5" /> Trả lời đúng
                         </span>
                         <span className="text-xl font-black text-emerald-800 mt-1 block">
-                          {questionResults.correct_count}
+                          {activeDisplayedResults.correct_count}
                         </span>
                         <span className="text-[11px] text-emerald-600 block mt-0.5">
                           Thí sinh đạt điểm
@@ -1641,7 +1813,7 @@ export function CompetitionHostPage() {
                           <XCircle className="w-3.5 h-3.5" /> Trả lời sai
                         </span>
                         <span className="text-xl font-black text-red-800 mt-1 block">
-                          {questionResults.incorrect_count}
+                          {activeDisplayedResults.incorrect_count}
                         </span>
                         <span className="text-[11px] text-red-600 block mt-0.5">
                           Chưa có điểm
@@ -1652,19 +1824,19 @@ export function CompetitionHostPage() {
                       <div className="p-4 bg-sky-50 rounded-xl border border-sky-200">
                         <span className="text-xs text-sky-700 font-medium block">Tỷ lệ đúng</span>
                         <span className="text-xl font-black text-sky-800 mt-1 block">
-                          {questionResults.correct_percentage}%
+                          {activeDisplayedResults.correct_percentage}%
                         </span>
                         <div className="w-full bg-sky-200 rounded-full h-1.5 mt-1.5 overflow-hidden">
                           <div
                             className="bg-sky-600 h-full rounded-full transition-all duration-500"
-                            style={{ width: `${Math.min(100, questionResults.correct_percentage)}%` }}
+                            style={{ width: `${Math.min(100, activeDisplayedResults.correct_percentage)}%` }}
                           />
                         </div>
                       </div>
                     </div>
 
                     {/* Answer Distribution Bars */}
-                    {questionResults.question_type !== 'short_answer' && Array.isArray(questionResults.distribution) && (
+                    {activeDisplayedResults.question_type !== 'short_answer' && Array.isArray(activeDisplayedResults.distribution) && (
                       <div className="space-y-4 pt-2">
                         <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
                           <PieChart className="w-4 h-4 text-amber-500" />
@@ -1672,7 +1844,7 @@ export function CompetitionHostPage() {
                         </h4>
 
                         <div className="space-y-3">
-                          {questionResults.distribution.map((opt, optIdx) => {
+                          {activeDisplayedResults.distribution.map((opt, optIdx) => {
                             const labelChar = String.fromCharCode(65 + optIdx);
                             const isCorrect = opt.is_correct_option;
 
@@ -1732,14 +1904,14 @@ export function CompetitionHostPage() {
                     )}
 
                     {/* Short Answer Notice */}
-                    {questionResults.question_type === 'short_answer' && (
+                    {activeDisplayedResults.question_type === 'short_answer' && (
                       <div className="p-4 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-xs space-y-1">
                         <p className="font-bold flex items-center gap-1.5">
                           <CheckCircle className="w-4 h-4 text-sky-600" />
                           Câu hỏi dạng tự luận ngắn
                         </p>
                         <p className="text-sky-700">
-                          Đã ghi nhận {questionResults.submitted_count} lượt nộp câu trả lời ({questionResults.correct_count} đúng, {questionResults.incorrect_count} sai). Hệ thống bảo mật không công khai nội dung chi tiết từng bài làm.
+                          Đã ghi nhận {activeDisplayedResults.submitted_count} lượt nộp câu trả lời ({activeDisplayedResults.correct_count} đúng, {activeDisplayedResults.incorrect_count} sai). Hệ thống bảo mật không công khai nội dung chi tiết từng bài làm.
                         </p>
                       </div>
                     )}
@@ -1758,15 +1930,41 @@ export function CompetitionHostPage() {
                         Xem Bảng Xếp Hạng
                       </button>
 
-                      <button
-                        type="button"
-                        disabled={actionPending}
-                        onClick={handleNextQuestion}
-                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
-                      >
-                        <SkipForward className="w-4 h-4" />
-                        Câu Tiếp Theo
-                      </button>
+                      {isReviewingHistory ? (
+                        <button
+                          type="button"
+                          onClick={handleReturnToCurrentQuestion}
+                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md transition"
+                        >
+                          <ArrowRight className="w-4 h-4 rotate-180" />
+                          Trở Về Câu Hiện Tại
+                        </button>
+                      ) : isFinalQuestion ? (
+                        <button
+                          type="button"
+                          disabled={actionPending}
+                          onClick={() => setConfirmModal({
+                            type: 'finish',
+                            title: 'Xác nhận kết thúc phòng thi',
+                            message: 'Đây là câu cuối cùng. Bạn có muốn kết thúc trận đấu và tính bảng xếp hạng chung cuộc không?',
+                            onConfirm: handleFinishSession
+                          })}
+                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          Kết Thúc Trận
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={actionPending}
+                          onClick={handleNextQuestion}
+                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
+                        >
+                          <SkipForward className="w-4 h-4" />
+                          Câu Tiếp Theo
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -1775,7 +1973,7 @@ export function CompetitionHostPage() {
                       <Clock className="w-6 h-6" />
                     </div>
                     <h3 className="text-base font-bold text-slate-800">
-                      {isResultsLoading ? 'Đang tải kết quả câu hỏi...' : 'Câu hỏi đang diễn ra hoặc chưa có kết quả'}
+                      {isResultsLoading || isHistoricalResultsLoading ? 'Đang tải kết quả câu hỏi...' : 'Câu hỏi đang diễn ra hoặc chưa có kết quả'}
                     </h3>
                     <p className="text-xs text-slate-500 max-w-md mx-auto">
                       Kết quả và biểu đồ phân bổ đáp án sẽ tự động mở khi hết thời gian đếm ngược hoặc khi Host bấm "Kết Thúc Câu".
@@ -1784,10 +1982,10 @@ export function CompetitionHostPage() {
                       <button
                         type="button"
                         onClick={() => fetchResultsSafely(activeSessionId)}
-                        disabled={isResultsLoading}
+                        disabled={isResultsLoading || isHistoricalResultsLoading}
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 text-white font-bold text-xs hover:bg-amber-600 shadow-sm transition disabled:opacity-50"
                       >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isResultsLoading ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`w-3.5 h-3.5 ${(isResultsLoading || isHistoricalResultsLoading) ? 'animate-spin' : ''}`} />
                         Kiểm Tra &amp; Mở Kết Quả
                       </button>
                     </div>
@@ -1872,15 +2070,32 @@ export function CompetitionHostPage() {
                     Quay Lại Bàn Điều Khiển
                   </button>
 
-                  <button
-                    type="button"
-                    disabled={actionPending}
-                    onClick={handleNextQuestion}
-                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                    Câu Tiếp Theo
-                  </button>
+                  {isFinalQuestion ? (
+                    <button
+                      type="button"
+                      disabled={actionPending}
+                      onClick={() => setConfirmModal({
+                        type: 'finish',
+                        title: 'Xác nhận kết thúc phòng thi',
+                        message: 'Đây là câu cuối cùng. Bạn có muốn kết thúc trận đấu và tính bảng xếp hạng chung cuộc không?',
+                        onConfirm: handleFinishSession
+                      })}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      Kết Thúc Trận
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={actionPending}
+                      onClick={handleNextQuestion}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
+                    >
+                      <SkipForward className="w-4 h-4" />
+                      Câu Tiếp Theo
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -2383,7 +2598,7 @@ export function CompetitionHostPage() {
         {/* ============================================================ */}
         {/* LEADERBOARD DRAWER / PANEL (Quick Host Modal)                */}
         {/* ============================================================ */}
-        {isLeaderboardOpen && activeSessionId && currentStatus !== 'finished' && (
+        {isLeaderboardOpen && hostViewMode !== 'LEADERBOARD' && activeSessionId && currentStatus !== 'finished' && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">

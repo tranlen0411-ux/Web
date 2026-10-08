@@ -308,6 +308,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
         return 'Quá nhiều lần thử thất bại. Vui lòng đợi 15 phút.';
       case 'ALREADY_ANSWERED':
         return 'Bạn đã nộp câu trả lời cho câu hỏi này rồi.';
+      case 'ANSWER_TOO_LATE':
+        return 'Đã hết thời gian nộp bài cho câu hỏi này.';
       case 'SESSION_PAUSED':
         return 'Phòng thi đang tạm dừng.';
       case 'SESSION_CLOSED':
@@ -739,6 +741,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     }
   };
 
+  const isTimeExpired = timeLeftSeconds !== null && timeLeftSeconds <= 0;
+
   // Handle Submit Answer with Stale, Question Advance, & Terminal Guards
   const handleSubmitAnswer = async () => {
     if (
@@ -746,7 +750,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       isSubmitting ||
       hasSubmittedCurrentQuestion ||
       !currentQuestion?.id ||
-      sessionData?.status !== 'in_progress'
+      sessionData?.status !== 'in_progress' ||
+      isTimeExpired
     ) {
       return;
     }
@@ -1601,7 +1606,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                   currentQuestion.options.map((option, idx) => {
                     const isSelected = selectedOptionId === option.id;
                     const letter = getOptionLetter(idx);
-                    const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused;
+                    const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
 
                     return (
                       <button
@@ -1671,13 +1676,22 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                 <button
                   type="button"
                   onClick={handleSubmitAnswer}
-                  disabled={!selectedOptionId || isSubmitting || isPaused}
-                  className="w-full py-4 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-lg rounded-2xl shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 active:scale-[0.99]"
+                  disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
+                  className={`w-full py-4 px-6 font-black text-lg rounded-2xl shadow-md transition-all flex items-center justify-center gap-3 active:scale-[0.99] ${
+                    isTimeExpired
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-2 border-slate-300'
+                      : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed'
+                  }`}
                 >
                   {isSubmitting ? (
                     <>
                       <RefreshCw className="w-6 h-6 animate-spin" />
                       <span>Đang nộp câu trả lời...</span>
+                    </>
+                  ) : isTimeExpired ? (
+                    <>
+                      <Clock className="w-6 h-6" />
+                      <span>Đã Hết Thời Gian</span>
                     </>
                   ) : (
                     <>
