@@ -36,6 +36,7 @@ import {
   hostFinishSession,
   hostCancelSession,
   hostCloseQuestion,
+  getHostSessionMetadata,
   getHostQuestionResults,
   getHostQuestionResultByOrder,
   getLeaderboardSnapshot
@@ -341,11 +342,47 @@ export function CompetitionHostPage() {
     }
   }, [currentQuestionId]);
 
+  // Single-fetch session metadata (authoritative total_questions) on session establishment/restoration
+  useEffect(() => {
+    let isSubscribed = true;
+    if (!activeSessionId || !isValidSessionUUID(activeSessionId)) {
+      setAuthoritativeTotalQuestions(null);
+      return;
+    }
+
+    // Reset when switching to a different session until fresh authoritative metadata arrives
+    setAuthoritativeTotalQuestions(null);
+
+    getHostSessionMetadata(activeSessionId)
+      .then((res) => {
+        if (isSubscribed && res?.success && res?.data?.total_questions) {
+          setAuthoritativeTotalQuestions(res.data.total_questions);
+        }
+      })
+      .catch(() => {
+        // Fail-closed without busy looping
+      });
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [activeSessionId]);
+
   // Determine current active state
   const currentStatus = snapshot?.status || (activeSessionId ? 'waiting' : 'setup');
 
-  const effectiveTotalQuestions = authoritativeTotalQuestions || createdQuestionCount || questions.length || 1;
-  const isFinalQuestion = Number(snapshot?.current_question_index) >= Number(effectiveTotalQuestions);
+  const hasAuthoritativeTotal =
+    Number.isInteger(Number(authoritativeTotalQuestions)) &&
+    Number(authoritativeTotalQuestions) > 0;
+
+  const isFinalQuestion =
+    hasAuthoritativeTotal &&
+    Number(snapshot?.current_question_index) >= Number(authoritativeTotalQuestions);
+
+  const effectiveTotalQuestions = hasAuthoritativeTotal
+    ? Number(authoritativeTotalQuestions)
+    : (createdQuestionCount && createdQuestionCount > 0 ? createdQuestionCount : (questions?.length || 1));
+
   const isReviewingHistory = Boolean(
     reviewedQuestionOrder !== null &&
     (snapshot?.status === 'finished' || (snapshot?.current_question_index && reviewedQuestionOrder < snapshot.current_question_index))

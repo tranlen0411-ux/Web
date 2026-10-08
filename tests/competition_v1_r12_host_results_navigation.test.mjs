@@ -326,8 +326,10 @@ test('COMPETITION V1 R12 — BACKEND PGLITE SECURITY & LOGIC TESTS', async (t) =
     assert.equal(data.question_order, 1);
   });
 
-  await t.test('10. Finished session => all session questions readable', async () => {
+  await t.test('10. Finished session => all played session questions readable', async () => {
     await setAuthContext(hostId, 'authenticated');
+    // Move to question 3 before finishing session
+    await db.query(`SELECT public.competition_host_next_question('${sessionId}') AS res;`);
     // Finish session
     await db.query(`SELECT public.competition_host_finish_session('${sessionId}') AS res;`);
 
@@ -403,6 +405,258 @@ test('COMPETITION V1 R12 — BACKEND PGLITE SECURITY & LOGIC TESTS', async (t) =
     assert.deepEqual(beforeScores, afterScores, 'Scores must not be mutated');
     assert.deepEqual(beforeAnswers, afterAnswers, 'Answers must not be mutated');
     assert.deepEqual(beforeSession, afterSession, 'Session state must not be mutated');
+  });
+
+  // ============================================================================
+  // DIRECT REVIEW BLOCKER 1 — F5 TOTAL QUESTIONS
+  // ============================================================================
+  await t.test('BLOCKER 1: F5 Total Questions & Host Session Metadata RPC', async () => {
+    await setAuthContext(hostId, 'authenticated');
+    const create5Res = await db.query(`
+      SELECT public.competition_host_create_session(
+        'Đấu Trường 5 Câu',
+        'Mô tả phòng thi',
+        'individual',
+        50,
+        '[
+          {"question_order": 1, "question_text": "Câu 1", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o1a", "text": "A"}, {"id": "o1b", "text": "B"}], "correct_answer": {"option_id": "o1a"}},
+          {"question_order": 2, "question_text": "Câu 2", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o2a", "text": "A"}, {"id": "o2b", "text": "B"}], "correct_answer": {"option_id": "o2a"}},
+          {"question_order": 3, "question_text": "Câu 3", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o3a", "text": "A"}, {"id": "o3b", "text": "B"}], "correct_answer": {"option_id": "o3a"}},
+          {"question_order": 4, "question_text": "Câu 4", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o4a", "text": "A"}, {"id": "o4b", "text": "B"}], "correct_answer": {"option_id": "o4a"}},
+          {"question_order": 5, "question_text": "Câu 5", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o5a", "text": "A"}, {"id": "o5b", "text": "B"}], "correct_answer": {"option_id": "o5a"}}
+        ]'::jsonb,
+        '[]'::jsonb,
+        false,
+        '{}'::jsonb,
+        true
+      ) AS res;
+    `);
+    const sess5 = create5Res.rows[0].res.session;
+    const sess5Id = sess5.id;
+
+    // Start session => Q1
+    await db.query(`SELECT public.competition_host_start_session('${sess5Id}') AS res;`);
+    // Next => Q2
+    await db.query(`SELECT public.competition_host_next_question('${sess5Id}') AS res;`);
+    // Next => Q3
+    await db.query(`SELECT public.competition_host_next_question('${sess5Id}') AS res;`);
+
+    // Simulate Host F5 / restore: Call competition_host_get_session_metadata
+    const metaRes = await db.query(`
+      SELECT public.competition_host_get_session_metadata('${sess5Id}') AS res;
+    `);
+    const meta = metaRes.rows[0].res;
+    assert.equal(meta.success, true);
+    assert.equal(meta.total_questions, 5);
+    assert.equal(meta.current_question_index, 3);
+
+    // Verify security: Unrelated teacher denied, student denied, anon denied
+    await setAuthContext(otherTeacherId, 'authenticated');
+    const deniedTeacher = await db.query(`SELECT public.competition_host_get_session_metadata('${sess5Id}') AS res;`);
+    assert.equal(deniedTeacher.rows[0].res.success, false);
+    assert.equal(deniedTeacher.rows[0].res.error_code, 'UNAUTHORIZED_ACCESS');
+
+    await setAuthContext(studentId, 'authenticated');
+    const deniedStudent = await db.query(`SELECT public.competition_host_get_session_metadata('${sess5Id}') AS res;`);
+    assert.equal(deniedStudent.rows[0].res.success, false);
+    assert.equal(deniedStudent.rows[0].res.error_code, 'UNAUTHORIZED_ACCESS');
+
+    await setAuthContext(null, 'anon');
+    const deniedAnon = await db.query(`SELECT public.competition_host_get_session_metadata('${sess5Id}') AS res;`);
+    assert.equal(deniedAnon.rows[0].res.success, false);
+    assert.equal(deniedAnon.rows[0].res.error_code, 'UNAUTHORIZED_ACCESS');
+
+    // Host checks isFinalQuestion logic at Q3
+    await setAuthContext(hostId, 'authenticated');
+    const hasAuthoritativeTotal = Number.isInteger(Number(meta.total_questions)) && Number(meta.total_questions) > 0;
+    const isFinalAtQ3 = hasAuthoritativeTotal && Number(meta.current_question_index) >= Number(meta.total_questions);
+    assert.equal(isFinalAtQ3, false, 'Question 3 out of 5 must NOT be final');
+
+    // Advance to Q4 and Q5
+    await db.query(`SELECT public.competition_host_next_question('${sess5Id}') AS res;`);
+    await db.query(`SELECT public.competition_host_next_question('${sess5Id}') AS res;`);
+
+    const metaQ5Res = await db.query(`SELECT public.competition_host_get_session_metadata('${sess5Id}') AS res;`);
+    const metaQ5 = metaQ5Res.rows[0].res;
+    assert.equal(metaQ5.current_question_index, 5);
+    const isFinalAtQ5 = hasAuthoritativeTotal && Number(metaQ5.current_question_index) >= Number(metaQ5.total_questions);
+    assert.equal(isFinalAtQ5, true, 'Question 5 out of 5 MUST be final');
+  });
+
+  // ============================================================================
+  // DIRECT REVIEW BLOCKER 2 — LATE JOINER (Snapshot Immutability against Late Joins)
+  // ============================================================================
+  let lateSessId;
+  await t.test('BLOCKER 2: Late joiner does not alter historical eligible/unanswered counts', async () => {
+    await setAuthContext(hostId, 'authenticated');
+    const createRes2 = await db.query(`
+      SELECT public.competition_host_create_session(
+        'Đấu Trường Late Joiner',
+        'Mô tả phòng thi',
+        'individual',
+        50,
+        '[
+          {"question_order": 1, "question_text": "Q1", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o1a", "text": "A"}, {"id": "o1b", "text": "B"}], "correct_answer": {"option_id": "o1a"}},
+          {"question_order": 2, "question_text": "Q2", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o2a", "text": "A"}, {"id": "o2b", "text": "B"}], "correct_answer": {"option_id": "o2a"}}
+        ]'::jsonb,
+        '[]'::jsonb,
+        false,
+        '{}'::jsonb,
+        true
+      ) AS res;
+    `);
+    const lateSess = createRes2.rows[0].res.session;
+    lateSessId = lateSess.id;
+    const lateRoomCode = lateSess.room_code;
+
+    const userA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const userB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const userC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+    await db.exec(`
+      INSERT INTO auth.users (id, email) VALUES
+        ('${userA}', 'a@school.vn'),
+        ('${userB}', 'b@school.vn'),
+        ('${userC}', 'c@school.vn')
+      ON CONFLICT (id) DO NOTHING;
+
+      INSERT INTO public.profiles (id, role, full_name) VALUES
+        ('${userA}', 'student', 'Học Sinh A'),
+        ('${userB}', 'student', 'Học Sinh B'),
+        ('${userC}', 'student', 'Học Sinh C')
+      ON CONFLICT (id) DO NOTHING;
+    `);
+
+    // A and B join session
+    await setAuthContext(userA, 'authenticated');
+    const pA = (await db.query(`SELECT public.competition_join_session('${lateRoomCode}', 'Học Sinh A') AS res;`)).rows[0].res.participant.id;
+    await setAuthContext(userB, 'authenticated');
+    await db.query(`SELECT public.competition_join_session('${lateRoomCode}', 'Học Sinh B') AS res;`);
+
+    // Host starts session (Q1)
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_start_session('${lateSessId}') AS res;`);
+
+    // A submits answer for Q1, B does not submit
+    const q1 = (await db.query(`SELECT id FROM public.competition_questions WHERE session_id = '${lateSessId}' AND question_order = 1;`)).rows[0];
+    await setAuthContext(userA, 'authenticated');
+    await db.query(`
+      SELECT public.competition_submit_answer('${lateSessId}'::UUID, '${q1.id}'::UUID, '${pA}'::UUID, null::TEXT, '["o1a"]'::jsonb, null::TEXT);
+    `);
+
+    // Host closes Q1
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_close_question('${lateSessId}') AS res;`);
+
+    // Read Q1 initial snapshot
+    const q1ResBefore = (await db.query(`SELECT public.competition_host_get_question_result_by_order('${lateSessId}', 1) AS res;`)).rows[0].res;
+    assert.equal(q1ResBefore.success, true);
+    assert.equal(q1ResBefore.total_eligible, 2, 'Initially 2 participants were eligible');
+    assert.equal(q1ResBefore.submitted_count, 1);
+    assert.equal(q1ResBefore.unanswered_count, 1);
+
+    // Now Participant C joins AFTER Q1 closed
+    await setAuthContext(userC, 'authenticated');
+    await db.query(`SELECT public.competition_join_session('${lateRoomCode}', 'Học Sinh C') AS res;`);
+
+    // Host transitions to Q2
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_next_question('${lateSessId}') AS res;`);
+
+    // Fetch historical result for Q1 again
+    const q1ResAfter = (await db.query(`SELECT public.competition_host_get_question_result_by_order('${lateSessId}', 1) AS res;`)).rows[0].res;
+    assert.equal(q1ResAfter.success, true);
+    assert.equal(q1ResAfter.total_eligible, 2, 'Historical Q1 total_eligible MUST remain 2, not 3');
+    assert.equal(q1ResAfter.submitted_count, 1);
+    assert.equal(q1ResAfter.unanswered_count, 1, 'Historical Q1 unanswered_count MUST remain 1');
+  });
+
+  // ============================================================================
+  // DIRECT REVIEW BLOCKER 3 — POST-CLOSE KICK / STATUS CHANGE
+  // ============================================================================
+  await t.test('BLOCKER 3: Post-close participant kick/status change does not mutate historical snapshot', async () => {
+    await setAuthContext(hostId, 'authenticated');
+    // Using the previous session (lateSessId), kick participant B who was in Q1
+    await db.exec(`
+      UPDATE public.competition_participants
+      SET status = 'kicked'
+      WHERE session_id = '${lateSessId}' AND display_name = 'Học Sinh B';
+    `);
+
+    // Read Q1 historical result
+    const q1ResPostKick = (await db.query(`SELECT public.competition_host_get_question_result_by_order('${lateSessId}', 1) AS res;`)).rows[0].res;
+    assert.equal(q1ResPostKick.success, true);
+    assert.equal(q1ResPostKick.total_eligible, 2, 'Historical snapshot must stay 2 even after B is kicked');
+    assert.equal(q1ResPostKick.unanswered_count, 1, 'Historical snapshot unanswered count must stay 1');
+  });
+
+  // ============================================================================
+  // DIRECT REVIEW BLOCKER 4 — NATURAL EXPIRY SNAPSHOT MATERIALIZATION
+  // ============================================================================
+  let expSessId;
+  await t.test('BLOCKER 4: Natural deadline expiry materializes snapshot on next_question transition', async () => {
+    await setAuthContext(hostId, 'authenticated');
+    const createRes3 = await db.query(`
+      SELECT public.competition_host_create_session(
+        'Đấu Trường Natural Expiry',
+        'Mô tả phòng thi',
+        'individual',
+        50,
+        '[
+          {"question_order": 1, "question_text": "Q1 Expire", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o1a", "text": "A"}, {"id": "o1b", "text": "B"}], "correct_answer": {"option_id": "o1a"}},
+          {"question_order": 2, "question_text": "Q2", "question_type": "single_choice", "points": 10.0, "time_limit_seconds": 30, "options": [{"id": "o2a", "text": "A"}, {"id": "o2b", "text": "B"}], "correct_answer": {"option_id": "o2a"}}
+        ]'::jsonb,
+        '[]'::jsonb,
+        false,
+        '{}'::jsonb,
+        true
+      ) AS res;
+    `);
+    expSessId = createRes3.rows[0].res.session.id;
+
+    // Start session (Q1)
+    await db.query(`SELECT public.competition_host_start_session('${expSessId}') AS res;`);
+
+    // Simulate natural deadline expiration in DB without host_close_question
+    await db.exec(`
+      UPDATE public.competition_sessions
+      SET question_deadline = now() - INTERVAL '5 seconds'
+      WHERE id = '${expSessId}';
+    `);
+
+    // Host calls host_next_question directly without calling host_close_question
+    await db.query(`SELECT public.competition_host_next_question('${expSessId}') AS res;`);
+
+    // Check that snapshot row exists in database for Q1
+    const snapshotRows = (await db.query(`
+      SELECT * FROM public.competition_question_result_snapshots
+      WHERE session_id = '${expSessId}' AND question_order = 1;
+    `)).rows;
+    assert.equal(snapshotRows.length, 1, 'Snapshot for naturally expired Q1 must be materialized during transition');
+
+    // Historical RPC returns Q1 result
+    const histRes = (await db.query(`SELECT public.competition_host_get_question_result_by_order('${expSessId}', 1) AS res;`)).rows[0].res;
+    assert.equal(histRes.success, true);
+    assert.equal(histRes.question_closed, true);
+    assert.equal(histRes.question_order, 1);
+  });
+
+  // ============================================================================
+  // DIRECT REVIEW BLOCKER 5 — IDEMPOTENCY
+  // ============================================================================
+  await t.test('BLOCKER 5: Snapshot creation is strictly idempotent with zero duplication or count drift', async () => {
+    await setAuthContext(hostId, 'authenticated');
+    for (let i = 0; i < 5; i++) {
+      await db.query(`SELECT public.competition_host_get_question_result_by_order('${expSessId}', 1);`);
+    }
+
+    const countRows = (await db.query(`
+      SELECT count(*)::INT AS total_rows
+      FROM public.competition_question_result_snapshots
+      WHERE session_id = '${expSessId}' AND question_order = 1;
+    `)).rows[0];
+
+    assert.equal(countRows.total_rows, 1, 'Only 1 snapshot row can exist per question');
   });
 });
 
