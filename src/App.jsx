@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SoundProvider } from './context/SoundContext';
 import { Navbar } from './components/common/Navbar';
@@ -15,6 +15,7 @@ import { MaterialsView } from './pages/MaterialsView';
 import { Phase2DeviceTestHarnessPage } from './pages/Phase2DeviceTestHarnessPage';
 import { CompetitionHostPage } from './pages/CompetitionHostPage';
 import { CompetitionStudentPage } from './pages/CompetitionStudentPage';
+import { CompetitionSpectatorPage } from './pages/CompetitionSpectatorPage';
 
 // Cờ kiểm tra môi trường kích hoạt test harness
 const isHarnessEnabled = Boolean(
@@ -91,9 +92,12 @@ const HomeDispatcher = () => {
 };
 
 function AppRoutes() {
+  const location = useLocation();
+  const isSpectator = location.pathname.startsWith('/competition/spectator');
+
   return (
-    <div className="min-h-screen flex flex-col justify-between bg-amber-50/60 font-sans">
-      <Navbar />
+    <div className={`min-h-screen flex flex-col justify-between ${isSpectator ? 'bg-slate-950 text-slate-100' : 'bg-amber-50/60 font-sans'}`}>
+      {!isSpectator && <Navbar />}
 
       <main className="flex-grow">
         <Routes>
@@ -139,6 +143,15 @@ function AppRoutes() {
             }
           />
 
+                    <Route
+            path="/competition/spectator"
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'teacher']}>
+                <CompetitionSpectatorPage />
+              </ProtectedRoute>
+            }
+          />
+
           <Route
             path="/competition/host"
             element={
@@ -164,7 +177,7 @@ function AppRoutes() {
         </Routes>
       </main>
 
-      <Footer />
+      {!isSpectator && <Footer />}
     </div>
   );
 }
