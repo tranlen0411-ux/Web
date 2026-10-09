@@ -2,9 +2,10 @@ import React from 'react';
 import { Trophy } from 'lucide-react';
 
 export function SpectatorLeaderboardView({ leaderboard = [] }) {
-  const rank1 = leaderboard.filter((p) => Number(p.rank) === 1);
-  const rank2 = leaderboard.filter((p) => Number(p.rank) === 2);
-  const rank3 = leaderboard.filter((p) => Number(p.rank) === 3);
+  const safeLeaderboard = Array.isArray(leaderboard) ? leaderboard : [];
+  const rank1 = safeLeaderboard.filter((p) => Number(p.rank) === 1);
+  const rank2 = safeLeaderboard.filter((p) => Number(p.rank) === 2);
+  const rank3 = safeLeaderboard.filter((p) => Number(p.rank) === 3);
 
   const hasPodium = rank1.length > 0 || rank2.length > 0 || rank3.length > 0;
 
@@ -109,14 +110,14 @@ export function SpectatorLeaderboardView({ leaderboard = [] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-medium text-sm sm:text-base">
-            {leaderboard.length === 0 ? (
+            {safeLeaderboard.length === 0 ? (
               <tr>
                 <td colSpan={4} className="py-8 text-center text-slate-500 italic">
                   Chưa có dữ liệu bảng xếp hạng...
                 </td>
               </tr>
             ) : (
-              leaderboard.slice(0, 10).map((row, idx) => {
+              safeLeaderboard.slice(0, 10).map((row, idx) => {
                 const numericRank = Number(row.rank);
                 const isTop3 = numericRank <= 3;
                 return (

@@ -140,8 +140,14 @@ export function CompetitionSpectatorPage() {
         if (settled[1].status === 'fulfilled' && settled[1].value?.success) {
           setSubmissionStats(settled[1].value.data);
         }
-        if (settled[2].status === 'fulfilled' && settled[2].value?.success) {
-          setLeaderboard(settled[2].value.data || []);
+        if (
+          settled[2].status === 'fulfilled' &&
+          settled[2].value?.success &&
+          Array.isArray(settled[2].value.data?.leaderboard)
+        ) {
+          setLeaderboard(settled[2].value.data.leaderboard);
+        } else {
+          setLeaderboard([]);
         }
         if (settled[3].status === 'fulfilled' && settled[3].value?.success) {
           setParticipants(settled[3].value.data || []);
@@ -160,8 +166,14 @@ export function CompetitionSpectatorPage() {
         ]);
         if (!isMountedRef.current || currentRequestId !== activeRequestIdRef.current) return;
 
-        if (lbRes.status === 'fulfilled' && lbRes.value?.success) {
-          setLeaderboard(lbRes.value.data || []);
+        if (
+          lbRes.status === 'fulfilled' &&
+          lbRes.value?.success &&
+          Array.isArray(lbRes.value.data?.leaderboard)
+        ) {
+          setLeaderboard(lbRes.value.data.leaderboard);
+        } else {
+          setLeaderboard([]);
         }
         if (partRes.status === 'fulfilled' && partRes.value?.success) {
           setParticipants(partRes.value?.data || []);

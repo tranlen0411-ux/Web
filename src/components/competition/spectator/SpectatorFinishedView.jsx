@@ -2,9 +2,10 @@
 import { Trophy, Medal } from 'lucide-react';
 
 export function SpectatorFinishedView({ leaderboard = [] }) {
-  const rank1Winners = leaderboard.filter((p) => p.rank === 1);
-  const rank2Winners = leaderboard.filter((p) => p.rank === 2);
-  const rank3Winners = leaderboard.filter((p) => p.rank === 3);
+  const safeLeaderboard = Array.isArray(leaderboard) ? leaderboard : [];
+  const rank1Winners = safeLeaderboard.filter((p) => p.rank === 1);
+  const rank2Winners = safeLeaderboard.filter((p) => p.rank === 2);
+  const rank3Winners = safeLeaderboard.filter((p) => p.rank === 3);
 
   return (
     <div className="w-full max-w-6xl mx-auto space-y-8 text-center animate-fade-in">
@@ -79,7 +80,7 @@ export function SpectatorFinishedView({ leaderboard = [] }) {
           Bảng Điểm Tổng Hợp Cuối Cùng
         </h4>
         <div className="space-y-2 max-h-60 overflow-y-auto">
-          {leaderboard.map((row) => (
+          {safeLeaderboard.map((row) => (
             <div
               key={row.participant_id}
               className="flex items-center justify-between p-3 rounded-xl bg-slate-800/60 border border-slate-700/60"

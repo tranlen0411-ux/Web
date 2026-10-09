@@ -29,9 +29,10 @@ function isValidUUID(v) {
 
 // Logic helper simulating SpectatorLeaderboardView rank filtering
 function getPodiumGroups(leaderboard = []) {
-  const rank1 = leaderboard.filter((p) => Number(p.rank) === 1);
-  const rank2 = leaderboard.filter((p) => Number(p.rank) === 2);
-  const rank3 = leaderboard.filter((p) => Number(p.rank) === 3);
+  const safeLeaderboard = Array.isArray(leaderboard) ? leaderboard : [];
+  const rank1 = safeLeaderboard.filter((p) => Number(p.rank) === 1);
+  const rank2 = safeLeaderboard.filter((p) => Number(p.rank) === 2);
+  const rank3 = safeLeaderboard.filter((p) => Number(p.rank) === 3);
   return { rank1, rank2, rank3 };
 }
 
@@ -178,9 +179,9 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     await t.test('15 & 25. finished ceremony podium handles tie rank 1 safely', () => {
       assert.match(finishedViewContent, /KẾT QUẢ CHUNG CUỘC/);
       assert.match(finishedViewContent, /Vinh Danh Nhà Vô Địch/);
-      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 1)'));
-      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 2)'));
-      assert.ok(finishedViewContent.includes('leaderboard.filter((p) => p.rank === 3)'));
+      assert.ok(finishedViewContent.includes('filter((p) => p.rank === 1)'));
+      assert.ok(finishedViewContent.includes('filter((p) => p.rank === 2)'));
+      assert.ok(finishedViewContent.includes('filter((p) => p.rank === 3)'));
     });
   });
 
@@ -239,9 +240,9 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
 
     await t.test('E. no find((p) => p.rank === 1) single-winner logic in SpectatorLeaderboardView', () => {
       assert.ok(!leaderboardViewContent.includes('leaderboard.find('), 'Must not use find() for leaderboard podium');
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 1)'), 'Must filter Rank 1');
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 2)'), 'Must filter Rank 2');
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 3)'), 'Must filter Rank 3');
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 1)'), 'Must filter Rank 1');
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 2)'), 'Must filter Rank 2');
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 3)'), 'Must filter Rank 3');
     });
 
     await t.test('F. no index-based re-ranking or client sorting', () => {
@@ -405,9 +406,9 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     });
 
     await t.test('11. Leaderboard podium tie handling unchanged', () => {
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 1)'));
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 2)'));
-      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 3)'));
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 1)'), 'Must filter Rank 1');
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 2)'), 'Must filter Rank 2');
+      assert.ok(leaderboardViewContent.includes('filter((p) => Number(p.rank) === 3)'), 'Must filter Rank 3');
     });
 
     await t.test('12. Polling lifecycle unchanged with stable dependencies', () => {
@@ -418,6 +419,116 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
       const effectDeps = effectMatch[1].split(',').map(s => s.trim()).filter(Boolean);
       assert.deepStrictEqual(callbackDeps.sort(), ['isValidUUID', 'sessionId'].sort());
       assert.deepStrictEqual(effectDeps.sort(), ['fetchSpectatorData', 'isValidUUID', 'sessionId'].sort());
+    });
+  });
+  await t.test('Group 10: Leaderboard Snapshot Normalization & Defensive Array Invariants (R13 Hotfix)', async (t) => {
+    await t.test('1. active/paused leaderboard extraction uses data.leaderboard', () => {
+      assert.match(
+        spectatorPageContent,
+        /settled\[2\]\.value\?\.success\s*&&\s*Array\.isArray\(settled\[2\]\.value\.data\?\.leaderboard\)\s*\)\s*\{\s*setLeaderboard\(settled\[2\]\.value\.data\.leaderboard\);/
+      );
+    });
+
+    await t.test('2. finished leaderboard extraction uses data.leaderboard', () => {
+      assert.match(
+        spectatorPageContent,
+        /lbRes\.value\?\.success\s*&&\s*Array\.isArray\(lbRes\.value\.data\?\.leaderboard\)\s*\)\s*\{\s*setLeaderboard\(lbRes\.value\.data\.leaderboard\);/
+      );
+    });
+
+    await t.test('3. Spectator never stores entire leaderboard RPC wrapper as leaderboard state', () => {
+      assert.ok(!spectatorPageContent.includes('setLeaderboard(settled[2].value.data || [])'), 'Must not store settled[2].value.data directly');
+      assert.ok(!spectatorPageContent.includes('setLeaderboard(lbRes.value.data || [])'), 'Must not store lbRes.value.data directly');
+      assert.ok(!spectatorPageContent.includes('setLeaderboard(settled[2].value.data)'), 'Must not store wrapper object');
+      assert.ok(!spectatorPageContent.includes('setLeaderboard(lbRes.value.data)'), 'Must not store wrapper object');
+    });
+
+    await t.test('4. invalid/non-array leaderboard payload safely becomes []', () => {
+      function extractLeaderboard(settledResult) {
+        if (
+          settledResult?.status === 'fulfilled' &&
+          settledResult?.value?.success &&
+          Array.isArray(settledResult?.value?.data?.leaderboard)
+        ) {
+          return settledResult.value.data.leaderboard;
+        }
+        return [];
+      }
+
+      assert.deepStrictEqual(extractLeaderboard(null), []);
+      assert.deepStrictEqual(extractLeaderboard({ status: 'rejected' }), []);
+      assert.deepStrictEqual(extractLeaderboard({ status: 'fulfilled', value: { success: false } }), []);
+      assert.deepStrictEqual(extractLeaderboard({ status: 'fulfilled', value: { success: true, data: {} } }), []);
+      assert.deepStrictEqual(extractLeaderboard({ status: 'fulfilled', value: { success: true, data: { leaderboard: null } } }), []);
+      assert.deepStrictEqual(extractLeaderboard({ status: 'fulfilled', value: { success: true, data: { leaderboard: 'invalid' } } }), []);
+      assert.deepStrictEqual(
+        extractLeaderboard({ status: 'fulfilled', value: { success: true, data: { leaderboard: [{ rank: 1, display_name: 'Test' }] } } }),
+        [{ rank: 1, display_name: 'Test' }]
+      );
+    });
+
+    await t.test('5. SpectatorLeaderboardView does not crash with undefined, null, {}, []', () => {
+      assert.match(leaderboardViewContent, /const\s+safeLeaderboard\s*=\s*Array\.isArray\(leaderboard\)\s*\?\s*leaderboard\s*:\s*\[\];/);
+      const testInputs = [undefined, null, {}, [], { leaderboard: [{ rank: 1 }] }, 'string', 123];
+      for (const input of testInputs) {
+        assert.doesNotThrow(() => {
+          const safe = Array.isArray(input) ? input : [];
+          const rank1 = safe.filter((p) => Number(p.rank) === 1);
+          const rank2 = safe.filter((p) => Number(p.rank) === 2);
+          const rank3 = safe.filter((p) => Number(p.rank) === 3);
+          const top10 = safe.slice(0, 10).map((row) => row.rank);
+          assert.ok(Array.isArray(rank1));
+          assert.ok(Array.isArray(rank2));
+          assert.ok(Array.isArray(rank3));
+          assert.ok(Array.isArray(top10));
+        }, 'Input ' + JSON.stringify(input) + ' should not throw in defensive guard');
+      }
+    });
+
+    await t.test('6. backend ranks preserved unchanged', () => {
+      assert.match(leaderboardViewContent, /#{row\.rank}/);
+      assert.match(leaderboardViewContent, /\{row\.total_score \?\? 0\}/);
+      assert.match(leaderboardViewContent, /\{row\.correct_count \?\? 0\}/);
+    });
+
+    await t.test('7. 1,1,3 tie case preserved', () => {
+      const mockData = [
+        { rank: 1, display_name: 'User A', total_score: 100 },
+        { rank: 1, display_name: 'User B', total_score: 100 },
+        { rank: 3, display_name: 'User C', total_score: 80 }
+      ];
+      const { rank1, rank2, rank3 } = getPodiumGroups(mockData);
+      assert.strictEqual(rank1.length, 2);
+      assert.strictEqual(rank2.length, 0);
+      assert.strictEqual(rank3.length, 1);
+    });
+
+    await t.test('8. no frontend sort()', () => {
+      assert.ok(!leaderboardViewContent.includes('.sort('), 'Must not sort leaderboard array on client');
+      assert.ok(!spectatorPageContent.includes('.sort('), 'Must not sort leaderboard array in page');
+    });
+
+    await t.test('9. no index-based ranking', () => {
+      assert.ok(!leaderboardViewContent.includes('rank = index + 1'), 'Must not fabricate sequential index rank');
+      assert.ok(!leaderboardViewContent.includes('idx + 1'), 'Must not display idx + 1 as rank');
+    });
+
+    await t.test('10. finished podium still receives normalized array & safely handles non-array', () => {
+      assert.match(finishedViewContent, /const\s+safeLeaderboard\s*=\s*Array\.isArray\(leaderboard\)\s*\?\s*leaderboard\s*:\s*\[\];/);
+      const testInputs = [undefined, null, {}, [], [{ rank: 1, display_name: 'Winner', total_score: 100 }]];
+      for (const input of testInputs) {
+        assert.doesNotThrow(() => {
+          const safe = Array.isArray(input) ? input : [];
+          const rank1 = safe.filter((p) => p.rank === 1);
+          const rank2 = safe.filter((p) => p.rank === 2);
+          const rank3 = safe.filter((p) => p.rank === 3);
+          const mapped = safe.map((row) => row.display_name);
+          assert.ok(Array.isArray(rank1));
+          assert.ok(Array.isArray(rank2));
+          assert.ok(Array.isArray(rank3));
+          assert.ok(Array.isArray(mapped));
+        });
+      }
     });
   });
 });
