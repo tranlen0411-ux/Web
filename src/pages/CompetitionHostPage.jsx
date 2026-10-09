@@ -9,6 +9,9 @@ import {
   CheckCircle,
   XCircle,
   Plus,
+  BookOpen,
+  FileSpreadsheet,
+  ChevronDown,
   Trash2,
   AlertTriangle,
   RefreshCw,
@@ -46,6 +49,12 @@ import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/us
 import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
 import { HostExportControls } from '../components/competition/HostExportControls.jsx';
 import { HostPrintableReport } from '../components/competition/HostPrintableReport.jsx';
+import { CompetitionQuestionBankModal } from '../components/competition/CompetitionQuestionBankModal.jsx';
+import { CompetitionImportExcelModal } from '../components/competition/CompetitionImportExcelModal.jsx';
+import {
+  reindexCompetitionQuestions,
+  sanitizeQuestionsForCreation
+} from '../utils/competitionQuestionAdapters.js';
 
 // Default starter questions for quick session creation
 const DEFAULT_QUESTIONS = [
@@ -279,6 +288,9 @@ export function CompetitionHostPage() {
   const [maxParticipants, setMaxParticipants] = useState(30);
   const [reviewEnabled, setReviewEnabled] = useState(false);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
+  const [isQuestionBankModalOpen, setIsQuestionBankModalOpen] = useState(false);
+  const [isImportExcelModalOpen, setIsImportExcelModalOpen] = useState(false);
+  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [setupError, setSetupError] = useState(null);
 
   // Polling Hook for Active Session
@@ -713,6 +725,32 @@ export function CompetitionHostPage() {
     setQuestions(updated);
   };
 
+  const handleImportFromBank = (newQuestions) => {
+    if (!Array.isArray(newQuestions) || newQuestions.length === 0) return;
+    const remaining = 5 - questions.length;
+    if (remaining <= 0) {
+      showToast('Đã đạt giới hạn tối đa 5 câu hỏi trong phòng thi.', 'warning');
+      return;
+    }
+    const toAdd = newQuestions.slice(0, remaining);
+    const combined = [...questions, ...toAdd];
+    setQuestions(reindexCompetitionQuestions(combined));
+    showToast(`Đã thêm thành công ${toAdd.length} câu hỏi từ Ngân hàng!`, 'success');
+  };
+
+  const handleImportFromExcel = (newQuestions) => {
+    if (!Array.isArray(newQuestions) || newQuestions.length === 0) return;
+    const remaining = 5 - questions.length;
+    if (remaining <= 0) {
+      showToast('Đã đạt giới hạn tối đa 5 câu hỏi trong phòng thi.', 'warning');
+      return;
+    }
+    const toAdd = newQuestions.slice(0, remaining);
+    const combined = [...questions, ...toAdd];
+    setQuestions(reindexCompetitionQuestions(combined));
+    showToast(`Đã nhập thành công ${toAdd.length} câu hỏi từ file Excel!`, 'success');
+  };
+
   // Submit Handler for Session Creation
   const handleCreateSession = async (e) => {
     e.preventDefault();
@@ -750,21 +788,14 @@ export function CompetitionHostPage() {
 
     setActionPending(true);
     try {
+      const sanitizedQuestions = sanitizeQuestionsForCreation(questions);
       const res = await hostCreateSession({
         title: trimmedTitle,
         description: description.trim() || null,
         mode: 'individual',
         maxParticipants: parseInt(maxParticipants, 10) || 30,
         reviewEnabled: Boolean(reviewEnabled),
-        questions: questions.map((q, idx) => ({
-          question_order: idx + 1,
-          question_text: q.question_text.trim(),
-          question_type: 'single_choice',
-          points: parseFloat(q.points) || 10.00,
-          time_limit_seconds: parseInt(q.time_limit_seconds, 10) || 30,
-          options: q.options.map(opt => ({ id: opt.id, text: opt.text.trim() })),
-          correct_answer: { option_id: q.correct_answer.option_id }
-        }))
+        questions: sanitizedQuestions
       });
 
       if (res.success && res.data?.session?.id) {
@@ -1191,15 +1222,63 @@ export function CompetitionHostPage() {
                   <p className="text-xs text-slate-500 mt-0.5">Mỗi câu hỏi có 4 lựa chọn A, B, C, D và chọn 1 đáp án đúng duy nhất.</p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleAddQuestion}
-                  disabled={questions.length >= 5}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 text-sky-700 font-semibold text-xs hover:bg-sky-100 disabled:opacity-50 transition border border-sky-200"
-                >
-                  <Plus className="w-4 h-4" />
-                  Thêm Câu Hỏi
-                </button>
+                <div className="relative">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
+                      disabled={questions.length >= 5}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 text-white font-semibold text-xs hover:bg-sky-700 disabled:opacity-50 transition shadow-xs"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Thêm Câu Hỏi
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isAddMenuOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+
+                  {isAddMenuOpen && (
+                    <div className="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 z-30 animate-fadeIn">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddMenuOpen(false);
+                          handleAddQuestion();
+                        }}
+                        disabled={questions.length >= 5}
+                        className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-sky-50 hover:text-sky-700 flex items-center gap-2.5 disabled:opacity-40 transition"
+                      >
+                        <Plus className="w-4 h-4 text-sky-500 shrink-0" />
+                        <span>Tạo câu hỏi mới</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddMenuOpen(false);
+                          setIsQuestionBankModalOpen(true);
+                        }}
+                        disabled={questions.length >= 5}
+                        className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-amber-50 hover:text-amber-700 flex items-center gap-2.5 disabled:opacity-40 transition"
+                      >
+                        <BookOpen className="w-4 h-4 text-amber-500 shrink-0" />
+                        <span>Chọn từ Ngân hàng</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddMenuOpen(false);
+                          setIsImportExcelModalOpen(true);
+                        }}
+                        disabled={questions.length >= 5}
+                        className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 flex items-center gap-2.5 disabled:opacity-40 transition"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Nhập từ file Excel</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-6">
@@ -2762,6 +2841,23 @@ export function CompetitionHostPage() {
 
         </div>
       </div>
+
+      {/* R14 Question Source Modals */}
+      <CompetitionQuestionBankModal
+        isOpen={isQuestionBankModalOpen}
+        onClose={() => setIsQuestionBankModalOpen(false)}
+        onImportQuestions={handleImportFromBank}
+        existingQuestions={questions}
+        maxAllowed={5}
+      />
+
+      <CompetitionImportExcelModal
+        isOpen={isImportExcelModalOpen}
+        onClose={() => setIsImportExcelModalOpen(false)}
+        onImportQuestions={handleImportFromExcel}
+        existingQuestions={questions}
+        maxAllowed={5}
+      />
 
       {/* Print Layout (Hidden on Screen, Visible on Print) */}
       {currentStatus === 'finished' && snapshot && (
