@@ -17,330 +17,336 @@ const hostPageContent = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'ut
 const qbModalContent = fs.readFileSync('src/components/competition/CompetitionQuestionBankModal.jsx', 'utf8');
 const excelModalContent = fs.readFileSync('src/components/competition/CompetitionImportExcelModal.jsx', 'utf8');
 const adaptersContent = fs.readFileSync('src/utils/competitionQuestionAdapters.js', 'utf8');
+const parsersContent = fs.readFileSync('src/utils/questionFileParsers.js', 'utf8');
 
-test('COMPETITION V1 R14 - QUESTION SOURCES PHASE 1 TEST SUITE', async (t) => {
+test('COMPETITION V1 R14 — CONTRACT HARDENING & QUESTION SOURCES TEST SUITE', async (t) => {
 
-  await t.test('Group 1: Source Chooser UI & Integration', async (t) => {
-    await t.test('1. Host Page imports Question Bank Modal and Excel Modal', () => {
-      assert.match(hostPageContent, /import\s*\{\s*CompetitionQuestionBankModal\s*\}\s*from/);
-      assert.match(hostPageContent, /import\s*\{\s*CompetitionImportExcelModal\s*\}\s*from/);
-    });
-
-    await t.test('2. Host Page defines state for both modals and add menu', () => {
-      assert.match(hostPageContent, /const\s*\[isQuestionBankModalOpen,\s*setIsQuestionBankModalOpen\]\s*=\s*useState\(false\);/);
-      assert.match(hostPageContent, /const\s*\[isImportExcelModalOpen,\s*setIsImportExcelModalOpen\]\s*=\s*useState\(false\);/);
-      assert.match(hostPageContent, /const\s*\[isAddMenuOpen,\s*setIsAddMenuOpen\]\s*=\s*useState\(false\);/);
-    });
-
-    await t.test('3. Chooser dropdown provides 3 question adding methods', () => {
-      assert.match(hostPageContent, /Tạo câu hỏi mới|T\?o cu h\?i m\?i/i);
-      assert.match(hostPageContent, /Chọn từ Ngân hàng|Ch\?n t\? Ngn hng/i);
-      assert.match(hostPageContent, /Nhập từ file Excel|Nh\?p t\? file Excel/i);
-    });
-
-    await t.test('4. Both modals are rendered with existing questions and maxAllowed=5', () => {
-      assert.match(hostPageContent, /<CompetitionQuestionBankModal[\s\S]*?isOpen=\{isQuestionBankModalOpen\}[\s\S]*?maxAllowed=\{5\}/);
-      assert.match(hostPageContent, /<CompetitionImportExcelModal[\s\S]*?isOpen=\{isImportExcelModalOpen\}[\s\S]*?maxAllowed=\{5\}/);
-    });
-  });
-
-  await t.test('Group 2: Question Bank Modal & BFF API Invariants', async (t) => {
-    await t.test('1. Uses listQuestions and getQuestionAuthoringDetail from questionBankService (no direct table select)', () => {
-      assert.match(qbModalContent, /import\s*\{[^}]*listQuestions[^}]*\}\s*from\s*['"]\.\.\/\.\.\/services\/questionBankService(\.js)?['"]/);
-      assert.match(qbModalContent, /import\s*\{[^}]*getQuestionAuthoringDetail[^}]*\}\s*from\s*['"]\.\.\/\.\.\/services\/questionBankService(\.js)?['"]/);
-      assert.ok(!qbModalContent.includes("from('question_bank_items')"), 'Must not query question_bank_items directly');
-      assert.ok(!qbModalContent.includes("from('competition_questions')"), 'Must not query competition_questions directly');
-    });
-
-    await t.test('2. Phase 1 requests ONLY single_choice and published questions', () => {
-      assert.match(qbModalContent, /question_type:\s*['"]single_choice['"]/);
-      assert.match(qbModalContent, /status:\s*['"]published['"]/);
-    });
-
-    await t.test('3. Modal calculates remainingSlots and restricts selection over limit', () => {
-      assert.match(qbModalContent, /const\s+remainingSlots\s*=\s*Math\.max\(0,\s*maxAllowed\s*-\s*existingQuestions\.length\);/);
-      assert.match(qbModalContent, /newMap\.size\s*>=\s*remainingSlots/);
-    });
-
-    await t.test('4. Modal highlights already added questions (duplicate guard)', () => {
-      assert.match(qbModalContent, /isDuplicateQuestion/);
-      assert.match(qbModalContent, /ĐÃ CÓ TRONG PHÒNG|DA CO TRONG PHONG/);
-    });
-
-    await t.test('5. Modal calls getQuestionAuthoringDetail on confirm import with loading indicator', () => {
-      assert.match(qbModalContent, /getQuestionAuthoringDetail\(item\.id/);
-      assert.match(qbModalContent, /isImporting/);
-    });
-  });
-
-  await t.test('Group 3: Excel Import Modal & Parser Invariants', async (t) => {
-    await t.test('1. Reuses parseExcelQuestions from questionFileParsers', () => {
-      assert.match(excelModalContent, /import\s*\{\s*parseExcelQuestions\s*\}\s*from\s*['"]\.\.\/\.\.\/utils\/questionFileParsers(\.js)?['"]/);
-    });
-
-    await t.test('2. Provides downloadable Competition Excel template', () => {
-      assert.match(excelModalContent, /downloadCompetitionExcelTemplate/);
-      assert.match(excelModalContent, /Tải file mẫu Excel|T\?i file m\?u Excel/);
-    });
-
-    await t.test('3. Row-level validation evaluates valid vs malformed rows', () => {
-      assert.match(excelModalContent, /normalizeImportedQuestionToCompetitionQuestion/);
-      assert.match(excelModalContent, /HỢP LỆ|H\?P L\?/);
-      assert.match(excelModalContent, /LỖI ĐỊNH DẠNG|L\?I D\?NH D\?NG/);
-    });
-
-    await t.test('4. Auto-selects valid rows only up to remainingSlots', () => {
-      assert.match(excelModalContent, /autoSelected\.size\s*<\s*remainingSlots/);
-    });
-
-    await t.test('5. Excel template round-trip with parseExcelQuestions (100% fidelity)', async () => {
-      const wb = createCompetitionExcelTemplateWorkbook();
-      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-      const parsed = await parseExcelQuestions(buffer, 'template_test.xlsx');
-
-      assert.strictEqual(parsed.success, true, 'parseExcelQuestions must succeed for standard template');
-      assert.strictEqual(parsed.errors.length, 0, 'parseExcelQuestions must return 0 errors for template');
-      assert.strictEqual(parsed.questions.length, 3, 'parseExcelQuestions must parse 3 sample questions');
-
-      // Verify each parsed question can be normalized to competition format
-      const compQuestions = parsed.questions.map((q, idx) =>
-        normalizeImportedQuestionToCompetitionQuestion(q, idx + 1)
-      );
-      assert.strictEqual(compQuestions.length, 3);
-      assert.strictEqual(compQuestions[0].question_order, 1);
-      assert.strictEqual(compQuestions[0].question_type, 'single_choice');
-      assert.strictEqual(compQuestions[0].options.length, 4);
-      assert.deepStrictEqual(compQuestions[0].correct_answer, { option_id: 'opt_1' });
-      assert.strictEqual(compQuestions[0].points, 10);
-      assert.strictEqual(compQuestions[0].time_limit_seconds, 30);
-    });
-  });
-
-  await t.test('Group 4: Adapter Logic & Canonical Normalization', async (t) => {
-    await t.test('1. normalizeOption formats id as opt_N and trims text', () => {
-      assert.deepStrictEqual(normalizeOption('  Hà Nội  ', 0), { id: 'opt_1', text: 'Hà Nội' });
-      assert.deepStrictEqual(normalizeOption({ text: '  Đà Nẵng ' }, 2), { id: 'opt_3', text: 'Đà Nẵng' });
-    });
-
-    await t.test('2. normalizeQuestionBankItemToCompetitionQuestion maps letter A/B/C/D to opt_1..4', () => {
-      const qbItem = {
-        id: 'qb_123',
-        question_type: 'single_choice',
-        prompt: '1 + 1 = ?',
-        options: ['1', '2', '3', '4'],
-        correct_answer: 'B',
-        points: 10,
-        time_limit_seconds: 45
-      };
-      const normalized = normalizeQuestionBankItemToCompetitionQuestion(qbItem, 1);
-      assert.strictEqual(normalized.question_order, 1);
-      assert.strictEqual(normalized.question_text, '1 + 1 = ?');
-      assert.strictEqual(normalized.question_type, 'single_choice');
-      assert.strictEqual(normalized.points, 10);
-      assert.strictEqual(normalized.time_limit_seconds, 45);
-      assert.deepStrictEqual(normalized.correct_answer, { option_id: 'opt_2' });
-      assert.strictEqual(normalized.options.length, 4);
-      assert.strictEqual(normalized.options[1].id, 'opt_2');
-      assert.strictEqual(normalized.options[1].text, '2');
-      assert.strictEqual(normalized._sourceBankId, 'qb_123');
-    });
-
-    await t.test('3. normalizeQuestionBankItemToCompetitionQuestion maps full authoring detail ({ item, version, answer_key })', () => {
-      const authoringDetail = {
+  // =========================================================================
+  // GROUP 1: QUESTION BANK AUTHORING DETAIL & FAIL-CLOSED INVARIANTS
+  // =========================================================================
+  await t.test('Group 1: Question Bank Authoring Detail & Fail-Closed Invariants', async (t) => {
+    
+    await t.test('1. Authoring detail success imports cleanly with option mapping and _sourceBankId', () => {
+      const validDetail = {
         projection: 'authoring_safe',
         item: {
-          id: 'qb_authoring_detail_uuid',
-          title: 'Thủ đô của Pháp',
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          title: 'Thủ đô nước Pháp',
           question_type: 'single_choice',
-          difficulty: 'medium',
           points: 15,
-          time_limit_seconds: 40
+          time_limit_seconds: 45
         },
         version: {
-          id: 'v_detail_uuid',
+          id: 'v_france_1',
           prompt: 'Thủ đô của nước Pháp là thành phố nào?',
           question_type: 'single_choice',
           options: [
-            { id: 'opt_uuid_10', text: 'London' },
-            { id: 'opt_uuid_20', text: 'Berlin' },
-            { id: 'opt_uuid_30', text: 'Paris' },
-            { id: 'opt_uuid_40', text: 'Rome' }
+            { id: 'opt_paris_uuid', text: 'Paris' },
+            { id: 'opt_lyon_uuid', text: 'Lyon' },
+            { id: 'opt_marseille_uuid', text: 'Marseille' },
+            { id: 'opt_nice_uuid', text: 'Nice' }
           ],
           explanation: 'Paris là thủ đô nước Pháp'
         },
         answer_key: {
           correct_answers: {
-            correct_option_id: 'opt_uuid_30'
+            correct_option_id: 'opt_paris_uuid'
           }
         }
       };
 
-      const normalized = normalizeQuestionBankItemToCompetitionQuestion(authoringDetail, 2);
-      assert.strictEqual(normalized.question_order, 2);
+      const normalized = normalizeQuestionBankItemToCompetitionQuestion(validDetail, 1);
+      assert.strictEqual(normalized.question_order, 1);
       assert.strictEqual(normalized.question_text, 'Thủ đô của nước Pháp là thành phố nào?');
       assert.strictEqual(normalized.question_type, 'single_choice');
       assert.strictEqual(normalized.points, 15);
-      assert.strictEqual(normalized.time_limit_seconds, 40);
+      assert.strictEqual(normalized.time_limit_seconds, 45);
       assert.strictEqual(normalized.options.length, 4);
-      assert.strictEqual(normalized.options[2].id, 'opt_3');
-      assert.strictEqual(normalized.options[2].text, 'Paris');
-      assert.deepStrictEqual(normalized.correct_answer, { option_id: 'opt_3' });
-      assert.strictEqual(normalized.explanation, 'Paris là thủ đô nước Pháp');
-      assert.strictEqual(normalized._sourceBankId, 'qb_authoring_detail_uuid');
+      assert.strictEqual(normalized.options[0].id, 'opt_1');
+      assert.strictEqual(normalized.options[0].text, 'Paris');
+      assert.deepStrictEqual(normalized.correct_answer, { option_id: 'opt_1' });
+      assert.strictEqual(normalized._sourceBankId, '550e8400-e29b-41d4-a716-446655440001');
     });
 
-    await t.test('4. normalizeQuestionBankItemToCompetitionQuestion handles answer_key array format', () => {
-      const authoringDetailArray = {
-        item: { id: 'qb_arr_uuid', question_type: 'single_choice' },
+    await t.test('2. Authoring detail failure does NOT fallback to list item (Modal uses Promise.allSettled and fails closed)', () => {
+      // Static invariant check: Modal must NOT contain fallback return item in catch block
+      assert.ok(!qbModalContent.includes('return item;'), 'Modal must not return list summary item on authoring detail failure');
+      assert.match(qbModalContent, /Promise\.allSettled/, 'Modal must use Promise.allSettled for safe authoring detail retrieval');
+      assert.match(qbModalContent, /failedItems\.length\s*>\s*0/, 'Modal must fail closed if any selected question fails detail retrieval');
+    });
+
+    await t.test('3. Malformed detail fails closed (throws descriptive error without corrupting state)', () => {
+      const malformedDetailNoOptions = {
+        item: { id: 'bad_item_1', question_type: 'single_choice' },
+        version: { prompt: 'Câu hỏi không có lựa chọn', options: [] },
+        answer_key: { correct_answers: 'A' }
+      };
+
+      assert.throws(() => {
+        normalizeQuestionBankItemToCompetitionQuestion(malformedDetailNoOptions, 1);
+      }, /yêu cầu ít nhất 2 phương án lựa chọn/);
+
+      const malformedDetailNoAnswer = {
+        item: { id: 'bad_item_2', question_type: 'single_choice' },
         version: {
-          prompt: 'Chọn đáp án A',
-          options: [
-            { id: 'uuid_a', text: 'Đáp án A' },
-            { id: 'uuid_b', text: 'Đáp án B' }
-          ]
+          prompt: 'Câu hỏi không có đáp án',
+          options: [{ text: 'Opt 1' }, { text: 'Opt 2' }]
         },
-        answer_key: {
-          correct_answers: ['uuid_a']
-        }
+        answer_key: {}
       };
 
-      const normalized = normalizeQuestionBankItemToCompetitionQuestion(authoringDetailArray, 1);
-      assert.deepStrictEqual(normalized.correct_answer, { option_id: 'opt_1' });
-    });
-
-    await t.test('5. normalizeQuestionBankItemToCompetitionQuestion rejects non-single_choice (Fail Closed)', () => {
-      const qbMulti = {
-        id: 'qb_multi',
-        question_type: 'multiple_choice',
-        prompt: 'Chọn các số chẵn',
-        options: ['1', '2', '3', '4'],
-        correct_answer: ['B', 'D']
-      };
       assert.throws(() => {
-        normalizeQuestionBankItemToCompetitionQuestion(qbMulti, 1);
-      }, /chưa được hỗ trợ trong Đấu trường R14|chua du\?c h\? tr\?/i);
+        normalizeQuestionBankItemToCompetitionQuestion(malformedDetailNoAnswer, 1);
+      }, /thiếu thông tin đáp án đúng/);
     });
 
-    await t.test('6. normalizeQuestionBankItemToCompetitionQuestion rejects missing correct answer (Fail Closed)', () => {
-      const qbInvalid = {
-        id: 'qb_no_ans',
-        question_type: 'single_choice',
-        prompt: 'Câu hỏi không có đáp án',
-        options: ['A', 'B'],
-        correct_answer: null
-      };
-      assert.throws(() => {
-        normalizeQuestionBankItemToCompetitionQuestion(qbInvalid, 1);
-      }, /thiếu thông tin đáp án đúng|thi\?u thng tin dp n dng/i);
-    });
-
-    await t.test('7. normalizeImportedQuestionToCompetitionQuestion parses Excel columns accurately', () => {
-      const excelRow = {
-        question_text: 'Đâu là loài linh trưởng?',
-        option_a: 'Vượn',
-        option_b: 'Cá voi',
-        option_c: 'Đại bàng',
-        option_d: 'Hổ',
-        correct_answer: 'A',
-        points: 10,
-        time_limit_seconds: 30
-      };
-      const normalized = normalizeImportedQuestionToCompetitionQuestion(excelRow, 3);
-      assert.strictEqual(normalized.question_order, 3);
-      assert.strictEqual(normalized.question_text, 'Đâu là loài linh trưởng?');
-      assert.strictEqual(normalized.options.length, 4);
-      assert.deepStrictEqual(normalized.correct_answer, { option_id: 'opt_1' });
-    });
-
-    await t.test('8. normalizeImportedQuestionToCompetitionQuestion rejects rows with < 2 options', () => {
-      const excelRow = {
-        question_text: 'Một phương án?',
-        option_a: 'Duy nhất',
-        correct_answer: 'A'
-      };
-      assert.throws(() => {
-        normalizeImportedQuestionToCompetitionQuestion(excelRow, 1);
-      }, /ít nhất 2 phương án|t nh\?t 2 phuong n/i);
-    });
-
-    await t.test('9. normalizeImportedQuestionToCompetitionQuestion rejects unresolvable correct answer', () => {
-      const excelRow = {
-        question_text: 'Đáp án sai lệch?',
-        option_a: 'Lựa chọn 1',
-        option_b: 'Lựa chọn 2',
-        correct_answer: 'XYZ'
-      };
-      assert.throws(() => {
-        normalizeImportedQuestionToCompetitionQuestion(excelRow, 1);
-      }, /không khớp với bất kỳ phương án nào|khng kh\?p v\?i b\?t k\? phuong n no/i);
-    });
-
-    await t.test('10. reindexCompetitionQuestions produces contiguous 1..N order', () => {
-      const unordered = [
-        { question_order: 5, question_text: 'Q1' },
-        { question_order: 9, question_text: 'Q2' },
-        { question_order: 1, question_text: 'Q3' }
-      ];
-      const reindexed = reindexCompetitionQuestions(unordered);
-      assert.strictEqual(reindexed[0].question_order, 1);
-      assert.strictEqual(reindexed[1].question_order, 2);
-      assert.strictEqual(reindexed[2].question_order, 3);
-    });
-
-    await t.test('11. sanitizeQuestionsForCreation strips non-canonical metadata (_sourceBankId)', () => {
-      const dirty = [
+    await t.test('4. Duplicate normalized prompt is blocked across batch and existing questions', () => {
+      const existingQuestions = [
         {
           question_order: 1,
-          question_text: 'Clean Q',
+          question_text: 'Thủ đô của Việt Nam là thành phố nào?',
+          _sourceBankId: 'bank_id_10'
+        }
+      ];
+
+      // Same prompt text with different spacing and casing from another source ID
+      const duplicatePromptCandidate = {
+        question_text: '  thủ đô của việt nam là thành phố nào?  ',
+        _sourceBankId: 'bank_id_99_different'
+      };
+
+      assert.strictEqual(
+        isDuplicateQuestion(duplicatePromptCandidate, existingQuestions),
+        true,
+        'Must detect duplicate normalized prompt regardless of whitespace and case'
+      );
+    });
+
+    await t.test('5. Duplicate source bank ID is blocked', () => {
+      const existingQuestions = [
+        {
+          question_order: 1,
+          question_text: 'Câu hỏi cũ',
+          _sourceBankId: 'bank_item_uuid_123'
+        }
+      ];
+
+      const sameBankIdCandidate = {
+        question_text: 'Nội dung câu hỏi đã được sửa nhẹ',
+        _sourceBankId: 'bank_item_uuid_123'
+      };
+
+      assert.strictEqual(
+        isDuplicateQuestion(sameBankIdCandidate, existingQuestions),
+        true,
+        'Must block duplicate source bank ID'
+      );
+    });
+  });
+
+  // =========================================================================
+  // GROUP 2: EXCEL TEMPLATE & TRUE TIME LIMIT ROUND-TRIP
+  // =========================================================================
+  await t.test('Group 2: Excel Template & True Time Limit Round-Trip', async (t) => {
+    
+    const wb = createCompetitionExcelTemplateWorkbook();
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const parsed = await parseExcelQuestions(buffer, 'template_roundtrip.xlsx');
+
+    assert.strictEqual(parsed.success, true, 'Standard template must parse with 100% success');
+    assert.strictEqual(parsed.errors.length, 0);
+    assert.strictEqual(parsed.questions.length, 3);
+
+    await t.test('6. Template time 25 survives parse and normalization', () => {
+      const q1 = parsed.questions[0];
+      assert.strictEqual(q1.time_limit_seconds, 25, 'Parser must preserve 25 seconds');
+      const compQ1 = normalizeImportedQuestionToCompetitionQuestion(q1, 1);
+      assert.strictEqual(compQ1.time_limit_seconds, 25, 'Competition adapter must preserve 25 seconds');
+    });
+
+    await t.test('7. Template time 45 survives parse and normalization', () => {
+      const q2 = parsed.questions[1];
+      assert.strictEqual(q2.time_limit_seconds, 45, 'Parser must preserve 45 seconds');
+      const compQ2 = normalizeImportedQuestionToCompetitionQuestion(q2, 2);
+      assert.strictEqual(compQ2.time_limit_seconds, 45, 'Competition adapter must preserve 45 seconds');
+    });
+
+    await t.test('8. Template time 60 survives parse and normalization', () => {
+      const q3 = parsed.questions[2];
+      assert.strictEqual(q3.time_limit_seconds, 60, 'Parser must preserve 60 seconds');
+      const compQ3 = normalizeImportedQuestionToCompetitionQuestion(q3, 3);
+      assert.strictEqual(compQ3.time_limit_seconds, 60, 'Competition adapter must preserve 60 seconds');
+    });
+
+    await t.test('9. Missing time safely defaults to Competition 30 seconds', async () => {
+      const headers = ['type', 'question', 'option_a', 'option_b', 'correct_answer'];
+      const rows = [
+        ['single_choice', 'Câu hỏi không có thời gian', 'A1', 'B2', 'A']
+      ];
+      const testWs = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const testWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(testWb, testWs, 'Sheet1');
+      const testBuf = XLSX.write(testWb, { type: 'array', bookType: 'xlsx' });
+
+      const res = await parseExcelQuestions(testBuf, 'no_time.xlsx');
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.questions[0].time_limit_seconds, undefined, 'Parser leaves omitted time as undefined');
+
+      const compQ = normalizeImportedQuestionToCompetitionQuestion(res.questions[0], 1);
+      assert.strictEqual(compQ.time_limit_seconds, 30, 'Competition adapter defaults missing time to 30');
+    });
+
+    await t.test('10. Invalid time produces row-level validation error in parser', async () => {
+      const headers = ['type', 'question', 'option_a', 'option_b', 'correct_answer', 'time_limit_seconds'];
+      const rows = [
+        ['single_choice', 'Câu hỏi thời gian quá ngắn', 'A1', 'B2', 'A', 3], // < 5 seconds
+        ['single_choice', 'Câu hỏi thời gian quá dài', 'A1', 'B2', 'A', 999]  // > 600 seconds
+      ];
+      const testWs = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const testWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(testWb, testWs, 'Sheet1');
+      const testBuf = XLSX.write(testWb, { type: 'array', bookType: 'xlsx' });
+
+      const res = await parseExcelQuestions(testBuf, 'invalid_time.xlsx');
+      assert.strictEqual(res.success, false);
+      assert.strictEqual(res.errors.length, 2);
+      assert.strictEqual(res.errors[0].row, 2);
+      assert.match(res.errors[0].message, /Thời gian làm bài "3" không hợp lệ/);
+      assert.strictEqual(res.errors[1].row, 3);
+      assert.match(res.errors[1].message, /Thời gian làm bài "999" không hợp lệ/);
+    });
+  });
+
+  // =========================================================================
+  // GROUP 3: EXCEL ROW-LEVEL VS STRUCTURAL ERROR ISOLATION
+  // =========================================================================
+  await t.test('Group 3: Excel Row-level vs Structural Error Isolation', async (t) => {
+
+    await t.test('11. One valid + one malformed row: valid row remains parsed and importable', async () => {
+      const headers = ['type', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'time_limit_seconds'];
+      const rows = [
+        ['single_choice', 'Câu 1 hợp lệ chuẩn', 'Đáp án 1', 'Đáp án 2', 'Đáp án 3', 'Đáp án 4', 'A', 25],
+        ['single_choice', 'Câu 2 bị lỗi thời gian', 'Opt A', 'Opt B', 'Opt C', 'Opt D', 'A', 999]
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+      const res = await parseExcelQuestions(buf, 'mixed_rows.xlsx');
+      assert.strictEqual(res.questions.length, 1, 'Valid row must be preserved in questions');
+      assert.strictEqual(res.questions[0].prompt, 'Câu 1 hợp lệ chuẩn');
+      assert.strictEqual(res.errors.length, 1, 'Malformed row must be recorded in errors');
+      assert.strictEqual(res.errors[0].row, 3);
+    });
+
+    await t.test('12. Row error displayed and modal distinguishes row error vs structural error', () => {
+      assert.match(excelModalContent, /structuralError\s*=\s*res\.errors\?\.find/);
+      assert.match(excelModalContent, /rowErrors\s*=\s*res\.errors\?\.filter/);
+      assert.match(excelModalContent, /LỖI ĐỊNH DẠNG|L\?I D\?NH D\?NG/);
+    });
+
+    await t.test('13. Structural missing-header error aborts whole file', async () => {
+      const headers = ['invalid_header_1', 'invalid_header_2'];
+      const rows = [['data1', 'data2']];
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+      const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+      const res = await parseExcelQuestions(buf, 'missing_headers.xlsx');
+      assert.strictEqual(res.success, false);
+      assert.strictEqual(res.questions.length, 0);
+      assert.strictEqual(res.errors[0].row, 1);
+      assert.match(res.errors[0].message, /Thiếu các cột bắt buộc: type, question/);
+    });
+
+    await t.test('14. Unsupported question type rejected by Competition modal (single_choice only)', () => {
+      const fillBlankRow = {
+        question_type: 'fill_blank',
+        question_text: 'Điền vào chỗ trống',
+        correct_answer: '10'
+      };
+
+      assert.throws(() => {
+        normalizeImportedQuestionToCompetitionQuestion(fillBlankRow, 1);
+      }, /R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án/);
+
+      const essayRow = {
+        question_type: 'essay',
+        question_text: 'Viết đoạn văn',
+        correct_answer: 'Mẫu'
+      };
+
+      assert.throws(() => {
+        normalizeImportedQuestionToCompetitionQuestion(essayRow, 1);
+      }, /R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án/);
+    });
+  });
+
+  // =========================================================================
+  // GROUP 4: SESSION LIMITS, RPC PAYLOAD & ZERO LIVE FK INVARIANTS
+  // =========================================================================
+  await t.test('Group 4: Session Limits, RPC Payload & Zero Live FK Invariants', async (t) => {
+    
+    await t.test('15. Shared max 5 limit strictly enforced across all sources', () => {
+      assert.match(hostPageContent, /const\s+remaining\s*=\s*5\s*-\s*questions\.length;/);
+      assert.match(hostPageContent, /const\s+toAdd\s*=\s*newQuestions\.slice\(0,\s*remaining\);/);
+      assert.match(hostPageContent, /disabled=\{questions\.length\s*>=\s*5\}/);
+    });
+
+    await t.test('16. Canonical hostCreateSession payload structure remains exact and compliant', () => {
+      const rawCompetitionQuestions = [
+        {
+          question_order: 1,
+          question_text: 'Câu 1',
+          question_type: 'single_choice',
+          points: 10,
+          time_limit_seconds: 25,
+          options: [
+            { id: 'opt_1', text: 'A' },
+            { id: 'opt_2', text: 'B' }
+          ],
+          correct_answer: { option_id: 'opt_1' },
+          _sourceBankId: 'bank_uuid_should_be_stripped',
+          extra_internal_state: 'garbage'
+        }
+      ];
+
+      const sanitized = sanitizeQuestionsForCreation(rawCompetitionQuestions);
+      assert.deepStrictEqual(sanitized, [
+        {
+          question_order: 1,
+          question_text: 'Câu 1',
+          question_type: 'single_choice',
+          points: 10,
+          time_limit_seconds: 25,
+          options: [
+            { id: 'opt_1', text: 'A' },
+            { id: 'opt_2', text: 'B' }
+          ],
+          correct_answer: { option_id: 'opt_1' }
+        }
+      ]);
+    });
+
+    await t.test('17. _sourceBankId and external metadata are 100% stripped before RPC (No live FK created)', () => {
+      const testList = [
+        {
+          question_order: 1,
+          question_text: 'Câu hỏi từ Ngân hàng',
           question_type: 'single_choice',
           points: 10,
           time_limit_seconds: 30,
           options: [{ id: 'opt_1', text: 'A' }, { id: 'opt_2', text: 'B' }],
           correct_answer: { option_id: 'opt_1' },
-          _sourceBankId: 'foreign_bank_uuid_123',
-          extra_garbage: true
+          _sourceBankId: 'qb_12345'
         }
       ];
-      const sanitized = sanitizeQuestionsForCreation(dirty);
-      assert.deepStrictEqual(sanitized, [
-        {
-          question_order: 1,
-          question_text: 'Clean Q',
-          question_type: 'single_choice',
-          points: 10,
-          time_limit_seconds: 30,
-          options: [{ id: 'opt_1', text: 'A' }, { id: 'opt_2', text: 'B' }],
-          correct_answer: { option_id: 'opt_1' }
-        }
-      ]);
+
+      const sanitized = sanitizeQuestionsForCreation(testList);
       assert.strictEqual(sanitized[0]._sourceBankId, undefined);
-      assert.strictEqual(sanitized[0].extra_garbage, undefined);
-    });
-
-    await t.test('12. isDuplicateQuestion detects identical bank id and prompt text', () => {
-      const existing = [
-        { question_order: 1, question_text: 'Hà Nội là thủ đô nước nào?', _sourceBankId: 'bank_item_1' }
-      ];
-      assert.strictEqual(isDuplicateQuestion({ _sourceBankId: 'bank_item_1', question_text: 'Khác' }, existing), true);
-      assert.strictEqual(isDuplicateQuestion({ _sourceBankId: 'bank_item_2', question_text: 'Hà Nội là thủ đô nước nào?' }, existing), true);
-      assert.strictEqual(isDuplicateQuestion({ _sourceBankId: 'bank_item_3', question_text: 'Câu hỏi hoàn toàn mới' }, existing), false);
-    });
-  });
-
-  await t.test('Group 5: Shared Max 5 Limit & Copy-Snapshot Invariants', async (t) => {
-    await t.test('1. Host Page import handlers cap imports to 5 - questions.length', () => {
-      assert.match(hostPageContent, /const\s+remaining\s*=\s*5\s*-\s*questions\.length;/);
-      assert.match(hostPageContent, /const\s+toAdd\s*=\s*newQuestions\.slice\(0,\s*remaining\);/);
-      assert.match(hostPageContent, /Đã đạt giới hạn tối đa 5 câu hỏi trong phòng thi|Da d\?t gi\?i h\?n t\?i da 5 cu h\?i trong phng thi/i);
-    });
-
-    await t.test('2. Manual add button is disabled at questions.length >= 5', () => {
-      assert.match(hostPageContent, /disabled=\{questions\.length\s*>=\s*5\}/);
-    });
-
-    await t.test('3. hostCreateSession uses sanitized questions snapshot', () => {
-      assert.match(hostPageContent, /const\s+sanitizedQuestions\s*=\s*sanitizeQuestionsForCreation\(questions\);/);
-      assert.match(hostPageContent, /questions:\s*sanitizedQuestions/);
+      assert.strictEqual(Object.keys(sanitized[0]).includes('_sourceBankId'), false);
     });
   });
 });

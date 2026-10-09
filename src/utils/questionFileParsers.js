@@ -34,6 +34,7 @@ const normalizeHeader = (header) => {
   if (clean.includes('dapan') || clean === 'correctanswer' || clean === 'answer') return 'correct_answer';
   if (clean.includes('thamkhao') || clean.includes('goiy') || clean === 'referenceanswer') return 'reference_answer';
   if (clean.includes('diem') || clean === 'points' || clean === 'point') return 'points';
+  if (clean.includes('timelimit') || clean.includes('thoigian') || clean === 'time' || clean === 'thoigiangiay' || clean === 'timelimitseconds' || clean === 'time_limit_seconds') return 'time_limit_seconds';
   return clean;
 };
 
@@ -64,6 +65,14 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
 
   const promptText = q.prompt !== undefined && q.prompt !== null ? String(q.prompt) : String(q.question || '');
   const pts = parseFloat(q.points) || 1;
+
+  let timeLimitSecs;
+  if (q.time_limit_seconds !== undefined && q.time_limit_seconds !== null && String(q.time_limit_seconds).trim() !== '') {
+    const parsedTime = parseInt(q.time_limit_seconds, 10);
+    if (!isNaN(parsedTime) && parsedTime >= 5 && parsedTime <= 600) {
+      timeLimitSecs = parsedTime;
+    }
+  }
 
   if (['single_choice', 'multiple_choice'].includes(qType)) {
     // 1. Chuẩn hóa options_json
@@ -137,6 +146,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       correct_answer: resolvedCorrect,
       correct_answer_key: correctAnswerKey,
       points: pts,
+      ...(timeLimitSecs !== undefined ? { time_limit_seconds: timeLimitSecs } : {}),
       source_row: q.source_row || null,
       mapping_error: mappingError
     };
@@ -162,6 +172,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       correct_answer: rawCorrect,
       correct_answer_key: correctAnswerKey,
       points: pts,
+      ...(timeLimitSecs !== undefined ? { time_limit_seconds: timeLimitSecs } : {}),
       source_row: q.source_row || null
     };
 
@@ -177,6 +188,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       reference_answer: '',
       correct_answer_key: null,
       points: pts,
+      ...(timeLimitSecs !== undefined ? { time_limit_seconds: timeLimitSecs } : {}),
       source_row: q.source_row || null
     };
 
@@ -205,6 +217,7 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
       reference_answer: refAnswer || 'Xem hướng dẫn chấm của giáo viên',
       correct_answer_key: correctAnswerKey,
       points: pts,
+      ...(timeLimitSecs !== undefined ? { time_limit_seconds: timeLimitSecs } : {}),
       source_row: q.source_row || null
     };
   }
@@ -332,6 +345,22 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
         continue;
       }
 
+      // Kiểm tra thời gian làm bài (nếu có cung cấp)
+      const timeLimitRaw = rowObj.time_limit_seconds;
+      let validatedTimeLimit;
+      if (timeLimitRaw !== undefined && timeLimitRaw !== null && String(timeLimitRaw).trim() !== '') {
+        const parsedTime = parseInt(timeLimitRaw, 10);
+        const floatTime = parseFloat(timeLimitRaw);
+        if (isNaN(parsedTime) || parsedTime !== floatTime || parsedTime < 5 || parsedTime > 600) {
+          errors.push({
+            row: rowNumber,
+            message: `Thời gian làm bài "${timeLimitRaw}" không hợp lệ (phải là số nguyên từ 5 đến 600 giây).`
+          });
+          continue;
+        }
+        validatedTimeLimit = parsedTime;
+      }
+
       // Kiểm tra điểm số
       let points = 1;
       if (pointsRaw !== undefined && pointsRaw !== '') {
@@ -356,6 +385,7 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
         correct_answer: rowObj.correct_answer || rowObj.reference_answer || '',
         reference_answer: rowObj.reference_answer || '',
         points: points,
+        ...(validatedTimeLimit !== undefined ? { time_limit_seconds: validatedTimeLimit } : {}),
         source_row: rowNumber
       };
 

@@ -167,29 +167,52 @@ export function CompetitionQuestionBankModal({
     setError(null);
 
     try {
-      // Fetch full authoring detail for each selected question
-      const details = await Promise.all(
-        selectedItems.map(async (item) => {
-          try {
-            const detail = await getQuestionAuthoringDetail(item.id, item.current_version_id);
-            return detail || item;
-          } catch (err) {
-            console.warn(`[CompetitionQuestionBankModal] getQuestionAuthoringDetail fallback for ${item.id}:`, err);
-            return item;
-          }
-        })
+      // 1. Fetch full authoring detail for each selected question using Promise.allSettled
+      const results = await Promise.allSettled(
+        selectedItems.map((item) => getQuestionAuthoringDetail(item.id, item.current_version_id))
       );
 
-      const normalizedList = details.map((detailOrItem, idx) => {
-        const nextOrder = existingQuestions.length + idx + 1;
-        return normalizeQuestionBankItemToCompetitionQuestion(detailOrItem, nextOrder);
-      });
+      const failedItems = [];
+      const successfulDetails = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const res = results[i];
+        const item = selectedItems[i];
+        if (res.status === 'rejected' || !res.value || (!res.value.item && !res.value.version)) {
+          const promptLabel = item.title || item.prompt || `Câu #${i + 1}`;
+          const reason = res.reason?.message || 'Không thể lấy thông tin chi tiết tác giả.';
+          failedItems.push(`"${promptLabel}" (${reason})`);
+        } else {
+          successfulDetails.push({ detail: res.value, originalItem: item });
+        }
+      }
+
+      // FAIL CLOSED: If ANY selected question failed to fetch valid authoring detail, reject whole batch
+      if (failedItems.length > 0) {
+        throw new Error(`Không thể lấy chi tiết tác giả cho ${failedItems.length} câu hỏi đã chọn:\n- ${failedItems.join('\n- ')}`);
+      }
+
+      // 2. Normalize questions and run Post-Normalization Duplicate Check
+      const normalizedList = [];
+      for (let i = 0; i < successfulDetails.length; i++) {
+        const { detail } = successfulDetails[i];
+        const nextOrder = existingQuestions.length + normalizedList.length + 1;
+        const normalizedQ = normalizeQuestionBankItemToCompetitionQuestion(detail, nextOrder);
+
+        // Run isDuplicateQuestion against existingQuestions + already normalized items in this batch
+        const allChecked = [...existingQuestions, ...normalizedList];
+        if (isDuplicateQuestion(normalizedQ, allChecked)) {
+          throw new Error(`Phát hiện câu hỏi trùng lặp sau khi lấy chi tiết: "${normalizedQ.question_text}". Không thể thêm vào phòng thi.`);
+        }
+
+        normalizedList.push(normalizedQ);
+      }
 
       onImportQuestions(normalizedList);
       onClose();
     } catch (err) {
       console.error('[CompetitionQuestionBankModal] Lỗi import câu hỏi:', err);
-      setError(err.message || 'Có lỗi xảy ra khi chuẩn hóa câu hỏi từ Ngân hàng.');
+      setError(err.message || 'Có lỗi xảy ra khi lấy chi tiết câu hỏi từ Ngân hàng.');
     } finally {
       setIsImporting(false);
     }
@@ -309,9 +332,9 @@ export function CompetitionQuestionBankModal({
 
         {/* ERROR BANNER */}
         {error && (
-          <div className="p-3 mx-4 mt-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          <div className="p-3 mx-4 mt-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2 whitespace-pre-line">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span className="flex-1">{error}</span>
           </div>
         )}
 

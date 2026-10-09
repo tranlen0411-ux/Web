@@ -214,6 +214,12 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     throw new Error('Dữ liệu dòng Excel không hợp lệ.');
   }
 
+  // Enforce single_choice for Competition Phase 1
+  const rawType = row.question_type || row.type || 'single_choice';
+  if (rawType !== 'single_choice') {
+    throw new Error('R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án.');
+  }
+
   const prompt = (row.question_text || row.question || row.prompt || row.debai || '').trim();
   if (!prompt) {
     throw new Error('Nội dung câu hỏi không được để trống.');
@@ -284,9 +290,15 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
   }
 
   const points = parseFloat(row.points) > 0 ? parseFloat(row.points) : 10.00;
-  const timeLimit = (parseInt(row.time_limit_seconds || row.time, 10) >= 5 && parseInt(row.time_limit_seconds || row.time, 10) <= 600)
-    ? parseInt(row.time_limit_seconds || row.time, 10)
-    : 30;
+  
+  const rawTime = row.time_limit_seconds !== undefined ? row.time_limit_seconds : row.time;
+  let timeLimit = 30;
+  if (rawTime !== undefined && rawTime !== null && String(rawTime).trim() !== '') {
+    const parsedTime = parseInt(rawTime, 10);
+    if (!isNaN(parsedTime) && parsedTime >= 5 && parsedTime <= 600) {
+      timeLimit = parsedTime;
+    }
+  }
 
   return {
     question_order: order,
@@ -345,10 +357,10 @@ export function isDuplicateQuestion(candidate, existingList = []) {
     if (hasSameId) return true;
   }
 
-  // Check by normalized question text
-  const candPrompt = String(candidate.question_text || '').trim().toLowerCase();
+  // Check by normalized question text (trimmed and lowercased)
+  const candPrompt = String(candidate.question_text || candidate.prompt || candidate.title || '').trim().toLowerCase();
   for (const existing of existingList) {
-    const exPrompt = String(existing.question_text || '').trim().toLowerCase();
+    const exPrompt = String(existing.question_text || existing.prompt || existing.title || '').trim().toLowerCase();
     if (candPrompt === exPrompt && candPrompt.length > 0) {
       return true;
     }
@@ -360,6 +372,7 @@ export function isDuplicateQuestion(candidate, existingList = []) {
 /**
  * Creates canonical Excel template workbook for Competition.
  * Headers match parseExcelQuestions required contract for 100% round-trip fidelity.
+ * Distinct times [25, 45, 60] verify round-trip persistence.
  *
  * @returns {import('xlsx').WorkBook}
  */
@@ -386,7 +399,7 @@ export function createCompetitionExcelTemplateWorkbook() {
       'Cần Thơ',
       'A',
       10,
-      30
+      25
     ],
     [
       'single_choice',
@@ -397,7 +410,7 @@ export function createCompetitionExcelTemplateWorkbook() {
       '120',
       'B',
       10,
-      30
+      45
     ],
     [
       'single_choice',
@@ -408,7 +421,7 @@ export function createCompetitionExcelTemplateWorkbook() {
       '5 cạnh',
       'C',
       10,
-      30
+      60
     ]
   ];
 
