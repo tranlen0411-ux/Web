@@ -110,6 +110,8 @@ export function CompetitionSpectatorPage() {
 
       // 3. Conditional Snapshot Reads by Session Status
       if (currentSession.status === 'waiting') {
+        setActiveQuestion(null);
+        setQuestionResults(null);
         const partRes = await getSessionParticipants(sessionId);
         if (isMountedRef.current && currentRequestId === activeRequestIdRef.current && partRes.success) {
           setParticipants(partRes.data || []);
@@ -133,7 +135,7 @@ export function CompetitionSpectatorPage() {
         if (!isMountedRef.current || currentRequestId !== activeRequestIdRef.current) return;
 
         if (settled[0].status === 'fulfilled' && settled[0].value?.success) {
-          setActiveQuestion(settled[0].value.data);
+          setActiveQuestion(settled[0].value.data?.question || null);
         }
         if (settled[1].status === 'fulfilled' && settled[1].value?.success) {
           setSubmissionStats(settled[1].value.data);
@@ -150,6 +152,7 @@ export function CompetitionSpectatorPage() {
           setQuestionResults(null);
         }
       } else if (currentSession.status === 'finished') {
+        setActiveQuestion(null);
         const [lbRes, partRes, resRes] = await Promise.allSettled([
           getLeaderboardSnapshot({ sessionId }),
           getSessionParticipants(sessionId),

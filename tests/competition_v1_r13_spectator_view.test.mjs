@@ -348,4 +348,76 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
       assert.match(spectatorPageContent, /Toàn Màn Hình|Thu Nhỏ/);
     });
   });
+  await t.test('Group 9: Live Question Data Contract & Sanitized Rendering (Contract Fix)', async (t) => {
+    await t.test('1. Spectator active-question data source is Host/Admin-safe', () => {
+      assert.match(spectatorPageContent, /getActiveQuestionSnapshot\(\{\s*sessionId\s*\}\)/);
+      assert.ok(!spectatorPageContent.includes('getActiveQuestionSnapshot({ sessionId, participantId'), 'Spectator must not pass student participantId');
+      assert.ok(!spectatorPageContent.includes('getActiveQuestionSnapshot({ sessionId, guestToken'), 'Spectator must not pass student guestToken');
+    });
+
+    await t.test('2. No participantId is fabricated', () => {
+      assert.ok(!spectatorPageContent.includes('participantId:'), 'Spectator must not fabricate participantId');
+      assert.ok(!spectatorPageContent.includes("participantId = '"), 'Spectator must not fake participantId');
+    });
+
+    await t.test('3. No guest token fabricated', () => {
+      assert.ok(!spectatorPageContent.includes('guestToken:'), 'Spectator must not fabricate guestToken');
+      assert.ok(!spectatorPageContent.includes("guestToken = '"), 'Spectator must not fake guestToken');
+    });
+
+    await t.test('4. No direct competition_questions query in Spectator bundle', () => {
+      assert.ok(!spectatorPageContent.includes("from('competition_questions')"), 'Must not query competition_questions directly');
+      assert.ok(!allSpectatorBundle.includes("from('competition_questions')"), 'Spectator bundle must not query competition_questions directly');
+    });
+
+    await t.test('5. No correct_answer in active payload or Live view render', () => {
+      assert.ok(!liveViewContent.includes('correct_answer'), 'Live question view must not use correct_answer');
+      assert.ok(!liveViewContent.includes('is_correct'), 'Live question view must not check is_correct');
+      assert.ok(!liveViewContent.includes('Đáp án đúng'), 'Live question view must not label correct answer');
+    });
+
+    await t.test('6. No explanation in active payload or Live view render', () => {
+      assert.ok(!liveViewContent.includes('explanation'), 'Live question view must not use explanation');
+      assert.ok(!liveViewContent.includes('Giải thích'), 'Live question view must not render explanation');
+    });
+
+    await t.test('7. Question text extracts from authoritative sanitized data.question and renders', () => {
+      assert.match(spectatorPageContent, /setActiveQuestion\(settled\[0\]\.value\.data\?\.question\s*\|\|\s*null\);/);
+      assert.match(liveViewContent, /\{activeQuestion\?\.question_text\s*\|\|\s*'Đang hiển thị câu hỏi thi đấu\.\.\.'\}/);
+    });
+
+    await t.test('8. Options extract from authoritative sanitized data.question and render', () => {
+      assert.match(liveViewContent, /activeQuestion\?\.options\s*&&\s*activeQuestion\.options\.length\s*>\s*0/);
+      assert.match(liveViewContent, /activeQuestion\.options\.map\(\((opt,\s*idx|opt)\)\s*=>/);
+      assert.match(liveViewContent, /\{opt\.text\}/);
+    });
+
+    await t.test('9. Closed-question result behavior unchanged (only reveals on questionResults)', () => {
+      assert.match(resultsViewContent, /KẾT QUẢ CÂU HỎI ĐÃ ĐÓNG/);
+      assert.match(resultsViewContent, /isCorrect \? 'bg-emerald-500/);
+      assert.match(resultsViewContent, /Đáp án đúng/);
+      assert.match(resultsViewContent, /questionResults\?\.correct_percentage/);
+    });
+
+    await t.test('10. Waiting view unchanged', () => {
+      assert.match(waitingViewContent, /MÃ PHÒNG THI ĐẤU/);
+      assert.match(waitingViewContent, /snapshot\?\.room_code/);
+    });
+
+    await t.test('11. Leaderboard podium tie handling unchanged', () => {
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 1)'));
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 2)'));
+      assert.ok(leaderboardViewContent.includes('leaderboard.filter((p) => Number(p.rank) === 3)'));
+    });
+
+    await t.test('12. Polling lifecycle unchanged with stable dependencies', () => {
+      const cbMatch = spectatorPageContent.match(/const fetchSpectatorData = useCallback\(async[\s\S]*?\},\s*\[([\s\S]*?)\]\);/);
+      const effectMatch = spectatorPageContent.match(/fetchSpectatorData\(true\);[\s\S]*?return\s*\(\)\s*=>\s*\{[\s\S]*?\};\s*\}\,\s*\[([\s\S]*?)\]\);/);
+      assert.ok(cbMatch && effectMatch);
+      const callbackDeps = cbMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+      const effectDeps = effectMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+      assert.deepStrictEqual(callbackDeps.sort(), ['isValidUUID', 'sessionId'].sort());
+      assert.deepStrictEqual(effectDeps.sort(), ['fetchSpectatorData', 'isValidUUID', 'sessionId'].sort());
+    });
+  });
 });
