@@ -18,7 +18,7 @@ import {
   ChevronRight,
   Plus
 } from 'lucide-react';
-import { listQuestions } from '../../services/questionBankService.js';
+import { listQuestions, getQuestionAuthoringDetail } from '../../services/questionBankService.js';
 import {
   normalizeQuestionBankItemToCompetitionQuestion,
   isDuplicateQuestion
@@ -30,7 +30,7 @@ const SUBJECT_OPTIONS = [
   'Tiếng Anh',
   'Tự nhiên và Xã hội',
   'Khoa học',
-  'Lịch sử và Địa lí',
+  'Lịch sử và Địa lý',
   'Tin học',
   'Đạo đức'
 ];
@@ -54,6 +54,7 @@ export function CompetitionQuestionBankModal({
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
   const [loading, setLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState(null);
 
   // Filters
@@ -74,6 +75,7 @@ export function CompetitionQuestionBankModal({
       document.body.style.overflow = 'hidden';
       setSelectedMap(new Map());
       setError(null);
+      setIsImporting(false);
     } else {
       document.body.style.overflow = 'unset';
     }
@@ -135,6 +137,7 @@ export function CompetitionQuestionBankModal({
   };
 
   const handleToggleSelect = (item) => {
+    if (isImporting) return;
     const newMap = new Map(selectedMap);
     if (newMap.has(item.id)) {
       newMap.delete(item.id);
@@ -151,7 +154,7 @@ export function CompetitionQuestionBankModal({
     }
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     const selectedItems = Array.from(selectedMap.values());
     if (selectedItems.length === 0) return;
 
@@ -160,100 +163,114 @@ export function CompetitionQuestionBankModal({
       return;
     }
 
+    setIsImporting(true);
+    setError(null);
+
     try {
-      const normalizedList = [];
-      for (let i = 0; i < selectedItems.length; i++) {
-        const item = selectedItems[i];
-        const nextOrder = existingQuestions.length + i + 1;
-        const normalizedQ = normalizeQuestionBankItemToCompetitionQuestion(item, nextOrder);
-        normalizedList.push(normalizedQ);
-      }
+      // Fetch full authoring detail for each selected question
+      const details = await Promise.all(
+        selectedItems.map(async (item) => {
+          try {
+            const detail = await getQuestionAuthoringDetail(item.id, item.current_version_id);
+            return detail || item;
+          } catch (err) {
+            console.warn(`[CompetitionQuestionBankModal] getQuestionAuthoringDetail fallback for ${item.id}:`, err);
+            return item;
+          }
+        })
+      );
+
+      const normalizedList = details.map((detailOrItem, idx) => {
+        const nextOrder = existingQuestions.length + idx + 1;
+        return normalizeQuestionBankItemToCompetitionQuestion(detailOrItem, nextOrder);
+      });
 
       onImportQuestions(normalizedList);
       onClose();
     } catch (err) {
+      console.error('[CompetitionQuestionBankModal] Lỗi import câu hỏi:', err);
       setError(err.message || 'Có lỗi xảy ra khi chuẩn hóa câu hỏi từ Ngân hàng.');
+    } finally {
+      setIsImporting(false);
     }
   };
 
-  if (!isOpen || typeof document === 'undefined') return null;
+  if (!isOpen) return null;
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const selectedCount = selectedMap.size;
 
   return createPortal(
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
-      <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-scaleUp">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* HEADER */}
-        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 bg-gradient-to-r from-amber-50 to-orange-50">
+        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20">
+            <div className="p-2.5 rounded-2xl bg-amber-500 text-white shadow-xs">
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                Chọn câu hỏi từ Ngân hàng
-                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
-                  Trắc nghiệm 1 đáp án
-                </span>
-              </h3>
+              <h2 className="text-lg font-bold text-slate-900">Chọn câu hỏi từ Ngân hàng</h2>
               <p className="text-xs text-slate-500">
-                Còn trống <strong className="text-amber-600">{remainingSlots}</strong> / {maxAllowed} câu hỏi trong đấu trường
+                Thêm tối đa {remainingSlots} câu vào đấu trường (Hiện có {existingQuestions.length}/{maxAllowed} câu)
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+            disabled={isImporting}
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* SEARCH & FILTERS BAR */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50 space-y-3">
+        {/* SEARCH & FILTERS TOOLBAR */}
+        <div className="p-4 border-b border-slate-100 bg-slate-50/50 space-y-3">
           <form onSubmit={handleSearchSubmit} className="flex gap-2">
             <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 placeholder="Tìm kiếm nội dung câu hỏi..."
-                className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent shadow-xs"
+                className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
               />
             </div>
             <button
               type="submit"
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs rounded-xl shadow-xs transition"
+              className="px-4 py-2 rounded-xl bg-amber-500 text-white text-xs font-semibold hover:bg-amber-600 transition"
             >
-              Tìm kiếm
+              Tìm
             </button>
             {(appliedSearch || selectedSubject || selectedGrade || selectedDifficulty) && (
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="px-3 py-2 text-slate-600 hover:bg-slate-200 text-xs font-semibold rounded-xl border border-slate-300 transition"
+                className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-xs font-medium hover:bg-slate-100 transition"
               >
                 Đặt lại
               </button>
             )}
           </form>
 
-          {/* Filter Dropdowns */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {/* Quick Filters */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
             <select
               value={selectedSubject}
               onChange={(e) => {
                 setSelectedSubject(e.target.value);
                 setPage(1);
               }}
-              className="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
             >
               <option value="">Tất cả môn học</option>
               {SUBJECT_OPTIONS.map((sub) => (
-                <option key={sub} value={sub}>{sub}</option>
+                <option key={sub} value={sub}>
+                  {sub}
+                </option>
               ))}
             </select>
 
@@ -263,11 +280,13 @@ export function CompetitionQuestionBankModal({
                 setSelectedGrade(e.target.value);
                 setPage(1);
               }}
-              className="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
             >
               <option value="">Tất cả khối lớp</option>
-              {[1, 2, 3, 4, 5].map((g) => (
-                <option key={g} value={g}>Lớp {g}</option>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((g) => (
+                <option key={g} value={g}>
+                  Khối {g}
+                </option>
               ))}
             </select>
 
@@ -277,7 +296,7 @@ export function CompetitionQuestionBankModal({
                 setSelectedDifficulty(e.target.value);
                 setPage(1);
               }}
-              className="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
             >
               <option value="">Tất cả độ khó</option>
               <option value="easy">Nhận biết</option>
@@ -407,7 +426,7 @@ export function CompetitionQuestionBankModal({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                disabled={page <= 1 || loading}
+                disabled={page <= 1 || loading || isImporting}
                 onClick={() => setPage(page - 1)}
                 className="p-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition"
               >
@@ -415,7 +434,7 @@ export function CompetitionQuestionBankModal({
               </button>
               <button
                 type="button"
-                disabled={page >= totalPages || loading}
+                disabled={page >= totalPages || loading || isImporting}
                 onClick={() => setPage(page + 1)}
                 className="p-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition"
               >
@@ -429,18 +448,28 @@ export function CompetitionQuestionBankModal({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-semibold transition"
+              disabled={isImporting}
+              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-semibold transition disabled:opacity-50"
             >
               Hủy bỏ
             </button>
             <button
               type="button"
-              disabled={selectedCount === 0 || selectedCount > remainingSlots}
+              disabled={selectedCount === 0 || selectedCount > remainingSlots || isImporting}
               onClick={handleConfirmImport}
               className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-xs font-bold shadow-xs transition disabled:cursor-not-allowed"
             >
-              <Plus className="w-4 h-4" />
-              Thêm {selectedCount} câu vào đấu trường
+              {isImporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Đang lấy chi tiết...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  Thêm {selectedCount} câu vào đấu trường
+                </>
+              )}
             </button>
           </div>
         </div>
