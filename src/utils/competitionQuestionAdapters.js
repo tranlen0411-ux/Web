@@ -1,7 +1,10 @@
-﻿// src/utils/competitionQuestionAdapters.js
+// src/utils/competitionQuestionAdapters.js
 // Adapter utilities for Competition V1 R14 Question Sources (Manual, Question Bank, Excel)
 
 import * as XLSX from 'xlsx';
+
+// Authoritative frontend maximum competition questions per session
+export const MAX_COMPETITION_QUESTIONS = 20;
 
 /**
  * Normalizes an option string or object into a canonical Competition option: { id: string, text: string }

@@ -1,4 +1,4 @@
-﻿// src/components/competition/CompetitionQuestionBankModal.jsx
+// src/components/competition/CompetitionQuestionBankModal.jsx
 // Modal Chọn Câu Hỏi từ Ngân Hàng Câu Hỏi vào Đấu Trường (Competition V1 R14)
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -21,7 +21,8 @@ import {
 import { listQuestions, getQuestionAuthoringDetail } from '../../services/questionBankService.js';
 import {
   normalizeQuestionBankItemToCompetitionQuestion,
-  isDuplicateQuestion
+  isDuplicateQuestion,
+  MAX_COMPETITION_QUESTIONS
 } from '../../utils/competitionQuestionAdapters.js';
 
 const SUBJECT_OPTIONS = [
@@ -47,7 +48,7 @@ export function CompetitionQuestionBankModal({
   onClose,
   onImportQuestions,
   existingQuestions = [],
-  maxAllowed = 5
+  maxAllowed = MAX_COMPETITION_QUESTIONS
 }) {
   const [questions, setQuestions] = useState([]);
   const [totalCount, setTotalCount] = useState(0);

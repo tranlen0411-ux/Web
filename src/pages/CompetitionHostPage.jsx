@@ -53,7 +53,8 @@ import { CompetitionQuestionBankModal } from '../components/competition/Competit
 import { CompetitionImportExcelModal } from '../components/competition/CompetitionImportExcelModal.jsx';
 import {
   reindexCompetitionQuestions,
-  sanitizeQuestionsForCreation
+  sanitizeQuestionsForCreation,
+  MAX_COMPETITION_QUESTIONS
 } from '../utils/competitionQuestionAdapters.js';
 
 // Default starter questions for quick session creation
@@ -674,8 +675,8 @@ export function CompetitionHostPage() {
 
   // Handle Question Builder Updates
   const handleAddQuestion = () => {
-    if (questions.length >= 5) {
-      showToast('Chỉ được tạo tối đa 5 câu hỏi trong phiên thi này.', 'warning');
+    if (questions.length >= MAX_COMPETITION_QUESTIONS) {
+      showToast(`Chỉ được tạo tối đa ${MAX_COMPETITION_QUESTIONS} câu hỏi trong phiên thi này.`, 'warning');
       return;
     }
     const nextOrder = questions.length + 1;
@@ -727,9 +728,9 @@ export function CompetitionHostPage() {
 
   const handleImportFromBank = (newQuestions) => {
     if (!Array.isArray(newQuestions) || newQuestions.length === 0) return;
-    const remaining = 5 - questions.length;
+    const remaining = MAX_COMPETITION_QUESTIONS - questions.length;
     if (remaining <= 0) {
-      showToast('Đã đạt giới hạn tối đa 5 câu hỏi trong phòng thi.', 'warning');
+      showToast(`Đã đạt giới hạn tối đa ${MAX_COMPETITION_QUESTIONS} câu hỏi trong phòng thi.`, 'warning');
       return;
     }
     const toAdd = newQuestions.slice(0, remaining);
@@ -740,9 +741,9 @@ export function CompetitionHostPage() {
 
   const handleImportFromExcel = (newQuestions) => {
     if (!Array.isArray(newQuestions) || newQuestions.length === 0) return;
-    const remaining = 5 - questions.length;
+    const remaining = MAX_COMPETITION_QUESTIONS - questions.length;
     if (remaining <= 0) {
-      showToast('Đã đạt giới hạn tối đa 5 câu hỏi trong phòng thi.', 'warning');
+      showToast(`Đã đạt giới hạn tối đa ${MAX_COMPETITION_QUESTIONS} câu hỏi trong phòng thi.`, 'warning');
       return;
     }
     const toAdd = newQuestions.slice(0, remaining);
@@ -1217,7 +1218,7 @@ export function CompetitionHostPage() {
                 <div>
                   <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                     <HelpCircle className="w-5 h-5 text-sky-500" />
-                    2. Soạn câu hỏi đấu trường ({questions.length}/5 câu)
+                    2. Soạn câu hỏi đấu trường ({questions.length}/{MAX_COMPETITION_QUESTIONS} câu)
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">Mỗi câu hỏi có 4 lựa chọn A, B, C, D và chọn 1 đáp án đúng duy nhất.</p>
                 </div>
@@ -1227,7 +1228,7 @@ export function CompetitionHostPage() {
                     <button
                       type="button"
                       onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
-                      disabled={questions.length >= 5}
+                      disabled={questions.length >= MAX_COMPETITION_QUESTIONS}
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 text-white font-semibold text-xs hover:bg-sky-700 disabled:opacity-50 transition shadow-xs"
                     >
                       <Plus className="w-4 h-4" />
@@ -1244,7 +1245,7 @@ export function CompetitionHostPage() {
                           setIsAddMenuOpen(false);
                           handleAddQuestion();
                         }}
-                        disabled={questions.length >= 5}
+                        disabled={questions.length >= MAX_COMPETITION_QUESTIONS}
                         className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-sky-50 hover:text-sky-700 flex items-center gap-2.5 disabled:opacity-40 transition"
                       >
                         <Plus className="w-4 h-4 text-sky-500 shrink-0" />
@@ -1257,7 +1258,7 @@ export function CompetitionHostPage() {
                           setIsAddMenuOpen(false);
                           setIsQuestionBankModalOpen(true);
                         }}
-                        disabled={questions.length >= 5}
+                        disabled={questions.length >= MAX_COMPETITION_QUESTIONS}
                         className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-amber-50 hover:text-amber-700 flex items-center gap-2.5 disabled:opacity-40 transition"
                       >
                         <BookOpen className="w-4 h-4 text-amber-500 shrink-0" />
@@ -1270,7 +1271,7 @@ export function CompetitionHostPage() {
                           setIsAddMenuOpen(false);
                           setIsImportExcelModalOpen(true);
                         }}
-                        disabled={questions.length >= 5}
+                        disabled={questions.length >= MAX_COMPETITION_QUESTIONS}
                         className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 flex items-center gap-2.5 disabled:opacity-40 transition"
                       >
                         <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -2848,7 +2849,7 @@ export function CompetitionHostPage() {
         onClose={() => setIsQuestionBankModalOpen(false)}
         onImportQuestions={handleImportFromBank}
         existingQuestions={questions}
-        maxAllowed={5}
+        maxAllowed={MAX_COMPETITION_QUESTIONS}
       />
 
       <CompetitionImportExcelModal
@@ -2856,7 +2857,7 @@ export function CompetitionHostPage() {
         onClose={() => setIsImportExcelModalOpen(false)}
         onImportQuestions={handleImportFromExcel}
         existingQuestions={questions}
-        maxAllowed={5}
+        maxAllowed={MAX_COMPETITION_QUESTIONS}
       />
 
       {/* Print Layout (Hidden on Screen, Visible on Print) */}

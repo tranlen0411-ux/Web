@@ -1,4 +1,4 @@
-﻿// src/components/competition/CompetitionImportExcelModal.jsx
+// src/components/competition/CompetitionImportExcelModal.jsx
 // Modal Nhập Câu Hỏi từ file Excel vào Đấu Trường (Competition V1 R14)
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -19,7 +19,8 @@ import {
 import { parseExcelQuestions } from '../../utils/questionFileParsers.js';
 import {
   normalizeImportedQuestionToCompetitionQuestion,
-  downloadCompetitionExcelTemplate
+  downloadCompetitionExcelTemplate,
+  MAX_COMPETITION_QUESTIONS
 } from '../../utils/competitionQuestionAdapters.js';
 
 export function CompetitionImportExcelModal({
@@ -27,7 +28,7 @@ export function CompetitionImportExcelModal({
   onClose,
   onImportQuestions,
   existingQuestions = [],
-  maxAllowed = 5
+  maxAllowed = MAX_COMPETITION_QUESTIONS
 }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isParsing, setIsParsing] = useState(false);

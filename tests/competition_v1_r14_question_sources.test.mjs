@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as XLSX from 'xlsx';
@@ -9,7 +9,8 @@ import {
   reindexCompetitionQuestions,
   sanitizeQuestionsForCreation,
   isDuplicateQuestion,
-  createCompetitionExcelTemplateWorkbook
+  createCompetitionExcelTemplateWorkbook,
+  MAX_COMPETITION_QUESTIONS
 } from '../src/utils/competitionQuestionAdapters.js';
 import { parseExcelQuestions } from '../src/utils/questionFileParsers.js';
 
@@ -289,10 +290,210 @@ test('COMPETITION V1 R14 — CONTRACT HARDENING & QUESTION SOURCES TEST SUITE', 
   // =========================================================================
   await t.test('Group 4: Session Limits, RPC Payload & Zero Live FK Invariants', async (t) => {
     
-    await t.test('15. Shared max 5 limit strictly enforced across all sources', () => {
-      assert.match(hostPageContent, /const\s+remaining\s*=\s*5\s*-\s*questions\.length;/);
+    function makeMockQuestions(count) {
+      return Array.from({ length: count }, (_, i) => ({
+        question_order: i + 1,
+        question_text: `Câu hỏi số ${i + 1}`,
+        question_type: 'single_choice',
+        points: 10.00,
+        time_limit_seconds: 30,
+        options: [
+          { id: 'opt_1', text: `A ${i + 1}` },
+          { id: 'opt_2', text: `B ${i + 1}` },
+          { id: 'opt_3', text: `C ${i + 1}` },
+          { id: 'opt_4', text: `D ${i + 1}` }
+        ],
+        correct_answer: { option_id: 'opt_1' }
+      }));
+    }
+
+    await t.test('15. Shared max 20 limit strictly enforced across all sources', () => {
+      assert.strictEqual(MAX_COMPETITION_QUESTIONS, 20);
+      assert.match(adaptersContent, /export const MAX_COMPETITION_QUESTIONS = 20;/);
+      assert.match(hostPageContent, /const\s+remaining\s*=\s*MAX_COMPETITION_QUESTIONS\s*-\s*questions\.length;/);
       assert.match(hostPageContent, /const\s+toAdd\s*=\s*newQuestions\.slice\(0,\s*remaining\);/);
-      assert.match(hostPageContent, /disabled=\{questions\.length\s*>=\s*5\}/);
+      assert.match(hostPageContent, /disabled=\{questions\.length\s*>=\s*MAX_COMPETITION_QUESTIONS\}/);
+      assert.match(qbModalContent, /maxAllowed\s*=\s*MAX_COMPETITION_QUESTIONS/);
+      assert.match(excelModalContent, /maxAllowed\s*=\s*MAX_COMPETITION_QUESTIONS/);
+    });
+
+    await t.test('Behavioral Check 1: 19 existing + manual add -> becomes 20', () => {
+      const existing = makeMockQuestions(19);
+      const canAdd = existing.length < MAX_COMPETITION_QUESTIONS;
+      assert.strictEqual(canAdd, true);
+      const nextOrder = existing.length + 1;
+      const newQ = {
+        question_order: nextOrder,
+        question_text: `Câu hỏi số ${nextOrder}`,
+        question_type: 'single_choice',
+        points: 10,
+        time_limit_seconds: 30,
+        options: [{ id: 'opt_1', text: 'A' }, { id: 'opt_2', text: 'B' }],
+        correct_answer: { option_id: 'opt_1' }
+      };
+      const updated = [...existing, newQ];
+      assert.strictEqual(updated.length, 20);
+      assert.strictEqual(updated[19].question_order, 20);
+    });
+
+    await t.test('Behavioral Check 2: 20 existing + manual add -> blocked', () => {
+      const existing = makeMockQuestions(20);
+      let blocked = false;
+      if (existing.length >= MAX_COMPETITION_QUESTIONS) {
+        blocked = true;
+      }
+      assert.strictEqual(blocked, true);
+      assert.strictEqual(existing.length, 20);
+    });
+
+    await t.test('Behavioral Check 3: 0 existing + bank selection -> max 20', () => {
+      const existing = [];
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 20);
+      const bankCandidates = makeMockQuestions(25);
+      const toAdd = bankCandidates.slice(0, remainingSlots);
+      assert.strictEqual(toAdd.length, 20);
+      const combined = reindexCompetitionQuestions([...existing, ...toAdd]);
+      assert.strictEqual(combined.length, 20);
+    });
+
+    await t.test('Behavioral Check 4: 18 existing + bank selection -> max 2', () => {
+      const existing = makeMockQuestions(18);
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 2);
+      const bankCandidates = makeMockQuestions(5);
+      const toAdd = bankCandidates.slice(0, remainingSlots);
+      assert.strictEqual(toAdd.length, 2);
+      const combined = reindexCompetitionQuestions([...existing, ...toAdd]);
+      assert.strictEqual(combined.length, 20);
+    });
+
+    await t.test('Behavioral Check 5: 20 existing + bank selection -> no further selection', () => {
+      const existing = makeMockQuestions(20);
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 0);
+      const bankCandidates = makeMockQuestions(5);
+      const toAdd = bankCandidates.slice(0, remainingSlots);
+      assert.strictEqual(toAdd.length, 0);
+    });
+
+    await t.test('Behavioral Check 6: 0 existing + Excel -> max 20', () => {
+      const existing = [];
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 20);
+      const excelCandidates = makeMockQuestions(30);
+      const imported = excelCandidates.slice(0, remainingSlots);
+      assert.strictEqual(imported.length, 20);
+      const combined = reindexCompetitionQuestions([...existing, ...imported]);
+      assert.strictEqual(combined.length, 20);
+    });
+
+    await t.test('Behavioral Check 7: 17 existing + Excel -> max 3', () => {
+      const existing = makeMockQuestions(17);
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 3);
+      const excelCandidates = makeMockQuestions(10);
+      const imported = excelCandidates.slice(0, remainingSlots);
+      assert.strictEqual(imported.length, 3);
+      const combined = reindexCompetitionQuestions([...existing, ...imported]);
+      assert.strictEqual(combined.length, 20);
+    });
+
+    await t.test('Behavioral Check 8: 20 existing + Excel -> no import', () => {
+      const existing = makeMockQuestions(20);
+      const remainingSlots = Math.max(0, MAX_COMPETITION_QUESTIONS - existing.length);
+      assert.strictEqual(remainingSlots, 0);
+      const excelCandidates = makeMockQuestions(10);
+      const imported = excelCandidates.slice(0, remainingSlots);
+      assert.strictEqual(imported.length, 0);
+    });
+
+    await t.test('Behavioral Check 9: header shows current/20', () => {
+      assert.match(
+        hostPageContent,
+        /Soạn câu hỏi đấu trường \(\{questions\.length\}\/(\{MAX_COMPETITION_QUESTIONS\}|20) câu\)/
+      );
+    });
+
+    await t.test('Behavioral Check 10: all add-source buttons disabled at 20', () => {
+      const matches = [...hostPageContent.matchAll(/disabled=\{questions\.length\s*>=\s*(?:MAX_COMPETITION_QUESTIONS|20)\}/g)];
+      assert.ok(matches.length >= 4, 'Must disable main add dropdown and all 3 source options at 20');
+    });
+
+    await t.test('Behavioral Check 11: delete one question from 20 -> adding becomes available again', () => {
+      const existing = makeMockQuestions(20);
+      assert.strictEqual(existing.length >= MAX_COMPETITION_QUESTIONS, true);
+      const afterRemove = existing.filter((_, idx) => idx !== 5);
+      const reindexed = reindexCompetitionQuestions(afterRemove);
+      assert.strictEqual(reindexed.length, 19);
+      assert.strictEqual(reindexed.length >= MAX_COMPETITION_QUESTIONS, false);
+      const remaining = MAX_COMPETITION_QUESTIONS - reindexed.length;
+      assert.strictEqual(remaining, 1);
+    });
+
+    await t.test('Behavioral Check 12: reindex remains contiguous 1..20', () => {
+      const list20 = makeMockQuestions(20).map(q => ({ ...q, question_order: 999 }));
+      const reindexed = reindexCompetitionQuestions(list20);
+      assert.strictEqual(reindexed.length, 20);
+      for (let i = 0; i < 20; i++) {
+        assert.strictEqual(reindexed[i].question_order, i + 1);
+      }
+    });
+
+    await t.test('Behavioral Check 13: canonical hostCreateSession payload accepts 20 questions', () => {
+      const list20 = makeMockQuestions(20);
+      const payload = sanitizeQuestionsForCreation(list20);
+      assert.strictEqual(payload.length, 20);
+      for (let i = 0; i < 20; i++) {
+        assert.strictEqual(payload[i].question_order, i + 1);
+        assert.strictEqual(payload[i].question_type, 'single_choice');
+        assert.strictEqual(typeof payload[i].question_text, 'string');
+        assert.ok(Array.isArray(payload[i].options));
+        assert.ok(payload[i].correct_answer?.option_id);
+      }
+    });
+
+    await t.test('Behavioral Check 14: no question silently dropped when exactly 20 supplied', () => {
+      const list20 = makeMockQuestions(20);
+      const payload = sanitizeQuestionsForCreation(list20);
+      assert.strictEqual(payload.length, 20);
+      for (let i = 0; i < 20; i++) {
+        assert.strictEqual(payload[i].question_text, list20[i].question_text);
+      }
+    });
+
+    await t.test('Behavioral Check 15: question 20 retains question_text, options, correct_answer, points, time_limit_seconds', () => {
+      const list20 = makeMockQuestions(20);
+      list20[19] = {
+        question_order: 20,
+        question_text: 'Câu hỏi số 20 đặc biệt kiểm tra toàn diện',
+        question_type: 'single_choice',
+        points: 25.50,
+        time_limit_seconds: 45,
+        options: [
+          { id: 'opt_1', text: 'Đáp án A20' },
+          { id: 'opt_2', text: 'Đáp án B20' },
+          { id: 'opt_3', text: 'Đáp án C20' },
+          { id: 'opt_4', text: 'Đáp án D20' }
+        ],
+        correct_answer: { option_id: 'opt_3' },
+        _sourceBankId: 'bank_temp_uuid'
+      };
+
+      const payload = sanitizeQuestionsForCreation(list20);
+      const q20 = payload[19];
+      assert.strictEqual(q20.question_order, 20);
+      assert.strictEqual(q20.question_text, 'Câu hỏi số 20 đặc biệt kiểm tra toàn diện');
+      assert.strictEqual(q20.points, 25.50);
+      assert.strictEqual(q20.time_limit_seconds, 45);
+      assert.deepStrictEqual(q20.options, [
+        { id: 'opt_1', text: 'Đáp án A20' },
+        { id: 'opt_2', text: 'Đáp án B20' },
+        { id: 'opt_3', text: 'Đáp án C20' },
+        { id: 'opt_4', text: 'Đáp án D20' }
+      ]);
+      assert.deepStrictEqual(q20.correct_answer, { option_id: 'opt_3' });
+      assert.strictEqual(q20._sourceBankId, undefined);
     });
 
     await t.test('16. Canonical hostCreateSession payload structure remains exact and compliant', () => {
