@@ -251,27 +251,86 @@ test('COMPETITION V1 R13 — SPECTATOR / PROJECTOR VIEW TEST SUITE', async (t) =
     });
   });
 
-  await t.test('Group 7: Polling, Promise.allSettled & Data Extraction (Direct Review Fix 2 & Cleanup)', async (t) => {
-    await t.test('16. polling cadence is >= 2 seconds (2000ms for active, 3000ms for idle)', () => {
-      assert.match(spectatorPageContent, /\(snapshot\?\.status === 'in_progress'\) \? 2000 : 3000/);
+  await t.test('Group 7: Polling Lifecycle Hardening & Invariants (Direct Review Hardening)', async (t) => {
+    // Helper to extract useCallback dependencies
+    const cbMatch = spectatorPageContent.match(/const fetchSpectatorData = useCallback\(async[\s\S]*?\},\s*\[([\s\S]*?)\]\);/);
+    assert.ok(cbMatch, 'fetchSpectatorData useCallback must be defined');
+    const callbackDeps = cbMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+
+    // Helper to extract polling useEffect dependencies
+    const effectMatch = spectatorPageContent.match(/fetchSpectatorData\(true\);[\s\S]*?return\s*\(\)\s*=>\s*\{[\s\S]*?\};\s*\}\,\s*\[([\s\S]*?)\]\);/);
+    assert.ok(effectMatch, 'Polling useEffect must be defined');
+    const effectDeps = effectMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+
+    await t.test('A. fetchSpectatorData useCallback does NOT depend on full snapshot state', () => {
+      assert.ok(!callbackDeps.includes('snapshot'), 'fetchSpectatorData must not depend on snapshot state');
+      assert.ok(!callbackDeps.includes('snapshotRef'), 'fetchSpectatorData must not list refs in dependency array');
+      assert.deepStrictEqual(callbackDeps.sort(), ['isValidUUID', 'sessionId'].sort(), 'fetchSpectatorData dependencies must be stable [sessionId, isValidUUID]');
     });
 
-    await t.test('17. polling timers cleaned up on unmount or session change', () => {
-      assert.match(spectatorPageContent, /if \(pollingTimerRef\.current\) clearTimeout\(pollingTimerRef\.current\)/);
-      assert.match(spectatorPageContent, /if \(timerIntervalRef\.current\) clearInterval\(timerIntervalRef\.current\)/);
-      assert.match(spectatorPageContent, /isMountedRef\.current = false/);
+    await t.test('B. polling effect does NOT depend on snapshot object', () => {
+      assert.ok(!effectDeps.includes('snapshot'), 'Polling effect must not depend on snapshot object');
+      assert.ok(!effectDeps.includes('snapshot?.status'), 'Polling effect must not depend on snapshot?.status');
+      assert.deepStrictEqual(effectDeps.sort(), ['fetchSpectatorData', 'isValidUUID', 'sessionId'].sort(), 'Polling effect dependencies must be stable [sessionId, isValidUUID, fetchSpectatorData]');
     });
 
-    await t.test('18. stale request guard discards responses from outdated request IDs', () => {
-      assert.match(spectatorPageContent, /const currentRequestId = \+\+activeRequestIdRef\.current/);
-      assert.match(spectatorPageContent, /if \(!isMountedRef\.current \|\| currentRequestId !== activeRequestIdRef\.current\) return/);
+    await t.test('C. setSnapshot(currentSession) cannot by itself recreate polling callback/effect', () => {
+      // Proves snapshot state changes are decoupled via refs
+      assert.match(spectatorPageContent, /snapshotRef\.current = currentSession;/);
+      assert.match(spectatorPageContent, /sessionStatusRef\.current = currentSession\.status;/);
+      assert.match(spectatorPageContent, /setSnapshot\(currentSession\);/);
+      assert.ok(!callbackDeps.includes('snapshot'));
+      assert.ok(!effectDeps.includes('snapshot'));
+    });
+
+    await t.test('D. initial fetch exists exactly as lifecycle initialization, not on every snapshot refresh', () => {
+      // Initial fetch is explicitly called with true once in effect initialization
+      assert.match(spectatorPageContent, /fetchSpectatorData\(true\);/);
+      // Recursive schedule only passes false
+      assert.match(spectatorPageContent, /await fetchSpectatorData\(false\);/);
+      assert.ok(!spectatorPageContent.includes('fetchSpectatorData(true);\n        schedulePoll();'), 'Recursive poll must never re-trigger initial fetch mode');
+    });
+
+    await t.test('E. recursive timeout waits 2000ms for in_progress and 3000ms otherwise', () => {
+      assert.match(spectatorPageContent, /const interval = \(sessionStatusRef\.current === 'in_progress'\) \? 2000 : 3000;/);
+      assert.match(spectatorPageContent, /pollingTimerRef\.current = setTimeout\(async \(\) => \{[\s\S]*?await fetchSpectatorData\(false\);[\s\S]*?schedulePoll\(\);[\s\S]*?\}, interval\);/);
+    });
+
+    await t.test('F. no network setInterval polling (only local countdown allowed)', () => {
+      // Find all setInterval usages
+      const setIntervalMatches = [...spectatorPageContent.matchAll(/setInterval\(([^,]+),/g)];
+      assert.strictEqual(setIntervalMatches.length, 1, 'Only exactly 1 setInterval is permitted in spectator page (for local countdown)');
+      assert.ok(spectatorPageContent.includes('timerIntervalRef.current = setInterval(updateTimer, 1000);'));
+      assert.ok(!spectatorPageContent.includes('setInterval(async'));
+      assert.ok(!spectatorPageContent.includes('setInterval(fetchSpectatorData'));
+    });
+
+    await t.test('G. isFetchingRef overlap guard remains', () => {
+      assert.match(spectatorPageContent, /if \(isFetchingRef\.current && !isInitial\) return;/);
+      assert.match(spectatorPageContent, /isFetchingRef\.current = true;/);
+      assert.match(spectatorPageContent, /isFetchingRef\.current = false;/);
+    });
+
+    await t.test('H. activeRequestId stale guard remains', () => {
+      assert.match(spectatorPageContent, /const currentRequestId = \+\+activeRequestIdRef\.current;/);
+      assert.match(spectatorPageContent, /if \(!isMountedRef\.current \|\| currentRequestId !== activeRequestIdRef\.current\) return;/);
+    });
+
+    await t.test('I. cleanup clears polling timeout', () => {
+      assert.match(spectatorPageContent, /isMountedRef\.current = false;/);
+      assert.match(spectatorPageContent, /if \(pollingTimerRef\.current\) \{\s*clearTimeout\(pollingTimerRef\.current\);\s*pollingTimerRef\.current = null;\s*\}/);
+    });
+
+    await t.test('J. sessionId change invalidates previous request lifecycle', () => {
+      assert.ok(effectDeps.includes('sessionId'), 'Polling effect must depend on sessionId to re-run on session change');
+      assert.ok(callbackDeps.includes('sessionId'), 'fetchSpectatorData must depend on sessionId');
+      assert.match(spectatorPageContent, /snapshotRef\.current = null;/);
+      assert.match(spectatorPageContent, /sessionStatusRef\.current = null;/);
     });
 
     await t.test('Fix 2. fulfilled Promise.allSettled participant response uses partRes.value.data', () => {
-      // Must use partRes.value?.data || [] in finished status handler
-      assert.match(spectatorPageContent, /if \(partRes\.status === 'fulfilled' && partRes\.value\?\.success\) {\s*setParticipants\(partRes\.value\?\.data \|\| \[\]\);/);
-      // Ensure no buggy partRes.data in finished handler
-      const finishedBlockMatch = spectatorPageContent.match(/currentSession.status === 'finished'[\s\S]*?setParticipants\(([^)]+)\)/);
+      assert.match(spectatorPageContent, /if \(partRes\.status === 'fulfilled' && partRes\.value\?\.success\) \{\s*setParticipants\(partRes\.value\?\.data \|\| \[\]\);/);
+      const finishedBlockMatch = spectatorPageContent.match(/currentSession\.status === 'finished'[\s\S]*?setParticipants\(([^)]+)\)/);
       assert.ok(finishedBlockMatch, 'Finished block must contain setParticipants');
       assert.ok(!finishedBlockMatch[1].includes('partRes.data'), 'Finished block must not use partRes.data');
       assert.ok(finishedBlockMatch[1].includes('partRes.value'), 'Finished block must use partRes.value');

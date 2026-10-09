@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -50,6 +50,8 @@ export function CompetitionSpectatorPage() {
   const timerIntervalRef = useRef(null);
   const pollingTimerRef = useRef(null);
   const isMountedRef = useRef(true);
+  const snapshotRef = useRef(null);
+  const sessionStatusRef = useRef(null);
 
   // Fullscreen sync listener
   useEffect(() => {
@@ -88,13 +90,15 @@ export function CompetitionSpectatorPage() {
       if (!isMountedRef.current || currentRequestId !== activeRequestIdRef.current) return;
 
       if (!sessionRes.success || !sessionRes.data) {
-        if (isInitial || !snapshot) {
+        if (isInitial || !snapshotRef.current) {
           setErrorMessage(sessionRes.message || 'Không tìm thấy phòng thi hoặc bạn không có quyền truy cập.');
         }
         return;
       }
 
       const currentSession = sessionRes.data;
+      snapshotRef.current = currentSession;
+      sessionStatusRef.current = currentSession.status;
       setSnapshot(currentSession);
       setErrorMessage(null);
 
@@ -165,7 +169,7 @@ export function CompetitionSpectatorPage() {
       }
     } catch (err) {
       if (isMountedRef.current && currentRequestId === activeRequestIdRef.current) {
-        if (isInitial) {
+        if (isInitial || !snapshotRef.current) {
           setErrorMessage(err.message || 'Lỗi kết nối khi tải dữ liệu trình chiếu.');
         }
       }
@@ -175,11 +179,14 @@ export function CompetitionSpectatorPage() {
         if (isInitial) setLoading(false);
       }
     }
-  }, [sessionId, isValidUUID, snapshot]);
+  }, [sessionId, isValidUUID]);
 
   // Controlled Polling Setup (Active = 2s, Waiting/Paused/Finished = 3s)
   useEffect(() => {
     isMountedRef.current = true;
+    snapshotRef.current = null;
+    sessionStatusRef.current = null;
+
     if (!sessionId || !isValidUUID) {
       setLoading(false);
       return;
@@ -189,8 +196,9 @@ export function CompetitionSpectatorPage() {
 
     const schedulePoll = () => {
       if (!isMountedRef.current) return;
-      const interval = (snapshot?.status === 'in_progress') ? 2000 : 3000;
+      const interval = (sessionStatusRef.current === 'in_progress') ? 2000 : 3000;
       pollingTimerRef.current = setTimeout(async () => {
+        if (!isMountedRef.current) return;
         await fetchSpectatorData(false);
         schedulePoll();
       }, interval);
@@ -200,10 +208,12 @@ export function CompetitionSpectatorPage() {
 
     return () => {
       isMountedRef.current = false;
-      if (pollingTimerRef.current) clearTimeout(pollingTimerRef.current);
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (pollingTimerRef.current) {
+        clearTimeout(pollingTimerRef.current);
+        pollingTimerRef.current = null;
+      }
     };
-  }, [sessionId, isValidUUID, fetchSpectatorData, snapshot?.status]);
+  }, [sessionId, isValidUUID, fetchSpectatorData]);
 
   // Local Countdown Timer Tick
   useEffect(() => {
