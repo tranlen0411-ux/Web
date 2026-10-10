@@ -56,6 +56,8 @@ import {
   sanitizeQuestionsForCreation,
   MAX_COMPETITION_QUESTIONS
 } from '../utils/competitionQuestionAdapters.js';
+import { useCompetitionAudio } from '../hooks/useCompetitionAudio.js';
+import { HostAudioControls } from '../components/competition/HostAudioControls.jsx';
 
 // Default starter questions for quick session creation
 const DEFAULT_QUESTIONS = [
@@ -424,6 +426,18 @@ export function CompetitionHostPage() {
   );
   const activeDisplayedResults = isReviewingHistory ? reviewedQuestionResults : questionResults;
   const activeDisplayedOrder = reviewedQuestionOrder ?? snapshot?.current_question_index ?? 1;
+
+  // Competition Host Audio Hook (Music & Sound Effects V1 - Host Only)
+  const audioControls = useCompetitionAudio({
+    sessionId: activeSessionId,
+    status: currentStatus,
+    hostViewMode,
+    currentQuestionId,
+    timeLeftSeconds,
+    isLeaderboardOpen,
+    finishedTab,
+    isReviewingHistory,
+  });
 
   // UI Visibility Contract & Consistency Guard for Live Submission Stats (S2)
   const isSubmissionStatsAuthoritative = Boolean(
@@ -1105,6 +1119,8 @@ export function CompetitionHostPage() {
   const handleStartSession = async () => {
     if (!activeSessionId || actionPending) return;
     setActionPending(true);
+    // Explicit user click gesture: seamlessly unlock audio controller
+    audioControls.unlockAudio().catch(() => {});
     try {
       const res = await hostStartSession(activeSessionId);
       if (res.success) {
@@ -1337,6 +1353,7 @@ export function CompetitionHostPage() {
 
           {activeSessionId && (
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <HostAudioControls {...audioControls} />
               <button
                 type="button"
                 onClick={() => setIsLeaderboardOpen(!isLeaderboardOpen)}
