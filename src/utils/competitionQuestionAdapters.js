@@ -26,9 +26,51 @@ export function normalizeOption(opt, index) {
 }
 
 /**
+ * Resolves a raw target string/number/object to an option ID from canonical options list.
+ */
+export function resolveTargetToOptionId(target, canonicalOptions = []) {
+  if (target === null || target === undefined || String(target).trim() === '') {
+    return null;
+  }
+  const targetStr = String(target).trim();
+
+  // 1. Match by _originalId (e.g. 'opt_uuid_a', 'opt_1')
+  const matchByOrig = canonicalOptions.find(o => o._originalId && o._originalId.toLowerCase() === targetStr.toLowerCase());
+  if (matchByOrig) return matchByOrig.id;
+
+  // 2. Match by letter A, B, C, D, E, F...
+  const upperTarget = targetStr.toUpperCase();
+  if (['A', 'B', 'C', 'D', 'E', 'F'].includes(upperTarget)) {
+    const letterIdx = upperTarget.charCodeAt(0) - 65;
+    if (letterIdx >= 0 && letterIdx < canonicalOptions.length) {
+      return canonicalOptions[letterIdx].id;
+    }
+  }
+
+  // 3. Match by canonical ID (opt_1, opt_2, ...)
+  if (/^opt_\d+$/i.test(targetStr)) {
+    const matchOpt = canonicalOptions.find(o => o.id.toLowerCase() === targetStr.toLowerCase());
+    if (matchOpt) return matchOpt.id;
+  }
+
+  // 4. Match by option text (case-insensitive)
+  const matchText = canonicalOptions.find(o => o.text.toLowerCase() === targetStr.toLowerCase());
+  if (matchText) return matchText.id;
+
+  // 5. Match by 1-based numerical index
+  const numIdx = parseInt(targetStr, 10);
+  if (!isNaN(numIdx) && numIdx >= 1 && numIdx <= canonicalOptions.length && String(numIdx) === targetStr) {
+    return canonicalOptions[numIdx - 1].id;
+  }
+
+  return null;
+}
+
+/**
  * Normalizes Question Bank item/version/authoring detail to canonical Competition question format.
  * Supports full authoring detail from getQuestionAuthoringDetail ({ item, version, answer_key })
  * as well as list summary items.
+ * Supports: single_choice, multiple_choice.
  *
  * @param {Object} input - Question Bank item object or authoring detail object
  * @param {number} [order=1] - Sequential question order
@@ -48,11 +90,12 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
     ? input.answer_key
     : (input.correct_answer_key || itemObj.answer_key || itemObj.correct_answer_key || {});
 
-  // Question Type Check (R14 Phase 1: single_choice only)
+  // Question Type Check (R15A supports single_choice and multiple_choice)
   const rawType = versionObj.question_type || itemObj.question_type || input.question_type || input.type || 'single_choice';
-  if (rawType !== 'single_choice') {
-    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường R14 (chỉ hỗ trợ Trắc nghiệm 1 đáp án).`);
+  if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
+    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc Trắc nghiệm nhiều đáp án).`);
   }
+  const canonicalType = rawType;
 
   // Extract Question Text / Prompt
   const promptText = (
@@ -106,72 +149,79 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
     });
   }
 
-  // Resolve Correct Answer Option ID
-  let target = null;
-  const ca = answerKeyObj.correct_answers !== undefined
-    ? answerKeyObj.correct_answers
-    : (answerKeyObj.correct_answer !== undefined
-      ? answerKeyObj.correct_answer
-      : (itemObj.correct_answer || versionObj.correct_answer || input.correct_answer || null));
-
-  if (Array.isArray(ca)) {
-    target = ca[0];
-  } else if (ca && typeof ca === 'object') {
-    target = ca.correct_option_id || ca.correct_answer || ca.correct_option || ca.option_id || ca.key || null;
-  } else if (typeof ca === 'string' || typeof ca === 'number') {
-    target = ca;
-  }
-
-  if (target === null || target === undefined || String(target).trim() === '') {
-    throw new Error('Câu hỏi thiếu thông tin đáp án đúng.');
-  }
-
-  const targetStr = String(target).trim();
+  // Resolve Correct Answer Option ID(s)
   let resolvedOptionId = null;
+  let resolvedOptionIds = [];
 
-  // 1. Match by _originalId (e.g. 'opt_uuid_a', 'opt_1')
-  const matchByOrig = canonicalOptions.find(o => o._originalId && o._originalId.toLowerCase() === targetStr.toLowerCase());
-  if (matchByOrig) {
-    resolvedOptionId = matchByOrig.id;
-  }
+  if (canonicalType === 'single_choice') {
+    let target = answerKeyObj.correct_option_id || itemObj.correct_option_id || versionObj.correct_option_id || input.correct_option_id || null;
+    if (target === null || target === undefined) {
+      const ca = answerKeyObj.correct_answers !== undefined
+        ? answerKeyObj.correct_answers
+        : (answerKeyObj.correct_answer !== undefined
+          ? answerKeyObj.correct_answer
+          : (itemObj.correct_answer || versionObj.correct_answer || input.correct_answer || null));
 
-  // 2. Match by letter A, B, C, D...
-  if (!resolvedOptionId) {
-    const upperTarget = targetStr.toUpperCase();
-    if (['A', 'B', 'C', 'D', 'E', 'F'].includes(upperTarget)) {
-      const letterIdx = upperTarget.charCodeAt(0) - 65;
-      if (letterIdx >= 0 && letterIdx < canonicalOptions.length) {
-        resolvedOptionId = canonicalOptions[letterIdx].id;
+      if (Array.isArray(ca)) {
+        target = ca[0];
+      } else if (ca && typeof ca === 'object') {
+        target = ca.correct_option_id || ca.correct_answer || ca.correct_option || ca.option_id || ca.key || null;
+      } else if (typeof ca === 'string' || typeof ca === 'number') {
+        target = ca;
       }
     }
-  }
 
-  // 3. Match by canonical ID (opt_1, opt_2, ...)
-  if (!resolvedOptionId && /^opt_\d+$/i.test(targetStr)) {
-    const matchOpt = canonicalOptions.find(o => o.id.toLowerCase() === targetStr.toLowerCase());
-    if (matchOpt) {
-      resolvedOptionId = matchOpt.id;
+    if (target === null || target === undefined || String(target).trim() === '') {
+      throw new Error('Câu hỏi thiếu thông tin đáp án đúng.');
     }
-  }
 
-  // 4. Match by option text (case-insensitive)
-  if (!resolvedOptionId) {
-    const matchText = canonicalOptions.find(o => o.text.toLowerCase() === targetStr.toLowerCase());
-    if (matchText) {
-      resolvedOptionId = matchText.id;
+    resolvedOptionId = resolveTargetToOptionId(target, canonicalOptions);
+    if (!resolvedOptionId) {
+      throw new Error(`Không thể ánh xạ đáp án đúng "${String(target).trim()}" vào danh sách các phương án lựa chọn.`);
     }
-  }
-
-  // 5. Match by 1-based numerical index
-  if (!resolvedOptionId) {
-    const numIdx = parseInt(targetStr, 10);
-    if (!isNaN(numIdx) && numIdx >= 1 && numIdx <= canonicalOptions.length) {
-      resolvedOptionId = canonicalOptions[numIdx - 1].id;
+  } else {
+    // multiple_choice
+    let rawTargets = [];
+    if (Array.isArray(answerKeyObj.correct_option_ids) && answerKeyObj.correct_option_ids.length > 0) {
+      rawTargets = answerKeyObj.correct_option_ids;
+    } else if (Array.isArray(answerKeyObj.correct_answers) && answerKeyObj.correct_answers.length > 0) {
+      rawTargets = answerKeyObj.correct_answers;
+    } else if (Array.isArray(itemObj.correct_option_ids) && itemObj.correct_option_ids.length > 0) {
+      rawTargets = itemObj.correct_option_ids;
+    } else if (Array.isArray(versionObj.correct_option_ids) && versionObj.correct_option_ids.length > 0) {
+      rawTargets = versionObj.correct_option_ids;
+    } else if (Array.isArray(input.correct_option_ids) && input.correct_option_ids.length > 0) {
+      rawTargets = input.correct_option_ids;
+    } else {
+      const fallbackCa = answerKeyObj.correct_answer || itemObj.correct_answer || versionObj.correct_answer || input.correct_answer;
+      if (Array.isArray(fallbackCa)) {
+        rawTargets = fallbackCa;
+      } else if (typeof fallbackCa === 'string' || typeof fallbackCa === 'number') {
+        rawTargets = String(fallbackCa).split(/[;,]/).map(s => s.trim()).filter(Boolean);
+      }
     }
-  }
 
-  if (!resolvedOptionId) {
-    throw new Error(`Không thể ánh xạ đáp án đúng "${targetStr}" vào danh sách các phương án lựa chọn.`);
+    if (!rawTargets || rawTargets.length === 0) {
+      throw new Error('Câu hỏi trắc nghiệm nhiều đáp án thiếu thông tin đáp án đúng.');
+    }
+
+    const resolvedSet = new Set();
+    for (const rawTarget of rawTargets) {
+      const optId = resolveTargetToOptionId(rawTarget, canonicalOptions);
+      if (!optId) {
+        throw new Error(`Không thể ánh xạ đáp án đúng "${String(rawTarget).trim()}" vào danh sách các phương án lựa chọn.`);
+      }
+      resolvedSet.add(optId);
+    }
+
+    // Preserve deterministic ordering matching canonicalOptions
+    resolvedOptionIds = canonicalOptions
+      .map(o => o.id)
+      .filter(id => resolvedSet.has(id));
+
+    if (resolvedOptionIds.length === 0) {
+      throw new Error('Câu hỏi trắc nghiệm nhiều đáp án phải có ít nhất 1 đáp án đúng.');
+    }
   }
 
   // Clean canonical options (remove temporary _originalId)
@@ -195,11 +245,13 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
   return {
     question_order: order,
     question_text: promptText,
-    question_type: 'single_choice',
+    question_type: canonicalType,
     points,
     time_limit_seconds: timeLimit,
     options: cleanOptions,
-    correct_answer: { option_id: resolvedOptionId },
+    correct_answer: canonicalType === 'multiple_choice'
+      ? { option_ids: resolvedOptionIds }
+      : { option_id: resolvedOptionId },
     explanation,
     _sourceBankId: sourceBankId
   };
@@ -207,6 +259,7 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
 
 /**
  * Normalizes an imported Excel row into canonical Competition question format.
+ * Supports: single_choice, multiple_choice.
  *
  * @param {Object} row - Parsed Excel row object
  * @param {number} [order=1] - Sequential question order
@@ -217,11 +270,12 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     throw new Error('Dữ liệu dòng Excel không hợp lệ.');
   }
 
-  // Enforce single_choice for Competition Phase 1
+  // Enforce single_choice or multiple_choice for Competition
   const rawType = row.question_type || row.type || 'single_choice';
-  if (rawType !== 'single_choice') {
-    throw new Error('R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án.');
+  if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
+    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc Trắc nghiệm nhiều đáp án).`);
   }
+  const canonicalType = rawType;
 
   const prompt = (row.question_text || row.question || row.prompt || row.debai || '').trim();
   if (!prompt) {
@@ -259,37 +313,43 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     throw new Error('Thiếu đáp án đúng.');
   }
 
-  const correctStr = String(rawCorrect).trim();
-  const upper = correctStr.toUpperCase();
   let resolvedOptionId = null;
+  let resolvedOptionIds = [];
 
-  // Check letter A/B/C/D
-  if (['A', 'B', 'C', 'D', 'E', 'F'].includes(upper)) {
-    const letterIdx = upper.charCodeAt(0) - 65;
-    if (letterIdx >= 0 && letterIdx < canonicalOptions.length) {
-      resolvedOptionId = canonicalOptions[letterIdx].id;
+  if (canonicalType === 'single_choice') {
+    resolvedOptionId = resolveTargetToOptionId(rawCorrect, canonicalOptions);
+    if (!resolvedOptionId) {
+      throw new Error(`Đáp án đúng "${String(rawCorrect).trim()}" không khớp với bất kỳ phương án nào (A, B, C, D hoặc nội dung lựa chọn).`);
     }
-  } else if (/^opt_\d+$/i.test(correctStr)) {
-    const matchOpt = canonicalOptions.find(o => o.id.toLowerCase() === correctStr.toLowerCase());
-    if (matchOpt) resolvedOptionId = matchOpt.id;
-  }
-
-  // Check matching option text
-  if (!resolvedOptionId) {
-    const matchText = canonicalOptions.find(o => o.text.toLowerCase() === correctStr.toLowerCase());
-    if (matchText) resolvedOptionId = matchText.id;
-  }
-
-  // Check index 1/2/3/4
-  if (!resolvedOptionId) {
-    const numIdx = parseInt(correctStr, 10);
-    if (!isNaN(numIdx) && numIdx >= 1 && numIdx <= canonicalOptions.length) {
-      resolvedOptionId = canonicalOptions[numIdx - 1].id;
+  } else {
+    // multiple_choice
+    let rawTargets = [];
+    if (Array.isArray(rawCorrect)) {
+      rawTargets = rawCorrect;
+    } else {
+      rawTargets = String(rawCorrect).split(/[;,]/).map(s => s.trim()).filter(Boolean);
     }
-  }
 
-  if (!resolvedOptionId) {
-    throw new Error(`Đáp án đúng "${correctStr}" không khớp với bất kỳ phương án nào (A, B, C, D hoặc nội dung lựa chọn).`);
+    if (rawTargets.length === 0) {
+      throw new Error('Thiếu đáp án đúng.');
+    }
+
+    const resolvedSet = new Set();
+    for (const target of rawTargets) {
+      const optId = resolveTargetToOptionId(target, canonicalOptions);
+      if (!optId) {
+        throw new Error(`Đáp án đúng "${String(target).trim()}" không khớp với bất kỳ phương án nào (A, B, C, D hoặc nội dung lựa chọn).`);
+      }
+      resolvedSet.add(optId);
+    }
+
+    resolvedOptionIds = canonicalOptions
+      .map(o => o.id)
+      .filter(id => resolvedSet.has(id));
+
+    if (resolvedOptionIds.length === 0) {
+      throw new Error('Câu hỏi trắc nghiệm nhiều đáp án phải có ít nhất 1 đáp án đúng.');
+    }
   }
 
   const points = parseFloat(row.points) > 0 ? parseFloat(row.points) : 10.00;
@@ -306,11 +366,13 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
   return {
     question_order: order,
     question_text: prompt,
-    question_type: 'single_choice',
+    question_type: canonicalType,
     points,
     time_limit_seconds: timeLimit,
     options: canonicalOptions,
-    correct_answer: { option_id: resolvedOptionId },
+    correct_answer: canonicalType === 'multiple_choice'
+      ? { option_ids: resolvedOptionIds }
+      : { option_id: resolvedOptionId },
     explanation: row.explanation ? String(row.explanation).trim() : null
   };
 }
@@ -328,24 +390,66 @@ export function reindexCompetitionQuestions(questions = []) {
 
 /**
  * Sanitizes questions array before sending to hostCreateSession RPC payload.
+ * Preserves canonical types: single_choice and multiple_choice.
+ * Fails closed on unsupported types or malformed answers.
  * Ensures zero internal metadata (like _sourceBankId) is transmitted.
  */
 export function sanitizeQuestionsForCreation(questions = []) {
   if (!Array.isArray(questions)) return [];
-  return questions.map((q, idx) => ({
-    question_order: idx + 1,
-    question_text: String(q.question_text || '').trim(),
-    question_type: 'single_choice',
-    points: parseFloat(q.points) || 10.00,
-    time_limit_seconds: parseInt(q.time_limit_seconds, 10) || 30,
-    options: (Array.isArray(q.options) ? q.options : []).map(opt => ({
+  if (questions.length > MAX_COMPETITION_QUESTIONS) {
+    throw new Error(`Số lượng câu hỏi (${questions.length}) vượt quá giới hạn tối đa ${MAX_COMPETITION_QUESTIONS} câu.`);
+  }
+  return questions.map((q, idx) => {
+    const qType = q.question_type;
+    if (qType !== 'single_choice' && qType !== 'multiple_choice') {
+      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice hoặc multiple_choice).`);
+    }
+
+    const options = (Array.isArray(q.options) ? q.options : []).map(opt => ({
       id: String(opt.id),
       text: String(opt.text || '').trim()
-    })),
-    correct_answer: {
-      option_id: String(q.correct_answer?.option_id || 'opt_1')
+    }));
+
+    if (options.length < 2) {
+      throw new Error(`Câu hỏi ${idx + 1} phải có ít nhất 2 phương án lựa chọn.`);
     }
-  }));
+
+    const validOptionIds = new Set(options.map(o => o.id));
+
+    let correctAnswer;
+    if (qType === 'multiple_choice') {
+      const rawIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
+      const optionIds = Array.from(new Set(rawIds.map(id => String(id).trim()).filter(Boolean)));
+      if (optionIds.length === 0) {
+        throw new Error(`Câu hỏi ${idx + 1} (trắc nghiệm nhiều đáp án) thiếu đáp án đúng.`);
+      }
+      for (const optId of optionIds) {
+        if (!validOptionIds.has(optId)) {
+          throw new Error(`Câu hỏi ${idx + 1} chứa đáp án đúng không nằm trong danh sách lựa chọn: "${optId}".`);
+        }
+      }
+      correctAnswer = { option_ids: optionIds };
+    } else {
+      const optionId = String(q.correct_answer?.option_id || '').trim();
+      if (!optionId) {
+        throw new Error(`Câu hỏi ${idx + 1} (trắc nghiệm 1 đáp án) thiếu đáp án đúng.`);
+      }
+      if (!validOptionIds.has(optionId)) {
+        throw new Error(`Câu hỏi ${idx + 1} chứa đáp án đúng không nằm trong danh sách lựa chọn: "${optionId}".`);
+      }
+      correctAnswer = { option_id: optionId };
+    }
+
+    return {
+      question_order: idx + 1,
+      question_text: String(q.question_text || '').trim(),
+      question_type: qType,
+      points: parseFloat(q.points) || 10.00,
+      time_limit_seconds: parseInt(q.time_limit_seconds, 10) || 30,
+      options,
+      correct_answer: correctAnswer
+    };
+  });
 }
 
 /**
@@ -375,6 +479,7 @@ export function isDuplicateQuestion(candidate, existingList = []) {
 /**
  * Creates canonical Excel template workbook for Competition.
  * Headers match parseExcelQuestions required contract for 100% round-trip fidelity.
+ * Includes both single_choice and multiple_choice examples.
  * Distinct times [25, 45, 60] verify round-trip persistence.
  *
  * @returns {import('xlsx').WorkBook}
@@ -405,13 +510,13 @@ export function createCompetitionExcelTemplateWorkbook() {
       25
     ],
     [
-      'single_choice',
-      'Kết quả của phép tính 25 + 75 là bao nhiêu?',
-      '90',
-      '100',
-      '110',
-      '120',
-      'B',
+      'multiple_choice',
+      'Những thành phố nào trực thuộc trung ương của Việt Nam? (Chọn nhiều đáp án, cách nhau bằng dấu chấm phẩy ;)',
+      'Hà Nội',
+      'Đà Lạt',
+      'Đà Nẵng',
+      'Nha Trang',
+      'A;C',
       10,
       45
     ],
