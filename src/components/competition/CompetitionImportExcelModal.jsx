@@ -94,15 +94,15 @@ export function CompetitionImportExcelModal({
         const rawRow = rows[i];
         const rowNum = rawRow.source_row || (i + 2);
 
-        // Enforce Single Choice Only for Competition R14 Phase 1
+        // Enforce Single Choice or Multiple Choice for Competition R15A
         const rawType = rawRow.question_type || rawRow.type;
-        if (rawType !== 'single_choice') {
+        if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
           evaluated.push({
             rowNum,
             isValid: false,
             question: null,
             raw: rawRow,
-            error: 'R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án.'
+            error: 'Đấu trường hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc nhiều đáp án.'
           });
           continue;
         }
@@ -399,7 +399,9 @@ export function CompetitionImportExcelModal({
                       {isValid && opts.length > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
                           {opts.map((opt, oIdx) => {
-                            const isCorrect = question.correct_answer?.option_id === opt.id;
+                            const isCorrect = question.question_type === 'multiple_choice'
+                              ? (question.correct_answer?.option_ids || []).includes(opt.id)
+                              : question.correct_answer?.option_id === opt.id;
                             const letter = String.fromCharCode(65 + oIdx);
                             return (
                               <div

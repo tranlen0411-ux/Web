@@ -44,6 +44,7 @@ const normalizeHeader = (header) => {
 const normalizeType = (typeStr) => {
   if (!typeStr) return null;
   const clean = sanitizeText(typeStr).toLowerCase().replace(/[\s\-_]+/g, '');
+  if (clean.includes('multiple') || clean.includes('nhieudapan')) return 'multiple_choice';
   if (clean.includes('tracnghiem') || clean.includes('single') || clean.includes('mcq') || clean === 'choice') return 'single_choice';
   if (clean.includes('dienkhuyet') || clean.includes('dientu') || clean.includes('blank') || clean === 'fill') return 'fill_blank';
   if (clean.includes('anh') || clean.includes('image') || clean.includes('photo') || clean === 'image_upload') return 'image_upload';
@@ -123,11 +124,42 @@ export const normalizeImportedQuestion = (q, idx = 0) => {
         }
       }
     } else if (qType === 'multiple_choice') {
+      let rawTokens = [];
       if (Array.isArray(rawCorrect)) {
-        resolvedCorrect = rawCorrect.map(a => String(a !== null && a !== undefined ? a : '')).filter(Boolean);
-      } else {
-        resolvedCorrect = [String(rawCorrect || '')].filter(Boolean);
+        rawTokens = rawCorrect;
+      } else if (typeof rawCorrect === 'string' || typeof rawCorrect === 'number') {
+        const str = String(rawCorrect).trim();
+        rawTokens = str.split(/[;,]/).map(s => s.trim()).filter(Boolean);
       }
+
+      const resolvedList = [];
+      for (const tok of rawTokens) {
+        const tokStr = String(tok).trim();
+        const upper = tokStr.toUpperCase();
+        if (['A', 'B', 'C', 'D', 'E', 'F'].includes(upper) && normOpts.length >= 2) {
+          const letterIdx = upper.charCodeAt(0) - 65;
+          if (letterIdx < normOpts.length) {
+            resolvedList.push(normOpts[letterIdx]);
+          } else {
+            mappingError = `${qPrefix}: không ánh xạ được đáp án ${upper} vào danh sách ${normOpts.length} lựa chọn.`;
+          }
+        } else if (/^\d+$/.test(tokStr) && !normOpts.includes(tokStr)) {
+          const numIdx = parseInt(tokStr, 10) - 1;
+          if (numIdx >= 0 && numIdx < normOpts.length) {
+            resolvedList.push(normOpts[numIdx]);
+          } else {
+            mappingError = `${qPrefix}: không ánh xạ được đáp án chỉ số ${tokStr} vào options.`;
+          }
+        } else {
+          const matchOpt = normOpts.find(o => o.trim().toLowerCase() === tokStr.toLowerCase());
+          if (matchOpt) {
+            resolvedList.push(matchOpt);
+          } else if (tokStr) {
+            resolvedList.push(tokStr);
+          }
+        }
+      }
+      resolvedCorrect = resolvedList;
     }
 
     const correctAnswerKey = {
@@ -340,7 +372,7 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
       if (!normalizedType) {
         errors.push({
           row: rowNumber,
-          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), fill_blank (điền từ), essay (tự luận), image_upload (nộp ảnh).`
+          message: `Loại câu "${typeRaw}" không hợp lệ. Chỉ chấp nhận: single_choice (trắc nghiệm), multiple_choice (trắc nghiệm nhiều đáp án), fill_blank (điền từ), essay (tự luận), image_upload (nộp ảnh).`
         });
         continue;
       }
@@ -408,6 +440,23 @@ export const parseExcelQuestions = async (arrayBuffer, fileName = '') => {
         const match = normQ.options_json.some(o => o.toLowerCase() === String(normQ.correct_answer_key.correct_answer).toLowerCase());
         if (!match) {
           errors.push({ row: rowNumber, message: `Câu ${normQ.question_number} (dòng Excel ${rowNumber}): đáp án đúng "${normQ.correct_answer_key.correct_answer}" không khớp với bất kỳ lựa chọn nào trong [${normQ.options_json.join(', ')}].` });
+          continue;
+        }
+      } else if (normalizedType === 'multiple_choice') {
+        if (normQ.options_json.length < 2) {
+          errors.push({ row: rowNumber, message: `Câu ${normQ.question_number} (dòng Excel ${rowNumber}): câu trắc nghiệm nhiều đáp án chỉ có ${normQ.options_json.length} lựa chọn; cần ít nhất 2 lựa chọn.` });
+          continue;
+        }
+        const correctList = Array.isArray(normQ.correct_answer_key?.correct_answer)
+          ? normQ.correct_answer_key.correct_answer
+          : [normQ.correct_answer_key?.correct_answer].filter(Boolean);
+        if (correctList.length === 0) {
+          errors.push({ row: rowNumber, message: `Câu ${normQ.question_number} (dòng Excel ${rowNumber}): chưa nhập hoặc không ánh xạ được đáp án đúng.` });
+          continue;
+        }
+        const invalidMatches = correctList.filter(ca => !normQ.options_json.some(o => o.toLowerCase() === String(ca).toLowerCase()));
+        if (invalidMatches.length > 0) {
+          errors.push({ row: rowNumber, message: `Câu ${normQ.question_number} (dòng Excel ${rowNumber}): đáp án đúng "${invalidMatches.join(', ')}" không khớp với các lựa chọn.` });
           continue;
         }
       } else if (normalizedType === 'fill_blank') {

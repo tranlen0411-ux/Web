@@ -231,6 +231,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   // Question & Submission Local State
   const [roomCode, setRoomCode] = useState(() => getRoomCodeFromUrl());
   const [selectedOptionId, setSelectedOptionId] = useState(null);
+  const [selectedOptionIds, setSelectedOptionIds] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedCurrentQuestion, setHasSubmittedCurrentQuestion] = useState(false);
   const [lastSubmittedQuestionId, setLastSubmittedQuestionId] = useState(null);
@@ -358,6 +359,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     setParticipantId(null);
     setParticipantInfo(null);
     setSelectedOptionId(null);
+    setSelectedOptionIds([]);
     setHasSubmittedCurrentQuestion(false);
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
@@ -633,6 +635,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   useEffect(() => {
     if (sessionData?.status === 'finished') {
       setSelectedOptionId(null);
+      setSelectedOptionIds([]);
       setHasSubmittedCurrentQuestion(false);
       setLastSubmittedQuestionId(null);
       setSubmitResult(null);
@@ -646,6 +649,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     if (currentQuestion?.id) {
       if (currentQuestion.id !== lastSubmittedQuestionId) {
         setSelectedOptionId(null);
+        setSelectedOptionIds([]);
         setHasSubmittedCurrentQuestion(false);
         setSubmitResult(null);
         setSubmitError(null);
@@ -742,6 +746,22 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   };
 
   const isTimeExpired = timeLeftSeconds !== null && timeLeftSeconds <= 0;
+  const isMultipleChoice = currentQuestion?.question_type === 'multiple_choice';
+  const handleSelectOption = (optionId) => {
+    if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
+
+    if (isMultipleChoice) {
+      setSelectedOptionIds((prev) => {
+        const next = prev.includes(optionId)
+          ? prev.filter((id) => id !== optionId)
+          : [...prev, optionId];
+        setSelectedOptionId(next.length > 0 ? next[0] : null);
+        return next;
+      });
+    } else {
+      setSelectedOptionId(optionId);
+    }
+  };
 
   // Handle Submit Answer with Stale, Question Advance, & Terminal Guards
   const handleSubmitAnswer = async () => {
@@ -763,12 +783,16 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     const targetQuestionId = currentQuestion.id;
 
     try {
+      const submissionOptions = isMultipleChoice
+        ? selectedOptionIds
+        : [selectedOptionId];
+
       const res = await studentSubmitAnswer({
         sessionId: targetSessionId,
         questionId: targetQuestionId,
         participantId: targetParticipantId,
         guestToken: isGuestMode ? guestToken : null,
-        selectedOptionIds: [selectedOptionId],
+        selectedOptionIds: submissionOptions,
       });
 
       const isResponseValid =
@@ -841,6 +865,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     setParticipantId(null);
     setParticipantInfo(null);
     setSelectedOptionId(null);
+    setSelectedOptionIds([]);
     setHasSubmittedCurrentQuestion(false);
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
@@ -1596,15 +1621,24 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
           {currentQuestion ? (
             <>
               {/* Question Text */}
-              <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-8 leading-snug">
-                {currentQuestion.question_text}
-              </h2>
+              <div className="mb-8">
+                {isMultipleChoice && (
+                  <span className="inline-block px-3 py-1 mb-2 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-200">
+                    Trắc nghiệm nhiều đáp án (chọn một hoặc nhiều)
+                  </span>
+                )}
+                <h2 className="text-xl sm:text-2xl font-black text-slate-800 leading-snug">
+                  {currentQuestion.question_text}
+                </h2>
+              </div>
 
               {/* Options Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
                 {Array.isArray(currentQuestion.options) &&
                   currentQuestion.options.map((option, idx) => {
-                    const isSelected = selectedOptionId === option.id;
+                    const isSelected = isMultipleChoice
+                      ? selectedOptionIds.includes(option.id)
+                      : selectedOptionId === option.id;
                     const letter = getOptionLetter(idx);
                     const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
 
@@ -1612,7 +1646,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                       <button
                         key={option.id || idx}
                         type="button"
-                        onClick={() => !disabled && setSelectedOptionId(option.id)}
+                        onClick={() => !disabled && handleSelectOption(option.id)}
                         disabled={disabled}
                         className={`p-4 sm:p-5 rounded-2xl border-3 text-left transition-all flex items-start gap-4 active:scale-[0.99] ${
                           isSelected
@@ -1621,7 +1655,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                         } ${disabled && !isSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
                         <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-base shrink-0 border-2 ${
+                          className={`w-9 h-9 ${isMultipleChoice ? 'rounded-lg' : 'rounded-xl'} flex items-center justify-center font-black text-base shrink-0 border-2 ${
                             isSelected
                               ? 'bg-sky-500 text-white border-sky-600'
                               : 'bg-slate-100 text-slate-700 border-slate-300'
@@ -1635,7 +1669,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                           </div>
                         </div>
                         {isSelected && (
-                          <div className="w-6 h-6 rounded-full bg-sky-500 text-white flex items-center justify-center shrink-0 mt-1.5">
+                          <div
+                            className={`w-6 h-6 ${
+                              isMultipleChoice ? 'rounded-md' : 'rounded-full'
+                            } bg-sky-500 text-white flex items-center justify-center shrink-0 mt-1.5`}
+                          >
                             <Check className="w-4 h-4 stroke-[3]" />
                           </div>
                         )}

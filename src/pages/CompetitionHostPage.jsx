@@ -726,6 +726,65 @@ export function CompetitionHostPage() {
     setQuestions(updated);
   };
 
+  const handleToggleCorrectOptionMulti = (qIndex, optionId) => {
+    const updated = [...questions];
+    const q = updated[qIndex];
+    const currentIds = Array.isArray(q.correct_answer?.option_ids) ? [...q.correct_answer.option_ids] : [];
+    const exists = currentIds.includes(optionId);
+    let nextIds;
+    if (exists) {
+      nextIds = currentIds.filter(id => id !== optionId);
+    } else {
+      nextIds = [...currentIds, optionId];
+    }
+    updated[qIndex].correct_answer = { option_ids: nextIds };
+    setQuestions(updated);
+  };
+
+  const handleQuestionTypeChange = (qIndex, newType) => {
+    const updated = [...questions];
+    const q = updated[qIndex];
+    if (newType === 'multiple_choice') {
+      // single_choice -> multiple_choice:
+      // preserve valid options, convert selected correct option to one-element option_ids[]
+      const currentOptId = q.correct_answer?.option_id;
+      const initialIds = currentOptId ? [currentOptId] : (Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : []);
+      updated[qIndex] = {
+        ...q,
+        question_type: 'multiple_choice',
+        correct_answer: {
+          option_ids: initialIds
+        }
+      };
+    } else if (newType === 'single_choice') {
+      // multiple_choice -> single_choice:
+      // if multiple correct answers exist, DO NOT silently choose one.
+      // Require user to select exactly one correct answer or clear invalid multiple-answer state visibly.
+      const currentIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
+      if (currentIds.length === 1) {
+        updated[qIndex] = {
+          ...q,
+          question_type: 'single_choice',
+          correct_answer: {
+            option_id: currentIds[0]
+          }
+        };
+      } else {
+        updated[qIndex] = {
+          ...q,
+          question_type: 'single_choice',
+          correct_answer: {
+            option_id: ''
+          }
+        };
+        if (currentIds.length > 1) {
+          showToast(`Câu ${q.question_order} có nhiều hơn 1 đáp án đúng. Vui lòng chọn lại 1 đáp án đúng duy nhất.`, 'warning');
+        }
+      }
+    }
+    setQuestions(updated);
+  };
+
   const handleImportFromBank = (newQuestions) => {
     if (!Array.isArray(newQuestions) || newQuestions.length === 0) return;
     const remaining = MAX_COMPETITION_QUESTIONS - questions.length;
@@ -781,9 +840,17 @@ export function CompetitionHostPage() {
           return;
         }
       }
-      if (!q.correct_answer?.option_id) {
-        setSetupError(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
-        return;
+      if (q.question_type === 'multiple_choice') {
+        const optionIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
+        if (optionIds.length === 0) {
+          setSetupError(`Vui lòng chọn ít nhất 1 đáp án đúng cho câu hỏi số ${i + 1} (trắc nghiệm nhiều đáp án).`);
+          return;
+        }
+      } else {
+        if (!q.correct_answer?.option_id) {
+          setSetupError(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
+          return;
+        }
       }
     }
 
@@ -1220,7 +1287,7 @@ export function CompetitionHostPage() {
                     <HelpCircle className="w-5 h-5 text-sky-500" />
                     2. Soạn câu hỏi đấu trường ({questions.length}/{MAX_COMPETITION_QUESTIONS} câu)
                   </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Mỗi câu hỏi có 4 lựa chọn A, B, C, D và chọn 1 đáp án đúng duy nhất.</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Hỗ trợ trắc nghiệm 1 đáp án hoặc nhiều đáp án (tối đa {MAX_COMPETITION_QUESTIONS} câu).</p>
                 </div>
 
                 <div className="relative">
@@ -1285,10 +1352,20 @@ export function CompetitionHostPage() {
               <div className="space-y-6">
                 {questions.map((q, qIdx) => (
                   <div key={qIdx} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="px-3 py-1 rounded-lg bg-amber-500 text-white font-bold text-xs shadow-sm">
-                        Câu {q.question_order}
-                      </span>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 rounded-lg bg-amber-500 text-white font-bold text-xs shadow-sm">
+                          Câu {q.question_order}
+                        </span>
+                        <select
+                          value={q.question_type || 'single_choice'}
+                          onChange={(e) => handleQuestionTypeChange(qIdx, e.target.value)}
+                          className="px-2.5 py-1 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                        >
+                          <option value="single_choice">Trắc nghiệm 1 đáp án</option>
+                          <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+                        </select>
+                      </div>
 
                       <div className="flex items-center gap-3">
                         <div className="flex items-center gap-1.5 text-xs text-slate-600">
@@ -1332,7 +1409,10 @@ export function CompetitionHostPage() {
                     {/* Options List */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {q.options.map((opt, optIdx) => {
-                        const isCorrect = q.correct_answer?.option_id === opt.id;
+                        const isMulti = q.question_type === 'multiple_choice';
+                        const isCorrect = isMulti
+                          ? (Array.isArray(q.correct_answer?.option_ids) && q.correct_answer.option_ids.includes(opt.id))
+                          : (q.correct_answer?.option_id === opt.id);
                         const labelChar = String.fromCharCode(65 + optIdx); // A, B, C, D
 
                         return (
@@ -1344,14 +1424,24 @@ export function CompetitionHostPage() {
                                 : 'bg-white border-slate-200'
                             }`}
                           >
-                            <input
-                              type="radio"
-                              name={`correct_q_${qIdx}`}
-                              checked={isCorrect}
-                              onChange={() => handleSelectCorrectOption(qIdx, opt.id)}
-                              className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                              title="Đánh dấu đây là đáp án đúng"
-                            />
+                            {isMulti ? (
+                              <input
+                                type="checkbox"
+                                checked={isCorrect}
+                                onChange={() => handleToggleCorrectOptionMulti(qIdx, opt.id)}
+                                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                                title="Đánh dấu phương án này là một đáp án đúng"
+                              />
+                            ) : (
+                              <input
+                                type="radio"
+                                name={`correct_q_${qIdx}`}
+                                checked={isCorrect}
+                                onChange={() => handleSelectCorrectOption(qIdx, opt.id)}
+                                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                title="Đánh dấu đây là đáp án đúng"
+                              />
+                            )}
                             <span className="font-bold text-xs text-slate-500 w-5">{labelChar}.</span>
                             <input
                               type="text"

@@ -64,6 +64,7 @@ export function CompetitionQuestionBankModal({
   const [selectedSubject, setSelectedSubject] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState('');
+  const [selectedType, setSelectedType] = useState('');
 
   // Selected Map (id -> item)
   const [selectedMap, setSelectedMap] = useState(new Map());
@@ -94,17 +95,24 @@ export function CompetitionQuestionBankModal({
       const filters = {
         page,
         page_size: pageSize,
-        question_type: 'single_choice', // R14 Phase 1: single_choice only
         status: 'published'
       };
 
+      if (selectedType) {
+        filters.question_type = selectedType;
+      }
       if (appliedSearch) filters.search = appliedSearch;
       if (selectedSubject) filters.subject = selectedSubject;
       if (selectedGrade) filters.grade_level = selectedGrade;
       if (selectedDifficulty) filters.difficulty = selectedDifficulty;
 
       const res = await listQuestions(filters);
-      setQuestions(res.items || []);
+      let items = res.items || [];
+      // Only permit single_choice and multiple_choice in Competition R15A
+      if (!selectedType) {
+        items = items.filter(it => it.question_type === 'single_choice' || it.question_type === 'multiple_choice');
+      }
+      setQuestions(items);
       setTotalCount(res.total_count || 0);
     } catch (err) {
       console.error('[CompetitionQuestionBankModal] Lỗi tải câu hỏi:', err);
@@ -114,7 +122,7 @@ export function CompetitionQuestionBankModal({
     } finally {
       setLoading(false);
     }
-  }, [isOpen, page, pageSize, appliedSearch, selectedSubject, selectedGrade, selectedDifficulty]);
+  }, [isOpen, page, pageSize, appliedSearch, selectedSubject, selectedGrade, selectedDifficulty, selectedType]);
 
   useEffect(() => {
     if (isOpen) {
@@ -134,6 +142,7 @@ export function CompetitionQuestionBankModal({
     setSelectedSubject('');
     setSelectedGrade('');
     setSelectedDifficulty('');
+    setSelectedType('');
     setPage(1);
   };
 
@@ -328,6 +337,19 @@ export function CompetitionQuestionBankModal({
               <option value="hard">Vận dụng</option>
               <option value="expert">Vận dụng cao</option>
             </select>
+
+            <select
+              value={selectedType}
+              onChange={(e) => {
+                setSelectedType(e.target.value);
+                setPage(1);
+              }}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 font-medium"
+            >
+              <option value="">Tất cả loại trắc nghiệm</option>
+              <option value="single_choice">Trắc nghiệm 1 đáp án</option>
+              <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+            </select>
           </div>
         </div>
 
@@ -391,6 +413,13 @@ export function CompetitionQuestionBankModal({
                     {/* Content */}
                     <div className="flex-1 space-y-2 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap text-xs">
+                        <span className={`px-2 py-0.5 rounded-md font-semibold text-[11px] border ${
+                          item.question_type === 'multiple_choice'
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : 'bg-sky-50 text-sky-700 border-sky-200'
+                        }`}>
+                          {item.question_type === 'multiple_choice' ? 'Trắc nghiệm nhiều đáp án' : 'Trắc nghiệm 1 đáp án'}
+                        </span>
                         {item.subject && (
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 font-semibold text-slate-700">
                             {item.subject}
