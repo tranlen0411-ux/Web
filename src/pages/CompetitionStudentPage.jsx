@@ -232,6 +232,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const [roomCode, setRoomCode] = useState(() => getRoomCodeFromUrl());
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState([]);
+  const [studentTextAnswer, setStudentTextAnswer] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedCurrentQuestion, setHasSubmittedCurrentQuestion] = useState(false);
   const [lastSubmittedQuestionId, setLastSubmittedQuestionId] = useState(null);
@@ -360,6 +361,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     setParticipantInfo(null);
     setSelectedOptionId(null);
     setSelectedOptionIds([]);
+    setStudentTextAnswer('');
     setHasSubmittedCurrentQuestion(false);
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
@@ -636,6 +638,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     if (sessionData?.status === 'finished') {
       setSelectedOptionId(null);
       setSelectedOptionIds([]);
+      setStudentTextAnswer('');
       setHasSubmittedCurrentQuestion(false);
       setLastSubmittedQuestionId(null);
       setSubmitResult(null);
@@ -650,6 +653,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       if (currentQuestion.id !== lastSubmittedQuestionId) {
         setSelectedOptionId(null);
         setSelectedOptionIds([]);
+        setStudentTextAnswer('');
         setHasSubmittedCurrentQuestion(false);
         setSubmitResult(null);
         setSubmitError(null);
@@ -747,6 +751,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
 
   const isTimeExpired = timeLeftSeconds !== null && timeLeftSeconds <= 0;
   const isMultipleChoice = currentQuestion?.question_type === 'multiple_choice';
+  const isShortAnswer = currentQuestion?.question_type === 'short_answer';
   const handleSelectOption = (optionId) => {
     if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
 
@@ -765,8 +770,14 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
 
   // Handle Submit Answer with Stale, Question Advance, & Terminal Guards
   const handleSubmitAnswer = async () => {
+    const hasValidAnswer = isShortAnswer
+      ? Boolean(studentTextAnswer && studentTextAnswer.trim().length > 0)
+      : isMultipleChoice
+      ? selectedOptionIds.length > 0
+      : Boolean(selectedOptionId);
+
     if (
-      !selectedOptionId ||
+      !hasValidAnswer ||
       isSubmitting ||
       hasSubmittedCurrentQuestion ||
       !currentQuestion?.id ||
@@ -783,7 +794,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     const targetQuestionId = currentQuestion.id;
 
     try {
-      const submissionOptions = isMultipleChoice
+      const submissionOptions = isShortAnswer
+        ? []
+        : isMultipleChoice
         ? selectedOptionIds
         : [selectedOptionId];
 
@@ -793,6 +806,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
         participantId: targetParticipantId,
         guestToken: isGuestMode ? guestToken : null,
         selectedOptionIds: submissionOptions,
+        textAnswer: isShortAnswer ? studentTextAnswer.trim() : null,
       });
 
       const isResponseValid =
@@ -1627,60 +1641,87 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                     Trắc nghiệm nhiều đáp án (chọn một hoặc nhiều)
                   </span>
                 )}
+                {isShortAnswer && (
+                  <span className="inline-block px-3 py-1 mb-2 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg border border-emerald-200">
+                    Điền vào chỗ trống
+                  </span>
+                )}
                 <h2 className="text-xl sm:text-2xl font-black text-slate-800 leading-snug">
                   {currentQuestion.question_text}
                 </h2>
               </div>
 
-              {/* Options Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                {Array.isArray(currentQuestion.options) &&
-                  currentQuestion.options.map((option, idx) => {
-                    const isSelected = isMultipleChoice
-                      ? selectedOptionIds.includes(option.id)
-                      : selectedOptionId === option.id;
-                    const letter = getOptionLetter(idx);
-                    const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
+              {/* Short Answer Input OR Options Grid */}
+              {isShortAnswer ? (
+                <div className="mb-8">
+                  <label htmlFor="student-text-answer" className="block text-sm font-black text-slate-700 mb-2">
+                    Nhập câu trả lời của bạn:
+                  </label>
+                  <input
+                    id="student-text-answer"
+                    type="text"
+                    value={studentTextAnswer}
+                    onChange={(e) => setStudentTextAnswer(e.target.value)}
+                    disabled={isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired}
+                    placeholder="Nhập đáp án tại đây..."
+                    autoComplete="off"
+                    maxLength={200}
+                    className="w-full px-5 py-4 text-base sm:text-lg font-bold bg-slate-50 border-3 border-slate-300 rounded-2xl focus:bg-white focus:border-sky-500 focus:outline-none transition-all placeholder:text-slate-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                  <p className="text-xs text-slate-500 font-medium mt-2">
+                    Hệ thống không phân biệt chữ hoa/thường và tự động bỏ khoảng trắng thừa ở đầu/cuối.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+                  {Array.isArray(currentQuestion.options) &&
+                    currentQuestion.options.map((option, idx) => {
+                      const isSelected = isMultipleChoice
+                        ? selectedOptionIds.includes(option.id)
+                        : selectedOptionId === option.id;
+                      const letter = getOptionLetter(idx);
+                      const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
 
-                    return (
-                      <button
-                        key={option.id || idx}
-                        type="button"
-                        onClick={() => !disabled && handleSelectOption(option.id)}
-                        disabled={disabled}
-                        className={`p-4 sm:p-5 rounded-2xl border-3 text-left transition-all flex items-start gap-4 active:scale-[0.99] ${
-                          isSelected
-                            ? 'bg-sky-50 border-sky-500 ring-2 ring-sky-300 shadow-md'
-                            : 'bg-white border-slate-200 hover:border-sky-300 hover:bg-slate-50/50'
-                        } ${disabled && !isSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div
-                          className={`w-9 h-9 ${isMultipleChoice ? 'rounded-lg' : 'rounded-xl'} flex items-center justify-center font-black text-base shrink-0 border-2 ${
+                      return (
+                        <button
+                          key={option.id || idx}
+                          type="button"
+                          onClick={() => !disabled && handleSelectOption(option.id)}
+                          disabled={disabled}
+                          className={`p-4 sm:p-5 rounded-2xl border-3 text-left transition-all flex items-start gap-4 active:scale-[0.99] ${
                             isSelected
-                              ? 'bg-sky-500 text-white border-sky-600'
-                              : 'bg-slate-100 text-slate-700 border-slate-300'
-                          }`}
+                              ? 'bg-sky-50 border-sky-500 ring-2 ring-sky-300 shadow-md'
+                              : 'bg-white border-slate-200 hover:border-sky-300 hover:bg-slate-50/50'
+                          } ${disabled && !isSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
-                          {letter}
-                        </div>
-                        <div className="flex-1 min-w-0 pt-1">
-                          <div className="text-base font-bold text-slate-800">
-                            {option.text || option.content || option.label || 'Lựa chọn'}
-                          </div>
-                        </div>
-                        {isSelected && (
                           <div
-                            className={`w-6 h-6 ${
-                              isMultipleChoice ? 'rounded-md' : 'rounded-full'
-                            } bg-sky-500 text-white flex items-center justify-center shrink-0 mt-1.5`}
+                            className={`w-9 h-9 ${isMultipleChoice ? 'rounded-lg' : 'rounded-xl'} flex items-center justify-center font-black text-base shrink-0 border-2 ${
+                              isSelected
+                                ? 'bg-sky-500 text-white border-sky-600'
+                                : 'bg-slate-100 text-slate-700 border-slate-300'
+                            }`}
                           >
-                            <Check className="w-4 h-4 stroke-[3]" />
+                            {letter}
                           </div>
-                        )}
-                      </button>
-                    );
-                  })}
-              </div>
+                          <div className="flex-1 min-w-0 pt-1">
+                            <div className="text-base font-bold text-slate-800">
+                              {option.text || option.content || option.label || 'Lựa chọn'}
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <div
+                              className={`w-6 h-6 ${
+                                isMultipleChoice ? 'rounded-md' : 'rounded-full'
+                              } bg-sky-500 text-white flex items-center justify-center shrink-0 mt-1.5`}
+                            >
+                              <Check className="w-4 h-4 stroke-[3]" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
 
               {/* Submit Error */}
               {submitError && (
@@ -1700,6 +1741,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                   <h3 className="text-lg font-black text-emerald-950 mb-1">
                     Đã Nộp Câu Trả Lời Thành Công! 🎉
                   </h3>
+                  {isShortAnswer && studentTextAnswer.trim() && (
+                    <p className="text-sm font-semibold text-emerald-900 mb-2">
+                      Câu trả lời của bạn: <span className="font-bold font-mono">"{studentTextAnswer.trim()}"</span>
+                    </p>
+                  )}
                   {submitResult?.points_awarded !== undefined && (
                     <p className="text-sm font-bold text-emerald-800 mb-2">
                       {submitResult.is_correct ? 'Chính xác! 🌟' : 'Đã ghi nhận! ⚡'} (+{submitResult.points_awarded} điểm)
@@ -1714,7 +1760,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                 <button
                   type="button"
                   onClick={handleSubmitAnswer}
-                  disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
+                  disabled={!selectedOptionId && !isShortAnswer || (isShortAnswer && !studentTextAnswer.trim()) || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
                   className={`w-full py-4 px-6 font-black text-lg rounded-2xl shadow-md transition-all flex items-center justify-center gap-3 active:scale-[0.99] ${
                     isTimeExpired
                       ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-2 border-slate-300'

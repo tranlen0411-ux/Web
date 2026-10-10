@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Clock, Pause } from 'lucide-react';
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -73,31 +73,40 @@ export function SpectatorLiveQuestionView({
           </div>
         )}
 
-        {/* Options Grid (Neutral style: No correct answer, No percentages) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-          {activeQuestion?.options && activeQuestion.options.length > 0 ? (
-            activeQuestion.options.map((opt, idx) => {
-              const theme = OPTION_THEMES[idx % OPTION_THEMES.length];
-              return (
-                <div
-                  key={opt.id || idx}
-                  className={`p-5 sm:p-6 rounded-2xl border-2 ${theme.bg} ${theme.border} flex items-center gap-4 shadow-lg transition-transform`}
-                >
-                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl ${theme.badge} font-black text-lg sm:text-xl flex items-center justify-center flex-shrink-0 shadow-md`}>
-                    {OPTION_LETTERS[idx] || (idx + 1)}
-                  </div>
-                  <span className={`text-lg sm:text-2xl font-bold ${theme.text} leading-snug`}>
-                    {opt.text}
-                  </span>
-                </div>
-              );
-            })
-          ) : (
-            <div className="col-span-2 text-center py-8 text-slate-500 italic">
-              Chờ dữ liệu các lựa chọn...
+        {/* Options Grid OR Short Answer Placeholder (Neutral style: No correct answer, No percentages) */}
+        {activeQuestion?.question_type === 'short_answer' ? (
+          <div className="text-center py-10 px-6 rounded-2xl bg-slate-950/50 border border-slate-800 text-slate-300">
+            <div className="text-xl sm:text-2xl font-black text-sky-400 mb-2">Câu hỏi điền vào chỗ trống</div>
+            <div className="text-sm sm:text-base text-slate-400">
+              Các thí sinh đang nhập câu trả lời trực tiếp trên thiết bị của mình.
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+            {activeQuestion?.options && activeQuestion.options.length > 0 ? (
+              activeQuestion.options.map((opt, idx) => {
+                const theme = OPTION_THEMES[idx % OPTION_THEMES.length];
+                return (
+                  <div
+                    key={opt.id || idx}
+                    className={`p-5 sm:p-6 rounded-2xl border-2 ${theme.bg} ${theme.border} flex items-center gap-4 shadow-lg transition-transform`}
+                  >
+                    <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl ${theme.badge} font-black text-lg sm:text-xl flex items-center justify-center flex-shrink-0 shadow-md`}>
+                      {OPTION_LETTERS[idx] || (idx + 1)}
+                    </div>
+                    <span className={`text-lg sm:text-2xl font-bold ${theme.text} leading-snug`}>
+                      {opt.text}
+                    </span>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="col-span-2 text-center py-8 text-slate-500 italic">
+                Chờ dữ liệu các lựa chọn...
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

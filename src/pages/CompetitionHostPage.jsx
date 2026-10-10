@@ -741,44 +741,121 @@ export function CompetitionHostPage() {
     setQuestions(updated);
   };
 
+  const handleAddAcceptedAnswer = (qIndex) => {
+    const updated = [...questions];
+    const currentAnswers = Array.isArray(updated[qIndex].correct_answer?.accepted_answers)
+      ? [...updated[qIndex].correct_answer.accepted_answers]
+      : [''];
+    currentAnswers.push('');
+    updated[qIndex].correct_answer = {
+      accepted_answers: currentAnswers
+    };
+    setQuestions(updated);
+  };
+
+  const handleRemoveAcceptedAnswer = (qIndex, ansIndex) => {
+    const updated = [...questions];
+    const currentAnswers = Array.isArray(updated[qIndex].correct_answer?.accepted_answers)
+      ? [...updated[qIndex].correct_answer.accepted_answers]
+      : [''];
+    if (currentAnswers.length <= 1) return;
+    currentAnswers.splice(ansIndex, 1);
+    updated[qIndex].correct_answer = {
+      accepted_answers: currentAnswers
+    };
+    setQuestions(updated);
+  };
+
+  const handleUpdateAcceptedAnswer = (qIndex, ansIndex, val) => {
+    const updated = [...questions];
+    const currentAnswers = Array.isArray(updated[qIndex].correct_answer?.accepted_answers)
+      ? [...updated[qIndex].correct_answer.accepted_answers]
+      : [''];
+    currentAnswers[ansIndex] = val;
+    updated[qIndex].correct_answer = {
+      accepted_answers: currentAnswers
+    };
+    setQuestions(updated);
+  };
+
   const handleQuestionTypeChange = (qIndex, newType) => {
     const updated = [...questions];
     const q = updated[qIndex];
-    if (newType === 'multiple_choice') {
-      // single_choice -> multiple_choice:
-      // preserve valid options, convert selected correct option to one-element option_ids[]
-      const currentOptId = q.correct_answer?.option_id;
-      const initialIds = currentOptId ? [currentOptId] : (Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : []);
+    if (newType === 'fill_blank') {
+      // Clear option-based answer key, initialize empty accepted_answers
       updated[qIndex] = {
         ...q,
-        question_type: 'multiple_choice',
+        question_type: 'fill_blank',
+        options: [],
         correct_answer: {
-          option_ids: initialIds
+          accepted_answers: ['']
         }
       };
-    } else if (newType === 'single_choice') {
-      // multiple_choice -> single_choice:
-      // if multiple correct answers exist, DO NOT silently choose one.
-      // Require user to select exactly one correct answer or clear invalid multiple-answer state visibly.
-      const currentIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
-      if (currentIds.length === 1) {
+      showToast(`Đã chuyển Câu ${q.question_order} sang Điền vào chỗ trống. Vui lòng nhập đáp án được chấp nhận.`, 'info');
+    } else if (newType === 'multiple_choice') {
+      if (q.question_type === 'fill_blank') {
         updated[qIndex] = {
           ...q,
-          question_type: 'single_choice',
+          question_type: 'multiple_choice',
+          options: [
+            { id: 'opt_1', text: 'Phương án A' },
+            { id: 'opt_2', text: 'Phương án B' },
+            { id: 'opt_3', text: 'Phương án C' },
+            { id: 'opt_4', text: 'Phương án D' }
+          ],
           correct_answer: {
-            option_id: currentIds[0]
+            option_ids: ['opt_1']
           }
         };
+        showToast(`Đã chuyển Câu ${q.question_order} sang Trắc nghiệm nhiều đáp án. Vui lòng chỉnh sửa các phương án lựa chọn.`, 'info');
       } else {
+        const currentOptId = q.correct_answer?.option_id;
+        const initialIds = currentOptId ? [currentOptId] : (Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : []);
+        updated[qIndex] = {
+          ...q,
+          question_type: 'multiple_choice',
+          correct_answer: {
+            option_ids: initialIds
+          }
+        };
+      }
+    } else if (newType === 'single_choice') {
+      if (q.question_type === 'fill_blank') {
         updated[qIndex] = {
           ...q,
           question_type: 'single_choice',
+          options: [
+            { id: 'opt_1', text: 'Phương án A' },
+            { id: 'opt_2', text: 'Phương án B' },
+            { id: 'opt_3', text: 'Phương án C' },
+            { id: 'opt_4', text: 'Phương án D' }
+          ],
           correct_answer: {
-            option_id: ''
+            option_id: 'opt_1'
           }
         };
-        if (currentIds.length > 1) {
-          showToast(`Câu ${q.question_order} có nhiều hơn 1 đáp án đúng. Vui lòng chọn lại 1 đáp án đúng duy nhất.`, 'warning');
+        showToast(`Đã chuyển Câu ${q.question_order} sang Trắc nghiệm 1 đáp án. Vui lòng chỉnh sửa các phương án lựa chọn.`, 'info');
+      } else {
+        const currentIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
+        if (currentIds.length === 1) {
+          updated[qIndex] = {
+            ...q,
+            question_type: 'single_choice',
+            correct_answer: {
+              option_id: currentIds[0]
+            }
+          };
+        } else {
+          updated[qIndex] = {
+            ...q,
+            question_type: 'single_choice',
+            correct_answer: {
+              option_id: ''
+            }
+          };
+          if (currentIds.length > 1) {
+            showToast(`Câu ${q.question_order} có nhiều hơn 1 đáp án đúng. Vui lòng chọn lại 1 đáp án đúng duy nhất.`, 'warning');
+          }
         }
       }
     }
@@ -834,22 +911,32 @@ export function CompetitionHostPage() {
         setSetupError(`Nội dung câu hỏi số ${i + 1} không được để trống.`);
         return;
       }
-      for (let j = 0; j < q.options.length; j++) {
-        if (!q.options[j].text.trim()) {
-          setSetupError(`Phương án ${j + 1} của câu hỏi ${i + 1} không được để trống.`);
-          return;
-        }
-      }
-      if (q.question_type === 'multiple_choice') {
-        const optionIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
-        if (optionIds.length === 0) {
-          setSetupError(`Vui lòng chọn ít nhất 1 đáp án đúng cho câu hỏi số ${i + 1} (trắc nghiệm nhiều đáp án).`);
+      if (q.question_type === 'fill_blank') {
+        const accepted = Array.isArray(q.correct_answer?.accepted_answers)
+          ? q.correct_answer.accepted_answers.map(s => String(s || '').trim()).filter(Boolean)
+          : [];
+        if (accepted.length === 0) {
+          setSetupError(`Vui lòng nhập ít nhất 1 đáp án đúng cho câu hỏi số ${i + 1} (điền vào chỗ trống).`);
           return;
         }
       } else {
-        if (!q.correct_answer?.option_id) {
-          setSetupError(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
-          return;
+        for (let j = 0; j < (q.options || []).length; j++) {
+          if (!q.options[j].text.trim()) {
+            setSetupError(`Phương án ${j + 1} của câu hỏi ${i + 1} không được để trống.`);
+            return;
+          }
+        }
+        if (q.question_type === 'multiple_choice') {
+          const optionIds = Array.isArray(q.correct_answer?.option_ids) ? q.correct_answer.option_ids : [];
+          if (optionIds.length === 0) {
+            setSetupError(`Vui lòng chọn ít nhất 1 đáp án đúng cho câu hỏi số ${i + 1} (trắc nghiệm nhiều đáp án).`);
+            return;
+          }
+        } else {
+          if (!q.correct_answer?.option_id) {
+            setSetupError(`Vui lòng chọn đáp án đúng cho câu hỏi số ${i + 1}.`);
+            return;
+          }
         }
       }
     }
@@ -1364,6 +1451,7 @@ export function CompetitionHostPage() {
                         >
                           <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                           <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+                          <option value="fill_blank">Điền vào chỗ trống</option>
                         </select>
                       </div>
 
@@ -1406,55 +1494,105 @@ export function CompetitionHostPage() {
                       />
                     </div>
 
-                    {/* Options List */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {q.options.map((opt, optIdx) => {
-                        const isMulti = q.question_type === 'multiple_choice';
-                        const isCorrect = isMulti
-                          ? (Array.isArray(q.correct_answer?.option_ids) && q.correct_answer.option_ids.includes(opt.id))
-                          : (q.correct_answer?.option_id === opt.id);
-                        const labelChar = String.fromCharCode(65 + optIdx); // A, B, C, D
-
-                        return (
-                          <div
-                            key={opt.id}
-                            className={`p-2.5 rounded-xl border transition flex items-center gap-2 ${
-                              isCorrect
-                                ? 'bg-emerald-50/80 border-emerald-400 ring-1 ring-emerald-400'
-                                : 'bg-white border-slate-200'
-                            }`}
-                          >
-                            {isMulti ? (
-                              <input
-                                type="checkbox"
-                                checked={isCorrect}
-                                onChange={() => handleToggleCorrectOptionMulti(qIdx, opt.id)}
-                                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
-                                title="Đánh dấu phương án này là một đáp án đúng"
-                              />
-                            ) : (
-                              <input
-                                type="radio"
-                                name={`correct_q_${qIdx}`}
-                                checked={isCorrect}
-                                onChange={() => handleSelectCorrectOption(qIdx, opt.id)}
-                                className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                title="Đánh dấu đây là đáp án đúng"
-                              />
-                            )}
-                            <span className="font-bold text-xs text-slate-500 w-5">{labelChar}.</span>
-                            <input
-                              type="text"
-                              required
-                              value={opt.text}
-                              onChange={(e) => handleUpdateOption(qIdx, optIdx, e.target.value)}
-                              placeholder={`Phương án ${labelChar}`}
-                              className="flex-1 px-2 py-1 rounded border-0 bg-transparent text-sm focus:outline-none text-slate-800"
-                            />
+                    {/* Question Answers: Fill Blank vs Choice */}
+                    {q.question_type === 'fill_blank' ? (
+                      <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                              Đáp án đúng được chấp nhận <span className="text-red-500">*</span>
+                            </label>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              Có thể nhập nhiều đáp án tương đương. Hệ thống không phân biệt chữ hoa/thường và bỏ khoảng trắng thừa ở đầu/cuối.
+                            </p>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <button
+                            type="button"
+                            onClick={() => handleAddAcceptedAnswer(qIdx)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-lg border border-sky-200 transition self-start sm:self-auto cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Thêm đáp án
+                          </button>
+                        </div>
+
+                        <div className="space-y-2 pt-1">
+                          {(q.correct_answer?.accepted_answers || ['']).map((ans, aIdx) => (
+                            <div key={aIdx} className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-400 w-6">#{aIdx + 1}</span>
+                              <input
+                                type="text"
+                                required={aIdx === 0}
+                                value={ans}
+                                onChange={(e) => handleUpdateAcceptedAnswer(qIdx, aIdx, e.target.value)}
+                                placeholder={aIdx === 0 ? 'Nhập đáp án chính (bắt buộc)...' : 'Nhập đáp án tương đương khác...'}
+                                className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium focus:outline-none focus:ring-1 focus:ring-sky-500"
+                              />
+                              {(q.correct_answer?.accepted_answers || []).length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveAcceptedAnswer(qIdx, aIdx)}
+                                  className="p-2 text-slate-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition cursor-pointer"
+                                  title="Xóa đáp án này"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      /* Options List for Choice-based questions */
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {Array.isArray(q.options) && q.options.map((opt, optIdx) => {
+                          const isMulti = q.question_type === 'multiple_choice';
+                          const isCorrect = isMulti
+                            ? (Array.isArray(q.correct_answer?.option_ids) && q.correct_answer.option_ids.includes(opt.id))
+                            : (q.correct_answer?.option_id === opt.id);
+                          const labelChar = String.fromCharCode(65 + optIdx); // A, B, C, D
+
+                          return (
+                            <div
+                              key={opt.id}
+                              className={`p-2.5 rounded-xl border transition flex items-center gap-2 ${
+                                isCorrect
+                                  ? 'bg-emerald-50/80 border-emerald-400 ring-1 ring-emerald-400'
+                                  : 'bg-white border-slate-200'
+                              }`}
+                            >
+                              {isMulti ? (
+                                <input
+                                  type="checkbox"
+                                  checked={isCorrect}
+                                  onChange={() => handleToggleCorrectOptionMulti(qIdx, opt.id)}
+                                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                                  title="Đánh dấu phương án này là một đáp án đúng"
+                                />
+                              ) : (
+                                <input
+                                  type="radio"
+                                  name={`correct_q_${qIdx}`}
+                                  checked={isCorrect}
+                                  onChange={() => handleSelectCorrectOption(qIdx, opt.id)}
+                                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                  title="Đánh dấu đây là đáp án đúng"
+                                />
+                              )}
+                              <span className="font-bold text-xs text-slate-500 w-5">{labelChar}.</span>
+                              <input
+                                type="text"
+                                required
+                                value={opt.text}
+                                onChange={(e) => handleUpdateOption(qIdx, optIdx, e.target.value)}
+                                placeholder={`Phương án ${labelChar}`}
+                                className="flex-1 px-2 py-1 rounded border-0 bg-transparent text-sm focus:outline-none text-slate-800"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2002,7 +2140,7 @@ export function CompetitionHostPage() {
                             {activeDisplayedResults.question_type === 'single_choice' && 'Trắc nghiệm 1 đáp án'}
                             {activeDisplayedResults.question_type === 'multiple_choice' && 'Trắc nghiệm nhiều đáp án'}
                             {activeDisplayedResults.question_type === 'true_false' && 'Đúng / Sai'}
-                            {activeDisplayedResults.question_type === 'short_answer' && 'Tự luận ngắn'}
+                            {(activeDisplayedResults.question_type === 'short_answer' || activeDisplayedResults.question_type === 'fill_blank') && 'Điền vào chỗ trống'}
                           </span>
                           <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold">
                             {activeDisplayedResults.points} điểm
@@ -2139,14 +2277,22 @@ export function CompetitionHostPage() {
 
                     {/* Short Answer Notice */}
                     {activeDisplayedResults.question_type === 'short_answer' && (
-                      <div className="p-4 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-xs space-y-1">
-                        <p className="font-bold flex items-center gap-1.5">
+                      <div className="p-4 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-xs space-y-1.5">
+                        <p className="font-bold flex items-center gap-1.5 text-sm">
                           <CheckCircle className="w-4 h-4 text-sky-600" />
-                          Câu hỏi dạng tự luận ngắn
+                          Câu hỏi điền vào chỗ trống
                         </p>
                         <p className="text-sky-700">
                           Đã ghi nhận {activeDisplayedResults.submitted_count} lượt nộp câu trả lời ({activeDisplayedResults.correct_count} đúng, {activeDisplayedResults.incorrect_count} sai). Hệ thống bảo mật không công khai nội dung chi tiết từng bài làm.
                         </p>
+                        {Array.isArray(activeDisplayedResults.correct_answer?.accepted_answers) && activeDisplayedResults.correct_answer.accepted_answers.length > 0 && (
+                          <div className="pt-1">
+                            <span className="font-bold text-slate-700">Các đáp án được chấp nhận: </span>
+                            <span className="font-mono text-emerald-700 font-bold">
+                              {activeDisplayedResults.correct_answer.accepted_answers.join(', ')}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
 

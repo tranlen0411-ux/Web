@@ -360,7 +360,9 @@ export const HostQuestionAnalyticsView = ({
                         ? 'Trắc nghiệm nhiều đáp án'
                         : q.question_type === 'true_false'
                         ? 'Đúng / Sai'
-                        : 'Tự luận ngắn'}
+                        : q.question_type === 'short_answer' || q.question_type === 'fill_blank'
+                        ? 'Điền vào chỗ trống'
+                        : 'Điền vào chỗ trống'}
                     </span>
                     <span className="text-xs font-bold text-slate-500">
                       • {q.points} điểm • {q.time_limit_seconds}s
@@ -480,7 +482,7 @@ export const HostQuestionAnalyticsView = ({
                 {/* Short Answer Notice */}
                 {q.question_type === 'short_answer' && (
                   <div className="p-3 bg-slate-100 rounded-xl text-xs text-slate-600 font-medium">
-                    Câu hỏi tự luận ngắn: Hệ thống chấm điểm tự động dựa trên từ khóa. Tỷ lệ hoàn thành đạt {q.accuracy_percent}%.
+                    Câu hỏi điền vào chỗ trống: Hệ thống so sánh đối chiếu câu trả lời của thí sinh với danh sách đáp án được chấp nhận (không phân biệt chữ hoa/thường, tự động bỏ khoảng trắng thừa). Độ chính xác đạt {q.accuracy_percent}%.
                   </div>
                 )}
               </div>
