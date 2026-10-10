@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { MAX_COMPETITION_QUESTIONS } from '../src/utils/competitionQuestionAdapters.js';
 
@@ -117,7 +118,7 @@ async function setAuthContext(userId, role = 'authenticated') {
   }
 }
 
-test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (43 TESTS)', async (t) => {
+test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)', async (t) => {
   await setupDatabase();
 
   // Seed Users
@@ -926,6 +927,379 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (43 TESTS)'
     // 43. MAX_COMPETITION_QUESTIONS = 20 unchanged
     await t.test('43. MAX_COMPETITION_QUESTIONS = 20 unchanged', async () => {
       assert.strictEqual(MAX_COMPETITION_QUESTIONS, 20);
+    });
+  });
+
+  // =========================================================================
+  // GROUP 5: ACTIVE MATCHING SNAPSHOT SECURITY HARDENING (TESTS 44 - 59)
+  // =========================================================================
+  await t.test('Group 5: Active Matching Snapshot Security Hardening (Tests 44-59)', async (t) => {
+    // Helper to compute authoritative deterministic order using MD5
+    function computeExpectedMatchingOrder(sessionId, questionId, options) {
+      const leftOptions = options
+        .filter(o => o.side === 'left')
+        .map(o => ({
+          id: o.id,
+          side: 'left',
+          text: o.text,
+          hash: crypto.createHash('md5').update(`matching-left:${sessionId}:${questionId}:${o.id}`).digest('hex')
+        }))
+        .sort((a, b) => a.hash.localeCompare(b.hash))
+        .map(({ hash, ...rest }) => rest);
+
+      const rightOptions = options
+        .filter(o => o.side === 'right')
+        .map(o => ({
+          id: o.id,
+          side: 'right',
+          text: o.text,
+          hash: crypto.createHash('md5').update(`matching-right:${sessionId}:${questionId}:${o.id}`).digest('hex')
+        }))
+        .sort((a, b) => a.hash.localeCompare(b.hash))
+        .map(({ hash, ...rest }) => rest);
+
+      return [...leftOptions, ...rightOptions];
+    }
+
+    // Canonical Correlated Fixture: options stored interleaved/correlated as l_1, r_1, l_2, r_2, l_3, r_3
+    const qCorrelated = {
+      question_order: 1,
+      question_text: 'Ghép cặp quốc gia với thủ đô',
+      question_type: 'matching',
+      points: 20,
+      time_limit_seconds: 30,
+      explanation: 'Việt Nam - Hà Nội, Pháp - Paris, Nhật Bản - Tokyo',
+      options: [
+        { id: 'l_1', side: 'left', text: 'Việt Nam' },
+        { id: 'r_1', side: 'right', text: 'Hà Nội' },
+        { id: 'l_2', side: 'left', text: 'Pháp' },
+        { id: 'r_2', side: 'right', text: 'Paris' },
+        { id: 'l_3', side: 'left', text: 'Nhật Bản' },
+        { id: 'r_3', side: 'right', text: 'Tokyo' }
+      ],
+      correct_answer: {
+        pairs: [
+          { left_id: 'l_1', right_id: 'r_1' },
+          { left_id: 'l_2', right_id: 'r_2' },
+          { left_id: 'l_3', right_id: 'r_3' }
+        ]
+      }
+    };
+
+    // Host creates session
+    await setAuthContext(hostId);
+    const sessionRes = await db.query(
+      `SELECT public.competition_host_create_session($1, $2, $3, $4, $5::jsonb, '[]'::jsonb, false, '{}'::jsonb, true) AS result`,
+      ['Matching Active Snapshot Security', 'Kiểm tra bảo mật snapshot', 'individual', 100, JSON.stringify([qCorrelated])]
+    );
+    const sessionId = sessionRes.rows[0].result.session_id;
+    const roomCode = sessionRes.rows[0].result.room_code;
+
+    // Student 1 joins
+    await setAuthContext(student1Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Bảo Mật')`, [roomCode]);
+
+    // Student 2 joins (to be kicked later)
+    await setAuthContext(student2Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Bị Kick')`, [roomCode]);
+
+    // Guest joins
+    await setAuthContext(null);
+    const guestToken = 'abcdef0123456789abcdef0123456789';
+    const guestJoin = await db.query(
+      `SELECT public.competition_join_session($1, 'Khách Bảo Mật', NULL, NULL, $2) AS result`,
+      [roomCode, guestToken]
+    );
+    const guestPartId = guestJoin.rows[0].result.participant.id;
+
+    // Host starts session
+    await setAuthContext(hostId);
+    await db.query(`SELECT public.competition_host_start_session($1)`, [sessionId]);
+
+    // Fetch snapshot as student 1
+    await setAuthContext(student1Id);
+    const snapRes = await db.query(
+      `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+      [sessionId]
+    );
+    const snap = snapRes.rows[0].result;
+    assert.strictEqual(snap.success, true);
+    const question = snap.question;
+    assert.ok(question);
+    const questionId = question.id;
+
+    // 44. active matching snapshot does not expose correct_answer
+    await t.test('44. active matching snapshot does not expose correct_answer', async () => {
+      assert.strictEqual(question.correct_answer, undefined);
+    });
+
+    // 45. active matching snapshot does not expose pairs or any correct mapping field
+    await t.test('45. active matching snapshot does not expose pairs or any correct mapping field', async () => {
+      assert.strictEqual(question.pairs, undefined);
+      for (const opt of question.options) {
+        assert.strictEqual(opt.pairs, undefined);
+        assert.strictEqual(opt.pair_index, undefined);
+        assert.strictEqual(opt.correct_right_id, undefined);
+        assert.strictEqual(opt.correct_left_id, undefined);
+        assert.strictEqual(opt.answer_key, undefined);
+        assert.strictEqual(opt.original_position, undefined);
+      }
+    });
+
+    // 46. active matching snapshot contains all original option IDs exactly once
+    await t.test('46. active matching snapshot contains all original option IDs exactly once', async () => {
+      const snapIds = question.options.map(o => o.id);
+      const originalIds = ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3'];
+      assert.strictEqual(snapIds.length, originalIds.length);
+      assert.deepStrictEqual([...snapIds].sort(), [...originalIds].sort());
+      const uniqueIds = new Set(snapIds);
+      assert.strictEqual(uniqueIds.size, originalIds.length);
+    });
+
+    // 47. active matching snapshot left IDs are grouped/present correctly
+    await t.test('47. active matching snapshot left IDs are grouped/present correctly', async () => {
+      const firstThree = question.options.slice(0, 3);
+      for (const opt of firstThree) {
+        assert.strictEqual(opt.side, 'left');
+      }
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      assert.deepStrictEqual(firstThree, expectedFull.slice(0, 3));
+    });
+
+    // 48. active matching snapshot right IDs are grouped/present correctly
+    await t.test('48. active matching snapshot right IDs are grouped/present correctly', async () => {
+      const lastThree = question.options.slice(3, 6);
+      for (const opt of lastThree) {
+        assert.strictEqual(opt.side, 'right');
+      }
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      assert.deepStrictEqual(lastThree, expectedFull.slice(3, 6));
+    });
+
+    // 49. active matching snapshot repeated calls return identical option ordering
+    await t.test('49. active matching snapshot repeated calls return identical option ordering', async () => {
+      for (let i = 0; i < 5; i++) {
+        const pollRes = await db.query(
+          `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+          [sessionId]
+        );
+        const pollOpts = pollRes.rows[0].result.question.options;
+        assert.deepStrictEqual(pollOpts, question.options);
+      }
+    });
+
+    // 50. active matching snapshot order is not the same as correlated stored order for the canonical correlated fixture
+    await t.test('50. active matching snapshot order is not the same as correlated stored order for the canonical correlated fixture', async () => {
+      const storedOrderIds = qCorrelated.options.map(o => o.id); // ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3']
+      const snapIds = question.options.map(o => o.id);
+      assert.notDeepStrictEqual(snapIds, storedOrderIds);
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      assert.deepStrictEqual(question.options, expectedFull);
+    });
+
+    // 51. active matching snapshot ordering is independent of correct_answer pair order
+    await t.test('51. active matching snapshot ordering is independent of correct_answer pair order', async () => {
+      // Reorder correct_answer.pairs directly in database
+      const reversedPairs = [
+        { left_id: 'l_3', right_id: 'r_3' },
+        { left_id: 'l_2', right_id: 'r_2' },
+        { left_id: 'l_1', right_id: 'r_1' }
+      ];
+      await db.query(
+        `UPDATE public.competition_questions
+         SET correct_answer = $1::jsonb
+         WHERE id = $2`,
+        [JSON.stringify({ pairs: reversedPairs }), questionId]
+      );
+
+      const afterUpdateRes = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+        [sessionId]
+      );
+      const afterOpts = afterUpdateRes.rows[0].result.question.options;
+      assert.deepStrictEqual(afterOpts, question.options);
+
+      // Restore canonical correct answer for subsequent scoring
+      await db.query(
+        `UPDATE public.competition_questions
+         SET correct_answer = $1::jsonb
+         WHERE id = $2`,
+        [JSON.stringify(qCorrelated.correct_answer), questionId]
+      );
+    });
+
+    // 52. non-matching active snapshot behavior unchanged
+    await t.test('52. non-matching active snapshot behavior unchanged', async () => {
+      await setAuthContext(hostId);
+      const qSingle = {
+        question_order: 1,
+        question_text: 'Thủ đô của Việt Nam là gì?',
+        question_type: 'single_choice',
+        points: 10,
+        time_limit_seconds: 20,
+        options: [
+          { id: 'opt_1', text: 'Hà Nội' },
+          { id: 'opt_2', text: 'Đà Nẵng' },
+          { id: 'opt_3', text: 'TP.HCM' }
+        ],
+        correct_answer: { option_id: 'opt_1' }
+      };
+      const scRes = await db.query(
+        `SELECT public.competition_host_create_session($1, $2, $3, $4, $5::jsonb) AS result`,
+        ['Single Choice Snapshot Test', 'Mô tả', 'individual', 100, JSON.stringify([qSingle])]
+      );
+      const scSessionId = scRes.rows[0].result.session_id;
+      const scRoomCode = scRes.rows[0].result.room_code;
+
+      await setAuthContext(student1Id);
+      await db.query(`SELECT public.competition_join_session($1, 'Học Sinh SC')`, [scRoomCode]);
+
+      await setAuthContext(hostId);
+      await db.query(`SELECT public.competition_host_start_session($1)`, [scSessionId]);
+
+      await setAuthContext(student1Id);
+      const scSnap = (await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+        [scSessionId]
+      )).rows[0].result;
+
+      assert.strictEqual(scSnap.success, true);
+      assert.strictEqual(scSnap.question.question_type, 'single_choice');
+      assert.deepStrictEqual(scSnap.question.options, qSingle.options);
+    });
+
+    // 53. authenticated Student still authorized
+    await t.test('53. authenticated Student still authorized', async () => {
+      await setAuthContext(student1Id);
+      const res = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+        [sessionId]
+      );
+      assert.strictEqual(res.rows[0].result.success, true);
+      assert.ok(res.rows[0].result.question);
+    });
+
+    // 54. valid Guest still authorized
+    await t.test('54. valid Guest still authorized', async () => {
+      await setAuthContext(null);
+      const res = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1, $2, $3) AS result`,
+        [sessionId, guestPartId, guestToken]
+      );
+      assert.strictEqual(res.rows[0].result.success, true);
+      assert.ok(res.rows[0].result.question);
+    });
+
+    // 55. invalid Guest token still rejected
+    await t.test('55. invalid Guest token still rejected', async () => {
+      await setAuthContext(null);
+      const badToken = '00000000000000000000000000000000';
+      const res = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1, $2, $3) AS result`,
+        [sessionId, guestPartId, badToken]
+      );
+      assert.strictEqual(res.rows[0].result.success, false);
+      assert.strictEqual(res.rows[0].result.error_code, 'UNAUTHORIZED_ACCESS');
+    });
+
+    // 56. kicked participant still rejected
+    await t.test('56. kicked participant still rejected', async () => {
+      // Kick student2
+      await db.query(
+        `UPDATE public.competition_participants
+         SET status = 'kicked'
+         WHERE session_id = $1 AND user_id = $2`,
+        [sessionId, student2Id]
+      );
+
+      await setAuthContext(student2Id);
+      const res = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+        [sessionId]
+      );
+      assert.strictEqual(res.rows[0].result.success, false);
+      assert.strictEqual(res.rows[0].result.error_code, 'UNAUTHORIZED_ACCESS');
+    });
+
+    // 57. active Matching snapshot contains no explanation if current contract protects it
+    await t.test('57. active Matching snapshot contains no explanation if current contract protects it', async () => {
+      await setAuthContext(student1Id);
+      const res = await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+        [sessionId]
+      );
+      assert.strictEqual(res.rows[0].result.question.explanation, undefined);
+    });
+
+    // 58. public RPC signature unchanged
+    await t.test('58. public RPC signature unchanged', async () => {
+      const sigQuery = await db.query(`
+        SELECT proname, proargnames
+        FROM pg_proc
+        WHERE proname = 'competition_get_active_question_snapshot'
+          AND pronamespace = 'public'::regnamespace;
+      `);
+      assert.strictEqual(sigQuery.rows.length, 1);
+      const args = sigQuery.rows[0].proargnames;
+      assert.deepStrictEqual(args, ['p_session_id', 'p_participant_id', 'p_guest_token']);
+    });
+
+    // 59. existing R16-A scoring regressions still PASS
+    await t.test('59. existing R16-A scoring regressions still PASS', async () => {
+      await setAuthContext(student1Id);
+      const submitRes = await db.query(
+        `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
+        [sessionId, questionId, JSON.stringify([
+          { left_id: 'l_1', right_id: 'r_1' },
+          { left_id: 'l_2', right_id: 'r_2' },
+          { left_id: 'l_3', right_id: 'r_3' }
+        ])]
+      );
+      assert.strictEqual(submitRes.rows[0].result.success, true);
+      assert.strictEqual(submitRes.rows[0].result.is_correct, true);
+      assert.strictEqual(Number(submitRes.rows[0].result.points_awarded), 20);
+    });
+
+    // Malformed options fail-closed with MALFORMED_QUESTION_SNAPSHOT
+    await t.test('active snapshot fail-closed on malformed matching options', async () => {
+      await setAuthContext(student1Id);
+
+      // Non-array options
+      await db.query(
+        `UPDATE public.competition_questions SET options = '"not-an-array"'::jsonb WHERE id = $1`,
+        [questionId]
+      );
+      let badSnap = (await db.query(`SELECT public.competition_get_active_question_snapshot($1) AS result`, [sessionId])).rows[0].result;
+      assert.strictEqual(badSnap.success, false);
+      assert.strictEqual(badSnap.error_code, 'MALFORMED_QUESTION_SNAPSHOT');
+
+      // Duplicate option ID
+      await db.query(
+        `UPDATE public.competition_questions SET options = $1::jsonb WHERE id = $2`,
+        [JSON.stringify([
+          { id: 'dup', side: 'left', text: 'A' },
+          { id: 'dup', side: 'right', text: 'B' },
+          { id: 'l_2', side: 'left', text: 'C' },
+          { id: 'r_2', side: 'right', text: 'D' }
+        ]), questionId]
+      );
+      badSnap = (await db.query(`SELECT public.competition_get_active_question_snapshot($1) AS result`, [sessionId])).rows[0].result;
+      assert.strictEqual(badSnap.success, false);
+      assert.strictEqual(badSnap.error_code, 'MALFORMED_QUESTION_SNAPSHOT');
+
+      // Missing side
+      await db.query(
+        `UPDATE public.competition_questions SET options = $1::jsonb WHERE id = $2`,
+        [JSON.stringify([
+          { id: 'l_1', text: 'A' },
+          { id: 'r_1', side: 'right', text: 'B' },
+          { id: 'l_2', side: 'left', text: 'C' },
+          { id: 'r_2', side: 'right', text: 'D' }
+        ]), questionId]
+      );
+      badSnap = (await db.query(`SELECT public.competition_get_active_question_snapshot($1) AS result`, [sessionId])).rows[0].result;
+      assert.strictEqual(badSnap.success, false);
+      assert.strictEqual(badSnap.error_code, 'MALFORMED_QUESTION_SNAPSHOT');
     });
   });
 });
