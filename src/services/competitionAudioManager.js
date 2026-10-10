@@ -12,7 +12,7 @@ import { getAudioContext, playSound } from '../utils/soundEffects.js';
  * - Safe lifecycle cleanup (NEVER close the global shared AudioContext)
  */
 
-export const BACKGROUND_MUSIC_AVAILABLE = false;
+export const BACKGROUND_MUSIC_AVAILABLE = true;
 
 export const BACKGROUND_MUSIC_TRACKS = {
   lobby: '/audio/competition/lobby_loop.mp3',
