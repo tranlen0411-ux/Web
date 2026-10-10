@@ -1086,8 +1086,9 @@ export function CompetitionHostPage() {
         questions: sanitizedQuestions
       });
 
-      if (res.success && res.data?.session?.id) {
-        const newSessionId = res.data.session.id;
+      const newSessionId = res.data?.session_id || res.data?.session?.id;
+
+      if (res.success && newSessionId) {
         restoredSessionPendingValidationRef.current = false;
         activeSessionIdRef.current = newSessionId;
         setActiveSessionId(newSessionId);
@@ -1098,7 +1099,20 @@ export function CompetitionHostPage() {
         } catch (_e) {}
         setCreatedQuestionCount(questions.length);
         setAuthoritativeTotalQuestions(questions.length);
-        setSnapshot(res.data.session);
+        const initialSnapshot = res.data?.session || {
+          id: newSessionId,
+          room_code: res.data?.room_code,
+          title: res.data?.title || trimmedTitle,
+          description: res.data?.description || description.trim() || null,
+          status: 'waiting',
+          mode: res.data?.mode || 'individual',
+          max_participants: res.data?.max_participants || parseInt(maxParticipants, 10) || 30,
+          current_question_index: 0,
+          current_question_id: null,
+          reward_enabled: res.data?.reward_enabled ?? Boolean(rewardEnabled),
+          review_enabled: res.data?.review_enabled ?? Boolean(reviewEnabled)
+        };
+        setSnapshot(initialSnapshot);
         setHostViewMode('LIVE_QUESTION');
         setQuestionResults(null);
         setReviewedQuestionOrder(null);
