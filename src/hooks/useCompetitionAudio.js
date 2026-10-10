@@ -42,6 +42,13 @@ export function useCompetitionAudio({
     competitionAudioManager.setGlobalSoundEnabled(isSoundEnabled);
   }, [isSoundEnabled]);
 
+  // Synchronize local controls into manager on mount
+  useEffect(() => {
+    competitionAudioManager.setMusicEnabled(isMusicEnabled);
+    competitionAudioManager.setSfxEnabled(isSfxEnabled);
+    competitionAudioManager.setVolume(volume);
+  }, []);
+
   // Synchronize local sub-controls into audio manager
   const setMusicEnabled = useCallback((enabled) => {
     setIsMusicEnabledState(enabled);
@@ -65,6 +72,17 @@ export function useCompetitionAudio({
     setIsUnlocked(unlocked);
     return unlocked;
   }, []);
+
+  // Semantic audio action: Manual host question close triggers guarded TIME_UP event
+  const triggerQuestionClosed = useCallback(() => {
+    if (!sessionId || !currentQuestionId) return;
+    const timeUpKey = `${sessionId}:${currentQuestionId}:TIME_UP`;
+    if (!lastPlayedEventsRef.current.has(timeUpKey)) {
+      lastPlayedEventsRef.current.add(timeUpKey);
+      competitionAudioManager.stopMusic();
+      competitionAudioManager.playSfx('competition_time_up');
+    }
+  }, [sessionId, currentQuestionId]);
 
   // Event Guard Refs
   const lastPlayedEventsRef = useRef(new Set()); // `${sessionId}:${questionId}:${eventPhase}`
@@ -245,5 +263,6 @@ export function useCompetitionAudio({
     setSfxEnabled,
     volume,
     setVolume,
+    triggerQuestionClosed,
   };
 }

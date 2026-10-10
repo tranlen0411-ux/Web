@@ -1183,6 +1183,7 @@ export function CompetitionHostPage() {
     try {
       const res = await hostCloseQuestion(activeSessionId);
       if (res.success) {
+        audioControls.triggerQuestionClosed?.();
         showToast('Đã kết thúc thời gian trả lời câu hỏi! Đang tải kết quả...', 'success');
         await refreshNow();
         await fetchResultsSafely(activeSessionId);

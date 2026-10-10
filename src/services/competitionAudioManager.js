@@ -28,11 +28,12 @@ class CompetitionAudioManager {
     this.currentTrack = null;
     this.audioElements = new Map(); // trackKey -> HTMLAudioElement
     this.isMusicPaused = false;
+    this.needsPlaybackRetry = false;
   }
 
   /**
    * Unlock audio playback upon user interaction
-   * Safely resumes shared AudioContext and primes HTMLAudio capability
+   * Safely resumes shared AudioContext and retries current background track
    */
   async unlock() {
     this.isUnlocked = true;
@@ -44,7 +45,64 @@ class CompetitionAudioManager {
     } catch (_err) {
       // Fail silent
     }
+
+    // Safely retry / resume current background track on user gesture unlock
+    if (this.currentTrack && this.globalSoundEnabled && this.musicEnabled && !this.isMusicPaused) {
+      this.retryCurrentBackgroundTrack();
+    }
+
     return this.isUnlocked;
+  }
+
+  /**
+   * Dedicated safe retry/resume method for background track after unlock gesture
+   * Invariants:
+   * - currentTrack exists
+   * - globalSoundEnabled === true
+   * - musicEnabled === true
+   * - NEVER overrides intentional game pause (isMusicPaused must be false)
+   * - Reuses existing HTMLAudio element if created, otherwise creates safely
+   */
+  retryCurrentBackgroundTrack() {
+    if (!this.currentTrack || !this.globalSoundEnabled || !this.musicEnabled || this.isMusicPaused) {
+      return;
+    }
+
+    if (typeof Audio === 'undefined') {
+      return;
+    }
+
+    try {
+      let audio = this.audioElements.get(this.currentTrack);
+      if (!audio) {
+        const src = BACKGROUND_MUSIC_TRACKS[this.currentTrack];
+        if (!src) return;
+        audio = new Audio(src);
+        audio.loop = true;
+        audio.preload = 'auto';
+        this.audioElements.set(this.currentTrack, audio);
+      }
+
+      audio.volume = this.volume;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise
+          .then(() => {
+            this.needsPlaybackRetry = false;
+          })
+          .catch((_err) => {
+            if (!this.isMusicPaused) {
+              this.needsPlaybackRetry = true;
+            }
+          });
+      } else {
+        this.needsPlaybackRetry = false;
+      }
+    } catch (_err) {
+      if (!this.isMusicPaused) {
+        this.needsPlaybackRetry = true;
+      }
+    }
   }
 
   /**
@@ -54,7 +112,7 @@ class CompetitionAudioManager {
     this.globalSoundEnabled = Boolean(enabled);
     if (!this.globalSoundEnabled) {
       this.pauseMusic();
-    } else if (this.currentTrack && this.musicEnabled && this.isMusicPaused) {
+    } else if (this.currentTrack && this.musicEnabled && (this.isMusicPaused || this.needsPlaybackRetry)) {
       this.resumeMusic();
     }
   }
@@ -66,7 +124,7 @@ class CompetitionAudioManager {
     this.musicEnabled = Boolean(enabled);
     if (!this.musicEnabled) {
       this.pauseMusic();
-    } else if (this.currentTrack && this.globalSoundEnabled && this.isMusicPaused) {
+    } else if (this.currentTrack && this.globalSoundEnabled && (this.isMusicPaused || this.needsPlaybackRetry)) {
       this.resumeMusic();
     }
   }
@@ -108,8 +166,8 @@ class CompetitionAudioManager {
       return;
     }
 
-    // Guard: Do not restart if already playing this track
-    if (this.currentTrack === trackKey && !this.isMusicPaused) {
+    // Guard: Do not restart if already playing this track (unless retry needed)
+    if (this.currentTrack === trackKey && !this.isMusicPaused && !this.needsPlaybackRetry) {
       return;
     }
 
@@ -120,12 +178,14 @@ class CompetitionAudioManager {
 
     this.currentTrack = trackKey;
     this.isMusicPaused = false;
+    this.needsPlaybackRetry = true;
 
     if (!this.globalSoundEnabled || !this.musicEnabled) {
+      this.needsPlaybackRetry = false;
       return;
     }
 
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') {
+    if (typeof Audio === 'undefined') {
       return;
     }
 
@@ -140,13 +200,24 @@ class CompetitionAudioManager {
 
       audio.volume = this.volume;
       const playPromise = audio.play();
-      if (playPromise && typeof playPromise.catch === 'function') {
-        playPromise.catch((_err) => {
-          // Handled fail-silently: asset might not exist yet or autoplay blocked
-        });
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise
+          .then(() => {
+            this.needsPlaybackRetry = false;
+          })
+          .catch((_err) => {
+            // Handled fail-silently: asset might not exist yet or autoplay blocked
+            if (!this.isMusicPaused) {
+              this.needsPlaybackRetry = true;
+            }
+          });
+      } else {
+        this.needsPlaybackRetry = false;
       }
     } catch (_err) {
-      // Fail-silent
+      if (!this.isMusicPaused) {
+        this.needsPlaybackRetry = true;
+      }
     }
   }
 
@@ -155,6 +226,7 @@ class CompetitionAudioManager {
    */
   pauseMusic() {
     this.isMusicPaused = true;
+    this.needsPlaybackRetry = false;
     if (this.currentTrack) {
       const audio = this.audioElements.get(this.currentTrack);
       if (audio) {
@@ -173,15 +245,34 @@ class CompetitionAudioManager {
       return;
     }
     this.isMusicPaused = false;
-    const audio = this.audioElements.get(this.currentTrack);
+    let audio = this.audioElements.get(this.currentTrack);
+    if (!audio) {
+      const src = BACKGROUND_MUSIC_TRACKS[this.currentTrack];
+      if (src && typeof Audio !== 'undefined') {
+        audio = new Audio(src);
+        audio.loop = true;
+        audio.preload = 'auto';
+        this.audioElements.set(this.currentTrack, audio);
+      }
+    }
     if (audio) {
       try {
         audio.volume = this.volume;
         const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(() => {});
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              this.needsPlaybackRetry = false;
+            })
+            .catch(() => {
+              this.needsPlaybackRetry = true;
+            });
+        } else {
+          this.needsPlaybackRetry = false;
         }
-      } catch (_err) {}
+      } catch (_err) {
+        this.needsPlaybackRetry = true;
+      }
     }
   }
 
@@ -192,6 +283,7 @@ class CompetitionAudioManager {
     this.stopCurrentAudioElement();
     this.currentTrack = null;
     this.isMusicPaused = false;
+    this.needsPlaybackRetry = false;
   }
 
   /**
@@ -240,6 +332,7 @@ class CompetitionAudioManager {
         audio.currentTime = 0;
       } catch (_e) {}
     });
+    this.needsPlaybackRetry = false;
   }
 
   /**

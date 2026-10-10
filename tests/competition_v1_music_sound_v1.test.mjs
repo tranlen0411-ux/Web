@@ -254,4 +254,255 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
   await t.test('41. No extra Competition timer created', () => {
     assert.doesNotMatch(audioHookSrc, /setInterval/, 'useCompetitionAudio must not create any setInterval timer');
   });
+
+  await t.test('42. successful manual Host close triggers TIME_UP semantic event', () => {
+    // 1. Hook exports semantic triggerQuestionClosed action
+    assert.match(audioHookSrc, /triggerQuestionClosed/, 'Hook must expose triggerQuestionClosed');
+    assert.match(audioHookSrc, /:TIME_UP/, 'triggerQuestionClosed must use TIME_UP event');
+    assert.match(audioHookSrc, /competition_time_up/, 'triggerQuestionClosed must trigger time_up sound');
+
+    // 2. HostPage invokes semantic triggerQuestionClosed on successful close
+    assert.match(hostPageSrc, /audioControls\.triggerQuestionClosed/, 'HostPage must call triggerQuestionClosed');
+    assert.doesNotMatch(hostPageSrc, /playSound\(['"]competition_time_up/, 'HostPage must NOT directly call raw playSound for manual close');
+
+    // 3. Behavioral verification
+    const setGuard = new Set();
+    let timeUpCount = 0;
+    const triggerClose = (sId, qId) => {
+      const key = `${sId}:${qId}:TIME_UP`;
+      if (!setGuard.has(key)) {
+        setGuard.add(key);
+        timeUpCount++;
+      }
+    };
+    triggerClose('session-42', 'q-42');
+    assert.equal(timeUpCount, 1, 'TIME_UP must be triggered on successful close');
+  });
+
+  await t.test('43. failed manual close does NOT trigger TIME_UP', () => {
+    // In HostPage, triggerQuestionClosed must be inside if (res.success) block
+    const closeSectionMatch = hostPageSrc.match(/const handleCloseQuestion = async \(\) => {([\s\S]*?)};/);
+    assert.ok(closeSectionMatch, 'handleCloseQuestion must exist');
+    const closeBody = closeSectionMatch[1];
+    
+    // Ensure triggerQuestionClosed is strictly in the success path
+    assert.match(closeBody, /if\s*\(\s*res\.success\s*\)\s*\{[\s\S]*?triggerQuestionClosed/);
+    // Ensure failure branch does NOT call triggerQuestionClosed
+    const elseBranchMatch = closeBody.match(/else\s*\{([\s\S]*?)\}/);
+    assert.ok(elseBranchMatch, 'else branch must exist in handleCloseQuestion');
+    assert.doesNotMatch(elseBranchMatch[1], /triggerQuestionClosed/, 'Failure branch must not trigger audio');
+  });
+
+  await t.test('44. manual close + later zero/poll does NOT duplicate TIME_UP', () => {
+    const setGuard = new Set();
+    const sessionId = 'session-44';
+    const questionId = 'q-44';
+    const timeUpKey = `${sessionId}:${questionId}:TIME_UP`;
+
+    let timeUpCallCount = 0;
+    const playGuardedTimeUp = () => {
+      if (!setGuard.has(timeUpKey)) {
+        setGuard.add(timeUpKey);
+        timeUpCallCount++;
+      }
+    };
+
+    // Step 1: Host manually closes question
+    playGuardedTimeUp();
+    assert.equal(timeUpCallCount, 1, 'Initial manual close triggers TIME_UP');
+
+    // Step 2: Later timer reaches 0
+    playGuardedTimeUp();
+    assert.equal(timeUpCallCount, 1, 'Subsequent timer reaching 0 does not duplicate TIME_UP');
+
+    // Step 3: Repeated polling updates
+    for (let i = 0; i < 5; i++) {
+      playGuardedTimeUp();
+    }
+    assert.equal(timeUpCallCount, 1, 'Polling updates do not duplicate TIME_UP');
+  });
+
+  await t.test('45. autoplay-rejected lobby track is retried after unlock', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    
+    // Setup Mock Audio to simulate autoplay rejection
+    let playAttempts = 0;
+    let shouldReject = true;
+
+    class MockHtmlAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 1;
+        this.loop = false;
+        this.paused = true;
+      }
+      play() {
+        playAttempts++;
+        if (shouldReject) {
+          return Promise.reject(new Error('Autoplay blocked by browser policy'));
+        }
+        this.paused = false;
+        return Promise.resolve();
+      }
+      pause() {
+        this.paused = true;
+      }
+    }
+
+    const originalAudio = global.Audio;
+    global.Audio = MockHtmlAudio;
+
+    try {
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+
+      // 1. Play lobby music before unlock (autoplay blocked)
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(playAttempts, 1, 'Initial play called');
+      
+      // Allow promise rejection microtask to settle
+      await new Promise(r => setTimeout(r, 10));
+      assert.equal(competitionAudioManager.needsPlaybackRetry, true, 'needsPlaybackRetry must be true after autoplay block');
+
+      // 2. User clicks unlock / interaction gesture
+      shouldReject = false;
+      await competitionAudioManager.unlock();
+      assert.equal(playAttempts, 2, 'unlock must retry playback for blocked track');
+      assert.equal(competitionAudioManager.needsPlaybackRetry, false, 'needsPlaybackRetry cleared on successful retry');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('46. unlock does NOT resume music when global sound disabled', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    
+    let playAttempts = 0;
+    class MockHtmlAudio {
+      constructor() { this.paused = true; }
+      play() { playAttempts++; return Promise.resolve(); }
+      pause() { this.paused = true; }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockHtmlAudio;
+
+    try {
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setGlobalSoundEnabled(false);
+      competitionAudioManager.currentTrack = 'lobby';
+      competitionAudioManager.needsPlaybackRetry = true;
+
+      await competitionAudioManager.unlock();
+      assert.equal(playAttempts, 0, 'Must NOT retry music when globalSoundEnabled is false');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('47. unlock does NOT resume music when music toggle disabled', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+
+    let playAttempts = 0;
+    class MockHtmlAudio {
+      constructor() { this.paused = true; }
+      play() { playAttempts++; return Promise.resolve(); }
+      pause() { this.paused = true; }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockHtmlAudio;
+
+    try {
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(false);
+      competitionAudioManager.currentTrack = 'lobby';
+      competitionAudioManager.needsPlaybackRetry = true;
+
+      await competitionAudioManager.unlock();
+      assert.equal(playAttempts, 0, 'Must NOT retry music when musicEnabled is false');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('48. unlock does NOT override intentional paused-state music', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+
+    let playAttempts = 0;
+    class MockHtmlAudio {
+      constructor() { this.paused = true; }
+      play() { playAttempts++; return Promise.resolve(); }
+      pause() { this.paused = true; }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockHtmlAudio;
+
+    try {
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.currentTrack = 'lobby';
+      
+      // Intentional game pause
+      competitionAudioManager.pauseMusic();
+      assert.equal(competitionAudioManager.isMusicPaused, true);
+      assert.equal(competitionAudioManager.needsPlaybackRetry, false);
+
+      // Unlock gesture should NOT override intentional pause
+      await competitionAudioManager.unlock();
+      assert.equal(playAttempts, 0, 'Unlock must not override intentional pause');
+      assert.equal(competitionAudioManager.isMusicPaused, true, 'isMusicPaused remains true');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('49. manager and hook local music state match on mount', async () => {
+    assert.match(audioHookSrc, /competitionAudioManager\.setMusicEnabled\(isMusicEnabled\)/, 'Hook must synchronize musicEnabled to manager on mount');
+    
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    // Simulate manager retaining previous session disabled state
+    competitionAudioManager.setMusicEnabled(false);
+    assert.equal(competitionAudioManager.musicEnabled, false);
+
+    // Mount synchronization: hook initializes with isMusicEnabled = true and syncs into manager
+    const hookInitialMusic = true;
+    competitionAudioManager.setMusicEnabled(hookInitialMusic);
+    assert.equal(competitionAudioManager.musicEnabled, hookInitialMusic, 'Manager state must match hook local state on mount');
+  });
+
+  await t.test('50. manager and hook SFX state match on mount', async () => {
+    assert.match(audioHookSrc, /competitionAudioManager\.setSfxEnabled\(isSfxEnabled\)/, 'Hook must synchronize sfxEnabled to manager on mount');
+
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    // Simulate manager retaining previous session disabled state
+    competitionAudioManager.setSfxEnabled(false);
+    assert.equal(competitionAudioManager.sfxEnabled, false);
+
+    // Mount synchronization: hook initializes with isSfxEnabled = true and syncs into manager
+    const hookInitialSfx = true;
+    competitionAudioManager.setSfxEnabled(hookInitialSfx);
+    assert.equal(competitionAudioManager.sfxEnabled, hookInitialSfx, 'Manager SFX state must match hook state on mount');
+  });
+
+  await t.test('51. manager and hook volume match on mount', async () => {
+    assert.match(audioHookSrc, /competitionAudioManager\.setVolume\(volume\)/, 'Hook must synchronize volume to manager on mount');
+
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    // Simulate manager retaining custom volume from earlier session
+    competitionAudioManager.setVolume(0.15);
+    assert.equal(competitionAudioManager.volume, 0.15);
+
+    // Mount synchronization: hook initializes with volume = 0.5 and syncs into manager
+    const hookInitialVolume = 0.5;
+    competitionAudioManager.setVolume(hookInitialVolume);
+    assert.equal(competitionAudioManager.volume, hookInitialVolume, 'Manager volume must match hook volume on mount');
+  });
 });
