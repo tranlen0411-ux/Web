@@ -108,9 +108,9 @@ export function CompetitionQuestionBankModal({
 
       const res = await listQuestions(filters);
       let items = res.items || [];
-      // Only permit single_choice and multiple_choice in Competition R15A
+      // Only permit single_choice, multiple_choice, and fill_blank in Competition R15B
       if (!selectedType) {
-        items = items.filter(it => it.question_type === 'single_choice' || it.question_type === 'multiple_choice');
+        items = items.filter(it => it.question_type === 'single_choice' || it.question_type === 'multiple_choice' || it.question_type === 'fill_blank');
       }
       setQuestions(items);
       setTotalCount(res.total_count || 0);
@@ -346,9 +346,10 @@ export function CompetitionQuestionBankModal({
               }}
               className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 font-medium"
             >
-              <option value="">Tất cả loại trắc nghiệm</option>
+              <option value="">Tất cả loại câu hỏi</option>
               <option value="single_choice">Trắc nghiệm 1 đáp án</option>
               <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+              <option value="fill_blank">Điền vào chỗ trống</option>
             </select>
           </div>
         </div>
@@ -416,9 +417,15 @@ export function CompetitionQuestionBankModal({
                         <span className={`px-2 py-0.5 rounded-md font-semibold text-[11px] border ${
                           item.question_type === 'multiple_choice'
                             ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : item.question_type === 'fill_blank'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             : 'bg-sky-50 text-sky-700 border-sky-200'
                         }`}>
-                          {item.question_type === 'multiple_choice' ? 'Trắc nghiệm nhiều đáp án' : 'Trắc nghiệm 1 đáp án'}
+                          {item.question_type === 'multiple_choice'
+                            ? 'Trắc nghiệm nhiều đáp án'
+                            : item.question_type === 'fill_blank'
+                            ? 'Điền vào chỗ trống'
+                            : 'Trắc nghiệm 1 đáp án'}
                         </span>
                         {item.subject && (
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 font-semibold text-slate-700">
@@ -446,8 +453,8 @@ export function CompetitionQuestionBankModal({
                         {promptText}
                       </p>
 
-                      {/* Options Preview */}
-                      {Array.isArray(rawOpts) && rawOpts.length > 0 && (
+                      {/* Options Preview for Choice Questions */}
+                      {item.question_type !== 'fill_blank' && Array.isArray(rawOpts) && rawOpts.length > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
                           {rawOpts.slice(0, 4).map((opt, idx) => {
                             const optText = typeof opt === 'string' ? opt : (opt?.text || String(opt || ''));
@@ -459,6 +466,13 @@ export function CompetitionQuestionBankModal({
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {/* Short Answer / Fill Blank Preview Notice */}
+                      {item.question_type === 'fill_blank' && (
+                        <div className="text-xs text-slate-500 italic pt-1">
+                          Câu hỏi điền vào chỗ trống (đáp án ngắn).
                         </div>
                       )}
                     </div>

@@ -94,15 +94,15 @@ export function CompetitionImportExcelModal({
         const rawRow = rows[i];
         const rowNum = rawRow.source_row || (i + 2);
 
-        // Enforce Single Choice or Multiple Choice for Competition R15A
+        // Enforce Single Choice, Multiple Choice, or Fill Blank for Competition R15B
         const rawType = rawRow.question_type || rawRow.type;
-        if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
+        if (rawType !== 'single_choice' && rawType !== 'multiple_choice' && rawType !== 'fill_blank' && rawType !== 'short_answer') {
           evaluated.push({
             rowNum,
             isValid: false,
             question: null,
             raw: rawRow,
-            error: 'Đấu trường hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc nhiều đáp án.'
+            error: 'Đấu trường hiện hỗ trợ Trắc nghiệm 1 đáp án, Trắc nghiệm nhiều đáp án hoặc Điền vào chỗ trống.'
           });
           continue;
         }
@@ -313,7 +313,7 @@ export function CompetitionImportExcelModal({
               <div>
                 <p className="text-sm font-bold text-slate-700">Chưa có tệp Excel nào được chọn</p>
                 <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                  Tải tệp mẫu Excel, điền nội dung câu hỏi trắc nghiệm kèm 4 lựa chọn (A, B, C, D) và đáp án đúng rồi tải lên tại đây.
+                  Tải tệp mẫu Excel, điền nội dung câu hỏi trắc nghiệm hoặc điền vào chỗ trống rồi tải lên tại đây.
                 </p>
               </div>
             </div>
@@ -395,8 +395,8 @@ export function CompetitionImportExcelModal({
                         </div>
                       )}
 
-                      {/* Options Preview */}
-                      {isValid && opts.length > 0 && (
+                      {/* Options Preview for Choice Questions */}
+                      {isValid && question?.question_type !== 'short_answer' && opts.length > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
                           {opts.map((opt, oIdx) => {
                             const isCorrect = question.question_type === 'multiple_choice'
@@ -422,6 +422,16 @@ export function CompetitionImportExcelModal({
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {/* Short Answer Preview */}
+                      {isValid && question?.question_type === 'short_answer' && (
+                        <div className="pt-1.5 text-xs">
+                          <span className="font-semibold text-slate-700">Đáp án được chấp nhận: </span>
+                          <span className="text-emerald-700 font-mono font-bold bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 inline-block">
+                            {(question.correct_answer?.accepted_answers || []).join(' ; ')}
+                          </span>
                         </div>
                       )}
                     </div>

@@ -67,10 +67,48 @@ export function resolveTargetToOptionId(target, canonicalOptions = []) {
 }
 
 /**
+ * Normalizes an array or delimited string of accepted answers into a canonical deduplicated list.
+ * Rules:
+ * - Trims each answer
+ * - Discards empty strings
+ * - Deduplicates case-insensitively (lower(btrim())) preserving first seen original casing
+ * - Preserves deterministic ordering
+ */
+export function normalizeAcceptedAnswers(input) {
+  let rawList = [];
+  if (Array.isArray(input)) {
+    rawList = input;
+  } else if (typeof input === 'string') {
+    rawList = input.split(';').map(s => s.trim());
+  } else if (input !== null && input !== undefined) {
+    rawList = [String(input).trim()];
+  }
+
+  const seenNormalized = new Set();
+  const result = [];
+
+  for (const item of rawList) {
+    if (typeof item !== 'string' && typeof item !== 'number') {
+      continue;
+    }
+    const trimmed = String(item).trim();
+    if (!trimmed) continue;
+
+    const normKey = trimmed.toLowerCase();
+    if (!seenNormalized.has(normKey)) {
+      seenNormalized.add(normKey);
+      result.push(trimmed);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Normalizes Question Bank item/version/authoring detail to canonical Competition question format.
  * Supports full authoring detail from getQuestionAuthoringDetail ({ item, version, answer_key })
  * as well as list summary items.
- * Supports: single_choice, multiple_choice.
+ * Supports: single_choice, multiple_choice, fill_blank.
  *
  * @param {Object} input - Question Bank item object or authoring detail object
  * @param {number} [order=1] - Sequential question order
@@ -90,16 +128,19 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
     ? input.answer_key
     : (input.correct_answer_key || itemObj.answer_key || itemObj.correct_answer_key || {});
 
-  // Question Type Check (R15A supports single_choice and multiple_choice)
+  // Question Type Check (R15B supports single_choice, multiple_choice, and fill_blank)
   const rawType = versionObj.question_type || itemObj.question_type || input.question_type || input.type || 'single_choice';
-  if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
-    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc Trắc nghiệm nhiều đáp án).`);
+  if (rawType !== 'single_choice' && rawType !== 'multiple_choice' && rawType !== 'fill_blank' && rawType !== 'short_answer') {
+    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (chỉ hỗ trợ Trắc nghiệm 1 đáp án, Trắc nghiệm nhiều đáp án hoặc Điền vào chỗ trống).`);
   }
-  const canonicalType = rawType;
+  // Canonical backend type: fill_blank -> short_answer
+  const canonicalType = (rawType === 'fill_blank' || rawType === 'short_answer') ? 'short_answer' : rawType;
 
   // Extract Question Text / Prompt
   const promptText = (
     versionObj.prompt ||
+    versionObj.question_text ||
+    versionObj.title ||
     itemObj.prompt ||
     itemObj.question_text ||
     itemObj.title ||
@@ -111,6 +152,48 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
 
   if (!promptText) {
     throw new Error('Nội dung câu hỏi không được để trống.');
+  }
+
+  // Points & Time Limit
+  const rawPoints = input.points || versionObj.points || itemObj.points;
+  const points = parseFloat(rawPoints) > 0 ? parseFloat(rawPoints) : 10.00;
+
+  const rawTime = input.time_limit_seconds || versionObj.time_limit_seconds || itemObj.time_limit_seconds;
+  const timeLimit = (parseInt(rawTime, 10) >= 5 && parseInt(rawTime, 10) <= 600)
+    ? parseInt(rawTime, 10)
+    : 30;
+
+  const explanation = (versionObj.explanation || itemObj.explanation || input.explanation || '').trim() || null;
+  const sourceBankId = itemObj.id || input.id || null;
+
+  // Handle canonical short_answer (fill_blank)
+  if (canonicalType === 'short_answer') {
+    const rawAnswers = answerKeyObj.correct_answers !== undefined
+      ? answerKeyObj.correct_answers
+      : (answerKeyObj.accepted_answers !== undefined
+        ? answerKeyObj.accepted_answers
+        : (answerKeyObj.correct_answer !== undefined
+          ? answerKeyObj.correct_answer
+          : (itemObj.correct_answers || itemObj.accepted_answers || itemObj.correct_answer || versionObj.correct_answers || versionObj.accepted_answers || versionObj.correct_answer || input.correct_answers || input.accepted_answers || input.correct_answer || [])));
+
+    const acceptedAnswers = normalizeAcceptedAnswers(rawAnswers);
+    if (acceptedAnswers.length === 0) {
+      throw new Error('Câu hỏi điền vào chỗ trống từ Ngân hàng phải có ít nhất 1 đáp án đúng được chấp nhận.');
+    }
+
+    return {
+      question_order: order,
+      question_text: promptText,
+      question_type: 'short_answer',
+      points,
+      time_limit_seconds: timeLimit,
+      options: [],
+      correct_answer: {
+        accepted_answers: acceptedAnswers
+      },
+      explanation,
+      _sourceBankId: sourceBankId
+    };
   }
 
   // Extract Options
@@ -230,18 +313,6 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
     text: o.text
   }));
 
-  // Points & Time Limit
-  const rawPoints = input.points || versionObj.points || itemObj.points;
-  const points = parseFloat(rawPoints) > 0 ? parseFloat(rawPoints) : 10.00;
-
-  const rawTime = input.time_limit_seconds || versionObj.time_limit_seconds || itemObj.time_limit_seconds;
-  const timeLimit = (parseInt(rawTime, 10) >= 5 && parseInt(rawTime, 10) <= 600)
-    ? parseInt(rawTime, 10)
-    : 30;
-
-  const explanation = (versionObj.explanation || itemObj.explanation || input.explanation || '').trim() || null;
-  const sourceBankId = itemObj.id || input.id || null;
-
   return {
     question_order: order,
     question_text: promptText,
@@ -259,7 +330,7 @@ export function normalizeQuestionBankItemToCompetitionQuestion(input, order = 1)
 
 /**
  * Normalizes an imported Excel row into canonical Competition question format.
- * Supports: single_choice, multiple_choice.
+ * Supports: single_choice, multiple_choice, fill_blank.
  *
  * @param {Object} row - Parsed Excel row object
  * @param {number} [order=1] - Sequential question order
@@ -270,19 +341,63 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     throw new Error('Dữ liệu dòng Excel không hợp lệ.');
   }
 
-  // Enforce single_choice or multiple_choice for Competition
+  // Enforce single_choice, multiple_choice, or fill_blank for Competition
   const rawType = row.question_type || row.type || 'single_choice';
-  if (rawType !== 'single_choice' && rawType !== 'multiple_choice') {
-    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (R14 hiện chỉ hỗ trợ Trắc nghiệm 1 đáp án hoặc Trắc nghiệm nhiều đáp án).`);
+  if (rawType !== 'single_choice' && rawType !== 'multiple_choice' && rawType !== 'fill_blank' && rawType !== 'short_answer') {
+    throw new Error(`Loại câu hỏi "${rawType}" chưa được hỗ trợ trong Đấu trường (chỉ hỗ trợ Trắc nghiệm 1 đáp án, Trắc nghiệm nhiều đáp án hoặc Điền vào chỗ trống).`);
   }
-  const canonicalType = rawType;
+  const canonicalType = (rawType === 'fill_blank' || rawType === 'short_answer') ? 'short_answer' : rawType;
 
   const prompt = (row.question_text || row.question || row.prompt || row.debai || '').trim();
   if (!prompt) {
     throw new Error('Nội dung câu hỏi không được để trống.');
   }
 
-  // Collect option texts
+  const points = parseFloat(row.points) > 0 ? parseFloat(row.points) : 10.00;
+  
+  const rawTime = row.time_limit_seconds !== undefined ? row.time_limit_seconds : row.time;
+  let timeLimit = 30;
+  if (rawTime !== undefined && rawTime !== null && String(rawTime).trim() !== '') {
+    const parsedTime = parseInt(rawTime, 10);
+    if (!isNaN(parsedTime) && parsedTime >= 5 && parsedTime <= 600) {
+      timeLimit = parsedTime;
+    }
+  }
+
+  const explanation = row.explanation ? String(row.explanation).trim() : null;
+
+  // Handle canonical short_answer (fill_blank)
+  if (canonicalType === 'short_answer') {
+    const rawCorrect = row.correct_answer !== undefined && row.correct_answer !== null
+      ? row.correct_answer
+      : (row.correct_answers !== undefined && row.correct_answers !== null
+        ? row.correct_answers
+        : (row.correct_answer_key?.accepted_answers || row.correct_answer_key?.correct_answer || row.dapan || row.answer));
+
+    if (rawCorrect === undefined || rawCorrect === null || String(rawCorrect).trim() === '') {
+      throw new Error('Thiếu đáp án đúng cho câu hỏi điền vào chỗ trống.');
+    }
+
+    const acceptedAnswers = normalizeAcceptedAnswers(rawCorrect);
+    if (acceptedAnswers.length === 0) {
+      throw new Error('Câu hỏi điền vào chỗ trống phải có ít nhất 1 đáp án đúng.');
+    }
+
+    return {
+      question_order: order,
+      question_text: prompt,
+      question_type: 'short_answer',
+      points,
+      time_limit_seconds: timeLimit,
+      options: [],
+      correct_answer: {
+        accepted_answers: acceptedAnswers
+      },
+      explanation
+    };
+  }
+
+  // Collect option texts for choice-based questions
   const optionTexts = [];
   if (row.option_a !== undefined && String(row.option_a).trim()) optionTexts.push(String(row.option_a).trim());
   if (row.option_b !== undefined && String(row.option_b).trim()) optionTexts.push(String(row.option_b).trim());
@@ -352,17 +467,6 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     }
   }
 
-  const points = parseFloat(row.points) > 0 ? parseFloat(row.points) : 10.00;
-  
-  const rawTime = row.time_limit_seconds !== undefined ? row.time_limit_seconds : row.time;
-  let timeLimit = 30;
-  if (rawTime !== undefined && rawTime !== null && String(rawTime).trim() !== '') {
-    const parsedTime = parseInt(rawTime, 10);
-    if (!isNaN(parsedTime) && parsedTime >= 5 && parsedTime <= 600) {
-      timeLimit = parsedTime;
-    }
-  }
-
   return {
     question_order: order,
     question_text: prompt,
@@ -373,7 +477,7 @@ export function normalizeImportedQuestionToCompetitionQuestion(row, order = 1) {
     correct_answer: canonicalType === 'multiple_choice'
       ? { option_ids: resolvedOptionIds }
       : { option_id: resolvedOptionId },
-    explanation: row.explanation ? String(row.explanation).trim() : null
+    explanation
   };
 }
 
@@ -390,9 +494,10 @@ export function reindexCompetitionQuestions(questions = []) {
 
 /**
  * Sanitizes questions array before sending to hostCreateSession RPC payload.
- * Preserves canonical types: single_choice and multiple_choice.
+ * Canonical backend types allowed: single_choice, multiple_choice, short_answer.
+ * Strips internal metadata (e.g. _sourceBankId, _sourceType) before sending.
+ * Translates fill_blank source type to canonical short_answer.
  * Fails closed on unsupported types or malformed answers.
- * Ensures zero internal metadata (like _sourceBankId) is transmitted.
  */
 export function sanitizeQuestionsForCreation(questions = []) {
   if (!Array.isArray(questions)) return [];
@@ -400,11 +505,53 @@ export function sanitizeQuestionsForCreation(questions = []) {
     throw new Error(`Số lượng câu hỏi (${questions.length}) vượt quá giới hạn tối đa ${MAX_COMPETITION_QUESTIONS} câu.`);
   }
   return questions.map((q, idx) => {
-    const qType = q.question_type;
-    if (qType !== 'single_choice' && qType !== 'multiple_choice') {
-      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice hoặc multiple_choice).`);
+    let qType = q.question_type;
+    if (qType === 'fill_blank') {
+      qType = 'short_answer';
     }
 
+    if (qType !== 'single_choice' && qType !== 'multiple_choice' && qType !== 'short_answer') {
+      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice, multiple_choice hoặc short_answer).`);
+    }
+
+    const questionText = String(q.question_text || '').trim();
+    if (!questionText) {
+      throw new Error(`Câu hỏi ${idx + 1} có nội dung trống.`);
+    }
+
+    const points = parseFloat(q.points) > 0 ? parseFloat(q.points) : 10.00;
+    const timeLimit = (parseInt(q.time_limit_seconds, 10) >= 5 && parseInt(q.time_limit_seconds, 10) <= 600)
+      ? parseInt(q.time_limit_seconds, 10)
+      : 30;
+
+    // Handle canonical short_answer
+    if (qType === 'short_answer') {
+      const rawAnswers = q.correct_answer?.accepted_answers !== undefined
+        ? q.correct_answer.accepted_answers
+        : (q.correct_answers !== undefined
+          ? q.correct_answers
+          : (q.accepted_answers !== undefined ? q.accepted_answers : q.correct_answer));
+
+      const acceptedAnswers = normalizeAcceptedAnswers(rawAnswers);
+      if (acceptedAnswers.length === 0) {
+        throw new Error(`Câu hỏi ${idx + 1} (điền vào chỗ trống) phải có ít nhất 1 đáp án đúng.`);
+      }
+
+      return {
+        question_order: idx + 1,
+        question_text: questionText,
+        question_type: 'short_answer',
+        points,
+        time_limit_seconds: timeLimit,
+        options: [],
+        correct_answer: {
+          accepted_answers: acceptedAnswers
+        },
+        ...(q.explanation ? { explanation: String(q.explanation).trim() } : {})
+      };
+    }
+
+    // Choice-based questions
     const options = (Array.isArray(q.options) ? q.options : []).map(opt => ({
       id: String(opt.id),
       text: String(opt.text || '').trim()
@@ -442,12 +589,13 @@ export function sanitizeQuestionsForCreation(questions = []) {
 
     return {
       question_order: idx + 1,
-      question_text: String(q.question_text || '').trim(),
+      question_text: questionText,
       question_type: qType,
-      points: parseFloat(q.points) || 10.00,
-      time_limit_seconds: parseInt(q.time_limit_seconds, 10) || 30,
+      points,
+      time_limit_seconds: timeLimit,
       options,
-      correct_answer: correctAnswer
+      correct_answer: correctAnswer,
+      ...(q.explanation ? { explanation: String(q.explanation).trim() } : {})
     };
   });
 }
@@ -479,7 +627,7 @@ export function isDuplicateQuestion(candidate, existingList = []) {
 /**
  * Creates canonical Excel template workbook for Competition.
  * Headers match parseExcelQuestions required contract for 100% round-trip fidelity.
- * Includes both single_choice and multiple_choice examples.
+ * Includes single_choice, multiple_choice, and fill_blank examples.
  * Distinct times [25, 45, 60] verify round-trip persistence.
  *
  * @returns {import('xlsx').WorkBook}
@@ -521,6 +669,17 @@ export function createCompetitionExcelTemplateWorkbook() {
       45
     ],
     [
+      'fill_blank',
+      'Thủ đô của Việt Nam là thành phố nào? (Nhập đáp án; nếu có nhiều đáp án tương đương thì cách nhau bằng dấu chấm phẩy ;)',
+      '',
+      '',
+      '',
+      '',
+      'Hà Nội;Ha Noi;Hanoi',
+      10,
+      30
+    ],
+    [
       'single_choice',
       'Hình vuông có mấy cạnh bằng nhau?',
       '2 cạnh',
@@ -543,7 +702,7 @@ export function createCompetitionExcelTemplateWorkbook() {
     { wch: 20 }, // option_b
     { wch: 20 }, // option_c
     { wch: 20 }, // option_d
-    { wch: 15 }, // correct_answer
+    { wch: 20 }, // correct_answer
     { wch: 10 }, // points
     { wch: 18 }  // time_limit_seconds
   ];
