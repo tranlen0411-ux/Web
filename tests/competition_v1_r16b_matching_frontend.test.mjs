@@ -151,18 +151,58 @@ test('COMPETITION V1 R16-B — MATCHING FRONTEND UI TEST MATRIX', async (t) => {
       assert.deepStrictEqual(sanitized[0].correct_answer.option_ids, ['opt_1', 'opt_2']);
     });
 
-    // 12. true_false rejects safely in session creation (fails closed)
-    await t.test('12. Existing true_false rejects safely in sanitizeQuestionsForCreation', () => {
+    // 12. true_false accepted, preserved canonical shape and fails closed when malformed
+    await t.test('12. Existing true_false accepted and preserved in sanitizeQuestionsForCreation', () => {
       const tfQ = {
         question_order: 1,
         question_text: 'Trái đất hình tròn?',
         question_type: 'true_false',
-        options: [{ id: 'opt_t', text: 'Đúng' }, { id: 'opt_f', text: 'Sai' }],
-        correct_answer: { option_id: 'opt_t' }
+        points: 10,
+        time_limit_seconds: 20,
+        options: [{ id: 'opt_true', text: 'Đúng' }, { id: 'opt_false', text: 'Sai' }],
+        correct_answer: { option_id: 'opt_true' }
+      };
+      const sanitized = sanitizeQuestionsForCreation([tfQ]);
+      assert.strictEqual(sanitized.length, 1);
+      assert.strictEqual(sanitized[0].question_type, 'true_false');
+      assert.strictEqual(sanitized[0].correct_answer.option_id, 'opt_true');
+      assert.strictEqual(sanitized[0].options.length, 2);
+      assert.strictEqual(sanitized[0].options[0].text, 'Đúng');
+      assert.strictEqual(sanitized[0].options[1].text, 'Sai');
+
+      // Malformed true_false fails closed
+      const missingOptionIdQ = {
+        question_order: 1,
+        question_text: 'Câu hỏi thiếu đáp án',
+        question_type: 'true_false',
+        options: [{ id: 'opt_true', text: 'Đúng' }, { id: 'opt_false', text: 'Sai' }],
+        correct_answer: { option_id: '' }
       };
       assert.throws(() => {
-        sanitizeQuestionsForCreation([tfQ]);
-      }, /không được hỗ trợ/);
+        sanitizeQuestionsForCreation([missingOptionIdQ]);
+      }, /thiếu đáp án đúng/);
+
+      const invalidOptionIdQ = {
+        question_order: 1,
+        question_text: 'Câu hỏi sai đáp án',
+        question_type: 'true_false',
+        options: [{ id: 'opt_true', text: 'Đúng' }, { id: 'opt_false', text: 'Sai' }],
+        correct_answer: { option_id: 'opt_unknown' }
+      };
+      assert.throws(() => {
+        sanitizeQuestionsForCreation([invalidOptionIdQ]);
+      }, /không nằm trong danh sách lựa chọn/);
+
+      const tooFewOptionsQ = {
+        question_order: 1,
+        question_text: 'Câu hỏi chỉ có 1 lựa chọn',
+        question_type: 'true_false',
+        options: [{ id: 'opt_true', text: 'Đúng' }],
+        correct_answer: { option_id: 'opt_true' }
+      };
+      assert.throws(() => {
+        sanitizeQuestionsForCreation([tooFewOptionsQ]);
+      }, /phải có ít nhất 2 phương án/);
     });
 
     // 13. short_answer unchanged

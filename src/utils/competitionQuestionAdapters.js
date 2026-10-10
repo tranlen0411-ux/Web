@@ -520,8 +520,8 @@ export function sanitizeQuestionsForCreation(questions = []) {
       qType = 'short_answer';
     }
 
-    if (qType !== 'single_choice' && qType !== 'multiple_choice' && qType !== 'short_answer' && qType !== 'matching') {
-      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice, multiple_choice, short_answer hoặc matching).`);
+    if (qType !== 'single_choice' && qType !== 'multiple_choice' && qType !== 'true_false' && qType !== 'short_answer' && qType !== 'matching') {
+      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice, multiple_choice, true_false, short_answer hoặc matching).`);
     }
 
     const questionText = String(q.question_text || '').trim();

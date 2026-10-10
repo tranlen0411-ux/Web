@@ -1018,8 +1018,21 @@ export function CompetitionHostPage() {
         }
       };
       showToast(`Đã chuyển Câu ${q.question_order} sang Điền vào chỗ trống. Vui lòng nhập đáp án được chấp nhận.`, 'info');
+    } else if (newType === 'true_false') {
+      updated[qIndex] = {
+        ...q,
+        question_type: 'true_false',
+        options: [
+          { id: 'opt_true', text: 'Đúng' },
+          { id: 'opt_false', text: 'Sai' }
+        ],
+        correct_answer: {
+          option_id: 'opt_true'
+        }
+      };
+      showToast(`Đã chuyển Câu ${q.question_order} sang Đúng / Sai.`, 'info');
     } else if (newType === 'multiple_choice') {
-      if (q.question_type === 'fill_blank' || q.question_type === 'matching') {
+      if (q.question_type === 'fill_blank' || q.question_type === 'matching' || q.question_type === 'true_false') {
         updated[qIndex] = {
           ...q,
           question_type: 'multiple_choice',
@@ -1046,7 +1059,7 @@ export function CompetitionHostPage() {
         };
       }
     } else if (newType === 'single_choice') {
-      if (q.question_type === 'fill_blank' || q.question_type === 'matching') {
+      if (q.question_type === 'fill_blank' || q.question_type === 'matching' || q.question_type === 'true_false') {
         updated[qIndex] = {
           ...q,
           question_type: 'single_choice',
@@ -1704,6 +1717,7 @@ export function CompetitionHostPage() {
                         >
                           <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                           <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
+                          <option value="true_false">Đúng / Sai</option>
                           <option value="fill_blank">Điền vào chỗ trống</option>
                           <option value="matching">Nối cặp</option>
                         </select>
