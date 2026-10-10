@@ -37,30 +37,14 @@ export function SpectatorQuestionResultsView({
         </h3>
 
         {/* Aggregate Distribution Bar Cards OR Short Answer Result Card */}
-        {activeQuestion?.question_type === 'short_answer' || questionResults?.question_type === 'short_answer' ? (
+        {questionResults?.question_type === 'short_answer' || activeQuestion?.question_type === 'short_answer' ? (
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="text-xs font-black uppercase tracking-wider text-sky-400">
               Câu hỏi điền vào chỗ trống
             </div>
-            {Array.isArray(questionResults?.correct_answer?.accepted_answers || activeQuestion?.correct_answer?.accepted_answers) &&
-              (questionResults?.correct_answer?.accepted_answers || activeQuestion?.correct_answer?.accepted_answers).length > 0 && (
-                <div className="space-y-2">
-                  <span className="text-xs font-bold text-slate-400 block">
-                    Đáp án đúng được chấp nhận:
-                  </span>
-                  <div className="flex flex-wrap gap-2">
-                    {(questionResults?.correct_answer?.accepted_answers || activeQuestion?.correct_answer?.accepted_answers).map((ans, idx) => (
-                      <span
-                        key={idx}
-                        className="px-3.5 py-1.5 rounded-xl bg-emerald-950/80 border border-emerald-500/60 text-emerald-300 font-bold text-sm sm:text-base font-mono inline-flex items-center gap-1.5"
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        {ans}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <p className="text-sm sm:text-base font-semibold text-slate-300">
+              Các thí sinh đã nhập câu trả lời trực tiếp trên thiết bị của mình. Kết quả được hệ thống tự động đối chiếu và bảo mật chi tiết từng bài làm.
+            </p>
             <div className="text-xs text-slate-400 italic">
               Hệ thống so sánh chuỗi không phân biệt chữ hoa/thường và đã tự động loại bỏ khoảng trắng thừa.
             </div>

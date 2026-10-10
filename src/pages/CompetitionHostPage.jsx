@@ -2285,14 +2285,6 @@ export function CompetitionHostPage() {
                         <p className="text-sky-700">
                           Đã ghi nhận {activeDisplayedResults.submitted_count} lượt nộp câu trả lời ({activeDisplayedResults.correct_count} đúng, {activeDisplayedResults.incorrect_count} sai). Hệ thống bảo mật không công khai nội dung chi tiết từng bài làm.
                         </p>
-                        {Array.isArray(activeDisplayedResults.correct_answer?.accepted_answers) && activeDisplayedResults.correct_answer.accepted_answers.length > 0 && (
-                          <div className="pt-1">
-                            <span className="font-bold text-slate-700">Các đáp án được chấp nhận: </span>
-                            <span className="font-mono text-emerald-700 font-bold">
-                              {activeDisplayedResults.correct_answer.accepted_answers.join(', ')}
-                            </span>
-                          </div>
-                        )}
                       </div>
                     )}
 

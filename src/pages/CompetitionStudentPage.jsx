@@ -752,6 +752,14 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const isTimeExpired = timeLeftSeconds !== null && timeLeftSeconds <= 0;
   const isMultipleChoice = currentQuestion?.question_type === 'multiple_choice';
   const isShortAnswer = currentQuestion?.question_type === 'short_answer';
+
+  // Synchronize text answer presence with selectedOptionId for short_answer questions
+  useEffect(() => {
+    if (isShortAnswer) {
+      setSelectedOptionId(studentTextAnswer.trim() ? '__TEXT_ANSWER__' : null);
+    }
+  }, [isShortAnswer, studentTextAnswer]);
+
   const handleSelectOption = (optionId) => {
     if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
 
@@ -1760,7 +1768,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                 <button
                   type="button"
                   onClick={handleSubmitAnswer}
-                  disabled={!selectedOptionId && !isShortAnswer || (isShortAnswer && !studentTextAnswer.trim()) || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
+                  disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
                   className={`w-full py-4 px-6 font-black text-lg rounded-2xl shadow-md transition-all flex items-center justify-center gap-3 active:scale-[0.99] ${
                     isTimeExpired
                       ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-2 border-slate-300'

@@ -320,7 +320,8 @@ test('COMPETITION V1 R15B — FILL BLANK (SHORT ANSWER) IMPLEMENTATION & REGRESS
 
     await t.test('24. empty trimmed student answer cannot submit', () => {
       assert.ok(studentPageContent.includes("studentTextAnswer && studentTextAnswer.trim().length > 0"));
-      assert.ok(studentPageContent.includes("(isShortAnswer && !studentTextAnswer.trim())"));
+      assert.ok(studentPageContent.includes("setSelectedOptionId(studentTextAnswer.trim() ? '__TEXT_ANSWER__' : null)"));
+      assert.ok(studentPageContent.includes("disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}"));
     });
 
     await t.test('25. successful submit locks text input', () => {
@@ -333,7 +334,7 @@ test('COMPETITION V1 R15B — FILL BLANK (SHORT ANSWER) IMPLEMENTATION & REGRESS
   });
 
   // =========================================================================
-  // GROUP 6: LEAK PROTECTION & SPECTATOR (STEP 9, 10, 11)
+  // GROUP 6: LEAK PROTECTION & SPECTATOR (STEP 9, 10, 11 & BLOCKER PATCH)
   // =========================================================================
   await t.test('Group 6: Leak Protection & Spectator', async (t) => {
 
@@ -354,12 +355,36 @@ test('COMPETITION V1 R15B — FILL BLANK (SHORT ANSWER) IMPLEMENTATION & REGRESS
     await t.test('29. results short_answer does not assume option_distribution', () => {
       assert.ok(hostAnalyticsContent.includes("const isChoiceType = ['single_choice', 'true_false', 'multiple_choice'].includes(q.question_type)"));
       assert.ok(hostPageContent.includes("activeDisplayedResults.question_type !== 'short_answer' && Array.isArray(activeDisplayedResults.distribution)"));
-      assert.ok(spectatorResultsContent.includes("activeQuestion?.question_type === 'short_answer' || questionResults?.question_type === 'short_answer'"));
+      assert.ok(spectatorResultsContent.includes("questionResults?.question_type === 'short_answer' || activeQuestion?.question_type === 'short_answer'"));
     });
 
-    await t.test('30. results accepted answers only visible after close', () => {
-      assert.ok(hostPageContent.includes("activeDisplayedResults.question_type === 'short_answer'"));
-      assert.ok(hostPageContent.includes("activeDisplayedResults.correct_answer.accepted_answers.join"));
+    await t.test('30. results short_answer renders summary stats without accepted_answers dependency', () => {
+      // Host Results renders summary counts without accepted_answers
+      assert.ok(hostPageContent.includes("activeDisplayedResults.submitted_count"));
+      assert.ok(hostPageContent.includes("activeDisplayedResults.correct_count"));
+      assert.ok(hostPageContent.includes("activeDisplayedResults.incorrect_count"));
+      assert.ok(hostPageContent.includes("activeDisplayedResults.correct_percentage"));
+
+      // Spectator Results renders summary counts without accepted_answers
+      assert.ok(spectatorResultsContent.includes("questionResults?.submitted_count"));
+      assert.ok(spectatorResultsContent.includes("questionResults?.correct_count"));
+      assert.ok(spectatorResultsContent.includes("questionResults?.incorrect_count"));
+      assert.ok(spectatorResultsContent.includes("questionResults?.correct_percentage"));
+    });
+
+    await t.test('Explicit Check: HOST_RESULTS_ACCEPTED_ANSWERS_DEPENDENCY: NO', () => {
+      assert.strictEqual(hostPageContent.includes("activeDisplayedResults.correct_answer?.accepted_answers"), false);
+      assert.strictEqual(hostPageContent.includes("activeDisplayedResults.correct_answer"), false);
+    });
+
+    await t.test('Explicit Check: SPECTATOR_RESULTS_ACCEPTED_ANSWERS_DEPENDENCY: NO', () => {
+      assert.strictEqual(spectatorResultsContent.includes("questionResults?.correct_answer?.accepted_answers"), false);
+      assert.strictEqual(spectatorResultsContent.includes("questionResults?.correct_answer"), false);
+    });
+
+    await t.test('Explicit Check: ACTIVE_QUESTION_CORRECT_ANSWER_FALLBACK: NO', () => {
+      assert.strictEqual(spectatorResultsContent.includes("activeQuestion?.correct_answer?.accepted_answers"), false);
+      assert.strictEqual(spectatorResultsContent.includes("activeQuestion?.correct_answer"), false);
     });
   });
 
