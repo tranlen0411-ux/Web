@@ -17,6 +17,7 @@
 -- 7. Host results contract (both live closed and historical by order) exposes matching_pairs only after reveal gate.
 -- 8. Zero public RPC signature changes.
 -- 9. Active question snapshot server-side sanitization and deterministic independent order randomization for Matching (left and right separated with unique salts, no random(), fail-closed MALFORMED_QUESTION_SNAPSHOT).
+-- 10. Server-side opaque canonicalization of Matching option IDs in competition_host_create_session (all client IDs replaced with server-generated UUIDs before insert into competition_questions, correct_answer remapped, zero client ID leakage).
 -- ============================================================================
 
 -- ------------------------------------------------------------
@@ -659,6 +660,81 @@ BEGIN
         v_q_points := COALESCE((v_q_elem->>'points')::NUMERIC, 10.00);
         v_q_time_limit := COALESCE((v_q_elem->>'time_limit_seconds')::INT, 30);
         v_q_explanation := NULLIF(pg_catalog.btrim(COALESCE(v_q_elem->>'explanation', '')), '');
+
+        -- Canonicalize Matching option IDs to server-generated opaque UUIDs before persist
+        IF v_q_type = 'matching' THEN
+            DECLARE
+                v_opt JSONB;
+                v_orig_id TEXT;
+                v_side TEXT;
+                v_text TEXT;
+                v_new_id TEXT;
+                v_id_map JSONB := '{}'::jsonb;
+                v_new_options JSONB := '[]'::jsonb;
+                v_pair JSONB;
+                v_orig_left_id TEXT;
+                v_orig_right_id TEXT;
+                v_new_left_id TEXT;
+                v_new_right_id TEXT;
+                v_new_pairs JSONB := '[]'::jsonb;
+            BEGIN
+                -- 1. Generate opaque UUID for each option and record temporary mapping
+                FOR v_opt IN SELECT * FROM pg_catalog.jsonb_array_elements(v_q_options)
+                LOOP
+                    v_orig_id := pg_catalog.btrim(v_opt->>'id');
+                    v_side := pg_catalog.lower(pg_catalog.btrim(v_opt->>'side'));
+                    v_text := pg_catalog.btrim(v_opt->>'text');
+                    v_new_id := pg_catalog.gen_random_uuid()::text;
+
+                    v_id_map := v_id_map || pg_catalog.jsonb_build_object(v_orig_id, v_new_id);
+
+                    v_new_options := v_new_options || pg_catalog.jsonb_build_array(
+                        pg_catalog.jsonb_build_object(
+                            'id', v_new_id,
+                            'side', v_side,
+                            'text', v_text
+                        )
+                    );
+                END LOOP;
+
+                -- 2. Remap correct_answer.pairs using the opaque UUIDs
+                FOR v_pair IN SELECT * FROM pg_catalog.jsonb_array_elements(v_q_correct->'pairs')
+                LOOP
+                    v_orig_left_id := pg_catalog.btrim(v_pair->>'left_id');
+                    v_orig_right_id := pg_catalog.btrim(v_pair->>'right_id');
+
+                    v_new_left_id := v_id_map->>v_orig_left_id;
+                    v_new_right_id := v_id_map->>v_orig_right_id;
+
+                    -- Fail-closed validation for mapping integrity
+                    IF v_new_left_id IS NULL OR v_new_right_id IS NULL OR v_new_left_id = '' OR v_new_right_id = '' THEN
+                        RETURN pg_catalog.jsonb_build_object(
+                            'success', false,
+                            'error_code', 'MALFORMED_QUESTION_PAYLOAD',
+                            'message', 'Lỗi ánh xạ định danh bảo mật cho câu hỏi nối từ.'
+                        );
+                    END IF;
+
+                    v_new_pairs := v_new_pairs || pg_catalog.jsonb_build_array(
+                        pg_catalog.jsonb_build_object(
+                            'left_id', v_new_left_id,
+                            'right_id', v_new_right_id
+                        )
+                    );
+                END LOOP;
+
+                IF pg_catalog.jsonb_array_length(v_new_pairs) <> pg_catalog.jsonb_array_length(v_q_correct->'pairs') THEN
+                    RETURN pg_catalog.jsonb_build_object(
+                        'success', false,
+                        'error_code', 'MALFORMED_QUESTION_PAYLOAD',
+                        'message', 'Số lượng cặp đáp án đúng sau ánh xạ không khớp.'
+                    );
+                END IF;
+
+                v_q_options := v_new_options;
+                v_q_correct := pg_catalog.jsonb_build_object('pairs', v_new_pairs);
+            END;
+        END IF;
 
         INSERT INTO public.competition_questions (
             session_id,

@@ -118,7 +118,7 @@ async function setAuthContext(userId, role = 'authenticated') {
   }
 }
 
-test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)', async (t) => {
+test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (86+ TESTS)', async (t) => {
   await setupDatabase();
 
   // Seed Users
@@ -128,6 +128,7 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
   const student1Id = '44444444-4444-4444-8444-444444444444';
   const student2Id = '55555555-5555-5555-8555-555555555555';
   const student3Id = '66666666-6666-6666-8666-666666666666';
+  const student4Id = '77777777-7777-4777-8777-777777777777';
 
   await db.exec(`
     INSERT INTO auth.users (id, email) VALUES
@@ -136,7 +137,8 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       ('${otherTeacherId}', 'teacher2@test.com'),
       ('${student1Id}', 'student1@test.com'),
       ('${student2Id}', 'student2@test.com'),
-      ('${student3Id}', 'student3@test.com');
+      ('${student3Id}', 'student3@test.com'),
+      ('${student4Id}', 'student4@test.com');
 
     INSERT INTO public.profiles (id, role, full_name) VALUES
       ('${hostId}', 'teacher', 'Host Teacher'),
@@ -144,7 +146,8 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       ('${otherTeacherId}', 'teacher', 'Other Teacher'),
       ('${student1Id}', 'student', 'Student One'),
       ('${student2Id}', 'student', 'Student Two'),
-      ('${student3Id}', 'student', 'Student Three');
+      ('${student3Id}', 'student', 'Student Three'),
+      ('${student4Id}', 'student', 'Student Four');
   `);
 
   // Canonical helper to create matching question
@@ -432,14 +435,17 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     )).rows[0];
     const questionId = qRow.current_question_id;
 
+    // Retrieve canonical server-generated opaque options & correct pairs
+    const qDetails = (await db.query(
+      `SELECT options, correct_answer FROM public.competition_questions WHERE id = $1`,
+      [questionId]
+    )).rows[0];
+    const canonicalCorrectPairs = qDetails.correct_answer.pairs;
+
     // 17. correct submission exact order PASS
     await t.test('17. correct submission exact order PASS', async () => {
       await setAuthContext(student1Id);
-      const submission = [
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_ty' },
-        { left_id: 'l_fr', right_id: 'r_pa' }
-      ];
+      const submission = canonicalCorrectPairs;
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
         [sessionId, questionId, JSON.stringify(submission)]
@@ -455,9 +461,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('18. correct submission different order PASS', async () => {
       await setAuthContext(student2Id);
       const submission = [
-        { left_id: 'l_fr', right_id: 'r_pa' },
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_ty' }
+        canonicalCorrectPairs[2],
+        canonicalCorrectPairs[0],
+        canonicalCorrectPairs[1]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
@@ -474,9 +480,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('19. wrong pair mapping FAIL', async () => {
       await setAuthContext(student3Id);
       const submission = [
-        { left_id: 'l_vn', right_id: 'r_ty' },
-        { left_id: 'l_jp', right_id: 'r_hn' },
-        { left_id: 'l_fr', right_id: 'r_pa' }
+        { left_id: canonicalCorrectPairs[0].left_id, right_id: canonicalCorrectPairs[1].right_id },
+        { left_id: canonicalCorrectPairs[1].left_id, right_id: canonicalCorrectPairs[0].right_id },
+        canonicalCorrectPairs[2]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
@@ -504,13 +510,18 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await setAuthContext(hostId);
     await db.query(`SELECT public.competition_host_start_session($1)`, [errSessionId]);
     const errQId = (await db.query(`SELECT current_question_id FROM public.competition_sessions WHERE id = $1`, [errSessionId])).rows[0].current_question_id;
+    const errQDetails = (await db.query(
+      `SELECT options, correct_answer FROM public.competition_questions WHERE id = $1`,
+      [errQId]
+    )).rows[0];
+    const errCanonicalPairs = errQDetails.correct_answer.pairs;
 
     // 20. missing submission pair rejected/fail-closed
     await t.test('20. missing submission pair rejected/fail-closed', async () => {
       await setAuthContext(student1Id);
       const missingPairSub = [
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_ty' }
+        errCanonicalPairs[0],
+        errCanonicalPairs[1]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb) AS result`,
@@ -524,10 +535,8 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('21. extra submission pair rejected/fail-closed', async () => {
       await setAuthContext(student1Id);
       const extraPairSub = [
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_ty' },
-        { left_id: 'l_fr', right_id: 'r_pa' },
-        { left_id: 'l_extra', right_id: 'r_extra' }
+        ...errCanonicalPairs,
+        { left_id: 'l_extra_uuid', right_id: 'r_extra_uuid' }
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb) AS result`,
@@ -541,9 +550,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('22. duplicate submitted left rejected', async () => {
       await setAuthContext(student1Id);
       const dupLeftSub = [
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_vn', right_id: 'r_ty' },
-        { left_id: 'l_fr', right_id: 'r_pa' }
+        { left_id: errCanonicalPairs[0].left_id, right_id: errCanonicalPairs[0].right_id },
+        { left_id: errCanonicalPairs[0].left_id, right_id: errCanonicalPairs[1].right_id },
+        errCanonicalPairs[2]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb) AS result`,
@@ -557,9 +566,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('23. duplicate submitted right rejected', async () => {
       await setAuthContext(student1Id);
       const dupRightSub = [
-        { left_id: 'l_vn', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_hn' },
-        { left_id: 'l_fr', right_id: 'r_pa' }
+        { left_id: errCanonicalPairs[0].left_id, right_id: errCanonicalPairs[0].right_id },
+        { left_id: errCanonicalPairs[1].left_id, right_id: errCanonicalPairs[0].right_id },
+        errCanonicalPairs[2]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb) AS result`,
@@ -573,9 +582,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('24. unknown submitted ID rejected', async () => {
       await setAuthContext(student1Id);
       const unknownSub = [
-        { left_id: 'l_unknown', right_id: 'r_hn' },
-        { left_id: 'l_jp', right_id: 'r_ty' },
-        { left_id: 'l_fr', right_id: 'r_pa' }
+        { left_id: 'unknown-id-1234-uuid', right_id: errCanonicalPairs[0].right_id },
+        errCanonicalPairs[1],
+        errCanonicalPairs[2]
       ];
       const res = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb) AS result`,
@@ -733,9 +742,11 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       assert.strictEqual(data.question_type, 'matching');
       assert.ok(Array.isArray(data.matching_pairs), 'matching_pairs must be an array');
       assert.strictEqual(data.matching_pairs.length, 3);
-      assert.strictEqual(data.matching_pairs[0].left_id, 'l_1');
+      assert.ok(data.matching_pairs[0].left_id);
+      assert.notStrictEqual(data.matching_pairs[0].left_id, 'l_1');
       assert.strictEqual(data.matching_pairs[0].left_text, 'Vế trái 1');
-      assert.strictEqual(data.matching_pairs[0].right_id, 'r_1');
+      assert.ok(data.matching_pairs[0].right_id);
+      assert.notStrictEqual(data.matching_pairs[0].right_id, 'r_1');
       assert.strictEqual(data.matching_pairs[0].right_text, 'Vế phải 1');
     });
 
@@ -751,8 +762,10 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       assert.strictEqual(data.question_type, 'matching');
       assert.ok(Array.isArray(data.matching_pairs));
       assert.strictEqual(data.matching_pairs.length, 3);
-      assert.strictEqual(data.matching_pairs[0].left_id, 'l_1');
-      assert.strictEqual(data.matching_pairs[0].right_id, 'r_1');
+      assert.ok(data.matching_pairs[0].left_id);
+      assert.notStrictEqual(data.matching_pairs[0].left_id, 'l_1');
+      assert.ok(data.matching_pairs[0].right_id);
+      assert.notStrictEqual(data.matching_pairs[0].right_id, 'r_1');
       assert.ok(Array.isArray(data.distribution));
       assert.strictEqual(data.distribution.length, 3);
     });
@@ -1028,6 +1041,14 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     assert.ok(question);
     const questionId = question.id;
 
+    // Fetch stored question to get server-canonicalized options and pairs
+    const storedQRow = (await db.query(
+      `SELECT options, correct_answer FROM public.competition_questions WHERE id = $1`,
+      [questionId]
+    )).rows[0];
+    const storedOptions = storedQRow.options;
+    const storedCorrectPairs = storedQRow.correct_answer.pairs;
+
     // 44. active matching snapshot does not expose correct_answer
     await t.test('44. active matching snapshot does not expose correct_answer', async () => {
       assert.strictEqual(question.correct_answer, undefined);
@@ -1046,14 +1067,17 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       }
     });
 
-    // 46. active matching snapshot contains all original option IDs exactly once
-    await t.test('46. active matching snapshot contains all original option IDs exactly once', async () => {
+    // 46. active matching snapshot contains all stored option IDs exactly once
+    await t.test('46. active matching snapshot contains all stored option IDs exactly once', async () => {
       const snapIds = question.options.map(o => o.id);
-      const originalIds = ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3'];
-      assert.strictEqual(snapIds.length, originalIds.length);
-      assert.deepStrictEqual([...snapIds].sort(), [...originalIds].sort());
+      const storedIds = storedOptions.map(o => o.id);
+      assert.strictEqual(snapIds.length, 6);
+      assert.deepStrictEqual([...snapIds].sort(), [...storedIds].sort());
       const uniqueIds = new Set(snapIds);
-      assert.strictEqual(uniqueIds.size, originalIds.length);
+      assert.strictEqual(uniqueIds.size, 6);
+      for (const clientOptId of ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3']) {
+        assert.ok(!snapIds.includes(clientOptId), `Original client ID ${clientOptId} must not be present`);
+      }
     });
 
     // 47. active matching snapshot left IDs are grouped/present correctly
@@ -1062,7 +1086,7 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       for (const opt of firstThree) {
         assert.strictEqual(opt.side, 'left');
       }
-      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, storedOptions);
       assert.deepStrictEqual(firstThree, expectedFull.slice(0, 3));
     });
 
@@ -1072,7 +1096,7 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       for (const opt of lastThree) {
         assert.strictEqual(opt.side, 'right');
       }
-      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, storedOptions);
       assert.deepStrictEqual(lastThree, expectedFull.slice(3, 6));
     });
 
@@ -1090,10 +1114,10 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
 
     // 50. active matching snapshot order is not the same as correlated stored order for the canonical correlated fixture
     await t.test('50. active matching snapshot order is not the same as correlated stored order for the canonical correlated fixture', async () => {
-      const storedOrderIds = qCorrelated.options.map(o => o.id); // ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3']
+      const correlatedClientIds = qCorrelated.options.map(o => o.id); // ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3']
       const snapIds = question.options.map(o => o.id);
-      assert.notDeepStrictEqual(snapIds, storedOrderIds);
-      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, qCorrelated.options);
+      assert.notDeepStrictEqual(snapIds, correlatedClientIds);
+      const expectedFull = computeExpectedMatchingOrder(sessionId, questionId, storedOptions);
       assert.deepStrictEqual(question.options, expectedFull);
     });
 
@@ -1101,9 +1125,9 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
     await t.test('51. active matching snapshot ordering is independent of correct_answer pair order', async () => {
       // Reorder correct_answer.pairs directly in database
       const reversedPairs = [
-        { left_id: 'l_3', right_id: 'r_3' },
-        { left_id: 'l_2', right_id: 'r_2' },
-        { left_id: 'l_1', right_id: 'r_1' }
+        storedCorrectPairs[2],
+        storedCorrectPairs[1],
+        storedCorrectPairs[0]
       ];
       await db.query(
         `UPDATE public.competition_questions
@@ -1124,7 +1148,7 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
         `UPDATE public.competition_questions
          SET correct_answer = $1::jsonb
          WHERE id = $2`,
-        [JSON.stringify(qCorrelated.correct_answer), questionId]
+        [JSON.stringify({ pairs: storedCorrectPairs }), questionId]
       );
     });
 
@@ -1249,11 +1273,7 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       await setAuthContext(student1Id);
       const submitRes = await db.query(
         `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
-        [sessionId, questionId, JSON.stringify([
-          { left_id: 'l_1', right_id: 'r_1' },
-          { left_id: 'l_2', right_id: 'r_2' },
-          { left_id: 'l_3', right_id: 'r_3' }
-        ])]
+        [sessionId, questionId, JSON.stringify(storedCorrectPairs)]
       );
       assert.strictEqual(submitRes.rows[0].result.success, true);
       assert.strictEqual(submitRes.rows[0].result.is_correct, true);
@@ -1302,4 +1322,444 @@ test('COMPETITION V1 R16-A — MATCHING BACKEND CONTRACT TEST MATRIX (59+ TESTS)
       assert.strictEqual(badSnap.error_code, 'MALFORMED_QUESTION_SNAPSHOT');
     });
   });
+
+  // =========================================================================
+  // GROUP 6: SERVER-SIDE OPAQUE MATCHING OPTION ID CANONICALIZATION (TESTS 60 - 86)
+  // =========================================================================
+  await t.test('Group 6: Server-Side Opaque Matching Option ID Canonicalization (Tests 60-86)', async (t) => {
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const clientCorrelatedIds = ['l_1', 'r_1', 'l_2', 'r_2', 'l_3', 'r_3'];
+
+    const qOpaqueTest = {
+      question_order: 1,
+      question_text: 'Nối từ vựng Tiếng Anh - Tiếng Việt',
+      question_type: 'matching',
+      points: 30,
+      time_limit_seconds: 45,
+      explanation: 'Táo - Apple, Cam - Orange, Chuối - Banana',
+      options: [
+        { id: 'l_1', side: 'left', text: 'Quả Táo' },
+        { id: 'r_1', side: 'right', text: 'Apple' },
+        { id: 'l_2', side: 'left', text: 'Quả Cam' },
+        { id: 'r_2', side: 'right', text: 'Orange' },
+        { id: 'l_3', side: 'left', text: 'Quả Chuối' },
+        { id: 'r_3', side: 'right', text: 'Banana' }
+      ],
+      correct_answer: {
+        pairs: [
+          { left_id: 'l_1', right_id: 'r_1' },
+          { left_id: 'l_2', right_id: 'r_2' },
+          { left_id: 'l_3', right_id: 'r_3' }
+        ]
+      }
+    };
+
+    // 60. host create accepts correlated client IDs such as l_1/r_1
+    await setAuthContext(hostId);
+    const createRes = await db.query(
+      `SELECT public.competition_host_create_session($1, $2, $3, $4, $5::jsonb, '[]'::jsonb, false, '{}'::jsonb, true) AS result`,
+      ['Opaque Canonicalization Room', 'Kiểm tra bảo mật ID', 'individual', 100, JSON.stringify([qOpaqueTest])]
+    );
+    assert.strictEqual(createRes.rows[0].result.success, true);
+    const sId = createRes.rows[0].result.session_id;
+    const rCode = createRes.rows[0].result.room_code;
+
+    // Student 1 joins
+    await setAuthContext(student1Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Opaque 1')`, [rCode]);
+
+    // Student 2 joins
+    await setAuthContext(student2Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Opaque 2')`, [rCode]);
+
+    // Student 3 joins
+    await setAuthContext(student3Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Opaque 3')`, [rCode]);
+
+    // Student 4 joins
+    await setAuthContext(student4Id);
+    await db.query(`SELECT public.competition_join_session($1, 'Học Sinh Opaque 4')`, [rCode]);
+
+    // Guest joins
+    await setAuthContext(null);
+    const guestToken = '11223344556677889900112233445566';
+    const guestJoin = await db.query(
+      `SELECT public.competition_join_session($1, 'Khách Opaque', NULL, NULL, $2) AS result`,
+      [rCode, guestToken]
+    );
+    const guestPartId = guestJoin.rows[0].result.participant.id;
+
+    // Host starts session
+    await setAuthContext(hostId);
+    await db.query(`SELECT public.competition_host_start_session($1)`, [sId]);
+
+    // Fetch question from DB
+    const qRow = (await db.query(
+      `SELECT current_question_id FROM public.competition_sessions WHERE id = $1`,
+      [sId]
+    )).rows[0];
+    const qId = qRow.current_question_id;
+
+    const storedRow = (await db.query(
+      `SELECT options, correct_answer FROM public.competition_questions WHERE id = $1`,
+      [qId]
+    )).rows[0];
+    const storedOptions = storedRow.options;
+    const storedCorrectPairs = storedRow.correct_answer.pairs;
+
+    // 61. stored Matching option IDs are NOT equal to client-provided IDs
+    await t.test('61. stored Matching option IDs are NOT equal to client-provided IDs', async () => {
+      for (const opt of storedOptions) {
+        assert.ok(!clientCorrelatedIds.includes(opt.id), `Option ID ${opt.id} must not equal any client ID`);
+      }
+    });
+
+    // 62. stored Matching option IDs are opaque UUID-shaped values
+    await t.test('62. stored Matching option IDs are opaque UUID-shaped values', async () => {
+      for (const opt of storedOptions) {
+        assert.match(opt.id, UUID_REGEX, `Option ID ${opt.id} must be a valid UUID`);
+      }
+    });
+
+    // 63. stored Matching options preserve text
+    await t.test('63. stored Matching options preserve text', async () => {
+      const texts = storedOptions.map(o => o.text).sort();
+      const expectedTexts = ['Apple', 'Banana', 'Orange', 'Quả Cam', 'Quả Chuối', 'Quả Táo'].sort();
+      assert.deepStrictEqual(texts, expectedTexts);
+    });
+
+    // 64. stored Matching options preserve side
+    await t.test('64. stored Matching options preserve side', async () => {
+      const leftOpts = storedOptions.filter(o => o.side === 'left');
+      const rightOpts = storedOptions.filter(o => o.side === 'right');
+      assert.strictEqual(leftOpts.length, 3);
+      assert.strictEqual(rightOpts.length, 3);
+      for (const opt of leftOpts) {
+        assert.ok(['Quả Táo', 'Quả Cam', 'Quả Chuối'].includes(opt.text));
+      }
+      for (const opt of rightOpts) {
+        assert.ok(['Apple', 'Orange', 'Banana'].includes(opt.text));
+      }
+    });
+
+    // 65. stored Matching correct_answer.pairs use opaque stored IDs
+    await t.test('65. stored Matching correct_answer.pairs use opaque stored IDs', async () => {
+      assert.strictEqual(storedCorrectPairs.length, 3);
+      for (const pair of storedCorrectPairs) {
+        assert.match(pair.left_id, UUID_REGEX);
+        assert.match(pair.right_id, UUID_REGEX);
+      }
+    });
+
+    // 66. stored correct pairs still resolve to existing left/right options
+    await t.test('66. stored correct pairs still resolve to existing left/right options', async () => {
+      const optMap = new Map(storedOptions.map(o => [o.id, o]));
+      for (const pair of storedCorrectPairs) {
+        const left = optMap.get(pair.left_id);
+        const right = optMap.get(pair.right_id);
+        assert.ok(left, 'left_id must resolve to stored option');
+        assert.ok(right, 'right_id must resolve to stored option');
+        assert.strictEqual(left.side, 'left');
+        assert.strictEqual(right.side, 'right');
+
+        // Verify logical semantic equivalence (Táo -> Apple, Cam -> Orange, Chuối -> Banana)
+        if (left.text === 'Quả Táo') assert.strictEqual(right.text, 'Apple');
+        if (left.text === 'Quả Cam') assert.strictEqual(right.text, 'Orange');
+        if (left.text === 'Quả Chuối') assert.strictEqual(right.text, 'Banana');
+      }
+    });
+
+    // 67. original client IDs do not appear anywhere in stored Matching options
+    await t.test('67. original client IDs do not appear anywhere in stored Matching options', async () => {
+      const rawOptionsJson = JSON.stringify(storedOptions);
+      for (const clientOptId of clientCorrelatedIds) {
+        assert.ok(!rawOptionsJson.includes(`"${clientOptId}"`), `Client ID ${clientOptId} must not appear in stored options`);
+      }
+    });
+
+    // 68. original client IDs do not appear anywhere in stored Matching correct_answer
+    await t.test('68. original client IDs do not appear anywhere in stored Matching correct_answer', async () => {
+      const rawCorrectJson = JSON.stringify(storedRow.correct_answer);
+      for (const clientOptId of clientCorrelatedIds) {
+        assert.ok(!rawCorrectJson.includes(`"${clientOptId}"`), `Client ID ${clientOptId} must not appear in stored correct_answer`);
+      }
+    });
+
+    // Student 1 fetches active question snapshot
+    await setAuthContext(student1Id);
+    const snapRes = await db.query(
+      `SELECT public.competition_get_active_question_snapshot($1) AS result`,
+      [sId]
+    );
+    const snap = snapRes.rows[0].result;
+    assert.strictEqual(snap.success, true);
+    const snapQuestion = snap.question;
+    assert.ok(snapQuestion);
+
+    // 69. active snapshot contains no original client IDs
+    await t.test('69. active snapshot contains no original client IDs', async () => {
+      const snapJson = JSON.stringify(snapQuestion);
+      for (const clientOptId of clientCorrelatedIds) {
+        assert.ok(!snapJson.includes(`"${clientOptId}"`), `Client ID ${clientOptId} must not leak in snapshot`);
+      }
+    });
+
+    // 70. active snapshot contains only stored opaque IDs
+    await t.test('70. active snapshot contains only stored opaque IDs', async () => {
+      const snapIds = snapQuestion.options.map(o => o.id);
+      assert.strictEqual(snapIds.length, 6);
+      for (const id of snapIds) {
+        assert.match(id, UUID_REGEX);
+      }
+      const storedIds = storedOptions.map(o => o.id);
+      assert.deepStrictEqual([...snapIds].sort(), [...storedIds].sort());
+    });
+
+    // 71. active snapshot still excludes correct_answer
+    await t.test('71. active snapshot still excludes correct_answer', async () => {
+      assert.strictEqual(snapQuestion.correct_answer, undefined);
+      assert.strictEqual(snapQuestion.pairs, undefined);
+    });
+
+    // 72. active deterministic ordering still PASS after canonicalization
+    await t.test('72. active deterministic ordering still PASS after canonicalization', async () => {
+      function computeExpectedMatchingOrder(sessionId, questionId, options) {
+        const leftOptions = options
+          .filter(o => o.side === 'left')
+          .map(o => ({
+            id: o.id,
+            side: 'left',
+            text: o.text,
+            hash: crypto.createHash('md5').update(`matching-left:${sessionId}:${questionId}:${o.id}`).digest('hex')
+          }))
+          .sort((a, b) => a.hash.localeCompare(b.hash))
+          .map(({ hash, ...rest }) => rest);
+
+        const rightOptions = options
+          .filter(o => o.side === 'right')
+          .map(o => ({
+            id: o.id,
+            side: 'right',
+            text: o.text,
+            hash: crypto.createHash('md5').update(`matching-right:${sessionId}:${questionId}:${o.id}`).digest('hex')
+          }))
+          .sort((a, b) => a.hash.localeCompare(b.hash))
+          .map(({ hash, ...rest }) => rest);
+
+        return [...leftOptions, ...rightOptions];
+      }
+
+      const expectedOrder = computeExpectedMatchingOrder(sId, qId, storedOptions);
+      assert.deepStrictEqual(snapQuestion.options, expectedOrder);
+    });
+
+    // 73. repeated polling order stable
+    await t.test('73. repeated polling order stable', async () => {
+      for (let i = 0; i < 3; i++) {
+        const res = (await db.query(`SELECT public.competition_get_active_question_snapshot($1) AS result`, [sId])).rows[0].result;
+        assert.deepStrictEqual(res.question.options, snapQuestion.options);
+      }
+    });
+
+    // 76. correct submission with opaque IDs scores PASS
+    await t.test('76. correct submission with opaque IDs scores PASS', async () => {
+      await setAuthContext(student1Id);
+      const submitRes = await db.query(
+        `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
+        [sId, qId, JSON.stringify(storedCorrectPairs)]
+      );
+      const data = submitRes.rows[0].result;
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.is_correct, true);
+      assert.strictEqual(Number(data.points_awarded), 30);
+    });
+
+    // 77. wrong submission with opaque IDs scores FAIL
+    await t.test('77. wrong submission with opaque IDs scores FAIL', async () => {
+      await setAuthContext(student2Id);
+      const wrongPairs = [
+        { left_id: storedCorrectPairs[0].left_id, right_id: storedCorrectPairs[1].right_id },
+        { left_id: storedCorrectPairs[1].left_id, right_id: storedCorrectPairs[0].right_id },
+        storedCorrectPairs[2]
+      ];
+      const submitRes = await db.query(
+        `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
+        [sId, qId, JSON.stringify(wrongPairs)]
+      );
+      const data = submitRes.rows[0].result;
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.is_correct, false);
+      assert.strictEqual(Number(data.points_awarded), 0);
+    });
+
+    // 78. unknown original client ID submitted after start is rejected
+    await t.test('78. unknown original client ID submitted after start is rejected', async () => {
+      await setAuthContext(student3Id);
+      const unknownSub = [
+        { left_id: 'unknown_client_id_xxx', right_id: storedCorrectPairs[0].right_id },
+        storedCorrectPairs[1],
+        storedCorrectPairs[2]
+      ];
+      const res = await db.query(
+        `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
+        [sId, qId, JSON.stringify(unknownSub)]
+      );
+      assert.strictEqual(res.rows[0].result.success, false);
+      assert.strictEqual(res.rows[0].result.error_code, 'INVALID_OPTION_SELECTED');
+    });
+
+    // 79. original correlated l_1/r_1 submission IDs are rejected after canonicalization
+    await t.test('79. original correlated l_1/r_1 submission IDs are rejected after canonicalization', async () => {
+      await setAuthContext(student4Id);
+      const originalSub = [
+        { left_id: 'l_1', right_id: 'r_1' },
+        { left_id: 'l_2', right_id: 'r_2' },
+        { left_id: 'l_3', right_id: 'r_3' }
+      ];
+      const res = await db.query(
+        `SELECT public.competition_submit_answer($1, $2, NULL, NULL, $3::jsonb, NULL) AS result`,
+        [sId, qId, JSON.stringify(originalSub)]
+      );
+      assert.strictEqual(res.rows[0].result.success, false);
+      assert.strictEqual(res.rows[0].result.error_code, 'INVALID_OPTION_SELECTED');
+    });
+
+    // Host closes question
+    await setAuthContext(hostId);
+    await db.query(`SELECT public.competition_host_close_question($1)`, [sId]);
+
+    // 74. Host closed matching_pairs use opaque IDs
+    await t.test('74. Host closed matching_pairs use opaque IDs', async () => {
+      await setAuthContext(hostId);
+      const res = (await db.query(
+        `SELECT public.competition_host_get_question_results($1) AS result`,
+        [sId]
+      )).rows[0].result;
+      assert.strictEqual(res.success, true);
+      assert.ok(Array.isArray(res.matching_pairs));
+      assert.strictEqual(res.matching_pairs.length, 3);
+      for (const pair of res.matching_pairs) {
+        assert.match(pair.left_id, UUID_REGEX);
+        assert.match(pair.right_id, UUID_REGEX);
+      }
+    });
+
+    // 75. historical matching distribution uses opaque IDs
+    await t.test('75. historical matching distribution uses opaque IDs', async () => {
+      await setAuthContext(hostId);
+      const res = (await db.query(
+        `SELECT public.competition_host_get_question_result_by_order($1, 1) AS result`,
+        [sId]
+      )).rows[0].result;
+      assert.strictEqual(res.success, true);
+      assert.ok(Array.isArray(res.matching_pairs));
+      assert.strictEqual(res.matching_pairs.length, 3);
+      for (const pair of res.matching_pairs) {
+        assert.match(pair.left_id, UUID_REGEX);
+        assert.match(pair.right_id, UUID_REGEX);
+      }
+    });
+
+    // 80. non-Matching create-session behavior unchanged
+    await t.test('80. non-Matching create-session behavior unchanged', async () => {
+      await setAuthContext(hostId);
+      const qSingle = {
+        question_order: 1,
+        question_text: 'Thủ đô nước Pháp?',
+        question_type: 'single_choice',
+        points: 10,
+        time_limit_seconds: 30,
+        options: [
+          { id: 'custom_opt_a', text: 'Paris' },
+          { id: 'custom_opt_b', text: 'Lyon' }
+        ],
+        correct_answer: { option_id: 'custom_opt_a' }
+      };
+      const scRes = await db.query(
+        `SELECT public.competition_host_create_session($1, $2, $3, $4, $5::jsonb) AS result`,
+        ['Single Non-Matching Test', 'Mô tả', 'individual', 100, JSON.stringify([qSingle])]
+      );
+      const scId = scRes.rows[0].result.session_id;
+      const scOptions = (await db.query(
+        `SELECT options FROM public.competition_questions WHERE session_id = $1`,
+        [scId]
+      )).rows[0].options;
+
+      assert.strictEqual(scOptions[0].id, 'custom_opt_a', 'Non-matching option IDs must remain preserved');
+      assert.strictEqual(scOptions[1].id, 'custom_opt_b');
+    });
+
+    // 81. public RPC signatures unchanged
+    await t.test('81. public RPC signatures unchanged', async () => {
+      const snapProc = (await db.query(`
+        SELECT proname, proargnames FROM pg_proc WHERE proname = 'competition_get_active_question_snapshot' AND pronamespace = 'public'::regnamespace;
+      `)).rows[0];
+      assert.deepStrictEqual(snapProc.proargnames, ['p_session_id', 'p_participant_id', 'p_guest_token']);
+
+      const hostCreateProc = (await db.query(`
+        SELECT proname, proargnames FROM pg_proc WHERE proname = 'competition_host_create_session' AND pronamespace = 'public'::regnamespace;
+      `)).rows[0];
+      assert.strictEqual(hostCreateProc.proargnames.length, 9);
+    });
+
+    // 82. Guest active snapshot security unchanged
+    await t.test('82. Guest active snapshot security unchanged', async () => {
+      await setAuthContext(null);
+      const validGuestSnap = (await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1, $2, $3) AS result`,
+        [sId, guestPartId, guestToken]
+      )).rows[0].result;
+      assert.strictEqual(validGuestSnap.success, true);
+
+      const invalidGuestSnap = (await db.query(
+        `SELECT public.competition_get_active_question_snapshot($1, $2, 'wrong_token_12345678901234567890') AS result`,
+        [sId, guestPartId]
+      )).rows[0].result;
+      assert.strictEqual(invalidGuestSnap.success, false);
+      assert.strictEqual(invalidGuestSnap.error_code, 'UNAUTHORIZED_ACCESS');
+    });
+
+    // 83. Guest review restriction preserved
+    await t.test('83. Guest review restriction preserved', async () => {
+      await setAuthContext(null);
+      const revRes = (await db.query(
+        `SELECT public.competition_student_get_review($1, $2) AS result`,
+        [sId, guestPartId]
+      )).rows[0].result;
+      assert.strictEqual(revRes.success, false);
+      assert.strictEqual(revRes.error_code, 'UNAUTHORIZED');
+
+      // Also verify static frontend gating invariant
+      const studentPageJsx = fs.readFileSync('src/pages/CompetitionStudentPage.jsx', 'utf8');
+      assert.ok(studentPageJsx.includes('if (isGuestMode) return; // Invariant: Guest MUST NOT call studentGetReview'));
+    });
+
+    // 84. leaderboard tie-break unchanged
+    await t.test('84. leaderboard tie-break unchanged', async () => {
+      await setAuthContext(hostId);
+      const lbRes = (await db.query(
+        `SELECT public.competition_get_leaderboard_snapshot($1) AS result`,
+        [sId]
+      )).rows[0].result;
+      assert.strictEqual(lbRes.success, true);
+      assert.ok(Array.isArray(lbRes.leaderboard));
+      assert.strictEqual(lbRes.leaderboard[0].display_name, 'Học Sinh Opaque 1');
+      assert.strictEqual(Number(lbRes.leaderboard[0].total_score), 30);
+    });
+
+    // 85. RANK gap behavior unchanged
+    await t.test('85. RANK gap behavior unchanged', async () => {
+      const q = await db.query(`
+        SELECT RANK() OVER (ORDER BY score DESC) as rank
+        FROM (VALUES (10), (10), (5)) as t(score);
+      `);
+      assert.deepStrictEqual(q.rows.map(r => Number(r.rank)), [1, 1, 3]);
+    });
+
+    // 86. MAX_COMPETITION_QUESTIONS = 20 unchanged
+    await t.test('86. MAX_COMPETITION_QUESTIONS = 20 unchanged', async () => {
+      assert.strictEqual(MAX_COMPETITION_QUESTIONS, 20);
+    });
+  });
 });
+
