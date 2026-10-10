@@ -14,6 +14,7 @@ import {
   X,
   ListFilter,
   Layers,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 /**
@@ -484,7 +485,7 @@ export const StudentQuestionReviewView = ({
                 </h2>
 
                 {/* Options Layout (Choice / True-False) */}
-                {Array.isArray(q.options) && q.options.length > 0 && (
+                {Array.isArray(q.options) && q.options.length > 0 && q.question_type !== 'matching' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                     {q.options.map((opt, optIdx) => {
                       const letter = getOptionLetter(optIdx);
@@ -547,6 +548,72 @@ export const StudentQuestionReviewView = ({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Matching Question Review Format */}
+                {q.question_type === 'matching' && (
+                  <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-5 mb-6 space-y-4">
+                    {/* Đáp án nối cặp của thí sinh */}
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2">
+                        Các cặp bạn đã nối:
+                      </div>
+                      {(!Array.isArray(studentAns?.selected_option_ids) || studentAns.selected_option_ids.length === 0) ? (
+                        <div className="text-sm font-semibold text-slate-400 italic bg-white p-3 rounded-xl border border-slate-200">
+                          Chưa nối cặp nào
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {studentAns.selected_option_ids.map((pair, pIdx) => {
+                            const leftText = q.options?.find(o => o.id === pair.left_id)?.text 
+                              || q.matching_pairs?.find(p => p.left_id === pair.left_id)?.left_text 
+                              || pair.left_id;
+                            const rightText = q.options?.find(o => o.id === pair.right_id)?.text 
+                              || q.matching_pairs?.find(p => p.right_id === pair.right_id)?.right_text 
+                              || pair.right_id;
+                            const isPairCorrect = Array.isArray(q.matching_pairs) && q.matching_pairs.some(
+                              mp => mp.left_id === pair.left_id && mp.right_id === pair.right_id
+                            );
+                            return (
+                              <div
+                                key={pIdx}
+                                className={`flex items-center justify-between p-3 rounded-xl border-2 text-xs sm:text-sm font-bold ${
+                                  isPairCorrect
+                                    ? 'bg-emerald-50 text-emerald-950 border-emerald-300'
+                                    : 'bg-rose-50 text-rose-950 border-rose-300'
+                                }`}
+                              >
+                                <span className="truncate max-w-[42%]">{leftText}</span>
+                                <ArrowLeftRight className={`w-4 h-4 shrink-0 mx-2 ${isPairCorrect ? 'text-emerald-600' : 'text-rose-500'}`} />
+                                <span className="truncate max-w-[42%] text-right">{rightText}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Đáp án đúng chuẩn xác */}
+                    {Array.isArray(q.matching_pairs) && q.matching_pairs.length > 0 && (
+                      <div className="pt-2 border-t border-slate-200">
+                        <div className="text-xs font-black uppercase tracking-wider text-emerald-700 mb-2">
+                          Đáp án đúng (Cặp chuẩn):
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {q.matching_pairs.map((mp, mpIdx) => (
+                            <div
+                              key={mpIdx}
+                              className="flex items-center justify-between p-3 rounded-xl border-2 border-emerald-300 bg-emerald-50/60 text-xs sm:text-sm font-black text-emerald-950"
+                            >
+                              <span className="truncate max-w-[42%]">{mp.left_text}</span>
+                              <ArrowLeftRight className="w-4 h-4 shrink-0 mx-2 text-emerald-600" />
+                              <span className="truncate max-w-[42%] text-right">{mp.right_text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -20,6 +20,8 @@ import {
   Zap,
   BookOpen,
   User,
+  ArrowLeftRight,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import {
@@ -93,6 +95,15 @@ export const getOrCreateGuestToken = () => {
   }
   return generateGuestToken();
 };
+
+export const MATCHING_PAIR_THEMES = [
+  { label: 'Cặp 1', badge: 'bg-sky-500 text-white', border: 'border-sky-500 ring-2 ring-sky-300 bg-sky-50/80', dot: 'bg-sky-500' },
+  { label: 'Cặp 2', badge: 'bg-emerald-600 text-white', border: 'border-emerald-500 ring-2 ring-emerald-300 bg-emerald-50/80', dot: 'bg-emerald-600' },
+  { label: 'Cặp 3', badge: 'bg-amber-600 text-white', border: 'border-amber-500 ring-2 ring-amber-300 bg-amber-50/80', dot: 'bg-amber-600' },
+  { label: 'Cặp 4', badge: 'bg-indigo-600 text-white', border: 'border-indigo-500 ring-2 ring-indigo-300 bg-indigo-50/80', dot: 'bg-indigo-600' },
+  { label: 'Cặp 5', badge: 'bg-teal-600 text-white', border: 'border-teal-500 ring-2 ring-teal-300 bg-teal-50/80', dot: 'bg-teal-600' },
+  { label: 'Cặp 6', badge: 'bg-rose-600 text-white', border: 'border-rose-500 ring-2 ring-rose-300 bg-rose-50/80', dot: 'bg-rose-600' }
+];
 
 // Safe initial session resolver for Authenticated Students
 export const getInitialStudentSession = () => {
@@ -233,6 +244,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState([]);
   const [studentTextAnswer, setStudentTextAnswer] = useState('');
+  const [studentPairs, setStudentPairs] = useState([]);
+  const [selectedLeftId, setSelectedLeftId] = useState(null);
+  const [selectedRightId, setSelectedRightId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedCurrentQuestion, setHasSubmittedCurrentQuestion] = useState(false);
   const [lastSubmittedQuestionId, setLastSubmittedQuestionId] = useState(null);
@@ -362,6 +376,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     setSelectedOptionId(null);
     setSelectedOptionIds([]);
     setStudentTextAnswer('');
+    setStudentPairs([]);
+    setSelectedLeftId(null);
+    setSelectedRightId(null);
     setHasSubmittedCurrentQuestion(false);
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
@@ -639,6 +656,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       setSelectedOptionId(null);
       setSelectedOptionIds([]);
       setStudentTextAnswer('');
+      setStudentPairs([]);
+      setSelectedLeftId(null);
+      setSelectedRightId(null);
       setHasSubmittedCurrentQuestion(false);
       setLastSubmittedQuestionId(null);
       setSubmitResult(null);
@@ -654,6 +674,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
         setSelectedOptionId(null);
         setSelectedOptionIds([]);
         setStudentTextAnswer('');
+        setStudentPairs([]);
+        setSelectedLeftId(null);
+        setSelectedRightId(null);
         setHasSubmittedCurrentQuestion(false);
         setSubmitResult(null);
         setSubmitError(null);
@@ -752,13 +775,29 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const isTimeExpired = timeLeftSeconds !== null && timeLeftSeconds <= 0;
   const isMultipleChoice = currentQuestion?.question_type === 'multiple_choice';
   const isShortAnswer = currentQuestion?.question_type === 'short_answer';
+  const isMatching = currentQuestion?.question_type === 'matching';
 
-  // Synchronize text answer presence with selectedOptionId for short_answer questions
+  const matchingLeftOptions = useMemo(() => {
+    if (!isMatching || !Array.isArray(currentQuestion?.options)) return [];
+    return currentQuestion.options.filter((o) => o.side === 'left');
+  }, [isMatching, currentQuestion?.options]);
+
+  const matchingRightOptions = useMemo(() => {
+    if (!isMatching || !Array.isArray(currentQuestion?.options)) return [];
+    return currentQuestion.options.filter((o) => o.side === 'right');
+  }, [isMatching, currentQuestion?.options]);
+
+  const totalMatchingPairs = matchingLeftOptions.length;
+
+  // Synchronize text answer or matching answer presence with selectedOptionId
   useEffect(() => {
     if (isShortAnswer) {
       setSelectedOptionId(studentTextAnswer.trim() ? '__TEXT_ANSWER__' : null);
+    } else if (isMatching) {
+      const isComplete = totalMatchingPairs >= 2 && studentPairs.length === totalMatchingPairs;
+      setSelectedOptionId(isComplete ? '__MATCHING_ANSWER__' : null);
     }
-  }, [isShortAnswer, studentTextAnswer]);
+  }, [isShortAnswer, studentTextAnswer, isMatching, studentPairs.length, totalMatchingPairs]);
 
   const handleSelectOption = (optionId) => {
     if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
@@ -776,10 +815,51 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     }
   };
 
+  const handleSelectMatchingOption = (option) => {
+    if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
+    if (!option || !option.id) return;
+
+    const optId = option.id;
+    const optSide = option.side;
+
+    if (optSide === 'left') {
+      if (selectedRightId) {
+        const rightId = selectedRightId;
+        const nextPairs = studentPairs.filter((p) => p.left_id !== optId && p.right_id !== rightId);
+        nextPairs.push({ left_id: optId, right_id: rightId });
+        setStudentPairs(nextPairs);
+        setSelectedLeftId(null);
+        setSelectedRightId(null);
+      } else {
+        setSelectedLeftId((prev) => (prev === optId ? null : optId));
+      }
+    } else if (optSide === 'right') {
+      if (selectedLeftId) {
+        const leftId = selectedLeftId;
+        const nextPairs = studentPairs.filter((p) => p.left_id !== leftId && p.right_id !== optId);
+        nextPairs.push({ left_id: leftId, right_id: optId });
+        setStudentPairs(nextPairs);
+        setSelectedLeftId(null);
+        setSelectedRightId(null);
+      } else {
+        setSelectedRightId((prev) => (prev === optId ? null : optId));
+      }
+    }
+  };
+
+  const handleRemoveMatchingPair = (optionId) => {
+    if (isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired) return;
+    setStudentPairs((prev) => prev.filter((p) => p.left_id !== optionId && p.right_id !== optionId));
+    if (selectedLeftId === optionId) setSelectedLeftId(null);
+    if (selectedRightId === optionId) setSelectedRightId(null);
+  };
+
   // Handle Submit Answer with Stale, Question Advance, & Terminal Guards
   const handleSubmitAnswer = async () => {
     const hasValidAnswer = isShortAnswer
       ? Boolean(studentTextAnswer && studentTextAnswer.trim().length > 0)
+      : isMatching
+      ? (totalMatchingPairs >= 2 && studentPairs.length === totalMatchingPairs)
       : isMultipleChoice
       ? selectedOptionIds.length > 0
       : Boolean(selectedOptionId);
@@ -804,6 +884,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     try {
       const submissionOptions = isShortAnswer
         ? []
+        : isMatching
+        ? studentPairs
         : isMultipleChoice
         ? selectedOptionIds
         : [selectedOptionId];
@@ -813,7 +895,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
         questionId: targetQuestionId,
         participantId: targetParticipantId,
         guestToken: isGuestMode ? guestToken : null,
-        selectedOptionIds: submissionOptions,
+        selectedOptionIds: submissionOptions, // selectedOptionIds: [selectedOptionId]
         textAnswer: isShortAnswer ? studentTextAnswer.trim() : null,
       });
 
@@ -888,6 +970,10 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     setParticipantInfo(null);
     setSelectedOptionId(null);
     setSelectedOptionIds([]);
+    setStudentTextAnswer('');
+    setStudentPairs([]);
+    setSelectedLeftId(null);
+    setSelectedRightId(null);
     setHasSubmittedCurrentQuestion(false);
     setLastSubmittedQuestionId(null);
     setSubmitResult(null);
@@ -1654,12 +1740,17 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                     Điền vào chỗ trống
                   </span>
                 )}
+                {isMatching && (
+                  <span className="inline-block px-3 py-1 mb-2 bg-sky-100 text-sky-800 text-xs font-bold rounded-lg border border-sky-200">
+                    Nối cặp tương ứng
+                  </span>
+                )}
                 <h2 className="text-xl sm:text-2xl font-black text-slate-800 leading-snug">
                   {currentQuestion.question_text}
                 </h2>
               </div>
 
-              {/* Short Answer Input OR Options Grid */}
+              {/* Short Answer Input OR Matching View OR Options Grid */}
               {isShortAnswer ? (
                 <div className="mb-8">
                   <label htmlFor="student-text-answer" className="block text-sm font-black text-slate-700 mb-2">
@@ -1679,6 +1770,151 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                   <p className="text-xs text-slate-500 font-medium mt-2">
                     Hệ thống không phân biệt chữ hoa/thường và tự động bỏ khoảng trắng thừa ở đầu/cuối.
                   </p>
+                </div>
+              ) : isMatching ? (
+                <div className="mb-8 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs sm:text-sm font-bold text-slate-600 px-1">
+                    <span>Chạm một mục ở vế trái, sau đó chạm mục ở vế phải để nối:</span>
+                    <span className="font-mono text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 self-start sm:self-auto">
+                      Đã nối: <strong>{studentPairs.length}</strong> / {totalMatchingPairs} cặp
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5 sm:gap-4">
+                    {/* CỘT TRÁI */}
+                    <div className="space-y-2.5">
+                      <div className="text-xs font-black uppercase tracking-wider text-slate-500 px-1">
+                        Vế Trái
+                      </div>
+                      {matchingLeftOptions.map((opt) => {
+                        const isSelected = selectedLeftId === opt.id;
+                        const pairIndex = studentPairs.findIndex((p) => p.left_id === opt.id);
+                        const isPaired = pairIndex !== -1;
+                        const theme = isPaired ? MATCHING_PAIR_THEMES[pairIndex % MATCHING_PAIR_THEMES.length] : null;
+                        const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
+
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => handleSelectMatchingOption(opt)}
+                            className={`w-full min-h-[56px] p-3 sm:p-4 rounded-2xl border-3 text-left transition-all flex flex-col justify-between gap-1.5 active:scale-[0.99] ${
+                              isSelected
+                                ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-300 shadow-md'
+                                : isPaired
+                                ? `${theme.border} shadow-sm`
+                                : 'bg-white border-slate-200 hover:border-sky-300 hover:bg-slate-50/50'
+                            } ${disabled && !isPaired && !isSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            <div className="text-xs sm:text-sm font-bold text-slate-800 break-words leading-snug">
+                              {opt.text}
+                            </div>
+
+                            {/* Status / Badge */}
+                            <div className="flex items-center justify-between w-full mt-1">
+                              {isSelected && (
+                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                                  Đang chọn
+                                </span>
+                              )}
+                              {isPaired && (
+                                <div className="flex items-center justify-between w-full">
+                                  <span className={`text-[10px] sm:text-xs font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${theme.badge}`}>
+                                    {theme.label}
+                                  </span>
+                                  {!disabled && (
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveMatchingPair(opt.id);
+                                      }}
+                                      className="text-xs text-slate-400 hover:text-red-500 font-bold px-1.5 py-0.5 rounded hover:bg-red-50 transition cursor-pointer"
+                                      title="Hủy nối cặp này"
+                                    >
+                                      Hủy
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {!isSelected && !isPaired && (
+                                <span className="text-[10px] font-semibold text-slate-400">Chưa nối</span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* CỘT PHẢI */}
+                    <div className="space-y-2.5">
+                      <div className="text-xs font-black uppercase tracking-wider text-slate-500 px-1">
+                        Vế Phải
+                      </div>
+                      {matchingRightOptions.map((opt) => {
+                        const isSelected = selectedRightId === opt.id;
+                        const pairIndex = studentPairs.findIndex((p) => p.right_id === opt.id);
+                        const isPaired = pairIndex !== -1;
+                        const theme = isPaired ? MATCHING_PAIR_THEMES[pairIndex % MATCHING_PAIR_THEMES.length] : null;
+                        const disabled = isSubmitting || hasSubmittedCurrentQuestion || isPaused || isTimeExpired;
+
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => handleSelectMatchingOption(opt)}
+                            className={`w-full min-h-[56px] p-3 sm:p-4 rounded-2xl border-3 text-left transition-all flex flex-col justify-between gap-1.5 active:scale-[0.99] ${
+                              isSelected
+                                ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-300 shadow-md'
+                                : isPaired
+                                ? `${theme.border} shadow-sm`
+                                : 'bg-white border-slate-200 hover:border-sky-300 hover:bg-slate-50/50'
+                            } ${disabled && !isPaired && !isSelected ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            <div className="text-xs sm:text-sm font-bold text-slate-800 break-words leading-snug">
+                              {opt.text}
+                            </div>
+
+                            {/* Status / Badge */}
+                            <div className="flex items-center justify-between w-full mt-1">
+                              {isSelected && (
+                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                                  Đang chọn
+                                </span>
+                              )}
+                              {isPaired && (
+                                <div className="flex items-center justify-between w-full">
+                                  <span className={`text-[10px] sm:text-xs font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${theme.badge}`}>
+                                    {theme.label}
+                                  </span>
+                                  {!disabled && (
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveMatchingPair(opt.id);
+                                      }}
+                                      className="text-xs text-slate-400 hover:text-red-500 font-bold px-1.5 py-0.5 rounded hover:bg-red-50 transition cursor-pointer"
+                                      title="Hủy nối cặp này"
+                                    >
+                                      Hủy
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {!isSelected && !isPaired && (
+                                <span className="text-[10px] font-semibold text-slate-400">Chưa nối</span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
@@ -1754,6 +1990,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                       Câu trả lời của bạn: <span className="font-bold font-mono">"{studentTextAnswer.trim()}"</span>
                     </p>
                   )}
+                  {isMatching && (
+                    <p className="text-sm font-semibold text-emerald-900 mb-2">
+                      Bạn đã hoàn thành nối <span className="font-bold">{studentPairs.length} cặp!</span>
+                    </p>
+                  )}
                   {submitResult?.points_awarded !== undefined && (
                     <p className="text-sm font-bold text-emerald-800 mb-2">
                       {submitResult.is_correct ? 'Chính xác! 🌟' : 'Đã ghi nhận! ⚡'} (+{submitResult.points_awarded} điểm)
@@ -1765,33 +2006,40 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                 </div>
               ) : (
                 /* State D: ACTIVE_QUESTION (Waiting for Student Submission) */
-                <button
-                  type="button"
-                  onClick={handleSubmitAnswer}
-                  disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
-                  className={`w-full py-4 px-6 font-black text-lg rounded-2xl shadow-md transition-all flex items-center justify-center gap-3 active:scale-[0.99] ${
-                    isTimeExpired
-                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-2 border-slate-300'
-                      : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed'
-                  }`}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="w-6 h-6 animate-spin" />
-                      <span>Đang nộp câu trả lời...</span>
-                    </>
-                  ) : isTimeExpired ? (
-                    <>
-                      <Clock className="w-6 h-6" />
-                      <span>Đã Hết Thời Gian</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Nộp Câu Trả Lời</span>
-                      <ArrowRight className="w-6 h-6" />
-                    </>
+                <>
+                  {isMatching && studentPairs.length < totalMatchingPairs && (
+                    <p className="text-xs font-bold text-amber-600 text-center mb-3">
+                      Hãy nối đủ tất cả các cặp trước khi nộp ({studentPairs.length}/{totalMatchingPairs}).
+                    </p>
                   )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={handleSubmitAnswer}
+                    disabled={!selectedOptionId || isSubmitting || isPaused || isTimeExpired || hasSubmittedCurrentQuestion}
+                    className={`w-full py-4 px-6 font-black text-lg rounded-2xl shadow-md transition-all flex items-center justify-center gap-3 active:scale-[0.99] ${
+                      isTimeExpired
+                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed border-2 border-slate-300'
+                        : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed'
+                    }`}
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <RefreshCw className="w-6 h-6 animate-spin" />
+                        <span>Đang nộp câu trả lời...</span>
+                      </>
+                    ) : isTimeExpired ? (
+                      <>
+                        <Clock className="w-6 h-6" />
+                        <span>Đã Hết Thời Gian</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Nộp Câu Trả Lời</span>
+                        <ArrowRight className="w-6 h-6" />
+                      </>
+                    )}
+                  </button>
+                </>
               )}
             </>
           ) : (

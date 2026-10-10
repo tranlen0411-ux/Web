@@ -7,6 +7,16 @@ import * as XLSX from 'xlsx';
 export const MAX_COMPETITION_QUESTIONS = 20;
 
 /**
+ * Generates a client-safe temporary unique ID for matching options.
+ */
+export function generateMatchingTempId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'm_opt_' + Math.random().toString(36).slice(2, 11) + '_' + Date.now().toString(36);
+}
+
+/**
  * Normalizes an option string or object into a canonical Competition option: { id: string, text: string }
  */
 export function normalizeOption(opt, index) {
@@ -510,8 +520,8 @@ export function sanitizeQuestionsForCreation(questions = []) {
       qType = 'short_answer';
     }
 
-    if (qType !== 'single_choice' && qType !== 'multiple_choice' && qType !== 'short_answer') {
-      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice, multiple_choice hoặc short_answer).`);
+    if (qType !== 'single_choice' && qType !== 'multiple_choice' && qType !== 'short_answer' && qType !== 'matching') {
+      throw new Error(`Loại câu hỏi "${qType}" không được hỗ trợ trong Đấu trường (chỉ chấp nhận single_choice, multiple_choice, short_answer hoặc matching).`);
     }
 
     const questionText = String(q.question_text || '').trim();
@@ -546,6 +556,116 @@ export function sanitizeQuestionsForCreation(questions = []) {
         options: [],
         correct_answer: {
           accepted_answers: acceptedAnswers
+        },
+        ...(q.explanation ? { explanation: String(q.explanation).trim() } : {})
+      };
+    }
+
+    // Handle canonical matching (2 to 6 pairs, equal left & right, bijective correct mapping)
+    if (qType === 'matching') {
+      let rawOptions = Array.isArray(q.options) ? q.options : [];
+      let rawPairs = Array.isArray(q.correct_answer?.pairs) ? q.correct_answer.pairs : [];
+
+      if (rawOptions.length === 0 && Array.isArray(q.matching_pairs) && q.matching_pairs.length > 0) {
+        rawOptions = [];
+        rawPairs = [];
+        q.matching_pairs.forEach((mp) => {
+          const lId = generateMatchingTempId();
+          const rId = generateMatchingTempId();
+          rawOptions.push({ id: lId, side: 'left', text: String(mp.left_text || '').trim() });
+          rawOptions.push({ id: rId, side: 'right', text: String(mp.right_text || '').trim() });
+          rawPairs.push({ left_id: lId, right_id: rId });
+        });
+      }
+
+      const leftOptions = [];
+      const rightOptions = [];
+      const allOptionIds = new Set();
+
+      for (let i = 0; i < rawOptions.length; i++) {
+        const opt = rawOptions[i];
+        if (!opt || typeof opt !== 'object') {
+          throw new Error(`Lựa chọn thứ ${i + 1} của câu hỏi ${idx + 1} không hợp lệ.`);
+        }
+        const optId = String(opt.id || '').trim();
+        const side = String(opt.side || '').trim();
+        const text = String(opt.text || '').trim();
+
+        if (!optId) {
+          throw new Error(`Lựa chọn thứ ${i + 1} của câu hỏi ${idx + 1} thiếu định danh ID.`);
+        }
+        if (!text) {
+          throw new Error(`Nội dung lựa chọn thứ ${i + 1} của câu hỏi ${idx + 1} không được để trống.`);
+        }
+        if (side !== 'left' && side !== 'right') {
+          throw new Error(`Thuộc tính vế (side) của lựa chọn thứ ${i + 1} câu hỏi ${idx + 1} phải là 'left' hoặc 'right'.`);
+        }
+        if (allOptionIds.has(optId)) {
+          throw new Error(`Định danh ID "${optId}" bị trùng lặp trong câu hỏi ${idx + 1}.`);
+        }
+        allOptionIds.add(optId);
+
+        const cleanOpt = { id: optId, side, text };
+        if (side === 'left') {
+          leftOptions.push(cleanOpt);
+        } else {
+          rightOptions.push(cleanOpt);
+        }
+      }
+
+      if (leftOptions.length < 2 || leftOptions.length > 6 || rightOptions.length < 2 || rightOptions.length > 6 || leftOptions.length !== rightOptions.length) {
+        throw new Error(`Câu hỏi ${idx + 1} (nối cặp) phải có từ 2 đến 6 cặp và số lượng hai vế phải bằng nhau.`);
+      }
+
+      const pairs = Array.isArray(rawPairs) && rawPairs.length > 0 ? rawPairs : (Array.isArray(q.correct_answer?.pairs) ? q.correct_answer.pairs : []);
+      if (pairs.length !== leftOptions.length) {
+        throw new Error(`Số lượng cặp nối đáp án đúng (${pairs.length}) không khớp với số lượng mục (${leftOptions.length}) trong câu hỏi ${idx + 1}.`);
+      }
+
+      const validLeftIds = new Set(leftOptions.map(o => o.id));
+      const validRightIds = new Set(rightOptions.map(o => o.id));
+      const seenLeft = new Set();
+      const seenRight = new Set();
+      const sanitizedPairs = [];
+
+      for (let pIdx = 0; pIdx < pairs.length; pIdx++) {
+        const pair = pairs[pIdx];
+        if (!pair || typeof pair !== 'object') {
+          throw new Error(`Cặp nối thứ ${pIdx + 1} của câu hỏi ${idx + 1} không hợp lệ.`);
+        }
+        const leftId = String(pair.left_id || '').trim();
+        const rightId = String(pair.right_id || '').trim();
+
+        if (!leftId || !rightId) {
+          throw new Error(`Cặp nối thứ ${pIdx + 1} của câu hỏi ${idx + 1} thiếu ID vế trái hoặc vế phải.`);
+        }
+        if (!validLeftIds.has(leftId)) {
+          throw new Error(`ID vế trái "${leftId}" trong cặp nối ${pIdx + 1} không tồn tại ở vế trái câu hỏi ${idx + 1}.`);
+        }
+        if (!validRightIds.has(rightId)) {
+          throw new Error(`ID vế phải "${rightId}" trong cặp nối ${pIdx + 1} không tồn tại ở vế phải câu hỏi ${idx + 1}.`);
+        }
+        if (seenLeft.has(leftId)) {
+          throw new Error(`Vế trái "${leftId}" bị ghép nối nhiều lần trong câu hỏi ${idx + 1}.`);
+        }
+        if (seenRight.has(rightId)) {
+          throw new Error(`Vế phải "${rightId}" bị ghép nối nhiều lần trong câu hỏi ${idx + 1}.`);
+        }
+        seenLeft.add(leftId);
+        seenRight.add(rightId);
+
+        sanitizedPairs.push({ left_id: leftId, right_id: rightId });
+      }
+
+      return {
+        question_order: idx + 1,
+        question_text: questionText,
+        question_type: 'matching',
+        points,
+        time_limit_seconds: timeLimit,
+        options: [...leftOptions, ...rightOptions],
+        correct_answer: {
+          pairs: sanitizedPairs
         },
         ...(q.explanation ? { explanation: String(q.explanation).trim() } : {})
       };

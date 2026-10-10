@@ -29,7 +29,8 @@ import {
   CheckCircle2,
   PieChart,
   Flame,
-  Star
+  Star,
+  ArrowLeftRight
 } from 'lucide-react';
 import {
   hostCreateSession,
@@ -54,6 +55,7 @@ import { CompetitionImportExcelModal } from '../components/competition/Competiti
 import {
   reindexCompetitionQuestions,
   sanitizeQuestionsForCreation,
+  generateMatchingTempId,
   MAX_COMPETITION_QUESTIONS
 } from '../utils/competitionQuestionAdapters.js';
 import { useCompetitionAudio } from '../hooks/useCompetitionAudio.js';
@@ -911,10 +913,101 @@ export function CompetitionHostPage() {
     setQuestions(updated);
   };
 
+  const handleAddMatchingPair = (qIndex) => {
+    const updated = [...questions];
+    const q = updated[qIndex];
+    const currentPairs = Array.isArray(q.correct_answer?.pairs) ? [...q.correct_answer.pairs] : [];
+    if (currentPairs.length >= 6) {
+      showToast('Câu hỏi nối cặp chỉ được tối đa 6 cặp.', 'warning');
+      return;
+    }
+    const leftId = generateMatchingTempId();
+    const rightId = generateMatchingTempId();
+    const newOptions = Array.isArray(q.options) ? [...q.options] : [];
+    newOptions.push({ id: leftId, side: 'left', text: '' });
+    newOptions.push({ id: rightId, side: 'right', text: '' });
+    currentPairs.push({ left_id: leftId, right_id: rightId });
+
+    updated[qIndex] = {
+      ...q,
+      options: newOptions,
+      correct_answer: {
+        pairs: currentPairs
+      }
+    };
+    setQuestions(updated);
+  };
+
+  const handleRemoveMatchingPair = (qIndex, pairIndex) => {
+    const updated = [...questions];
+    const q = updated[qIndex];
+    const currentPairs = Array.isArray(q.correct_answer?.pairs) ? [...q.correct_answer.pairs] : [];
+    if (currentPairs.length <= 2) {
+      showToast('Câu hỏi nối cặp phải có ít nhất 2 cặp.', 'warning');
+      return;
+    }
+    const pairToRemove = currentPairs[pairIndex];
+    currentPairs.splice(pairIndex, 1);
+    const newOptions = (q.options || []).filter(
+      (opt) => opt.id !== pairToRemove.left_id && opt.id !== pairToRemove.right_id
+    );
+
+    updated[qIndex] = {
+      ...q,
+      options: newOptions,
+      correct_answer: {
+        pairs: currentPairs
+      }
+    };
+    setQuestions(updated);
+  };
+
+  const handleUpdateMatchingPairText = (qIndex, pairIndex, side, textValue) => {
+    const updated = [...questions];
+    const q = updated[qIndex];
+    const pair = q.correct_answer?.pairs?.[pairIndex];
+    if (!pair) return;
+    const targetId = side === 'left' ? pair.left_id : pair.right_id;
+    const newOptions = (q.options || []).map((opt) => {
+      if (opt.id === targetId) {
+        return { ...opt, text: textValue };
+      }
+      return opt;
+    });
+    updated[qIndex] = {
+      ...q,
+      options: newOptions
+    };
+    setQuestions(updated);
+  };
+
   const handleQuestionTypeChange = (qIndex, newType) => {
     const updated = [...questions];
     const q = updated[qIndex];
-    if (newType === 'fill_blank') {
+    if (newType === 'matching') {
+      const leftId1 = generateMatchingTempId();
+      const rightId1 = generateMatchingTempId();
+      const leftId2 = generateMatchingTempId();
+      const rightId2 = generateMatchingTempId();
+
+      updated[qIndex] = {
+        ...q,
+        question_type: 'matching',
+        options: [
+          { id: leftId1, side: 'left', text: '' },
+          { id: leftId2, side: 'left', text: '' },
+          { id: rightId1, side: 'right', text: '' },
+          { id: rightId2, side: 'right', text: '' }
+        ],
+        correct_answer: {
+          pairs: [
+            { left_id: leftId1, right_id: rightId1 },
+            { left_id: leftId2, right_id: rightId2 }
+          ]
+        }
+      };
+      showToast(`Đã chuyển Câu ${q.question_order} sang Nối cặp. Vui lòng nhập nội dung các vế trái và vế phải.`, 'info');
+    } else if (newType === 'fill_blank') {
       // Clear option-based answer key, initialize empty accepted_answers
       updated[qIndex] = {
         ...q,
@@ -926,7 +1019,7 @@ export function CompetitionHostPage() {
       };
       showToast(`Đã chuyển Câu ${q.question_order} sang Điền vào chỗ trống. Vui lòng nhập đáp án được chấp nhận.`, 'info');
     } else if (newType === 'multiple_choice') {
-      if (q.question_type === 'fill_blank') {
+      if (q.question_type === 'fill_blank' || q.question_type === 'matching') {
         updated[qIndex] = {
           ...q,
           question_type: 'multiple_choice',
@@ -953,7 +1046,7 @@ export function CompetitionHostPage() {
         };
       }
     } else if (newType === 'single_choice') {
-      if (q.question_type === 'fill_blank') {
+      if (q.question_type === 'fill_blank' || q.question_type === 'matching') {
         updated[qIndex] = {
           ...q,
           question_type: 'single_choice',
@@ -1044,7 +1137,30 @@ export function CompetitionHostPage() {
         setSetupError(`Nội dung câu hỏi số ${i + 1} không được để trống.`);
         return;
       }
-      if (q.question_type === 'fill_blank') {
+      if (q.question_type === 'matching') {
+        const pairs = Array.isArray(q.correct_answer?.pairs) ? q.correct_answer.pairs : [];
+        if (pairs.length < 2) {
+          setSetupError(`Câu hỏi số ${i + 1} (nối cặp) phải có ít nhất 2 cặp.`);
+          return;
+        }
+        if (pairs.length > 6) {
+          setSetupError(`Câu hỏi số ${i + 1} (nối cặp) không được vượt quá 6 cặp.`);
+          return;
+        }
+        for (let j = 0; j < pairs.length; j++) {
+          const pair = pairs[j];
+          const leftOpt = (q.options || []).find(o => o.id === pair.left_id);
+          const rightOpt = (q.options || []).find(o => o.id === pair.right_id);
+          if (!leftOpt || !leftOpt.text.trim()) {
+            setSetupError(`Vui lòng nhập nội dung vế trái cho cặp số ${j + 1} của câu hỏi ${i + 1}.`);
+            return;
+          }
+          if (!rightOpt || !rightOpt.text.trim()) {
+            setSetupError(`Vui lòng nhập nội dung vế phải cho cặp số ${j + 1} của câu hỏi ${i + 1}.`);
+            return;
+          }
+        }
+      } else if (q.question_type === 'fill_blank') {
         const accepted = Array.isArray(q.correct_answer?.accepted_answers)
           ? q.correct_answer.accepted_answers.map(s => String(s || '').trim()).filter(Boolean)
           : [];
@@ -1589,6 +1705,7 @@ export function CompetitionHostPage() {
                           <option value="single_choice">Trắc nghiệm 1 đáp án</option>
                           <option value="multiple_choice">Trắc nghiệm nhiều đáp án</option>
                           <option value="fill_blank">Điền vào chỗ trống</option>
+                          <option value="matching">Nối cặp</option>
                         </select>
                       </div>
 
@@ -1631,8 +1748,74 @@ export function CompetitionHostPage() {
                       />
                     </div>
 
-                    {/* Question Answers: Fill Blank vs Choice */}
-                    {q.question_type === 'fill_blank' ? (
+                    {/* Question Answers: Matching vs Fill Blank vs Choice */}
+                    {q.question_type === 'matching' ? (
+                      <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                              Các cặp nối đúng (2 – 6 cặp) <span className="text-red-500">*</span>
+                            </label>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              Mỗi hàng biểu thị một cặp ghép nối chính xác giữa vế trái và vế phải.
+                            </p>
+                          </div>
+                          {(q.correct_answer?.pairs || []).length < 6 && (
+                            <button
+                              type="button"
+                              onClick={() => handleAddMatchingPair(qIdx)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-lg border border-sky-200 transition self-start sm:self-auto cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Thêm cặp
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-3 pt-1">
+                          {(q.correct_answer?.pairs || []).map((pair, pIdx) => {
+                            const leftOpt = (q.options || []).find((o) => o.id === pair.left_id) || { text: '' };
+                            const rightOpt = (q.options || []).find((o) => o.id === pair.right_id) || { text: '' };
+                            const canDelete = (q.correct_answer?.pairs || []).length > 2;
+
+                            return (
+                              <div key={pair.left_id || pIdx} className="flex flex-col sm:flex-row items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                                <span className="text-xs font-bold text-slate-400 w-6 shrink-0 text-center sm:text-left">#{pIdx + 1}</span>
+                                <div className="flex-1 w-full flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    required
+                                    value={leftOpt.text}
+                                    onChange={(e) => handleUpdateMatchingPairText(qIdx, pIdx, 'left', e.target.value)}
+                                    placeholder="Nội dung vế trái..."
+                                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                  />
+                                  <ArrowLeftRight className="w-4 h-4 text-sky-500 shrink-0" />
+                                  <input
+                                    type="text"
+                                    required
+                                    value={rightOpt.text}
+                                    onChange={(e) => handleUpdateMatchingPairText(qIdx, pIdx, 'right', e.target.value)}
+                                    placeholder="Nội dung vế phải..."
+                                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white font-medium focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                  />
+                                </div>
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveMatchingPair(qIdx, pIdx)}
+                                    className="p-2 text-slate-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition cursor-pointer shrink-0 self-end sm:self-auto"
+                                    title="Xóa cặp này"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : q.question_type === 'fill_blank' ? (
                       <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <div>
@@ -2318,6 +2501,7 @@ export function CompetitionHostPage() {
                             {activeDisplayedResults.question_type === 'multiple_choice' && 'Trắc nghiệm nhiều đáp án'}
                             {activeDisplayedResults.question_type === 'true_false' && 'Đúng / Sai'}
                             {(activeDisplayedResults.question_type === 'short_answer' || activeDisplayedResults.question_type === 'fill_blank') && 'Điền vào chỗ trống'}
+                            {activeDisplayedResults.question_type === 'matching' && 'Nối cặp'}
                           </span>
                           <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold">
                             {activeDisplayedResults.points} điểm
@@ -2385,7 +2569,7 @@ export function CompetitionHostPage() {
                     </div>
 
                     {/* Answer Distribution Bars */}
-                    {activeDisplayedResults.question_type !== 'short_answer' && Array.isArray(activeDisplayedResults.distribution) && (
+                    {activeDisplayedResults.question_type !== 'short_answer' && Array.isArray(activeDisplayedResults.distribution) && activeDisplayedResults.question_type !== 'matching' && (
                       <div className="space-y-4 pt-2">
                         <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
                           <PieChart className="w-4 h-4 text-amber-500" />
@@ -2449,6 +2633,42 @@ export function CompetitionHostPage() {
                             );
                           })}
                         </div>
+                      </div>
+                    )}
+
+                    {/* Matching Pairs Display */}
+                    {activeDisplayedResults.question_type === 'matching' && (
+                      <div className="space-y-4 pt-2">
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          Đáp Án Đúng Các Cặp Nối
+                        </h4>
+
+                        {Array.isArray(activeDisplayedResults.matching_pairs) && activeDisplayedResults.matching_pairs.length > 0 ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {activeDisplayedResults.matching_pairs.map((pair, pIdx) => (
+                              <div
+                                key={pair.left_id ? `${pair.left_id}_${pair.right_id}` : pIdx}
+                                className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-300 flex items-center justify-between gap-3 text-sm font-bold text-slate-800"
+                              >
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <span className="w-6 h-6 rounded-lg bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                                    {pIdx + 1}
+                                  </span>
+                                  <span className="truncate">{pair.left_text}</span>
+                                </div>
+                                <ArrowLeftRight className="w-4 h-4 text-emerald-600 shrink-0" />
+                                <div className="flex-1 text-right min-w-0">
+                                  <span className="truncate">{pair.right_text}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 text-xs text-center italic">
+                            Không có dữ liệu cặp nối đáp án đúng.
+                          </div>
+                        )}
                       </div>
                     )}
 
