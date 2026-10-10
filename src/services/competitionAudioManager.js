@@ -3,6 +3,7 @@ import {
   DEFAULT_MUSIC_THEME,
   getThemeById,
   isValidThemeId,
+  isSelectableThemeId,
 } from './competitionMusicThemes.js';
 
 /**
@@ -12,6 +13,7 @@ import {
  * - Orchestrates Competition V1 background music loops and Web Audio SFX
  * - Reuses the shared repository AudioContext from soundEffects.js (Zero 2nd context)
  * - Manages track registry, theme selection, volume scaling, mute/music/SFX toggles
+ * - Hardened Preview lifecycle with guaranteed zero duplicate restores and fail-silent guards
  * - Handles autoplay unlocking on user gesture
  * - 100% fail-silent (audio errors NEVER throw, block, or degrade game state)
  * - Safe lifecycle cleanup (NEVER close the global shared AudioContext)
@@ -38,8 +40,14 @@ class CompetitionAudioManager {
     this.currentThemeId = DEFAULT_MUSIC_THEME;
     this.currentTrack = null;
     this.activeAudio = null;
+
+    // Hardened preview lifecycle state
     this.previewAudio = null;
     this.previewThemeId = null;
+    this.isPreviewActive = false;
+    this.previewRestored = false;
+    this.onPreviewEndCallback = null;
+
     this.audioElements = new Map(); // src -> HTMLAudioElement
     this.isMusicPaused = false;
     this.needsPlaybackRetry = false;
@@ -47,12 +55,13 @@ class CompetitionAudioManager {
 
   /**
    * Resolve source URL for requested trackKey based on currentThemeId
+   * Strictly refuses unavailable themes (e.g. scorm_track).
    */
   getTrackSrc(trackKey) {
     if (!trackKey) return null;
     if (this.currentThemeId === 'none') return null;
     const theme = getThemeById(this.currentThemeId);
-    if (!theme) return null;
+    if (!theme || theme.available === false) return null;
     if (trackKey === 'lobby') return theme.lobbyTrack;
     if (trackKey === 'question_active') return theme.questionTrack;
     return BACKGROUND_MUSIC_TRACKS[trackKey] || null;
@@ -60,9 +69,10 @@ class CompetitionAudioManager {
 
   /**
    * Set active background music theme
+   * Strictly enforces selectable themes; unavailable themes (e.g. scorm_track) fall back to default.
    */
   setTheme(themeId) {
-    const validId = isValidThemeId(themeId) ? themeId : DEFAULT_MUSIC_THEME;
+    const validId = isSelectableThemeId(themeId) ? themeId : DEFAULT_MUSIC_THEME;
     if (this.currentThemeId === validId) {
       return;
     }
@@ -183,6 +193,7 @@ class CompetitionAudioManager {
   setGamePaused(isPaused) {
     this.isGamePaused = Boolean(isPaused);
     if (this.isGamePaused) {
+      this.stopPreview(false);
       this.pauseMusic();
     } else if (this.currentTrack && this.globalSoundEnabled && this.musicEnabled && this.isMusicPaused && this.currentThemeId !== 'none') {
       this.resumeMusic();
@@ -196,6 +207,7 @@ class CompetitionAudioManager {
   setGlobalSoundEnabled(enabled) {
     this.globalSoundEnabled = Boolean(enabled);
     if (!this.globalSoundEnabled) {
+      this.stopPreview(false);
       this.pauseMusic();
     } else if (this.currentTrack && this.musicEnabled && !this.isGamePaused && (this.isMusicPaused || this.needsPlaybackRetry) && this.currentThemeId !== 'none') {
       this.resumeMusic();
@@ -209,6 +221,7 @@ class CompetitionAudioManager {
   setMusicEnabled(enabled) {
     this.musicEnabled = Boolean(enabled);
     if (!this.musicEnabled) {
+      this.stopPreview(false);
       this.pauseMusic();
     } else if (this.currentTrack && this.globalSoundEnabled && !this.isGamePaused && (this.isMusicPaused || this.needsPlaybackRetry) && this.currentThemeId !== 'none') {
       this.resumeMusic();
@@ -341,21 +354,24 @@ class CompetitionAudioManager {
   /**
    * Preview a theme's lobby track safely
    * Controlled duration, user gesture required, zero 2nd AudioContext, zero game interference.
+   * Hardened against duplicate restores, request storms, and stale media listeners.
    */
   previewTheme(themeId, onEnd) {
+    // Disabled during active game (in_progress or paused)
     if (this.isGamePaused || this.currentTrack === 'question_active') {
       return false;
     }
-    if (!themeId || themeId === 'none') {
-      this.stopPreview();
+    if (!themeId || themeId === 'none' || !isValidThemeId(themeId)) {
+      this.stopPreview(false);
       return false;
     }
     const theme = getThemeById(themeId);
-    if (!theme || !theme.lobbyTrack) {
-      this.stopPreview();
+    if (!theme || theme.available === false || !theme.lobbyTrack) {
+      this.stopPreview(false);
       return false;
     }
 
+    // Stop any existing preview before starting a new one (zero overlap)
     this.stopPreview(false);
 
     // If active lobby music is currently playing, pause it during preview
@@ -375,23 +391,26 @@ class CompetitionAudioManager {
       audio.volume = this.volume;
       this.previewAudio = audio;
       this.previewThemeId = themeId;
+      this.isPreviewActive = true;
+      this.previewRestored = false;
+      this.onPreviewEndCallback = onEnd;
 
-      const stopAndRestore = () => {
+      // Natural end or timeout triggers stopPreview(true)
+      const handleNaturalOrTimeoutEnd = () => {
         this.stopPreview(true);
-        if (typeof onEnd === 'function') onEnd();
       };
 
-      audio.onended = stopAndRestore;
+      audio.onended = handleNaturalOrTimeoutEnd;
       audio.ontimeupdate = () => {
         if (audio.currentTime >= 15) {
-          stopAndRestore();
+          handleNaturalOrTimeoutEnd();
         }
       };
 
       const playPromise = audio.play();
       if (playPromise && typeof playPromise.catch === 'function') {
         playPromise.catch(() => {
-          stopAndRestore();
+          this.stopPreview(true);
         });
       }
       return true;
@@ -402,24 +421,49 @@ class CompetitionAudioManager {
   }
 
   /**
-   * Stop active preview and restore background music if eligible
+   * Stop active preview and restore background music exactly once if eligible
+   * Clears all stale media event listeners immediately.
    */
   stopPreview(restore = true) {
-    const wasPreviewing = Boolean(this.previewAudio);
-    if (this.previewAudio) {
-      try {
-        this.previewAudio.pause();
-        this.previewAudio.currentTime = 0;
-        this.previewAudio.onended = null;
-        this.previewAudio.ontimeupdate = null;
-      } catch (_e) {}
-      this.previewAudio = null;
-    }
-    this.previewThemeId = null;
+    const wasActive = this.isPreviewActive;
+    const oldAudio = this.previewAudio;
+    const oldCallback = this.onPreviewEndCallback;
 
-    // Restore background music only if preview was actively running and restore is permitted
-    if (wasPreviewing && restore && this.currentTrack && !this.isMusicPaused && !this.isGamePaused && this.globalSoundEnabled && this.musicEnabled && this.currentThemeId !== 'none') {
-      this.resumeMusic();
+    // Clear stale media handlers and audio instance immediately
+    if (oldAudio) {
+      try {
+        oldAudio.onended = null;
+        oldAudio.ontimeupdate = null;
+        oldAudio.pause();
+        oldAudio.currentTime = 0;
+      } catch (_e) {}
+    }
+
+    this.previewAudio = null;
+    this.previewThemeId = null;
+    this.isPreviewActive = false;
+    this.onPreviewEndCallback = null;
+
+    if (typeof oldCallback === 'function') {
+      try {
+        oldCallback();
+      } catch (_e) {}
+    }
+
+    // Exactly-once restore guard
+    if (wasActive && restore && !this.previewRestored) {
+      this.previewRestored = true;
+      // Must NOT resume if global sound off, music toggle off, game paused, or current theme none
+      if (
+        this.currentTrack &&
+        !this.isMusicPaused &&
+        !this.isGamePaused &&
+        this.globalSoundEnabled &&
+        this.musicEnabled &&
+        this.currentThemeId !== 'none'
+      ) {
+        this.resumeMusic();
+      }
     }
   }
 

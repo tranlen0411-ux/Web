@@ -1114,17 +1114,21 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
   await t.test('87. theme registry has exactly 3 themes', async () => {
     const { MUSIC_THEMES } = await import('../src/services/competitionMusicThemes.js');
     assert.equal(Array.isArray(MUSIC_THEMES), true);
-    assert.equal(MUSIC_THEMES.length, 3, 'Theme registry must contain exactly 3 curated themes');
+    assert.ok(MUSIC_THEMES.length >= 3, 'Theme registry must contain at least 3 curated themes');
   });
 
   await t.test('88. valid IDs exact', async () => {
     const { MUSIC_THEMES, isValidThemeId } = await import('../src/services/competitionMusicThemes.js');
     const ids = MUSIC_THEMES.map((t) => t.id);
-    assert.deepEqual(ids, ['classroom_chill', 'light_gameshow', 'calm_focus']);
+    assert.ok(ids.includes('classroom_chill'));
+    assert.ok(ids.includes('light_gameshow'));
+    assert.ok(ids.includes('calm_focus'));
     assert.equal(isValidThemeId('none'), true);
     assert.equal(isValidThemeId('classroom_chill'), true);
     assert.equal(isValidThemeId('light_gameshow'), true);
     assert.equal(isValidThemeId('calm_focus'), true);
+    assert.equal(isValidThemeId('bright_classroom'), true);
+    assert.equal(isValidThemeId('scorm_track'), true);
     assert.equal(isValidThemeId('unknown_theme'), false);
     assert.equal(isValidThemeId(''), false);
     assert.equal(isValidThemeId(null), false);
@@ -1544,6 +1548,560 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
       assert.equal(fs.existsSync(fullPath), true, `${f} must exist`);
       assert.ok(fs.statSync(fullPath).size > 100000, `${f} must have non-trivial size`);
     }
+  });
+
+  await t.test('117. bright_classroom registry present', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('bright_classroom');
+    assert.ok(theme);
+    assert.equal(theme.id, 'bright_classroom');
+    assert.equal(theme.name, 'Bright Classroom');
+  });
+
+  await t.test('118. bright_classroom lobby path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('bright_classroom');
+    assert.equal(theme.lobbyTrack, '/audio/competition/themes/bright_classroom/lobby.mp3');
+  });
+
+  await t.test('119. bright_classroom question path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('bright_classroom');
+    assert.equal(theme.questionTrack, '/audio/competition/themes/bright_classroom/question.mp3');
+  });
+
+  await t.test('120. bright assets exist', () => {
+    const lobbyFile = path.join(ROOT_DIR, 'public/audio/competition/themes/bright_classroom/lobby.mp3');
+    const questionFile = path.join(ROOT_DIR, 'public/audio/competition/themes/bright_classroom/question.mp3');
+    assert.equal(fs.existsSync(lobbyFile), true);
+    assert.equal(fs.existsSync(questionFile), true);
+    assert.ok(fs.statSync(lobbyFile).size > 100000);
+    assert.ok(fs.statSync(questionFile).size > 100000);
+  });
+
+  await t.test('121. bright theme available', async () => {
+    const { getThemeById, isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('bright_classroom');
+    assert.equal(theme.available, true);
+    assert.equal(isSelectableThemeId('bright_classroom'), true);
+  });
+
+  await t.test('122. scorm_track registry present', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_track');
+    assert.ok(theme);
+    assert.equal(theme.id, 'scorm_track');
+    assert.equal(theme.name, 'SCORM Track');
+  });
+
+  await t.test('123. scorm_track unavailable', async () => {
+    const { getThemeById, isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_track');
+    assert.equal(theme.available, false);
+    assert.equal(theme.reason, 'WAITING_FOR_SCORM_AUDIO_AUDIT');
+    assert.equal(isSelectableThemeId('scorm_track'), false);
+  });
+
+  await t.test('124. scorm_track has no playable paths', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_track');
+    assert.equal(theme.lobbyTrack, null);
+    assert.equal(theme.questionTrack, null);
+  });
+
+  await t.test('125. scorm preview disabled', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const result = competitionAudioManager.previewTheme('scorm_track');
+    assert.equal(result, false, 'previewTheme must refuse scorm_track');
+  });
+
+  await t.test('126. scorm select disabled', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.setTheme('scorm_track');
+    assert.notEqual(competitionAudioManager.getTheme(), 'scorm_track', 'setTheme must refuse scorm_track');
+  });
+
+  await t.test('127. localStorage scorm_track falls back', async () => {
+    const { getStoredThemeId, DEFAULT_MUSIC_THEME } = await import('../src/services/competitionMusicThemes.js');
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    store.set('competition_music_theme', 'scorm_track');
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+    try {
+      assert.equal(getStoredThemeId(), DEFAULT_MUSIC_THEME);
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('128. preview natural end restores lifecycle once', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    let resumeCount = 0;
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.currentTime = 0;
+      }
+      play() {
+        if (this.src === '/audio/competition/lobby_loop.mp3') {
+          resumeCount++;
+        }
+        return Promise.resolve();
+      }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(resumeCount, 1);
+
+      // Start preview
+      let endCalled = false;
+      competitionAudioManager.previewTheme('light_gameshow', () => { endCalled = true; });
+
+      // Simulate natural end
+      competitionAudioManager.previewAudio.onended();
+      assert.equal(endCalled, true);
+      assert.equal(resumeCount, 2, 'Original lifecycle lobby track must be restored once');
+
+      // Second trigger should NOT resume again (exactly once guard)
+      competitionAudioManager.stopPreview(true);
+      assert.equal(resumeCount, 2, 'No duplicate restore');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('129. preview manual stop restores lifecycle once', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    let resumeCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() {
+        if (this.src === '/audio/competition/lobby_loop.mp3') resumeCount++;
+        return Promise.resolve();
+      }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(resumeCount, 1);
+
+      competitionAudioManager.previewTheme('calm_focus');
+      // User clicks Dừng (manual stop)
+      competitionAudioManager.stopPreview(true);
+      assert.equal(resumeCount, 2, 'Manual stop restores lifecycle track once');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('130. switching preview stops old preview first', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    const pausedTracks = [];
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() { pausedTracks.push(this.src); }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.previewTheme('light_gameshow');
+      assert.equal(competitionAudioManager.previewThemeId, 'light_gameshow');
+
+      competitionAudioManager.previewTheme('calm_focus');
+      assert.ok(pausedTracks.includes('/audio/competition/themes/light_gameshow/lobby.mp3'));
+      assert.equal(competitionAudioManager.previewThemeId, 'calm_focus');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('131. active game disables preview', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    try {
+      competitionAudioManager.currentTrack = 'question_active';
+      const result = competitionAudioManager.previewTheme('light_gameshow');
+      assert.equal(result, false, 'Preview must be disabled when question_active is running');
+    } finally {
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('132. paused game disables preview', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    try {
+      competitionAudioManager.setGamePaused(true);
+      const result = competitionAudioManager.previewTheme('light_gameshow');
+      assert.equal(result, false, 'Preview must be disabled when game is paused');
+    } finally {
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('133. preview->active transition stops preview', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    let previewPaused = false;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() { previewPaused = true; }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.previewTheme('light_gameshow');
+      assert.equal(competitionAudioManager.isPreviewActive, true);
+
+      // Transition to active game pause
+      competitionAudioManager.setGamePaused(true);
+      assert.equal(competitionAudioManager.isPreviewActive, false);
+      assert.equal(previewPaused, true);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('134. global sound off prevents restore', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    let playCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { playCount++; return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(playCount, 1);
+
+      competitionAudioManager.previewTheme('light_gameshow');
+      competitionAudioManager.setGlobalSoundEnabled(false);
+      const prevPlayCount = playCount;
+
+      competitionAudioManager.stopPreview(true);
+      assert.equal(playCount, prevPlayCount, 'Global sound off must prevent restore');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('135. music toggle off prevents restore', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    let playCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { playCount++; return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(playCount, 1);
+
+      competitionAudioManager.previewTheme('light_gameshow');
+      competitionAudioManager.setMusicEnabled(false);
+      const prevPlayCount = playCount;
+
+      competitionAudioManager.stopPreview(true);
+      assert.equal(playCount, prevPlayCount, 'Music toggle off must prevent restore');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('136. game pause prevents restore', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    let playCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { playCount++; return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(playCount, 1);
+
+      competitionAudioManager.previewTheme('light_gameshow');
+      competitionAudioManager.setGamePaused(true);
+      const prevPlayCount = playCount;
+
+      competitionAudioManager.stopPreview(true);
+      assert.equal(playCount, prevPlayCount, 'Game pause must prevent restore');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('137. none theme prevents restore', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    let playCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { playCount++; return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('none');
+      competitionAudioManager.currentTrack = 'lobby';
+      competitionAudioManager.isPreviewActive = true;
+      competitionAudioManager.previewAudio = new MockAudio('/test');
+
+      competitionAudioManager.stopPreview(true);
+      assert.equal(playCount, 0, 'none theme must not resume music on preview stop');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('138. preview does not alter selected theme', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.setTheme('classroom_chill');
+    competitionAudioManager.previewTheme('calm_focus');
+    assert.equal(competitionAudioManager.getTheme(), 'classroom_chill', 'previewTheme must never change selected theme');
+    competitionAudioManager.stopPreview(false);
+  });
+
+  await t.test('139. preview does not alter lifecycle currentTrack', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.currentTrack = 'lobby';
+    competitionAudioManager.previewTheme('bright_classroom');
+    assert.equal(competitionAudioManager.currentTrack, 'lobby', 'preview must not change lifecycle currentTrack');
+    competitionAudioManager.stopPreview(false);
+  });
+
+  await t.test('140. preview cleanup removes handlers/state', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    let mockAudioInstance = null;
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        mockAudioInstance = this;
+      }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.previewTheme('bright_classroom');
+      assert.ok(mockAudioInstance.onended);
+      assert.ok(mockAudioInstance.ontimeupdate);
+
+      competitionAudioManager.stopPreview(false);
+      assert.equal(mockAudioInstance.onended, null);
+      assert.equal(mockAudioInstance.ontimeupdate, null);
+      assert.equal(competitionAudioManager.previewAudio, null);
+      assert.equal(competitionAudioManager.previewThemeId, null);
+      assert.equal(competitionAudioManager.isPreviewActive, false);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('141. no duplicate restore', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    let restoreCount = 0;
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() {
+        if (this.src === '/audio/competition/lobby_loop.mp3') restoreCount++;
+        return Promise.resolve();
+      }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(restoreCount, 1);
+
+      competitionAudioManager.previewTheme('bright_classroom');
+      competitionAudioManager.stopPreview(true);
+      competitionAudioManager.stopPreview(true);
+      competitionAudioManager.stopPreview(true);
+      assert.equal(restoreCount, 2, 'Multiple stopPreview calls must restore exactly once');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('142. scorm network requests zero', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    let instances = 0;
+    class MockAudio {
+      constructor(src) { instances++; }
+      play() { return Promise.resolve(); }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('scorm_track');
+      competitionAudioManager.previewTheme('scorm_track');
+      assert.equal(instances, 0, 'scorm_track must trigger zero Audio instances / network requests');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('143. unavailable theme network zero', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    let instances = 0;
+    class MockAudio {
+      constructor(src) { instances++; }
+      play() { return Promise.resolve(); }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.previewTheme('unavailable_random');
+      competitionAudioManager.previewTheme('scorm_track');
+      assert.equal(instances, 0);
+    } finally {
+      global.Audio = originalAudio;
+    }
+  });
+
+  await t.test('144. unselected theme normal requests zero', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    const createdSources = [];
+    class MockAudio {
+      constructor(src) { createdSources.push(src); }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setTheme('bright_classroom');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(createdSources.length, 1);
+      assert.equal(createdSources[0], '/audio/competition/themes/bright_classroom/lobby.mp3');
+      assert.ok(!createdSources.some((s) => s.includes('light_gameshow')));
+      assert.ok(!createdSources.some((s) => s.includes('calm_focus')));
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('145. no second AudioContext', () => {
+    const freshThemesSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionMusicThemes.js'), 'utf8');
+    const freshManagerSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionAudioManager.js'), 'utf8');
+    const freshHookSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/hooks/useCompetitionAudio.js'), 'utf8');
+    assert.doesNotMatch(freshThemesSrc, /new AudioContext/, 'competitionMusicThemes must not instantiate AudioContext');
+    assert.doesNotMatch(freshManagerSrc, /new AudioContext/, 'competitionAudioManager must not instantiate AudioContext');
+    assert.doesNotMatch(freshHookSrc, /new AudioContext/, 'useCompetitionAudio must not instantiate AudioContext');
+  });
+
+  await t.test('146. no extra timer', () => {
+    const freshThemesSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionMusicThemes.js'), 'utf8');
+    const freshManagerSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionAudioManager.js'), 'utf8');
+    const freshHookSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/hooks/useCompetitionAudio.js'), 'utf8');
+    assert.doesNotMatch(freshThemesSrc, /setInterval/, 'No setInterval in competitionMusicThemes');
+    assert.doesNotMatch(freshThemesSrc, /setTimeout/, 'No setTimeout in competitionMusicThemes');
+    assert.doesNotMatch(freshManagerSrc, /setInterval/, 'No setInterval in competitionAudioManager');
+    assert.doesNotMatch(freshHookSrc, /setInterval/, 'No setInterval in useCompetitionAudio');
+  });
+
+  await t.test('147. Student audio unchanged', () => {
+    assert.doesNotMatch(studentPageSrc, /competitionMusicThemes/, 'StudentPage must not import themes');
+    assert.doesNotMatch(studentPageSrc, /useCompetitionAudio/, 'StudentPage must not use useCompetitionAudio');
+  });
+
+  await t.test('148. Guest audio unchanged', () => {
+    const guestPagePath = path.join(ROOT_DIR, 'src/pages/CompetitionGuestPage.jsx');
+    if (fs.existsSync(guestPagePath)) {
+      const guestContent = fs.readFileSync(guestPagePath, 'utf8');
+      assert.doesNotMatch(guestContent, /useCompetitionAudio/, 'GuestPage must not import Competition audio hook');
+    }
+  });
+
+  await t.test('149. Spectator audio unchanged', () => {
+    assert.doesNotMatch(spectatorPageSrc, /competitionMusicThemes/, 'SpectatorPage must not import themes');
+    assert.doesNotMatch(spectatorPageSrc, /useCompetitionAudio/, 'SpectatorPage must not use useCompetitionAudio');
+  });
+
+  await t.test('150. README documents SCORM audit gate', () => {
+    const readmeFile = path.join(ROOT_DIR, 'public/audio/competition/README.md');
+    const content = fs.readFileSync(readmeFile, 'utf8');
+    assert.match(content, /bright_classroom/i, 'README documents bright_classroom');
+    assert.match(content, /SCORM Track/i, 'README documents SCORM Track');
+    assert.match(content, /SCORM Track Audit Gate/i, 'README documents SCORM Track Audit Gate');
+    assert.match(content, /WAITING_FOR_SCORM_AUDIO_AUDIT/i, 'README documents audit reason');
   });
 });
 

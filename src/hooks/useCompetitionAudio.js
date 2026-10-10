@@ -6,6 +6,7 @@ import {
   setStoredThemeId,
   DEFAULT_MUSIC_THEME,
   isValidThemeId,
+  isSelectableThemeId,
 } from '../services/competitionMusicThemes.js';
 
 /**
@@ -83,7 +84,7 @@ export function useCompetitionAudio({
 
   // Theme selection callback
   const setThemeId = useCallback((newThemeId) => {
-    const valid = isValidThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
+    const valid = isSelectableThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
     setStoredThemeId(valid);
     setThemeIdState(valid);
     competitionAudioManager.setTheme(valid);
@@ -93,7 +94,7 @@ export function useCompetitionAudio({
   const previewTheme = useCallback((targetThemeId) => {
     if (isGameActive) return;
     if (previewingThemeId === targetThemeId) {
-      competitionAudioManager.stopPreview();
+      competitionAudioManager.stopPreview(true);
       setPreviewingThemeId(null);
       return;
     }
@@ -106,14 +107,14 @@ export function useCompetitionAudio({
   }, [isGameActive, previewingThemeId]);
 
   const stopPreview = useCallback(() => {
-    competitionAudioManager.stopPreview();
+    competitionAudioManager.stopPreview(true);
     setPreviewingThemeId(null);
   }, []);
 
   // Disallow preview during active game
   useEffect(() => {
     if (isGameActive) {
-      competitionAudioManager.stopPreview();
+      competitionAudioManager.stopPreview(false);
       setPreviewingThemeId(null);
     }
   }, [isGameActive]);

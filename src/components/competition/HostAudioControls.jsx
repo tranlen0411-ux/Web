@@ -239,7 +239,8 @@ export function HostAudioControls({
               {ALL_THEME_OPTIONS.map((theme) => {
                 const isSelected = themeId === theme.id;
                 const isPreviewing = previewingThemeId === theme.id;
-                const hasPreview = Boolean(theme.lobbyTrack);
+                const isAvailable = theme.available !== false;
+                const hasPreview = isAvailable && Boolean(theme.lobbyTrack);
 
                 return (
                   <div
@@ -247,7 +248,9 @@ export function HostAudioControls({
                     className={`flex flex-col justify-between p-3 rounded-xl border transition-all text-left ${
                       isSelected
                         ? 'border-amber-400 bg-amber-50/70 shadow-sm ring-1 ring-amber-400/50'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
+                        : isAvailable
+                        ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
+                        : 'border-slate-200 bg-slate-50/60 opacity-80 border-dashed'
                     }`}
                   >
                     {/* Top Content */}
@@ -256,12 +259,16 @@ export function HostAudioControls({
                         <span className="text-xs font-bold text-slate-800 line-clamp-1">
                           {theme.name}
                         </span>
-                        {isSelected && (
+                        {isSelected ? (
                           <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-800 bg-amber-100/90 px-1.5 py-0.5 rounded-full border border-amber-200">
                             <Check className="w-2.5 h-2.5" />
                             Đang chọn
                           </span>
-                        )}
+                        ) : !isAvailable ? (
+                          <span className="shrink-0 inline-flex items-center text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full border border-amber-200">
+                            Chờ kiểm tra học liệu
+                          </span>
+                        ) : null}
                       </div>
                       <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 min-h-[30px] leading-tight">
                         {theme.description}
@@ -302,23 +309,32 @@ export function HostAudioControls({
                           )}
                         </button>
                       ) : (
-                        <span className="text-[10px] text-slate-400 italic px-1">
-                          Không có nhạc
-                        </span>
+                        <button
+                          type="button"
+                          disabled
+                          title={!isAvailable ? 'Chờ kiểm tra bản quyền học liệu SCORM' : 'Chủ đề không có nhạc nền'}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium border border-slate-200 text-slate-400 bg-slate-100/70 cursor-not-allowed opacity-60"
+                        >
+                          <Play className="w-2.5 h-2.5 fill-current" />
+                          Nghe thử
+                        </button>
                       )}
 
                       {/* Chọn button */}
                       <button
                         type="button"
-                        disabled={isSelected}
+                        disabled={isSelected || !isAvailable}
                         onClick={() => setThemeId && setThemeId(theme.id)}
+                        title={!isAvailable ? 'Học liệu chưa được duyệt' : undefined}
                         className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition ${
                           isSelected
                             ? 'bg-amber-200/60 text-amber-900 cursor-default font-bold'
+                            : !isAvailable
+                            ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
                             : 'bg-amber-500 hover:bg-amber-600 active:scale-95 text-white shadow-xs'
                         }`}
                       >
-                        {isSelected ? 'Đã chọn' : 'Chọn'}
+                        {isSelected ? 'Đã chọn' : !isAvailable ? 'Chưa khả dụng' : 'Chọn'}
                       </button>
                     </div>
                   </div>
