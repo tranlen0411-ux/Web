@@ -277,11 +277,32 @@ export function CompetitionHostPage() {
   const [reviewedQuestionOrder, setReviewedQuestionOrder] = useState(null);
   const [reviewedQuestionResults, setReviewedQuestionResults] = useState(null);
   const [isHistoricalResultsLoading, setIsHistoricalResultsLoading] = useState(false);
+  const [loadingOrder, setLoadingOrder] = useState(null);
+  const [historicalError, setHistoricalError] = useState(null);
   const [authoritativeTotalQuestions, setAuthoritativeTotalQuestions] = useState(null);
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(null);
   const [leaderboardError, setLeaderboardError] = useState(null);
   const latestLeaderboardRequestIdRef = useRef(0);
+
+  // Performance & Loading UX V1: In-memory cache for closed question results (Phase 3)
+  // Scoped strictly by `${sessionId}:${questionId}`
+  const historicalResultsCacheRef = useRef(new Map());
+  // Helper lookup mapping `${sessionId}:${questionOrder}` -> questionId
+  const orderToQuestionIdMapRef = useRef(new Map());
+  // In-flight request deduplication map (Phase 4)
+  const inFlightResultsRef = useRef(new Map());
+  // Stale request guard to prevent race conditions during rapid navigation (Phase 7)
+  const latestHistoricalRequestIdRef = useRef(0);
+
+  // Clear / isolate in-memory cache when active session changes (Phase 7 & Phase 9)
+  useEffect(() => {
+    historicalResultsCacheRef.current.clear();
+    orderToQuestionIdMapRef.current.clear();
+    inFlightResultsRef.current.clear();
+    setHistoricalError(null);
+    setLoadingOrder(null);
+  }, [activeSessionId]);
 
   // Setup Form State
   const [title, setTitle] = useState('Đấu Trường Tri Thức V1');
@@ -535,15 +556,26 @@ export function CompetitionHostPage() {
           if (res.data.total_questions) {
             setAuthoritativeTotalQuestions(res.data.total_questions);
           }
+          // Safely populate cache for closed current question
+          if (res.data.question_id) {
+            const cacheKey = `${sessionId}:${res.data.question_id}`;
+            historicalResultsCacheRef.current.set(cacheKey, res.data);
+            const qOrder = snapshotRef.current?.current_question_index || res.data.question_order;
+            if (qOrder) {
+              orderToQuestionIdMapRef.current.set(`${sessionId}:${qOrder}`, res.data.question_id);
+            }
+          }
           setQuestionResults(res.data);
           setReviewedQuestionOrder(null);
           setReviewedQuestionResults(null);
+          setHistoricalError(null);
           setHostViewMode('QUESTION_RESULTS');
           return { success: true, data: res.data };
         }
         return { success: false, error_code: 'QUESTION_ID_MISMATCH' };
       } else if (res.error_code === 'QUESTION_STILL_ACTIVE') {
         // Skew protection: Question still active on server, fail-closed without rapid retry loop
+        // Active questions MUST NOT be cached as closed
         return { success: false, error_code: 'QUESTION_STILL_ACTIVE' };
       }
       return { success: false, error_code: res.error_code || 'ERROR' };
@@ -556,36 +588,121 @@ export function CompetitionHostPage() {
     }
   }, []);
 
-  // Historical Question Results Fetcher (Review Mode)
+  // Historical Question Results Fetcher (Review Mode with in-memory cache & dedup)
   const fetchHistoricalResult = useCallback(async (orderToFetch) => {
     const sessionId = activeSessionIdRef.current;
-    if (!sessionId || isHistoricalResultsLoading) return { success: false };
-    setIsHistoricalResultsLoading(true);
-    try {
-      const res = await getHostQuestionResultByOrder({
-        sessionId,
-        questionOrder: orderToFetch,
-      });
+    if (!sessionId) return { success: false, error_code: 'NO_SESSION' };
 
-      if (res.success && res.data) {
-        if (res.data.total_questions) {
-          setAuthoritativeTotalQuestions(res.data.total_questions);
-        }
+    // 1. Every explicit navigation target change MUST advance the UI request generation (Blocker 1)
+    const requestId = ++latestHistoricalRequestIdRef.current;
+
+    // 2. Build lookup & check in-memory cache first (Phase 3 & Phase 6)
+    const orderLookupKey = `${sessionId}:${orderToFetch}`;
+    const knownQuestionId = orderToQuestionIdMapRef.current.get(orderLookupKey);
+    const cacheKey = knownQuestionId ? `${sessionId}:${knownQuestionId}` : null;
+
+    if (cacheKey && historicalResultsCacheRef.current.has(cacheKey)) {
+      const cachedData = historicalResultsCacheRef.current.get(cacheKey);
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        setHistoricalError(null);
         setReviewedQuestionOrder(orderToFetch);
-        setReviewedQuestionResults(res.data);
+        setReviewedQuestionResults(cachedData);
         setHostViewMode('QUESTION_RESULTS');
-        return { success: true, data: res.data };
-      } else {
-        showToast(res.message || 'Không thể tải kết quả câu hỏi này.', 'error');
-        return { success: false, error_code: res.error_code };
+        setIsHistoricalResultsLoading(false);
+        setLoadingOrder(null);
       }
+      return { success: true, data: cachedData, fromCache: true };
+    }
+
+    // 3. Immediate synchronous loading feedback (Phase 5)
+    setIsHistoricalResultsLoading(true);
+    setLoadingOrder(orderToFetch);
+    setHistoricalError(null);
+
+    // 4. In-flight request deduplication & network fetch (Blocker 1 & In-Flight Dedup Interaction)
+    const inFlightKey = cacheKey || orderLookupKey;
+    let fetchPromise = inFlightResultsRef.current.get(inFlightKey);
+
+    if (!fetchPromise) {
+      // Create network promise that performs RPC once, populates cache, and returns result
+      fetchPromise = (async () => {
+        try {
+          const res = await getHostQuestionResultByOrder({
+            sessionId,
+            questionOrder: orderToFetch,
+          });
+
+          // Populate cache if response is authoritative and closed
+          if (res.success && res.data && res.data.question_id) {
+            const itemCacheKey = `${sessionId}:${res.data.question_id}`;
+            historicalResultsCacheRef.current.set(itemCacheKey, res.data);
+            orderToQuestionIdMapRef.current.set(orderLookupKey, res.data.question_id);
+          }
+          return res;
+        } catch (_err) {
+          return {
+            success: false,
+            error_code: 'NETWORK_ERROR',
+            message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+          };
+        } finally {
+          inFlightResultsRef.current.delete(inFlightKey);
+        }
+      })();
+
+      inFlightResultsRef.current.set(inFlightKey, fetchPromise);
+    }
+
+    // 5. Await the network result (whether network creator or adopted in-flight caller)
+    try {
+      const res = await fetchPromise;
+
+      // UI ownership check: Only update UI if this caller's requestId is STILL the latest
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        if (res.success && res.data) {
+          if (res.data.total_questions) {
+            setAuthoritativeTotalQuestions(res.data.total_questions);
+          }
+          setReviewedQuestionOrder(orderToFetch);
+          setReviewedQuestionResults(res.data);
+          setHostViewMode('QUESTION_RESULTS');
+          setHistoricalError(null);
+          return { success: true, data: res.data };
+        } else {
+          setHistoricalError({
+            order: orderToFetch,
+            message: res.message || 'Không thể tải kết quả câu hỏi này.'
+          });
+          showToast(res.message || 'Không thể tải kết quả câu hỏi này.', 'error');
+          return { success: false, error_code: res.error_code };
+        }
+      }
+      return { success: false, error_code: 'STALE_REQUEST' };
     } catch (_err) {
-      showToast('Lỗi mạng khi tải kết quả câu hỏi.', 'error');
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        setHistoricalError({
+          order: orderToFetch,
+          message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+        });
+        showToast('Lỗi mạng khi tải kết quả câu hỏi.', 'error');
+      }
       return { success: false, error_code: 'NETWORK_ERROR' };
     } finally {
-      setIsHistoricalResultsLoading(false);
+      if (requestId === latestHistoricalRequestIdRef.current) {
+        setIsHistoricalResultsLoading(false);
+        setLoadingOrder(null);
+      }
     }
-  }, [isHistoricalResultsLoading, showToast]);
+  }, [showToast]);
 
   const handleReviewPrevQuestion = useCallback(() => {
     const currentReviewOrder = reviewedQuestionOrder ?? snapshot?.current_question_index ?? 1;
@@ -609,6 +726,7 @@ export function CompetitionHostPage() {
       ) {
         setReviewedQuestionOrder(null);
         setReviewedQuestionResults(null);
+        setHistoricalError(null);
         setHostViewMode('QUESTION_RESULTS');
       } else {
         fetchHistoricalResult(targetOrder);
@@ -619,6 +737,7 @@ export function CompetitionHostPage() {
   const handleReturnToCurrentQuestion = useCallback(() => {
     setReviewedQuestionOrder(null);
     setReviewedQuestionResults(null);
+    setHistoricalError(null);
     if (snapshot?.status === 'finished') {
       setHostViewMode('FINAL_RESULTS');
     } else if (questionResults && questionResults.question_id === snapshot?.current_question_id) {
@@ -1817,10 +1936,11 @@ export function CompetitionHostPage() {
 
                 <button
                   type="button"
+                  aria-busy={isResultsLoading || isHistoricalResultsLoading}
+                  disabled={isResultsLoading}
                   onClick={() => {
-                    if (questionResults) {
-                      setHostViewMode('QUESTION_RESULTS');
-                    } else {
+                    setHostViewMode('QUESTION_RESULTS');
+                    if (!questionResults && !isResultsLoading) {
                       fetchResultsSafely(activeSessionId);
                     }
                   }}
@@ -2099,6 +2219,37 @@ export function CompetitionHostPage() {
                       </div>
                     )}
 
+                    {/* Historical Loading Feedback (Phase 5) */}
+                    {isHistoricalResultsLoading && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-xs text-amber-800 font-bold animate-pulse" role="status" aria-busy="true">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600 flex-shrink-0" />
+                        <span>Đang tải {loadingOrder ? `Câu ${loadingOrder}...` : 'kết quả câu hỏi...'}</span>
+                      </div>
+                    )}
+
+                    {/* Historical Error UX & Retry (Phase 10) */}
+                    {historicalError && (
+                      <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-xs text-red-800" role="alert">
+                        <div className="flex items-center gap-2 font-medium">
+                          <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                          <span>Không thể tải kết quả câu hỏi. Vui lòng thử lại.</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (historicalError.order) {
+                              fetchHistoricalResult(historicalError.order);
+                            }
+                          }}
+                          disabled={isHistoricalResultsLoading}
+                          className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold transition shadow-xs flex-shrink-0 flex items-center gap-1.5"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isHistoricalResultsLoading ? 'animate-spin' : ''}`} />
+                          Thử lại
+                        </button>
+                      </div>
+                    )}
+
                     {/* Header & Question Text with Review Navigation */}
                     <div className="border-b border-slate-100 pb-4 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2106,11 +2257,15 @@ export function CompetitionHostPage() {
                           {/* ← Câu Trước */}
                           <button
                             type="button"
-                            disabled={isHistoricalResultsLoading || activeDisplayedOrder <= 1}
+                            aria-busy={loadingOrder === activeDisplayedOrder - 1}
+                            disabled={loadingOrder === activeDisplayedOrder - 1 || activeDisplayedOrder <= 1}
                             onClick={handleReviewPrevQuestion}
                             className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1"
                             title="Xem kết quả câu hỏi trước"
                           >
+                            {loadingOrder === activeDisplayedOrder - 1 ? (
+                              <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                            ) : null}
                             ← Câu Trước
                           </button>
 
@@ -2121,8 +2276,9 @@ export function CompetitionHostPage() {
                           {/* Câu Sau → */}
                           <button
                             type="button"
+                            aria-busy={loadingOrder === activeDisplayedOrder + 1}
                             disabled={
-                              isHistoricalResultsLoading ||
+                              loadingOrder === activeDisplayedOrder + 1 ||
                               (snapshot?.status === 'finished'
                                 ? activeDisplayedOrder >= effectiveTotalQuestions
                                 : activeDisplayedOrder >= (snapshot?.current_question_index || 1))
@@ -2132,6 +2288,9 @@ export function CompetitionHostPage() {
                             title="Xem kết quả câu hỏi sau"
                           >
                             Câu Sau →
+                            {loadingOrder === activeDisplayedOrder + 1 ? (
+                              <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                            ) : null}
                           </button>
                         </div>
 
@@ -2345,11 +2504,40 @@ export function CompetitionHostPage() {
                       <Clock className="w-6 h-6" />
                     </div>
                     <h3 className="text-base font-bold text-slate-800">
-                      {isResultsLoading || isHistoricalResultsLoading ? 'Đang tải kết quả câu hỏi...' : 'Câu hỏi đang diễn ra hoặc chưa có kết quả'}
+                      {isResultsLoading || isHistoricalResultsLoading
+                        ? (loadingOrder ? `Đang tải Câu ${loadingOrder}...` : 'Đang tải kết quả câu hỏi...')
+                        : 'Câu hỏi đang diễn ra hoặc chưa có kết quả'}
                     </h3>
                     <p className="text-xs text-slate-500 max-w-md mx-auto">
-                      Kết quả và biểu đồ phân bổ đáp án sẽ tự động mở khi hết thời gian đếm ngược hoặc khi Host bấm "Kết Thúc Câu".
+                      {isResultsLoading || isHistoricalResultsLoading
+                        ? 'Hệ thống đang tải dữ liệu kết quả mới nhất...'
+                        : 'Kết quả và biểu đồ phân bổ đáp án sẽ tự động mở khi hết thời gian đếm ngược hoặc khi Host bấm "Kết Thúc Câu".'}
                     </p>
+
+                    {historicalError && (
+                      <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-xs text-red-800 max-w-md mx-auto text-left" role="alert">
+                        <div className="flex items-center gap-2 font-medium">
+                          <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                          <span>Không thể tải kết quả câu hỏi. Vui lòng thử lại.</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (historicalError.order) {
+                              fetchHistoricalResult(historicalError.order);
+                            } else {
+                              fetchResultsSafely(activeSessionId);
+                            }
+                          }}
+                          disabled={isHistoricalResultsLoading || isResultsLoading}
+                          className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold transition shadow-xs flex-shrink-0 flex items-center gap-1.5"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${(isHistoricalResultsLoading || isResultsLoading) ? 'animate-spin' : ''}`} />
+                          Thử lại
+                        </button>
+                      </div>
+                    )}
+
                     <div className="pt-2">
                       <button
                         type="button"
@@ -2358,7 +2546,7 @@ export function CompetitionHostPage() {
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 text-white font-bold text-xs hover:bg-amber-600 shadow-sm transition disabled:opacity-50"
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${(isResultsLoading || isHistoricalResultsLoading) ? 'animate-spin' : ''}`} />
-                        Kiểm Tra &amp; Mở Kết Quả
+                        {isResultsLoading || isHistoricalResultsLoading ? 'Đang tải...' : 'Kiểm Tra & Mở Kết Quả'}
                       </button>
                     </div>
                   </div>
