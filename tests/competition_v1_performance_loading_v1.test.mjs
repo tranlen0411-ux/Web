@@ -58,87 +58,105 @@ test('COMPETITION V1 — PERFORMANCE & LOADING UX V1 TEST SUITE (30 TESTS)', asy
       const sessionId = activeSessionId;
       if (!sessionId) return { success: false, error_code: 'NO_SESSION' };
 
-      // 1. In-memory Cache Lookup
+      // 1. Advance request generation first (Blocker 1)
+      const requestId = ++latestHistoricalRequestId;
+
+      // 2. In-memory Cache Lookup
       const orderLookupKey = `${sessionId}:${orderToFetch}`;
       const knownQuestionId = orderToQuestionIdMap.get(orderLookupKey);
       const cacheKey = knownQuestionId ? `${sessionId}:${knownQuestionId}` : null;
 
       if (cacheKey && historicalResultsCache.has(cacheKey)) {
         const cachedData = historicalResultsCache.get(cacheKey);
-        historicalError = null;
-        reviewedQuestionOrder = orderToFetch;
-        reviewedQuestionResults = cachedData;
-        hostViewMode = 'QUESTION_RESULTS';
+        if (
+          requestId === latestHistoricalRequestId &&
+          activeSessionId === sessionId
+        ) {
+          historicalError = null;
+          reviewedQuestionOrder = orderToFetch;
+          reviewedQuestionResults = cachedData;
+          hostViewMode = 'QUESTION_RESULTS';
+          isHistoricalResultsLoading = false;
+          loadingOrder = null;
+        }
         return { success: true, data: cachedData, fromCache: true };
       }
 
-      // 2. In-flight request deduplication
-      const inFlightKey = cacheKey || orderLookupKey;
-      if (inFlightResults.has(inFlightKey)) {
-        return inFlightResults.get(inFlightKey);
-      }
-
-      // 3. Stale guard increment
-      const requestId = ++latestHistoricalRequestId;
-
-      // 4. Immediate loading feedback
+      // 3. Immediate loading feedback
       isHistoricalResultsLoading = true;
       loadingOrder = orderToFetch;
       historicalError = null;
 
-      // 5. Fetch promise
-      const fetchPromise = (async () => {
-        try {
-          rpcCallCount++;
-          const res = await rpcHandler(sessionId, orderToFetch);
+      // 4. In-flight request deduplication & network fetch
+      const inFlightKey = cacheKey || orderLookupKey;
+      let fetchPromise = inFlightResults.get(inFlightKey);
 
-          if (res.success && res.data && res.data.question_id) {
-            const itemCacheKey = `${sessionId}:${res.data.question_id}`;
-            historicalResultsCache.set(itemCacheKey, res.data);
-            orderToQuestionIdMap.set(orderLookupKey, res.data.question_id);
-          }
+      if (!fetchPromise) {
+        fetchPromise = (async () => {
+          try {
+            rpcCallCount++;
+            const res = await rpcHandler(sessionId, orderToFetch);
 
-          if (
-            requestId === latestHistoricalRequestId &&
-            activeSessionId === sessionId
-          ) {
-            if (res.success && res.data) {
-              reviewedQuestionOrder = orderToFetch;
-              reviewedQuestionResults = res.data;
-              hostViewMode = 'QUESTION_RESULTS';
-              historicalError = null;
-              return { success: true, data: res.data };
-            } else {
-              historicalError = {
-                order: orderToFetch,
-                message: res.message || 'Không thể tải kết quả câu hỏi này.'
-              };
-              return { success: false, error_code: res.error_code };
+            if (res.success && res.data && res.data.question_id) {
+              const itemCacheKey = `${sessionId}:${res.data.question_id}`;
+              historicalResultsCache.set(itemCacheKey, res.data);
+              orderToQuestionIdMap.set(orderLookupKey, res.data.question_id);
             }
-          }
-          return { success: false, error_code: 'STALE_REQUEST' };
-        } catch (_err) {
-          if (
-            requestId === latestHistoricalRequestId &&
-            activeSessionId === sessionId
-          ) {
-            historicalError = {
-              order: orderToFetch,
+            return res;
+          } catch (_err) {
+            return {
+              success: false,
+              error_code: 'NETWORK_ERROR',
               message: 'Lỗi mạng khi tải kết quả câu hỏi.'
             };
+          } finally {
+            inFlightResults.delete(inFlightKey);
           }
-          return { success: false, error_code: 'NETWORK_ERROR' };
-        } finally {
-          inFlightResults.delete(inFlightKey);
-          if (requestId === latestHistoricalRequestId) {
-            isHistoricalResultsLoading = false;
-            loadingOrder = null;
+        })();
+
+        inFlightResults.set(inFlightKey, fetchPromise);
+      }
+
+      // 5. Await result and check UI ownership
+      try {
+        const res = await fetchPromise;
+
+        if (
+          requestId === latestHistoricalRequestId &&
+          activeSessionId === sessionId
+        ) {
+          if (res.success && res.data) {
+            reviewedQuestionOrder = orderToFetch;
+            reviewedQuestionResults = res.data;
+            hostViewMode = 'QUESTION_RESULTS';
+            historicalError = null;
+            return { success: true, data: res.data };
+          } else {
+            historicalError = {
+              order: orderToFetch,
+              message: res.message || 'Không thể tải kết quả câu hỏi này.'
+            };
+            return { success: false, error_code: res.error_code };
           }
         }
-      })();
-
-      inFlightResults.set(inFlightKey, fetchPromise);
-      return fetchPromise;
+        return { success: false, error_code: 'STALE_REQUEST' };
+      } catch (_err) {
+        if (
+          requestId === latestHistoricalRequestId &&
+          activeSessionId === sessionId
+        ) {
+          historicalError = {
+            order: orderToFetch,
+            message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+          };
+        }
+        return { success: false, error_code: 'NETWORK_ERROR' };
+      } finally {
+        if (requestId === latestHistoricalRequestId) {
+          isHistoricalResultsLoading = false;
+          loadingOrder = null;
+        }
+      }
     }
 
     return {
@@ -268,10 +286,13 @@ test('COMPETITION V1 — PERFORMANCE & LOADING UX V1 TEST SUITE (30 TESTS)', asy
     const p2 = harness.fetchHistoricalResult(2);
 
     const [res1, res2] = await Promise.all([p1, p2]);
-    assert.strictEqual(res1.success, true);
+    // The earlier duplicate call was superseded by the later call (stale guard)
+    assert.strictEqual(res1.error_code, 'STALE_REQUEST');
+    // The later call owns the UI and succeeds
     assert.strictEqual(res2.success, true);
-    // RPC was only launched ONCE
+    // RPC was only launched ONCE (deduplication verified)
     assert.strictEqual(harness.getState().rpcCallCount, 1);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
   });
 
   // =========================================================================
@@ -665,6 +686,199 @@ test('COMPETITION V1 — PERFORMANCE & LOADING UX V1 TEST SUITE (30 TESTS)', asy
   // =========================================================================
   await t.test('30. MAX_COMPETITION_QUESTIONS == 20', () => {
     assert.strictEqual(MAX_COMPETITION_QUESTIONS, 20);
+  });
+
+  // =========================================================================
+  // TEST 31: uncached Câu 1 pending -> cached Câu 2 selected
+  //          -> Câu 1 returns later -> UI remains Câu 2 (Blocker 1)
+  // =========================================================================
+  await t.test('31. uncached Câu 1 pending -> cached Câu 2 selected -> Câu 1 returns later -> UI remains Câu 2', async () => {
+    const harness = createHarness();
+    // Warm up Câu 2 in cache first
+    await harness.fetchHistoricalResult(2);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
+
+    // Setup slow RPC for Câu 1
+    let finishQ1;
+    harness.setRpcHandler(async (sessionId, order) => {
+      if (order === 1) {
+        await new Promise(r => { finishQ1 = r; });
+        return {
+          success: true,
+          data: { question_id: 'q-order-1', question_order: 1, question_closed: true, question_text: 'Text Q1' }
+        };
+      }
+      return {
+        success: true,
+        data: { question_id: `q-order-${order}`, question_order: order, question_closed: true }
+      };
+    });
+
+    // 1. Host requests uncached Câu 1 (in-flight)
+    const p1 = harness.fetchHistoricalResult(1);
+    assert.strictEqual(harness.getState().loadingOrder, 1);
+
+    // 2. While Câu 1 pending, Host navigates to cached Câu 2
+    const res2 = await harness.fetchHistoricalResult(2);
+    assert.strictEqual(res2.fromCache, true);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
+    assert.strictEqual(harness.getState().reviewedQuestionResults.question_id, 'q-order-2');
+
+    // 3. Câu 1 finishes later
+    finishQ1();
+    const res1 = await p1;
+
+    // Câu 1 must be marked STALE_REQUEST and UI remains Câu 2
+    assert.strictEqual(res1.error_code, 'STALE_REQUEST');
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
+    assert.strictEqual(harness.getState().reviewedQuestionResults.question_id, 'q-order-2');
+    // Cache for Câu 1 was still populated safely
+    assert.strictEqual(harness.cache.has('session-123:q-order-1'), true);
+  });
+
+  // =========================================================================
+  // TEST 32: uncached Câu 1 pending -> uncached Câu 2 selected
+  //          -> both RPCs may run -> latest Câu 2 owns UI
+  // =========================================================================
+  await t.test('32. uncached Câu 1 pending -> uncached Câu 2 selected -> both RPCs may run -> latest Câu 2 owns UI', async () => {
+    const harness = createHarness();
+    let finishQ1, finishQ2;
+    harness.setRpcHandler(async (sessionId, order) => {
+      if (order === 1) {
+        await new Promise(r => { finishQ1 = r; });
+        return {
+          success: true,
+          data: { question_id: 'q-order-1', question_order: 1, question_closed: true }
+        };
+      } else if (order === 2) {
+        await new Promise(r => { finishQ2 = r; });
+        return {
+          success: true,
+          data: { question_id: 'q-order-2', question_order: 2, question_closed: true }
+        };
+      }
+    });
+
+    const p1 = harness.fetchHistoricalResult(1);
+    const p2 = harness.fetchHistoricalResult(2);
+
+    // Q1 finishes first, then Q2 finishes
+    finishQ1();
+    await p1;
+    finishQ2();
+    await p2;
+
+    assert.strictEqual(harness.getState().rpcCallCount, 2);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
+    assert.strictEqual(harness.getState().reviewedQuestionResults.question_id, 'q-order-2');
+  });
+
+  // =========================================================================
+  // TEST 33: Câu 1 pending -> navigate Câu 2 -> navigate back Câu 1
+  //          while original Câu 1 request still pending
+  //          -> RPC count for Câu 1 remains 1
+  //          -> Câu 1 becomes latest UI target
+  //          -> when original Câu 1 resolves, UI shows Câu 1
+  // =========================================================================
+  await t.test('33. Câu 1 pending -> navigate Câu 2 -> navigate back Câu 1 while pending -> RPC count 1, UI shows Câu 1', async () => {
+    const harness = createHarness();
+    let finishQ1;
+    harness.setRpcHandler(async (sessionId, order) => {
+      if (order === 1) {
+        await new Promise(r => { finishQ1 = r; });
+        return {
+          success: true,
+          data: { question_id: 'q-order-1', question_order: 1, question_closed: true, question_text: 'Result Q1' }
+        };
+      } else {
+        return {
+          success: true,
+          data: { question_id: `q-order-${order}`, question_order: order, question_closed: true }
+        };
+      }
+    });
+
+    // 1. Host requests Câu 1 (in-flight pending)
+    const p1_first = harness.fetchHistoricalResult(1);
+    assert.strictEqual(harness.getState().rpcCallCount, 1);
+
+    // 2. Host navigates to Câu 2
+    const p2 = await harness.fetchHistoricalResult(2);
+    assert.strictEqual(p2.success, true);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 2);
+
+    // 3. While original Câu 1 is still pending, Host navigates BACK to Câu 1!
+    const p1_second = harness.fetchHistoricalResult(1);
+
+    // Crucial check: RPC count MUST REMAIN 1 (no duplicate RPC for Câu 1)
+    assert.strictEqual(harness.getState().rpcCallCount, 2); // 1 for Q1 + 1 for Q2 = 2 total
+
+    // 4. Now original Câu 1 RPC finishes
+    finishQ1();
+    const [res1_first, res1_second] = await Promise.all([p1_first, p1_second]);
+
+    // First caller was superseded by Q2, so it gets STALE_REQUEST
+    assert.strictEqual(res1_first.error_code, 'STALE_REQUEST');
+    // Second caller adopted the pending result as latest UI target!
+    assert.strictEqual(res1_second.success, true);
+    assert.strictEqual(harness.getState().reviewedQuestionOrder, 1);
+    assert.strictEqual(harness.getState().reviewedQuestionResults.question_id, 'q-order-1');
+  });
+
+  // =========================================================================
+  // TEST 34: cache hit increments/invalidates stale UI generation
+  // =========================================================================
+  await t.test('34. cache hit increments/invalidates stale UI generation', () => {
+    const freshHostPageContent = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
+    const fnStartMatch = freshHostPageContent.match(
+      /const fetchHistoricalResult = useCallback\(async \(orderToFetch\) => \{[\s\S]*?const requestId = \+\+latestHistoricalRequestIdRef\.current;[\s\S]*?if \(cacheKey && historicalResultsCacheRef\.current\.has\(cacheKey\)\)/
+    );
+    assert.ok(fnStartMatch, 'fetchHistoricalResult must increment latestHistoricalRequestIdRef before checking cache');
+  });
+
+  // =========================================================================
+  // TEST 35: Prev/Next are NOT globally disabled by isHistoricalResultsLoading
+  // =========================================================================
+  await t.test('35. Prev/Next are NOT globally disabled by isHistoricalResultsLoading', () => {
+    const freshHostPageContent = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
+    assert.doesNotMatch(
+      freshHostPageContent,
+      /<button[^>]*onClick=\{handleReviewPrevQuestion\}[^>]*disabled=\{isHistoricalResultsLoading/
+    );
+    assert.doesNotMatch(
+      freshHostPageContent,
+      /<button[^>]*onClick=\{handleReviewNextQuestion\}[^>]*disabled=\{isHistoricalResultsLoading/
+    );
+  });
+
+  // =========================================================================
+  // TEST 36: exact pending target button IS disabled
+  // =========================================================================
+  await t.test('36. exact pending target button IS disabled', () => {
+    const freshHostPageContent = fs.readFileSync('src/pages/CompetitionHostPage.jsx', 'utf8');
+    assert.match(
+      freshHostPageContent,
+      /disabled=\{loadingOrder === activeDisplayedOrder - 1 \|\| activeDisplayedOrder <= 1\}/
+    );
+    assert.match(
+      freshHostPageContent,
+      /disabled=\{\s*loadingOrder === activeDisplayedOrder \+ 1 \|\|/
+    );
+  });
+
+  // =========================================================================
+  // TEST 37: different target button remains enabled while another target is pending
+  // =========================================================================
+  await t.test('37. different target button remains enabled while another target is pending', () => {
+    const activeDisplayedOrder = 2;
+    const loadingOrder = 1;
+    const effectiveTotalQuestions = 5;
+
+    const isPrevDisabled = loadingOrder === activeDisplayedOrder - 1 || activeDisplayedOrder <= 1;
+    const isNextDisabled = loadingOrder === activeDisplayedOrder + 1 || activeDisplayedOrder >= effectiveTotalQuestions;
+
+    assert.strictEqual(isPrevDisabled, true, 'Prev (target 1) must be disabled while target 1 is pending');
+    assert.strictEqual(isNextDisabled, false, 'Next (target 3) must remain enabled while target 1 is pending');
   });
 
 });

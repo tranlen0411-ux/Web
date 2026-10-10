@@ -593,96 +593,115 @@ export function CompetitionHostPage() {
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return { success: false, error_code: 'NO_SESSION' };
 
-    // 1. Build lookup & check in-memory cache first (Phase 3 & Phase 6)
+    // 1. Every explicit navigation target change MUST advance the UI request generation (Blocker 1)
+    const requestId = ++latestHistoricalRequestIdRef.current;
+
+    // 2. Build lookup & check in-memory cache first (Phase 3 & Phase 6)
     const orderLookupKey = `${sessionId}:${orderToFetch}`;
     const knownQuestionId = orderToQuestionIdMapRef.current.get(orderLookupKey);
     const cacheKey = knownQuestionId ? `${sessionId}:${knownQuestionId}` : null;
 
     if (cacheKey && historicalResultsCacheRef.current.has(cacheKey)) {
       const cachedData = historicalResultsCacheRef.current.get(cacheKey);
-      setHistoricalError(null);
-      setReviewedQuestionOrder(orderToFetch);
-      setReviewedQuestionResults(cachedData);
-      setHostViewMode('QUESTION_RESULTS');
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        setHistoricalError(null);
+        setReviewedQuestionOrder(orderToFetch);
+        setReviewedQuestionResults(cachedData);
+        setHostViewMode('QUESTION_RESULTS');
+        setIsHistoricalResultsLoading(false);
+        setLoadingOrder(null);
+      }
       return { success: true, data: cachedData, fromCache: true };
     }
 
-    // 2. In-flight request deduplication (Phase 4)
-    const inFlightKey = cacheKey || orderLookupKey;
-    if (inFlightResultsRef.current.has(inFlightKey)) {
-      return inFlightResultsRef.current.get(inFlightKey);
-    }
-
-    // 3. Stale request guard increment (Phase 7)
-    const requestId = ++latestHistoricalRequestIdRef.current;
-
-    // 4. Immediate synchronous loading feedback (Phase 5)
+    // 3. Immediate synchronous loading feedback (Phase 5)
     setIsHistoricalResultsLoading(true);
     setLoadingOrder(orderToFetch);
     setHistoricalError(null);
 
-    // 5. Create in-flight promise
-    const fetchPromise = (async () => {
-      try {
-        const res = await getHostQuestionResultByOrder({
-          sessionId,
-          questionOrder: orderToFetch,
-        });
+    // 4. In-flight request deduplication & network fetch (Blocker 1 & In-Flight Dedup Interaction)
+    const inFlightKey = cacheKey || orderLookupKey;
+    let fetchPromise = inFlightResultsRef.current.get(inFlightKey);
 
-        // Populate cache if response is authoritative and closed (regardless of whether UI was superseded)
-        if (res.success && res.data && res.data.question_id) {
-          const itemCacheKey = `${sessionId}:${res.data.question_id}`;
-          historicalResultsCacheRef.current.set(itemCacheKey, res.data);
-          orderToQuestionIdMapRef.current.set(orderLookupKey, res.data.question_id);
-        }
+    if (!fetchPromise) {
+      // Create network promise that performs RPC once, populates cache, and returns result
+      fetchPromise = (async () => {
+        try {
+          const res = await getHostQuestionResultByOrder({
+            sessionId,
+            questionOrder: orderToFetch,
+          });
 
-        // Stale response protection: Only update UI if this is still the latest requested review
-        if (
-          requestId === latestHistoricalRequestIdRef.current &&
-          activeSessionIdRef.current === sessionId
-        ) {
-          if (res.success && res.data) {
-            if (res.data.total_questions) {
-              setAuthoritativeTotalQuestions(res.data.total_questions);
-            }
-            setReviewedQuestionOrder(orderToFetch);
-            setReviewedQuestionResults(res.data);
-            setHostViewMode('QUESTION_RESULTS');
-            setHistoricalError(null);
-            return { success: true, data: res.data };
-          } else {
-            setHistoricalError({
-              order: orderToFetch,
-              message: res.message || 'Không thể tải kết quả câu hỏi này.'
-            });
-            showToast(res.message || 'Không thể tải kết quả câu hỏi này.', 'error');
-            return { success: false, error_code: res.error_code };
+          // Populate cache if response is authoritative and closed
+          if (res.success && res.data && res.data.question_id) {
+            const itemCacheKey = `${sessionId}:${res.data.question_id}`;
+            historicalResultsCacheRef.current.set(itemCacheKey, res.data);
+            orderToQuestionIdMapRef.current.set(orderLookupKey, res.data.question_id);
           }
+          return res;
+        } catch (_err) {
+          return {
+            success: false,
+            error_code: 'NETWORK_ERROR',
+            message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+          };
+        } finally {
+          inFlightResultsRef.current.delete(inFlightKey);
         }
-        return { success: false, error_code: 'STALE_REQUEST' };
-      } catch (_err) {
-        if (
-          requestId === latestHistoricalRequestIdRef.current &&
-          activeSessionIdRef.current === sessionId
-        ) {
+      })();
+
+      inFlightResultsRef.current.set(inFlightKey, fetchPromise);
+    }
+
+    // 5. Await the network result (whether network creator or adopted in-flight caller)
+    try {
+      const res = await fetchPromise;
+
+      // UI ownership check: Only update UI if this caller's requestId is STILL the latest
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        if (res.success && res.data) {
+          if (res.data.total_questions) {
+            setAuthoritativeTotalQuestions(res.data.total_questions);
+          }
+          setReviewedQuestionOrder(orderToFetch);
+          setReviewedQuestionResults(res.data);
+          setHostViewMode('QUESTION_RESULTS');
+          setHistoricalError(null);
+          return { success: true, data: res.data };
+        } else {
           setHistoricalError({
             order: orderToFetch,
-            message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+            message: res.message || 'Không thể tải kết quả câu hỏi này.'
           });
-          showToast('Lỗi mạng khi tải kết quả câu hỏi.', 'error');
-        }
-        return { success: false, error_code: 'NETWORK_ERROR' };
-      } finally {
-        inFlightResultsRef.current.delete(inFlightKey);
-        if (requestId === latestHistoricalRequestIdRef.current) {
-          setIsHistoricalResultsLoading(false);
-          setLoadingOrder(null);
+          showToast(res.message || 'Không thể tải kết quả câu hỏi này.', 'error');
+          return { success: false, error_code: res.error_code };
         }
       }
-    })();
-
-    inFlightResultsRef.current.set(inFlightKey, fetchPromise);
-    return fetchPromise;
+      return { success: false, error_code: 'STALE_REQUEST' };
+    } catch (_err) {
+      if (
+        requestId === latestHistoricalRequestIdRef.current &&
+        activeSessionIdRef.current === sessionId
+      ) {
+        setHistoricalError({
+          order: orderToFetch,
+          message: 'Lỗi mạng khi tải kết quả câu hỏi.'
+        });
+        showToast('Lỗi mạng khi tải kết quả câu hỏi.', 'error');
+      }
+      return { success: false, error_code: 'NETWORK_ERROR' };
+    } finally {
+      if (requestId === latestHistoricalRequestIdRef.current) {
+        setIsHistoricalResultsLoading(false);
+        setLoadingOrder(null);
+      }
+    }
   }, [showToast]);
 
   const handleReviewPrevQuestion = useCallback(() => {
@@ -2238,13 +2257,13 @@ export function CompetitionHostPage() {
                           {/* ← Câu Trước */}
                           <button
                             type="button"
-                            aria-busy={isHistoricalResultsLoading && loadingOrder === activeDisplayedOrder - 1}
-                            disabled={isHistoricalResultsLoading || activeDisplayedOrder <= 1}
+                            aria-busy={loadingOrder === activeDisplayedOrder - 1}
+                            disabled={loadingOrder === activeDisplayedOrder - 1 || activeDisplayedOrder <= 1}
                             onClick={handleReviewPrevQuestion}
                             className="px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1"
                             title="Xem kết quả câu hỏi trước"
                           >
-                            {isHistoricalResultsLoading && loadingOrder === activeDisplayedOrder - 1 ? (
+                            {loadingOrder === activeDisplayedOrder - 1 ? (
                               <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
                             ) : null}
                             ← Câu Trước
@@ -2257,9 +2276,9 @@ export function CompetitionHostPage() {
                           {/* Câu Sau → */}
                           <button
                             type="button"
-                            aria-busy={isHistoricalResultsLoading && loadingOrder === activeDisplayedOrder + 1}
+                            aria-busy={loadingOrder === activeDisplayedOrder + 1}
                             disabled={
-                              isHistoricalResultsLoading ||
+                              loadingOrder === activeDisplayedOrder + 1 ||
                               (snapshot?.status === 'finished'
                                 ? activeDisplayedOrder >= effectiveTotalQuestions
                                 : activeDisplayedOrder >= (snapshot?.current_question_index || 1))
@@ -2269,7 +2288,7 @@ export function CompetitionHostPage() {
                             title="Xem kết quả câu hỏi sau"
                           >
                             Câu Sau →
-                            {isHistoricalResultsLoading && loadingOrder === activeDisplayedOrder + 1 ? (
+                            {loadingOrder === activeDisplayedOrder + 1 ? (
                               <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
                             ) : null}
                           </button>
