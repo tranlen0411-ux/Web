@@ -20,6 +20,7 @@ export function HostAudioControls({
   setSfxEnabled,
   volume,
   setVolume,
+  isMusicAvailable = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const popoverRef = useRef(null);
@@ -116,18 +117,28 @@ export function HostAudioControls({
           {/* Music Toggle */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Music className={`w-4 h-4 ${isMusicEnabled && isSoundEnabled ? 'text-amber-500' : 'text-slate-400'}`} />
+              <Music className={`w-4 h-4 ${isMusicAvailable && isMusicEnabled && isSoundEnabled ? 'text-amber-500' : 'text-slate-400'}`} />
               <div>
-                <div className="text-xs font-bold text-slate-700">Nhạc nền</div>
-                <div className="text-[10px] text-slate-400">Sảnh chờ &amp; thời gian làm bài</div>
+                <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  Nhạc nền
+                  {!isMusicAvailable && (
+                    <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                      Chưa khả dụng
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  {!isMusicAvailable ? 'Chưa có tệp nhạc' : 'Sảnh chờ & thời gian làm bài'}
+                </div>
               </div>
             </div>
             <button
               type="button"
-              disabled={!isSoundEnabled}
+              disabled={!isSoundEnabled || !isMusicAvailable}
               onClick={() => setMusicEnabled(!isMusicEnabled)}
+              title={!isMusicAvailable ? 'Chưa có tệp nhạc nền' : undefined}
               className={`w-11 h-6 flex items-center rounded-full p-1 transition duration-200 disabled:opacity-40 ${
-                isMusicEnabled && isSoundEnabled ? 'bg-amber-500 justify-end' : 'bg-slate-300 justify-start'
+                isMusicAvailable && isMusicEnabled && isSoundEnabled ? 'bg-amber-500 justify-end' : 'bg-slate-300 justify-start'
               }`}
             >
               <div className="bg-white w-4 h-4 rounded-full shadow-md" />

@@ -12,6 +12,8 @@ import { getAudioContext, playSound } from '../utils/soundEffects.js';
  * - Safe lifecycle cleanup (NEVER close the global shared AudioContext)
  */
 
+export const BACKGROUND_MUSIC_AVAILABLE = false;
+
 export const BACKGROUND_MUSIC_TRACKS = {
   lobby: '/audio/competition/lobby_loop.mp3',
   question_active: '/audio/competition/question_active_loop.mp3',
@@ -25,6 +27,9 @@ class CompetitionAudioManager {
     this.sfxEnabled = true;
     this.volume = 0.5; // Default safe volume (0.0 - 1.0)
 
+    this.isGamePaused = false;
+    this.isMusicAvailable = BACKGROUND_MUSIC_AVAILABLE;
+
     this.currentTrack = null;
     this.audioElements = new Map(); // trackKey -> HTMLAudioElement
     this.isMusicPaused = false;
@@ -33,7 +38,7 @@ class CompetitionAudioManager {
 
   /**
    * Unlock audio playback upon user interaction
-   * Safely resumes shared AudioContext and retries current background track
+   * Safely resumes shared AudioContext and retries current background track if available
    */
   async unlock() {
     this.isUnlocked = true;
@@ -46,8 +51,8 @@ class CompetitionAudioManager {
       // Fail silent
     }
 
-    // Safely retry / resume current background track on user gesture unlock
-    if (this.currentTrack && this.globalSoundEnabled && this.musicEnabled && !this.isMusicPaused) {
+    // Safely retry / resume current background track on user gesture unlock ONLY if music is available and not paused
+    if (this.isMusicAvailable && this.currentTrack && this.globalSoundEnabled && this.musicEnabled && !this.isGamePaused && !this.isMusicPaused) {
       this.retryCurrentBackgroundTrack();
     }
 
@@ -57,14 +62,15 @@ class CompetitionAudioManager {
   /**
    * Dedicated safe retry/resume method for background track after unlock gesture
    * Invariants:
+   * - isMusicAvailable === true
    * - currentTrack exists
    * - globalSoundEnabled === true
    * - musicEnabled === true
-   * - NEVER overrides intentional game pause (isMusicPaused must be false)
+   * - NEVER overrides intentional game pause (isGamePaused & isMusicPaused must be false)
    * - Reuses existing HTMLAudio element if created, otherwise creates safely
    */
   retryCurrentBackgroundTrack() {
-    if (!this.currentTrack || !this.globalSoundEnabled || !this.musicEnabled || this.isMusicPaused) {
+    if (!this.isMusicAvailable || !this.currentTrack || !this.globalSoundEnabled || !this.musicEnabled || this.isGamePaused || this.isMusicPaused) {
       return;
     }
 
@@ -91,7 +97,7 @@ class CompetitionAudioManager {
             this.needsPlaybackRetry = false;
           })
           .catch((_err) => {
-            if (!this.isMusicPaused) {
+            if (!this.isMusicPaused && !this.isGamePaused) {
               this.needsPlaybackRetry = true;
             }
           });
@@ -99,32 +105,47 @@ class CompetitionAudioManager {
         this.needsPlaybackRetry = false;
       }
     } catch (_err) {
-      if (!this.isMusicPaused) {
+      if (!this.isMusicPaused && !this.isGamePaused) {
         this.needsPlaybackRetry = true;
       }
     }
   }
 
   /**
+   * Separate GAME/LIFECYCLE pause state from user preference state
+   * Authoritative Competition state transitions control this flag.
+   */
+  setGamePaused(isPaused) {
+    this.isGamePaused = Boolean(isPaused);
+    if (this.isGamePaused) {
+      this.pauseMusic();
+    } else if (this.currentTrack && this.globalSoundEnabled && this.musicEnabled && this.isMusicPaused) {
+      this.resumeMusic();
+    }
+  }
+
+  /**
    * Sync with repository global sound preference (sound_enabled from SoundContext)
+   * MUST NEVER override active game pause.
    */
   setGlobalSoundEnabled(enabled) {
     this.globalSoundEnabled = Boolean(enabled);
     if (!this.globalSoundEnabled) {
       this.pauseMusic();
-    } else if (this.currentTrack && this.musicEnabled && (this.isMusicPaused || this.needsPlaybackRetry)) {
+    } else if (this.currentTrack && this.musicEnabled && !this.isGamePaused && (this.isMusicPaused || this.needsPlaybackRetry)) {
       this.resumeMusic();
     }
   }
 
   /**
    * Toggle background music
+   * MUST NEVER override active game pause.
    */
   setMusicEnabled(enabled) {
     this.musicEnabled = Boolean(enabled);
     if (!this.musicEnabled) {
       this.pauseMusic();
-    } else if (this.currentTrack && this.globalSoundEnabled && (this.isMusicPaused || this.needsPlaybackRetry)) {
+    } else if (this.currentTrack && this.globalSoundEnabled && !this.isGamePaused && (this.isMusicPaused || this.needsPlaybackRetry)) {
       this.resumeMusic();
     }
   }
@@ -158,7 +179,8 @@ class CompetitionAudioManager {
    * Play background music track (lobby | question_active)
    * Guaranteed Invariants:
    * - If already playing the requested track: NO restart, NO duplicate playback
-   * - If sound or music is disabled: records currentTrack but keeps audio paused
+   * - If game is paused or sound/music disabled: records currentTrack but keeps audio paused
+   * - If background music assets are not available: records currentTrack but creates ZERO Audio object and ZERO network request
    * - If file is missing or play() rejected: fails completely silently
    */
   playMusic(trackKey) {
@@ -177,7 +199,22 @@ class CompetitionAudioManager {
     }
 
     this.currentTrack = trackKey;
+
+    // If game is currently paused, record current track but keep music paused
+    if (this.isGamePaused) {
+      this.isMusicPaused = true;
+      this.needsPlaybackRetry = false;
+      return;
+    }
+
     this.isMusicPaused = false;
+
+    // If background music assets are not available, record logical track but perform ZERO Audio creation or network attempt
+    if (!this.isMusicAvailable) {
+      this.needsPlaybackRetry = false;
+      return;
+    }
+
     this.needsPlaybackRetry = true;
 
     if (!this.globalSoundEnabled || !this.musicEnabled) {
@@ -207,7 +244,7 @@ class CompetitionAudioManager {
           })
           .catch((_err) => {
             // Handled fail-silently: asset might not exist yet or autoplay blocked
-            if (!this.isMusicPaused) {
+            if (!this.isMusicPaused && !this.isGamePaused) {
               this.needsPlaybackRetry = true;
             }
           });
@@ -215,7 +252,7 @@ class CompetitionAudioManager {
         this.needsPlaybackRetry = false;
       }
     } catch (_err) {
-      if (!this.isMusicPaused) {
+      if (!this.isMusicPaused && !this.isGamePaused) {
         this.needsPlaybackRetry = true;
       }
     }
@@ -239,12 +276,18 @@ class CompetitionAudioManager {
 
   /**
    * Resume active background music
+   * Guarded against active game pause and unavailable assets
    */
   resumeMusic() {
-    if (!this.currentTrack || !this.globalSoundEnabled || !this.musicEnabled) {
+    if (!this.currentTrack || !this.globalSoundEnabled || !this.musicEnabled || this.isGamePaused) {
       return;
     }
     this.isMusicPaused = false;
+
+    if (!this.isMusicAvailable) {
+      return;
+    }
+
     let audio = this.audioElements.get(this.currentTrack);
     if (!audio) {
       const src = BACKGROUND_MUSIC_TRACKS[this.currentTrack];
@@ -265,13 +308,17 @@ class CompetitionAudioManager {
               this.needsPlaybackRetry = false;
             })
             .catch(() => {
-              this.needsPlaybackRetry = true;
+              if (!this.isMusicPaused && !this.isGamePaused) {
+                this.needsPlaybackRetry = true;
+              }
             });
         } else {
           this.needsPlaybackRetry = false;
         }
       } catch (_err) {
-        this.needsPlaybackRetry = true;
+        if (!this.isMusicPaused && !this.isGamePaused) {
+          this.needsPlaybackRetry = true;
+        }
       }
     }
   }
@@ -333,6 +380,7 @@ class CompetitionAudioManager {
       } catch (_e) {}
     });
     this.needsPlaybackRetry = false;
+    this.isGamePaused = false;
   }
 
   /**

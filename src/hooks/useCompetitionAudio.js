@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSound } from '../context/SoundContext.jsx';
-import { competitionAudioManager } from '../services/competitionAudioManager.js';
+import { competitionAudioManager, BACKGROUND_MUSIC_AVAILABLE } from '../services/competitionAudioManager.js';
 
 /**
  * Custom React Hook for Competition Host Audio (Music & Sound Effects V1)
@@ -101,6 +101,7 @@ export function useCompetitionAudio({
       lastCountdownTickKeyRef.current = null;
       podiumPlayedSessionRef.current = null;
       lastLeaderboardOpenRef.current = Boolean(isLeaderboardOpen);
+      competitionAudioManager.setGamePaused(false);
       competitionAudioManager.stopAll();
     }
   }, [sessionId, isLeaderboardOpen]);
@@ -124,12 +125,12 @@ export function useCompetitionAudio({
     }
 
     if (status === 'paused') {
-      competitionAudioManager.pauseMusic();
+      competitionAudioManager.setGamePaused(true);
       return;
     }
 
     if (status === 'in_progress' && prevStatus === 'paused') {
-      competitionAudioManager.resumeMusic();
+      competitionAudioManager.setGamePaused(false);
       return;
     }
 
@@ -248,6 +249,7 @@ export function useCompetitionAudio({
   // 6. Component unmount cleanup
   useEffect(() => {
     return () => {
+      competitionAudioManager.setGamePaused(false);
       competitionAudioManager.stopAll();
     };
   }, []);
@@ -263,6 +265,7 @@ export function useCompetitionAudio({
     setSfxEnabled,
     volume,
     setVolume,
+    isMusicAvailable: BACKGROUND_MUSIC_AVAILABLE,
     triggerQuestionClosed,
   };
 }
