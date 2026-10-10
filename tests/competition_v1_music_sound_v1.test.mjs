@@ -2103,5 +2103,300 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
     assert.match(content, /SCORM Track Audit Gate/i, 'README documents SCORM Track Audit Gate');
     assert.match(content, /WAITING_FOR_SCORM_AUDIO_AUDIT/i, 'README documents audit reason');
   });
+
+  // --- SCORM-INSPIRED MUSIC PACK V1 TESTS (151 - 182) ---
+
+  await t.test('151. scorm_inspired_calm registry', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_calm');
+    assert.ok(theme, 'scorm_inspired_calm must exist');
+    assert.equal(theme.id, 'scorm_inspired_calm');
+    assert.equal(theme.name, 'SCORM-Inspired Calm');
+    assert.equal(theme.available, true);
+  });
+
+  await t.test('152. calm lobby path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_calm');
+    assert.equal(theme.lobbyTrack, '/audio/competition/themes/scorm_inspired_calm/lobby.mp3');
+  });
+
+  await t.test('153. calm question path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_calm');
+    assert.equal(theme.questionTrack, '/audio/competition/themes/scorm_inspired_calm/question.mp3');
+  });
+
+  await t.test('154. calm assets exist', () => {
+    const lobbyFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_calm/lobby.mp3');
+    const qFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_calm/question.mp3');
+    assert.ok(fs.existsSync(lobbyFile), 'calm lobby.mp3 must exist');
+    assert.ok(fs.existsSync(qFile), 'calm question.mp3 must exist');
+    assert.ok(fs.statSync(lobbyFile).size > 100000, 'calm lobby.mp3 must be substantive');
+    assert.ok(fs.statSync(qFile).size > 100000, 'calm question.mp3 must be substantive');
+  });
+
+  await t.test('155. calm selectable', async () => {
+    const { isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(isSelectableThemeId('scorm_inspired_calm'), true);
+  });
+
+  await t.test('156. calm localStorage persistence', async () => {
+    const { getStoredThemeId, setStoredThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+    try {
+      setStoredThemeId('scorm_inspired_calm');
+      assert.equal(getStoredThemeId(), 'scorm_inspired_calm');
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('157. calm preview works', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+    try {
+      const result = competitionAudioManager.previewTheme('scorm_inspired_calm');
+      assert.equal(result, true, 'previewTheme must succeed for scorm_inspired_calm');
+      assert.equal(competitionAudioManager.previewThemeId, 'scorm_inspired_calm');
+      competitionAudioManager.stopPreview(false);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('158. scorm_inspired_bright registry', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_bright');
+    assert.ok(theme, 'scorm_inspired_bright must exist');
+    assert.equal(theme.id, 'scorm_inspired_bright');
+    assert.equal(theme.name, 'SCORM-Inspired Bright');
+    assert.equal(theme.available, true);
+  });
+
+  await t.test('159. bright lobby path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_bright');
+    assert.equal(theme.lobbyTrack, '/audio/competition/themes/scorm_inspired_bright/lobby.mp3');
+  });
+
+  await t.test('160. bright question path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_bright');
+    assert.equal(theme.questionTrack, '/audio/competition/themes/scorm_inspired_bright/question.mp3');
+  });
+
+  await t.test('161. bright assets exist', () => {
+    const lobbyFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_bright/lobby.mp3');
+    const qFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_bright/question.mp3');
+    assert.ok(fs.existsSync(lobbyFile), 'bright lobby.mp3 must exist');
+    assert.ok(fs.existsSync(qFile), 'bright question.mp3 must exist');
+    assert.ok(fs.statSync(lobbyFile).size > 100000, 'bright lobby.mp3 must be substantive');
+    assert.ok(fs.statSync(qFile).size > 100000, 'bright question.mp3 must be substantive');
+  });
+
+  await t.test('162. bright selectable', async () => {
+    const { isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(isSelectableThemeId('scorm_inspired_bright'), true);
+  });
+
+  await t.test('163. bright localStorage persistence', async () => {
+    const { getStoredThemeId, setStoredThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+    try {
+      setStoredThemeId('scorm_inspired_bright');
+      assert.equal(getStoredThemeId(), 'scorm_inspired_bright');
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('164. bright preview works', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+    try {
+      const result = competitionAudioManager.previewTheme('scorm_inspired_bright');
+      assert.equal(result, true, 'previewTheme must succeed for scorm_inspired_bright');
+      assert.equal(competitionAudioManager.previewThemeId, 'scorm_inspired_bright');
+      competitionAudioManager.stopPreview(false);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('165. scorm_inspired_focus registry', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_focus');
+    assert.ok(theme, 'scorm_inspired_focus must exist');
+    assert.equal(theme.id, 'scorm_inspired_focus');
+    assert.equal(theme.name, 'SCORM-Inspired Focus');
+    assert.equal(theme.available, true);
+  });
+
+  await t.test('166. focus lobby path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_focus');
+    assert.equal(theme.lobbyTrack, '/audio/competition/themes/scorm_inspired_focus/lobby.mp3');
+  });
+
+  await t.test('167. focus question path exact', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_inspired_focus');
+    assert.equal(theme.questionTrack, '/audio/competition/themes/scorm_inspired_focus/question.mp3');
+  });
+
+  await t.test('168. focus assets exist', () => {
+    const lobbyFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_focus/lobby.mp3');
+    const qFile = path.join(ROOT_DIR, 'public/audio/competition/themes/scorm_inspired_focus/question.mp3');
+    assert.ok(fs.existsSync(lobbyFile), 'focus lobby.mp3 must exist');
+    assert.ok(fs.existsSync(qFile), 'focus question.mp3 must exist');
+    assert.ok(fs.statSync(lobbyFile).size > 100000, 'focus lobby.mp3 must be substantive');
+    assert.ok(fs.statSync(qFile).size > 100000, 'focus question.mp3 must be substantive');
+  });
+
+  await t.test('169. focus selectable', async () => {
+    const { isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(isSelectableThemeId('scorm_inspired_focus'), true);
+  });
+
+  await t.test('170. focus localStorage persistence', async () => {
+    const { getStoredThemeId, setStoredThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+    try {
+      setStoredThemeId('scorm_inspired_focus');
+      assert.equal(getStoredThemeId(), 'scorm_inspired_focus');
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('171. focus preview works', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+    try {
+      const result = competitionAudioManager.previewTheme('scorm_inspired_focus');
+      assert.equal(result, true, 'previewTheme must succeed for scorm_inspired_focus');
+      assert.equal(competitionAudioManager.previewThemeId, 'scorm_inspired_focus');
+      competitionAudioManager.stopPreview(false);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('172. final library option count exact', async () => {
+    const { ALL_THEME_OPTIONS, MUSIC_THEMES } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(ALL_THEME_OPTIONS.length, 9, 'Exactly 9 library options in total (1 none + 8 themes)');
+    assert.equal(MUSIC_THEMES.length, 8, 'Exactly 8 themes in MUSIC_THEMES array');
+  });
+
+  await t.test('173. SCORM Track still unavailable', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_track');
+    assert.equal(theme.available, false, 'SCORM Track must remain unavailable');
+  });
+
+  await t.test('174. SCORM Track still no paths', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('scorm_track');
+    assert.equal(theme.lobbyTrack, null);
+    assert.equal(theme.questionTrack, null);
+  });
+
+  await t.test('175. SCORM Track still unselectable', async () => {
+    const { isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(isSelectableThemeId('scorm_track'), false);
+  });
+
+  await t.test('176. no new AudioContext', () => {
+    assert.doesNotMatch(audioManagerSrc, /new AudioContext/, 'competitionAudioManager must not create a 2nd AudioContext');
+    assert.doesNotMatch(audioHookSrc, /new AudioContext/, 'useCompetitionAudio must not create an AudioContext');
+    assert.doesNotMatch(hostPageSrc, /new AudioContext/, 'Host page must not instantiate AudioContext');
+  });
+
+  await t.test('177. no extra Competition timer', () => {
+    assert.doesNotMatch(audioManagerSrc, /setInterval/, 'No setInterval in audio manager');
+    assert.doesNotMatch(audioHookSrc, /setInterval/, 'No setInterval in audio hook');
+  });
+
+  await t.test('178. Student audio unchanged', () => {
+    assert.doesNotMatch(studentPageSrc, /competitionMusicThemes/, 'StudentPage must not import themes');
+    assert.doesNotMatch(studentPageSrc, /useCompetitionAudio/, 'StudentPage must not use useCompetitionAudio');
+  });
+
+  await t.test('179. Guest audio unchanged', () => {
+    const guestPagePath = path.join(ROOT_DIR, 'src/pages/CompetitionGuestPage.jsx');
+    if (fs.existsSync(guestPagePath)) {
+      const guestContent = fs.readFileSync(guestPagePath, 'utf8');
+      assert.doesNotMatch(guestContent, /useCompetitionAudio/, 'GuestPage must not import Competition audio hook');
+    }
+  });
+
+  await t.test('180. Spectator audio unchanged', () => {
+    assert.doesNotMatch(spectatorPageSrc, /competitionMusicThemes/, 'SpectatorPage must not import themes');
+    assert.doesNotMatch(spectatorPageSrc, /useCompetitionAudio/, 'SpectatorPage must not use useCompetitionAudio');
+  });
+
+  await t.test('181. README provenance text present', () => {
+    const readmeFile = path.join(ROOT_DIR, 'public/audio/competition/README.md');
+    const content = fs.readFileSync(readmeFile, 'utf8');
+    assert.match(content, /SCORM-Inspired Music Pack Provenance/i);
+    assert.match(content, /ORIGINAL_PROJECT_GENERATED/i);
+    assert.match(content, /ZERO source SCORM audio reused/i);
+  });
+
+  await t.test('182. source SCORM audio path absent from Competition assets', () => {
+    const compAudioDir = path.join(ROOT_DIR, 'public/audio/competition');
+    const allFiles = [];
+    function scanDir(dir) {
+      fs.readdirSync(dir, { withFileTypes: true }).forEach(ent => {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) scanDir(full);
+        else allFiles.push(ent.name);
+      });
+    }
+    scanDir(compAudioDir);
+    ['sound1.mp3', 'sound2.mp3', 'sound3.mp3', 'sound4.mp3', 'sound5.mp3', 'video1.mp4', 'video2.mp4', 'video3.mp4'].forEach(banned => {
+      assert.equal(allFiles.includes(banned), false, `Source SCORM asset ${banned} must not be present in Competition`);
+    });
+  });
 });
 

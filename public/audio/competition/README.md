@@ -18,6 +18,18 @@
 | `calm_focus` | Calm Focus | Question | `/audio/competition/themes/calm_focus/question.mp3` | ~35.03s | 128 kbps | 44,100 Hz | Gentle acoustic pulse, low-distraction marimba pattern for academic concentration. |
 | `bright_classroom` | Bright Classroom | Lobby | `/audio/competition/themes/bright_classroom/lobby.mp3` | ~34.91s | 128 kbps | 44,100 Hz | Sunny, uplifting, cheerful acoustic pluck arpeggio, glockenspiel sparkle, bouncy walking bass. |
 | `bright_classroom` | Bright Classroom | Question | `/audio/competition/themes/bright_classroom/question.mp3` | ~33.10s | 128 kbps | 44,100 Hz | Upbeat motivating progression, offbeat acoustic accents; leaves frequency space for countdown SFX. |
+| `scorm_inspired_calm` | SCORM-Inspired Calm | Lobby | `/audio/competition/themes/scorm_inspired_calm/lobby.mp3` | ~31.30s | 128 kbps | 44,100 Hz | Warm, gentle piano and marimba arpeggios, atmospheric pad; relaxed classroom feel. |
+| `scorm_inspired_calm` | SCORM-Inspired Calm | Question | `/audio/competition/themes/scorm_inspired_calm/question.mp3` | ~30.00s | 128 kbps | 44,100 Hz | Gentle pizzicato pulse, soft bass line, calm and low distraction. |
+| `scorm_inspired_bright` | SCORM-Inspired Bright | Lobby | `/audio/competition/themes/scorm_inspired_bright/lobby.mp3` | ~33.68s | 128 kbps | 44,100 Hz | Sunny glockenspiel, ukulele-style pluck, cheerful hand claps on beats 2 & 4; joyful classroom energy. |
+| `scorm_inspired_bright` | SCORM-Inspired Bright | Question | `/audio/competition/themes/scorm_inspired_bright/question.mp3` | ~33.10s | 128 kbps | 44,100 Hz | Playful staccato marimba, bouncing walking bass, light claps; friendly trivia energy without stress. |
+| `scorm_inspired_focus` | SCORM-Inspired Focus | Lobby | `/audio/competition/themes/scorm_inspired_focus/lobby.mp3` | ~36.23s | 128 kbps | 44,100 Hz | Clean electric piano, modern xylophone motifs, minimal shaker; focused and modern atmosphere. |
+| `scorm_inspired_focus` | SCORM-Inspired Focus | Question | `/audio/competition/themes/scorm_inspired_focus/question.mp3` | ~35.56s | 128 kbps | 44,100 Hz | Steady electric piano quarter pulse, subtle xylophone accents; concentration-friendly for trivia. |
+
+## SCORM-Inspired Music Pack Provenance
+- All 3 SCORM-Inspired themes are 100% ORIGINAL_PROJECT_GENERATED procedural audio compositions.
+- ZERO source SCORM audio reused; zero video audio extracted; zero third-party samples.
+- ZERO melody, hook, motif, vocal, or lyric copied from any SCORM package.
+- Broad stylistic inspiration only (instrumentation family: glockenspiel, ukulele, marimba, acoustic piano, claps; tempo 88-116 BPM).
 
 ## SCORM Track Audit Gate
 - **Entry ID**: `scorm_track`
