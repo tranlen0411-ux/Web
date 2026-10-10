@@ -1,6 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSound } from '../context/SoundContext.jsx';
 import { competitionAudioManager, BACKGROUND_MUSIC_AVAILABLE } from '../services/competitionAudioManager.js';
+import {
+  getStoredThemeId,
+  setStoredThemeId,
+  DEFAULT_MUSIC_THEME,
+  isValidThemeId,
+  isSelectableThemeId,
+} from '../services/competitionMusicThemes.js';
 
 /**
  * Custom React Hook for Competition Host Audio (Music & Sound Effects V1)
@@ -9,6 +16,7 @@ import { competitionAudioManager, BACKGROUND_MUSIC_AVAILABLE } from '../services
  * - 100% Host-Only (zero student / spectator audio execution)
  * - Zero second AudioContext (reuses shared context from soundEffects.js)
  * - Respects repository global sound_enabled from SoundContext
+ * - Theme selection persisted across reloads via localStorage
  * - Zero extra Competition timer created (presentation-only sync with host timer)
  * - Sound duplicate on polling: PREVENTED BY DESIGN via Compound Event Key guards
  * - Countdown duplicate: PREVENTED BY DESIGN via per-second tick key guards
@@ -37,6 +45,13 @@ export function useCompetitionAudio({
   const [volume, setVolumeState] = useState(0.5);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
+  // Background music theme state (persisted in localStorage)
+  const [themeId, setThemeIdState] = useState(() => getStoredThemeId());
+  const [previewingThemeId, setPreviewingThemeId] = useState(null);
+
+  // Determine whether active game lifecycle is running
+  const isGameActive = status === 'in_progress' || status === 'paused';
+
   // Synchronize global sound preference into audio manager
   useEffect(() => {
     competitionAudioManager.setGlobalSoundEnabled(isSoundEnabled);
@@ -47,6 +62,7 @@ export function useCompetitionAudio({
     competitionAudioManager.setMusicEnabled(isMusicEnabled);
     competitionAudioManager.setSfxEnabled(isSfxEnabled);
     competitionAudioManager.setVolume(volume);
+    competitionAudioManager.setTheme(themeId);
   }, []);
 
   // Synchronize local sub-controls into audio manager
@@ -65,6 +81,43 @@ export function useCompetitionAudio({
     setVolumeState(clamped);
     competitionAudioManager.setVolume(clamped);
   }, []);
+
+  // Theme selection callback
+  const setThemeId = useCallback((newThemeId) => {
+    const valid = isSelectableThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
+    setStoredThemeId(valid);
+    setThemeIdState(valid);
+    competitionAudioManager.setTheme(valid);
+  }, []);
+
+  // Preview callback (gesture-initiated, disabled when active game is running)
+  const previewTheme = useCallback((targetThemeId) => {
+    if (isGameActive) return;
+    if (previewingThemeId === targetThemeId) {
+      competitionAudioManager.stopPreview(true);
+      setPreviewingThemeId(null);
+      return;
+    }
+    const success = competitionAudioManager.previewTheme(targetThemeId, () => {
+      setPreviewingThemeId(null);
+    });
+    if (success) {
+      setPreviewingThemeId(targetThemeId);
+    }
+  }, [isGameActive, previewingThemeId]);
+
+  const stopPreview = useCallback(() => {
+    competitionAudioManager.stopPreview(true);
+    setPreviewingThemeId(null);
+  }, []);
+
+  // Disallow preview during active game
+  useEffect(() => {
+    if (isGameActive) {
+      competitionAudioManager.stopPreview(false);
+      setPreviewingThemeId(null);
+    }
+  }, [isGameActive]);
 
   // Explicit unlock callback on user gesture (Top-bar button or Start Session click)
   const unlockAudio = useCallback(async () => {
@@ -267,5 +320,11 @@ export function useCompetitionAudio({
     setVolume,
     isMusicAvailable: BACKGROUND_MUSIC_AVAILABLE,
     triggerQuestionClosed,
+    themeId,
+    setThemeId,
+    previewTheme,
+    stopPreview,
+    previewingThemeId,
+    isGameActive,
   };
 }
