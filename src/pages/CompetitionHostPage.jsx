@@ -250,6 +250,11 @@ export function CompetitionHostPage() {
     setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;
     setTimeLeftSeconds(null);
+    setRewardTransactions([]);
+    setIsRewardLedgerLoading(false);
+    setRewardLedgerError(null);
+    latestRewardRequestIdRef.current++;
+    isFinishingSessionRef.current = false;
 
     if (failureReason) {
       showToast(failureReason, 'error');
@@ -308,6 +313,11 @@ export function CompetitionHostPage() {
     inFlightResultsRef.current.clear();
     setHistoricalError(null);
     setLoadingOrder(null);
+    setRewardTransactions([]);
+    setIsRewardLedgerLoading(false);
+    setRewardLedgerError(null);
+    latestRewardRequestIdRef.current++;
+    isFinishingSessionRef.current = false;
   }, [activeSessionId]);
 
   // Setup Form State
@@ -567,10 +577,12 @@ export function CompetitionHostPage() {
       } else {
         const msg = res.message || 'Không thể tải sổ cái phần thưởng.';
         setRewardLedgerError(msg);
+        setRewardTransactions([]);
       }
     } catch (_err) {
       if (requestId === latestRewardRequestIdRef.current) {
         setRewardLedgerError('Lỗi mạng khi tải sổ cái phần thưởng.');
+        setRewardTransactions([]);
       }
     } finally {
       if (requestId === latestRewardRequestIdRef.current) {
@@ -609,12 +621,13 @@ export function CompetitionHostPage() {
     let guests = 0;
 
     rewardTransactions.forEach((tx) => {
-      if (tx.reward_status === 'awarded') {
+      const txStatus = tx.status || tx.reward_status;
+      if (txStatus === 'awarded') {
         awarded += 1;
         totalStars += Number(tx.stars_awarded || 0);
-      } else if (tx.reward_status === 'skipped_no_submission') {
+      } else if (txStatus === 'skipped_no_submission') {
         skipped += 1;
-      } else if (tx.reward_status === 'skipped_guest') {
+      } else if (txStatus === 'skipped_guest') {
         guests += 1;
       }
     });
@@ -3235,6 +3248,14 @@ export function CompetitionHostPage() {
                     <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />
                     Đang đồng bộ dữ liệu sổ cái phần thưởng từ máy chủ...
                   </div>
+                ) : rewardLedgerError && rewardTransactions.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500">
+                    Không thể hiển thị thông số trao thưởng do phát sinh lỗi kết nối. Vui lòng bấm &ldquo;Thử lại&rdquo;.
+                  </div>
+                ) : rewardTransactions.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500">
+                    Chưa ghi nhận bản ghi giao dịch thưởng nào cho phiên thi này.
+                  </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200 text-center">
@@ -3413,21 +3434,25 @@ export function CompetitionHostPage() {
                                   </span>
                                   {snapshot.reward_enabled && (() => {
                                     const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
                                     if (isRewardLedgerLoading && !tx) {
                                       return <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">Đang tải sao...</span>;
                                     }
                                     if (!tx) return null;
-                                    if (tx.reward_status === 'awarded') {
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
                                       return (
                                         <span className="inline-flex items-center gap-1 text-xs font-black text-slate-800 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-300 mt-1 shadow-2xs">
                                           +{tx.stars_awarded} ⭐
                                         </span>
                                       );
                                     }
-                                    if (tx.reward_status === 'skipped_guest') {
+                                    if (txStatus === 'skipped_guest') {
                                       return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Khách (0 ⭐)</span>;
                                     }
-                                    if (tx.reward_status === 'skipped_no_submission') {
+                                    if (txStatus === 'skipped_no_submission') {
                                       return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Chưa nộp (0 ⭐)</span>;
                                     }
                                     return null;
@@ -3497,21 +3522,25 @@ export function CompetitionHostPage() {
                                   </span>
                                   {snapshot.reward_enabled && (() => {
                                     const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
                                     if (isRewardLedgerLoading && !tx) {
                                       return <span className="text-[11px] text-amber-600 font-semibold block mt-0.5">Đang tải sao...</span>;
                                     }
                                     if (!tx) return null;
-                                    if (tx.reward_status === 'awarded') {
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
                                       return (
                                         <span className="inline-flex items-center gap-1 text-xs font-black text-amber-900 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 mt-1 shadow-2xs">
                                           +{tx.stars_awarded} ⭐
                                         </span>
                                       );
                                     }
-                                    if (tx.reward_status === 'skipped_guest') {
+                                    if (txStatus === 'skipped_guest') {
                                       return <span className="text-[10px] text-slate-500 bg-white/80 px-2 py-0.5 rounded-full block mt-1">Khách (0 ⭐)</span>;
                                     }
-                                    if (tx.reward_status === 'skipped_no_submission') {
+                                    if (txStatus === 'skipped_no_submission') {
                                       return <span className="text-[10px] text-slate-500 bg-white/80 px-2 py-0.5 rounded-full block mt-1">Chưa nộp (0 ⭐)</span>;
                                     }
                                     return null;
@@ -3576,21 +3605,25 @@ export function CompetitionHostPage() {
                                   </span>
                                   {snapshot.reward_enabled && (() => {
                                     const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
                                     if (isRewardLedgerLoading && !tx) {
                                       return <span className="text-[11px] text-amber-600 font-semibold block mt-0.5">Đang tải sao...</span>;
                                     }
                                     if (!tx) return null;
-                                    if (tx.reward_status === 'awarded') {
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
                                       return (
                                         <span className="inline-flex items-center gap-1 text-xs font-black text-amber-900 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300 mt-1">
                                           +{tx.stars_awarded} ⭐
                                         </span>
                                       );
                                     }
-                                    if (tx.reward_status === 'skipped_guest') {
+                                    if (txStatus === 'skipped_guest') {
                                       return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Khách (0 ⭐)</span>;
                                     }
-                                    if (tx.reward_status === 'skipped_no_submission') {
+                                    if (txStatus === 'skipped_no_submission') {
                                       return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Chưa nộp (0 ⭐)</span>;
                                     }
                                     return null;
@@ -3709,22 +3742,30 @@ export function CompetitionHostPage() {
                                 if (!tx && isRewardLedgerLoading) {
                                   return <span className="text-[10px] text-amber-500 block mt-0.5 font-medium">...⭐</span>;
                                 }
+                                if (!tx && rewardLedgerError) {
+                                  return (
+                                    <span className="text-[10px] text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 mt-1 inline-block">
+                                      Lỗi tải sao
+                                    </span>
+                                  );
+                                }
                                 if (!tx) return null;
-                                if (tx.reward_status === 'awarded') {
+                                const txStatus = tx.status || tx.reward_status;
+                                if (txStatus === 'awarded') {
                                   return (
                                     <span className="text-xs font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 mt-1 inline-block shadow-2xs">
                                       +{tx.stars_awarded} ⭐
                                     </span>
                                   );
                                 }
-                                if (tx.reward_status === 'skipped_guest') {
+                                if (txStatus === 'skipped_guest') {
                                   return (
                                     <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">
                                       Khách: 0 ⭐
                                     </span>
                                   );
                                 }
-                                if (tx.reward_status === 'skipped_no_submission') {
+                                if (txStatus === 'skipped_no_submission') {
                                   return (
                                     <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">
                                       Chưa nộp: 0 ⭐
