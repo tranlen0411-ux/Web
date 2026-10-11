@@ -59,6 +59,9 @@ jobs:
       - name: Run PGlite test suite
         run: npm run test:pglite
 
+      - name: Run Competition backend test suite (R18, R17, R16-A)
+        run: npm run test:competition
+
       - name: Run Real PostgreSQL Concurrency test suite
         env:
           TEST_POSTGRES_URL: postgres://test_user:test_password@127.0.0.1:5432/postgres_test
