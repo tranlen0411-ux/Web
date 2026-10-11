@@ -359,7 +359,20 @@ export async function hostCreateSession({
     });
 
     if (error) return normalizeResponse(null, error.message);
-    return normalizeResponse(data, 'Không thể tạo phòng thi.');
+    const normalized = normalizeResponse(data, 'Không thể tạo phòng thi.');
+    if (normalized.success && normalized.data && normalized.data.session_id && !normalized.data.session) {
+      normalized.data.session = {
+        id: normalized.data.session_id,
+        room_code: normalized.data.room_code,
+        title: normalized.data.title,
+        mode: normalized.data.mode,
+        max_participants: normalized.data.max_participants,
+        question_count: normalized.data.question_count,
+        reward_enabled: normalized.data.reward_enabled,
+        review_enabled: normalized.data.review_enabled,
+      };
+    }
+    return normalized;
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
   }
