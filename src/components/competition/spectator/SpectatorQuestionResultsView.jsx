@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { CheckCircle2, ArrowLeftRight } from 'lucide-react';
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -36,7 +36,7 @@ export function SpectatorQuestionResultsView({
           {questionResults?.question_text || activeQuestion?.question_text}
         </h3>
 
-        {/* Aggregate Distribution Bar Cards OR Short Answer Result Card */}
+        {/* Aggregate Distribution Bar Cards OR Matching Result Card OR Short Answer Result Card */}
         {questionResults?.question_type === 'short_answer' || activeQuestion?.question_type === 'short_answer' ? (
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="text-xs font-black uppercase tracking-wider text-sky-400">
@@ -48,6 +48,37 @@ export function SpectatorQuestionResultsView({
             <div className="text-xs text-slate-400 italic">
               Hệ thống so sánh chuỗi không phân biệt chữ hoa/thường và đã tự động loại bỏ khoảng trắng thừa.
             </div>
+          </div>
+        ) : (questionResults?.question_type === 'matching' || activeQuestion?.question_type === 'matching') ? (
+          <div className="space-y-4">
+            <div className="text-xs font-black uppercase tracking-wider text-emerald-400">
+              Đáp án đúng các cặp nối
+            </div>
+            {Array.isArray(questionResults?.matching_pairs || questionResults?.distribution) && (questionResults?.matching_pairs || questionResults?.distribution).length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                {(questionResults?.matching_pairs || questionResults?.distribution).map((pair, pIdx) => (
+                  <div
+                    key={pair.left_id ? `${pair.left_id}_${pair.right_id}` : pIdx}
+                    className="p-4 rounded-2xl border-2 bg-emerald-950/60 border-emerald-500/80 flex items-center justify-between gap-3 text-sm sm:text-base font-bold text-emerald-200 shadow-md"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="w-7 h-7 rounded-lg bg-emerald-500 text-slate-950 text-xs font-black flex items-center justify-center shrink-0">
+                        {pIdx + 1}
+                      </span>
+                      <span className="truncate">{pair.left_text}</span>
+                    </div>
+                    <ArrowLeftRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <div className="flex-1 text-right min-w-0">
+                      <span className="truncate">{pair.right_text}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-slate-400 text-xs text-center italic">
+                Không có dữ liệu cặp nối đáp án đúng.
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-4">

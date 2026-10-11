@@ -73,12 +73,59 @@ export function SpectatorLiveQuestionView({
           </div>
         )}
 
-        {/* Options Grid OR Short Answer Placeholder (Neutral style: No correct answer, No percentages) */}
+        {/* Options Grid OR Matching View OR Short Answer Placeholder (Neutral style: No correct answer, No percentages) */}
         {activeQuestion?.question_type === 'short_answer' ? (
           <div className="text-center py-10 px-6 rounded-2xl bg-slate-950/50 border border-slate-800 text-slate-300">
             <div className="text-xl sm:text-2xl font-black text-sky-400 mb-2">Câu hỏi điền vào chỗ trống</div>
             <div className="text-sm sm:text-base text-slate-400">
               Các thí sinh đang nhập câu trả lời trực tiếp trên thiết bị của mình.
+            </div>
+          </div>
+        ) : activeQuestion?.question_type === 'matching' ? (
+          <div className="space-y-4">
+            <div className="text-center text-sm font-bold text-sky-400 mb-2">
+              Câu hỏi nối cặp tương ứng giữa vế trái và vế phải
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+              {/* Vế Trái */}
+              <div className="space-y-3">
+                <div className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
+                  Vế Trái
+                </div>
+                {(activeQuestion?.options || []).filter(o => o.side === 'left').map((opt, idx) => (
+                  <div
+                    key={opt.id || idx}
+                    className="p-4 sm:p-5 rounded-2xl border-2 bg-slate-950/60 border-slate-800 flex items-center gap-3 shadow-md"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-300 font-black text-sm flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </div>
+                    <span className="text-base sm:text-lg font-bold text-slate-200 leading-snug break-words">
+                      {opt.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Vế Phải */}
+              <div className="space-y-3">
+                <div className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
+                  Vế Phải
+                </div>
+                {(activeQuestion?.options || []).filter(o => o.side === 'right').map((opt, idx) => (
+                  <div
+                    key={opt.id || idx}
+                    className="p-4 sm:p-5 rounded-2xl border-2 bg-slate-950/60 border-slate-800 flex items-center gap-3 shadow-md"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-sm flex items-center justify-center shrink-0">
+                      {String.fromCharCode(65 + idx)}
+                    </div>
+                    <span className="text-base sm:text-lg font-bold text-slate-200 leading-snug break-words">
+                      {opt.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
