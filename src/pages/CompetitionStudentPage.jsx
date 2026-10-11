@@ -259,6 +259,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   // Guards & Independent Refs
   const activeSessionIdRef = useRef(sessionId);
   const activeParticipantIdRef = useRef(participantId);
+  const activeUserIdRef = useRef(user?.id);
   const restoredSessionPendingValidationRef = useRef(Boolean(initialSession.sessionId && initialSession.participantId));
   const isMountedRef = useRef(true);
 
@@ -330,8 +331,13 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
 
     try {
       const res = await studentGetRewardTransaction(targetSessionId, targetUserId);
+
+      // Strict Concurrency & Identity Guard: Verify request ID, session ID, and user ID simultaneously
       if (requestId !== latestStudentRewardRequestIdRef.current) return;
-      if (activeSessionIdRef.current && targetSessionId !== activeSessionIdRef.current) return;
+      if (!activeSessionIdRef.current || targetSessionId !== activeSessionIdRef.current) return;
+      if (sessionId && targetSessionId !== sessionId) return;
+      if (!activeUserIdRef.current || targetUserId !== activeUserIdRef.current) return;
+      if (user?.id && targetUserId !== user.id) return;
 
       if (res.success) {
         setStudentRewardTx(res.data);
@@ -359,12 +365,20 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
         setRewardTxError(res.message || 'Không thể tải kết quả thưởng sao.');
       }
     } catch (_err) {
-      if (requestId === latestStudentRewardRequestIdRef.current) {
+      if (
+        requestId === latestStudentRewardRequestIdRef.current &&
+        activeSessionIdRef.current === targetSessionId &&
+        activeUserIdRef.current === targetUserId
+      ) {
         setStudentRewardTx(null);
         setRewardTxError('Lỗi mạng khi tải kết quả thưởng sao.');
       }
     } finally {
-      if (requestId === latestStudentRewardRequestIdRef.current) {
+      if (
+        requestId === latestStudentRewardRequestIdRef.current &&
+        activeSessionIdRef.current === targetSessionId &&
+        activeUserIdRef.current === targetUserId
+      ) {
         setIsRewardTxLoading(false);
       }
     }
@@ -561,6 +575,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   useEffect(() => {
     activeSessionIdRef.current = sessionId;
     activeParticipantIdRef.current = participantId;
+    activeUserIdRef.current = user?.id;
 
     try {
       if (typeof window !== 'undefined') {
@@ -794,6 +809,20 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       refreshedProfileKeyRef.current = null;
     }
   }, [sessionId, finishedSessionSnapshot]);
+
+  // Auth User Switch / Logout Guard: Clear reward state and invalidate in-flight requests
+  const previousUserIdRef = useRef(user?.id);
+  useEffect(() => {
+    if (previousUserIdRef.current !== user?.id) {
+      previousUserIdRef.current = user?.id;
+      activeUserIdRef.current = user?.id;
+      latestStudentRewardRequestIdRef.current += 1;
+      setStudentRewardTx(null);
+      setIsRewardTxLoading(false);
+      setRewardTxError(null);
+      refreshedProfileKeyRef.current = null;
+    }
+  }, [user?.id]);
 
   // Reset answer selection when authoritative question ID changes
   useEffect(() => {
@@ -1456,13 +1485,21 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   }
 
   // 8. PAUSED STATE BANNER
-  const isPaused = sessionData?.status === 'paused';
+  const isPaused = Boolean(sessionData?.id === sessionId && sessionData?.status === 'paused');
 
   // 9. FINISHED STATE: STUDENT/GUEST FINAL RESULTS & MINI PODIUM (State G)
-  const isFinished = sessionData?.status === 'finished' || (finishedSessionSnapshot?.status === 'finished' && finishedSessionSnapshot?.id === sessionId);
+  const isFinished = Boolean(
+    (sessionData?.id === sessionId && sessionData?.status === 'finished') ||
+    (finishedSessionSnapshot?.id === sessionId && finishedSessionSnapshot?.status === 'finished')
+  );
   if (isFinished) {
-    const currentSessionRewardEnabled = Boolean(sessionData?.reward_enabled || (finishedSessionSnapshot?.id === sessionId && finishedSessionSnapshot?.reward_enabled));
-    const currentSessionRewardStatus = sessionData?.reward_status || (finishedSessionSnapshot?.id === sessionId ? finishedSessionSnapshot?.reward_status : null);
+    const currentSessionRewardEnabled = Boolean(
+      (sessionData?.id === sessionId && sessionData?.reward_enabled) ||
+      (finishedSessionSnapshot?.id === sessionId && finishedSessionSnapshot?.reward_enabled)
+    );
+    const currentSessionRewardStatus =
+      (sessionData?.id === sessionId ? sessionData?.reward_status : null) ||
+      (finishedSessionSnapshot?.id === sessionId ? finishedSessionSnapshot?.reward_status : null);
 
     // 9A. REVIEW SUB-VIEW (R5 - Authenticated Students Only)
     if (!isGuestMode && studentViewMode === 'QUESTION_REVIEW') {

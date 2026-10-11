@@ -362,6 +362,82 @@ test('COMPETITION V1 R18 – REWARD FRONTEND BEHAVIORAL & INTEGRATION TEST SUITE
 
       assert.strictEqual(rewardStatus, 'pending', 'Phải giữ nguyên pending, không được tự ý ép thành completed');
     });
+
+    await t.test('5.4. sessionData.id không khớp sessionId KHÔNG làm isFinished của phòng mới thành true', () => {
+      // Giả lập sessionData từ realtime còn lưu phòng cũ đã finished
+      const staleSessionData = { id: 'room-OLD', status: 'finished' };
+      const currentSessionId = 'room-NEW';
+      const finishedSnapshot = null;
+
+      const isFinished = Boolean(
+        (staleSessionData?.id === currentSessionId && staleSessionData?.status === 'finished') ||
+        (finishedSnapshot?.id === currentSessionId && finishedSnapshot?.status === 'finished')
+      );
+
+      assert.strictEqual(isFinished, false, 'Dữ liệu phòng cũ còn sót lại không được làm phòng mới thành finished');
+    });
+
+    await t.test('5.5. Auth user thay đổi hoặc đăng xuất xóa sạch reward state và hủy in-flight request', () => {
+      let stateStudentRewardTx = { status: 'awarded', stars_awarded: 15 };
+      let stateIsLoading = true;
+      let stateError = 'some error';
+      let stateProfileKey = 'sess-1:user-1';
+      let latestReqId = 10;
+
+      // Giả lập auth change handler
+      const handleAuthChange = (_newUser) => {
+        latestReqId += 1;
+        stateStudentRewardTx = null;
+        stateIsLoading = false;
+        stateError = null;
+        stateProfileKey = null;
+      };
+
+      // User-1 đăng xuất hoặc đổi sang User-2
+      handleAuthChange(null);
+
+      assert.strictEqual(latestReqId, 11, 'Request ID phải tăng để vô hiệu hóa in-flight response');
+      assert.strictEqual(stateStudentRewardTx, null, 'Giao dịch của user cũ phải bị xóa');
+      assert.strictEqual(stateIsLoading, false);
+      assert.strictEqual(stateError, null);
+      assert.strictEqual(stateProfileKey, null);
+    });
+
+    await t.test('5.6. fetchStudentRewardTx bảo vệ đồng thời sessionId và userId khi response về muộn', async () => {
+      let activeSessionId = 'sess-1';
+      let activeUserId = 'user-1';
+      let latestReqId = 1;
+      let stateTx = null;
+      let profileRefreshed = false;
+
+      const simulateFetch = async (targetSessionId, targetUserId) => {
+        const reqId = ++latestReqId;
+        // Giả lập network delay
+        await new Promise((r) => setTimeout(r, 20));
+
+        // Simultaneous identity & concurrency guard
+        if (reqId !== latestReqId) return { dropped: true, reason: 'stale_req' };
+        if (targetSessionId !== activeSessionId) return { dropped: true, reason: 'session_mismatch' };
+        if (targetUserId !== activeUserId) return { dropped: true, reason: 'user_mismatch' };
+
+        stateTx = { status: 'awarded', stars_awarded: 15 };
+        profileRefreshed = true;
+        return { dropped: false };
+      };
+
+      // Bắt đầu fetch cho user-1 trên sess-1
+      const fetchPromise = simulateFetch('sess-1', 'user-1');
+
+      // Trong lúc in-flight, user đăng xuất hoặc đổi tài khoản sang user-2
+      activeUserId = 'user-2';
+      latestReqId += 1; // trigger bởi auth switch
+
+      const result = await fetchPromise;
+
+      assert.strictEqual(result.dropped, true, 'Response của user-1 phải bị drop khi user đã đổi');
+      assert.strictEqual(stateTx, null, 'State không được bị ghi đè bởi user cũ');
+      assert.strictEqual(profileRefreshed, false, 'refreshProfile không được gọi cho user cũ');
+    });
   });
 
   // =========================================================================
@@ -541,6 +617,26 @@ test('COMPETITION V1 R18 – REWARD FRONTEND BEHAVIORAL & INTEGRATION TEST SUITE
       assert.ok(
         studentPageContent.includes('Chưa xác minh được bản ghi thưởng sao'),
         'Student page phải hiển thị thông báo chưa xác minh được bản ghi thưởng sao'
+      );
+    });
+
+    await t.test('10.6. sessionData.id được kiểm tra khớp sessionId cho isFinished', () => {
+      assert.ok(
+        studentPageContent.includes("sessionData?.id === sessionId && sessionData?.status === 'finished'"),
+        'Student page phải kiểm tra sessionData?.id === sessionId && sessionData?.status === finished'
+      );
+    });
+
+    await t.test('10.7. fetchStudentRewardTx bảo vệ đồng thời cả targetSessionId và targetUserId', () => {
+      assert.ok(
+        studentPageContent.includes('targetUserId !== activeUserIdRef.current') ||
+        studentPageContent.includes('targetUserId !== user.id'),
+        'fetchStudentRewardTx phải kiểm tra targetUserId khớp user hiện tại'
+      );
+      assert.ok(
+        studentPageContent.includes('targetSessionId !== activeSessionIdRef.current') ||
+        studentPageContent.includes('targetSessionId !== sessionId'),
+        'fetchStudentRewardTx phải kiểm tra targetSessionId khớp session hiện tại'
       );
     });
   });
