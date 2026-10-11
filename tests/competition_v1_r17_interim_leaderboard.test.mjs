@@ -597,9 +597,12 @@ test('Competition V1 R17 - Interim Leaderboard & Security Hardening', async (t) 
   });
 
   // =========================================================================
-  // SCENARIO 12: CONCURRENCY RACE CONDITION & POST-QUERY ATOMICITY GUARD
+  // SCENARIO 12: CONCURRENCY RACE CONDITION SIMULATION & POST-QUERY ATOMICITY GUARD
   // =========================================================================
-  await t.test('12. Concurrency Race Condition: Atomicity guard blocks leak when Host transitions concurrently', async () => {
+  // NOTE: This test verifies the post-query atomicity guard logic in a controlled
+  // sequential transition within PGlite (single-connection WASM environment).
+  // It does NOT represent multi-connection concurrent interleaving stress testing.
+  await t.test('12. Concurrency Simulation: Atomicity guard state-verification in controlled sequential transition', async () => {
     // Create dedicated session for concurrency simulation
     await setAuthContext(hostId, 'authenticated');
     const cSessionRes = await db.query(
@@ -716,4 +719,82 @@ test('Competition V1 R17 - Interim Leaderboard & Security Hardening', async (t) 
     assert.equal(atomicityCheck.rows[0].result.success, false);
     assert.equal(atomicityCheck.rows[0].result.error_code, 'QUESTION_STILL_OPEN');
   });
+
+  // =========================================================================
+  // SCENARIO 13: RLS POLICIES & ROLE PRIVILEGE AUDIT (anon & authenticated roles)
+  // =========================================================================
+  await t.test('13. RLS Role Audit: Direct table query blocked under authenticated student & anon roles', async () => {
+    // 1. Verify RLS blocks direct SELECT on competition_scores for non-privileged authenticated student
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    const studentDirectScores = await db.query(
+      `SELECT * FROM public.competition_scores WHERE session_id = '${sessionId}'`
+    );
+    assert.equal(studentDirectScores.rows.length, 0, 'RLS must block direct score read for students');
+
+    // 2. Verify RLS allows direct SELECT on competition_scores for Host (scores_host_select policy)
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${hostId}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    const hostDirectScores = await db.query(
+      `SELECT * FROM public.competition_scores WHERE session_id = '${sessionId}'`
+    );
+    assert.ok(hostDirectScores.rows.length >= 2, 'Host can read scores via scores_host_select RLS policy');
+
+    // 3. Verify RLS allows direct SELECT on competition_scores for Admin (scores_admin_select policy)
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${adminId}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    const adminDirectScores = await db.query(
+      `SELECT * FROM public.competition_scores WHERE session_id = '${sessionId}'`
+    );
+    assert.ok(adminDirectScores.rows.length >= 2, 'Admin can read scores via scores_admin_select RLS policy');
+
+    // 4. Verify RLS blocks direct SELECT on competition_scores for anon role
+    await db.exec(`
+      SET ROLE anon;
+      SELECT set_config('request.jwt.claim.sub', '', false);
+      SELECT set_config('request.jwt.claim.role', 'anon', false);
+    `);
+    const anonDirectScores = await db.query(
+      `SELECT * FROM public.competition_scores WHERE session_id = '${sessionId}'`
+    );
+    assert.equal(anonDirectScores.rows.length, 0, 'RLS must block direct score read for anon');
+
+    // 5. Verify EXECUTE privilege on public wrapper for both authenticated and anon
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    const studentRpcCheck = await db.query(
+      `SELECT public.competition_get_leaderboard_snapshot($1) AS result`,
+      [sessionId]
+    );
+    // Should execute without permission denied error
+    assert.ok(studentRpcCheck.rows[0].result !== undefined);
+
+    await db.exec(`
+      SET ROLE anon;
+      SELECT set_config('request.jwt.claim.sub', '', false);
+      SELECT set_config('request.jwt.claim.role', 'anon', false);
+    `);
+    const anonRpcCheck = await db.query(
+      `SELECT public.competition_get_leaderboard_snapshot($1, $2, $3) AS result`,
+      [sessionId, guestPartId, guestRawToken]
+    );
+    // Should execute without permission denied error
+    assert.ok(anonRpcCheck.rows[0].result !== undefined);
+
+    // Reset back to postgres superuser
+    await db.exec(`SET ROLE postgres;`);
+  });
 });
+
