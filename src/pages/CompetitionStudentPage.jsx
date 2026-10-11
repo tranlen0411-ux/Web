@@ -266,6 +266,9 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     sessionData,
     currentQuestion,
     leaderboard,
+    interimLeaderboard,
+    interimQuestionId,
+    interimQuestionIndex,
     error: realtimeError,
     refreshAuthoritativeState,
     refreshFinalLeaderboard,
@@ -275,6 +278,20 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     guestToken: isGuestMode && !user ? guestToken : null,
     enabled: Boolean(sessionId && participantId && !(isGuestMode && user)),
   });
+
+  // Interim Leaderboard State and Current Student Entry (R17)
+  const isInterimLeaderboardActive = Boolean(
+    sessionData?.status === 'in_progress' &&
+    Array.isArray(interimLeaderboard) &&
+    interimLeaderboard.length > 0 &&
+    interimQuestionId &&
+    sessionData?.current_question_id === interimQuestionId
+  );
+
+  const studentInterimEntry = useMemo(() => {
+    if (!interimLeaderboard || !participantId) return null;
+    return interimLeaderboard.find((item) => item.participant_id === participantId) || null;
+  }, [interimLeaderboard, participantId]);
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 
@@ -1707,8 +1724,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
             </span>
           </div>
 
-          {/* Countdown Clock */}
-          {timeLeftSeconds !== null && (
+          {/* Countdown Clock or Closed Status Pill */}
+          {timeLeftSeconds !== null && !isInterimLeaderboardActive && (
             <div
               className={`flex items-center gap-2 px-4 py-1.5 rounded-xl font-black text-sm sm:text-base border-2 ${
                 timeLeftSeconds <= 5
@@ -1722,10 +1739,143 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
               <span>{timeLeftSeconds}s</span>
             </div>
           )}
+          {isInterimLeaderboardActive && (
+            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-black text-xs sm:text-sm bg-emerald-50 text-emerald-700 border-2 border-emerald-300">
+              <Trophy className="w-4 h-4 text-amber-500" />
+              <span>Đã chốt câu hỏi</span>
+            </div>
+          )}
         </div>
 
-        {/* Question & Options Content */}
-        <div className="p-6 sm:p-8">
+        {/* Interim Leaderboard View OR Question & Options Content */}
+        {isInterimLeaderboardActive ? (
+          <div className="p-6 sm:p-8 space-y-6">
+            {/* Interim Header Banner */}
+            <div className="bg-gradient-to-r from-sky-500 to-indigo-600 text-white rounded-2xl p-5 shadow-sm text-center">
+              <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider mb-2">
+                <Trophy className="w-3.5 h-3.5 text-amber-300" />
+                <span>Bảng Xếp Hạng Tạm Thời</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black mb-1">
+                Kết Quả Sau Câu {interimQuestionIndex || sessionData?.current_question_index || 1}
+              </h2>
+              <p className="text-sky-100 text-xs sm:text-sm font-medium">
+                Câu hỏi vừa kết thúc! Bảng xếp hạng tạm thời đã được cập nhật. Vui lòng chờ giáo viên chuyển sang câu tiếp theo...
+              </p>
+            </div>
+
+            {/* Personal Standing Card */}
+            {studentInterimEntry && (
+              <div className="bg-amber-50/80 border-2 border-amber-200 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white font-black text-lg flex items-center justify-center shadow-sm">
+                    #{studentInterimEntry.rank}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-amber-800">
+                      Thứ hạng của bạn
+                    </div>
+                    <div className="text-base sm:text-lg font-black text-slate-800 truncate max-w-[200px]">
+                      {studentInterimEntry.display_name}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 text-right">
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Tổng điểm
+                    </div>
+                    <div className="text-lg font-black text-emerald-600">
+                      {studentInterimEntry.total_score}đ
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Đúng
+                    </div>
+                    <div className="text-lg font-black text-sky-600">
+                      {studentInterimEntry.correct_count} câu
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Top Leaderboard Table */}
+            <div className="border-2 border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                  <Crown className="w-4 h-4 text-amber-500" />
+                  Top Thí Sinh Dẫn Đầu
+                </span>
+                <span className="text-[11px] font-bold text-slate-500">
+                  {interimLeaderboard.length} người tham gia
+                </span>
+              </div>
+
+              <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                {interimLeaderboard.slice(0, 10).map((item, idx) => {
+                  const isCurrent = item.participant_id === participantId;
+                  const isTop1 = item.rank === 1;
+                  const isTop2 = item.rank === 2;
+                  const isTop3 = item.rank === 3;
+
+                  return (
+                    <div
+                      key={item.participant_id || idx}
+                      className={`px-4 py-3 flex items-center justify-between gap-3 text-sm transition-colors ${
+                        isCurrent
+                          ? 'bg-sky-50 font-black border-l-4 border-sky-500'
+                          : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${
+                            isTop1
+                              ? 'bg-amber-400 text-amber-950 shadow-sm'
+                              : isTop2
+                              ? 'bg-slate-300 text-slate-800'
+                              : isTop3
+                              ? 'bg-amber-700/80 text-white'
+                              : 'bg-slate-100 text-slate-600 font-bold'
+                          }`}
+                        >
+                          {item.rank}
+                        </span>
+                        <span className={`truncate text-slate-800 ${isCurrent ? 'font-black text-sky-900' : 'font-bold'}`}>
+                          {item.display_name}
+                          {isCurrent && (
+                            <span className="ml-1.5 text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-sky-200 text-sky-800">
+                              Bạn
+                            </span>
+                          )}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-4 shrink-0 text-right">
+                        <span className="text-xs font-bold text-slate-500 hidden sm:inline">
+                          {item.correct_count} đúng
+                        </span>
+                        <span className="font-black text-emerald-600">
+                          {item.total_score}đ
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Waiting for Next Question Banner */}
+            <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl p-3.5 text-center flex items-center justify-center gap-2 text-xs font-bold text-slate-600">
+              <RefreshCw className="w-4 h-4 text-sky-500 animate-spin" />
+              <span>Đang chờ giáo viên mở câu hỏi tiếp theo... Hệ thống sẽ tự động chuyển màn hình!</span>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6 sm:p-8">
           {currentQuestion ? (
             <>
               {/* Question Text */}
@@ -2050,6 +2200,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
             </div>
           )}
         </div>
+      )}
       </div>
     </div>
   );

@@ -39,11 +39,17 @@ export function useStudentCompetitionRealtime({
   const [sessionData, setSessionData] = useState(null);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [interimLeaderboard, setInterimLeaderboard] = useState(null);
+  const [interimQuestionId, setInterimQuestionId] = useState(null);
+  const [interimQuestionIndex, setInterimQuestionIndex] = useState(null);
   const [error, setError] = useState(null);
 
   const channelRef = useRef(null);
   const pollTimerRef = useRef(null);
   const isPollingRef = useRef(false);
+  const isFetchingInterimLeaderboardRef = useRef(false);
+  const interimLeaderboardRequestIdRef = useRef(0);
+  const lastActiveQuestionIdRef = useRef(null);
   const isMountedRef = useRef(true);
   const isTerminalRef = useRef(false);
   const currentQuestionRef = useRef(currentQuestion);
@@ -136,19 +142,77 @@ export function useStudentCompetitionRealtime({
 
       // 2. Fetch Active Sanitized Question via RPC
       if (session.status === 'in_progress' || session.status === 'paused') {
+        // Detect question transition: auto-clear interim leaderboard on question advance
+        if (session.current_question_id !== lastActiveQuestionIdRef.current) {
+          lastActiveQuestionIdRef.current = session.current_question_id;
+          interimLeaderboardRequestIdRef.current += 1;
+          setInterimLeaderboard(null);
+          setInterimQuestionId(null);
+          setInterimQuestionIndex(null);
+        }
+
         const qRes = await getActiveQuestionSnapshot({ sessionId, participantId, guestToken });
         if (isMountedRef.current && qRes.success) {
           const activeQ = qRes.data?.question || null;
           currentQuestionRef.current = activeQ;
           setCurrentQuestion(activeQ);
         }
+
+        // Interim Leaderboard: If in_progress and question deadline has elapsed, attempt fetch
+        const isDeadlinePassed = session.question_deadline
+          ? new Date(session.question_deadline).getTime() <= Date.now()
+          : false;
+
+        if (
+          session.status === 'in_progress' &&
+          isDeadlinePassed &&
+          session.current_question_id &&
+          !isFetchingInterimLeaderboardRef.current
+        ) {
+          const currentReqId = ++interimLeaderboardRequestIdRef.current;
+          const targetQId = session.current_question_id;
+          const targetQIndex = session.current_question_index;
+          isFetchingInterimLeaderboardRef.current = true;
+
+          getLeaderboardSnapshot({ sessionId, participantId, guestToken })
+            .then((lbRes) => {
+              if (!isMountedRef.current) return;
+              // Stale-response guard: session or question must not have transitioned
+              if (
+                currentReqId !== interimLeaderboardRequestIdRef.current ||
+                sessionDataRef.current?.current_question_id !== targetQId ||
+                sessionDataRef.current?.status !== 'in_progress'
+              ) {
+                return;
+              }
+
+              if (lbRes.success && Array.isArray(lbRes.data?.leaderboard)) {
+                setInterimLeaderboard(lbRes.data.leaderboard);
+                setInterimQuestionId(targetQId);
+                setInterimQuestionIndex(targetQIndex);
+              } else if (lbRes.error_code === 'QUESTION_STILL_OPEN') {
+                // Treated silently as normal waiting state (zero toast, zero error state)
+              }
+            })
+            .catch(() => {
+              // Non-blocking catch to avoid interrupting student polling cycle
+            })
+            .finally(() => {
+              isFetchingInterimLeaderboardRef.current = false;
+            });
+        }
       } else if (session.status === 'waiting' || isTerminal) {
         currentQuestionRef.current = null;
         setCurrentQuestion(null);
+        setInterimLeaderboard(null);
+        setInterimQuestionId(null);
+        setInterimQuestionIndex(null);
+        lastActiveQuestionIdRef.current = null;
       }
 
       // 3. Fetch Leaderboard Snapshot if session is finished
       if (session.status === 'finished') {
+        setInterimLeaderboard(null);
         await refreshFinalLeaderboard();
       }
     } catch (err) {
@@ -266,6 +330,9 @@ export function useStudentCompetitionRealtime({
     sessionData,
     currentQuestion,
     leaderboard,
+    interimLeaderboard,
+    interimQuestionId,
+    interimQuestionIndex,
     error,
     refreshAuthoritativeState,
     refreshFinalLeaderboard,
