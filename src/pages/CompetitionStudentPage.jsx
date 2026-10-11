@@ -221,11 +221,12 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
 
   // Session & Identity State
   const initialSession = useMemo(() => {
-    if (isGuestMode && (loading || user)) {
+    // If authenticated user is present in Guest mode, do not resolve guest session
+    if (isGuestMode && user) {
       return { sessionId: null, participantId: null, guestToken: null, displayName: null };
     }
     return isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
-  }, [isGuestMode, loading, user]);
+  }, [isGuestMode, user]);
 
   const [sessionId, setSessionId] = useState(initialSession.sessionId);
   const [participantId, setParticipantId] = useState(initialSession.participantId);
@@ -374,6 +375,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
           window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
           window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
           window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_TOKEN_KEY);
         } else {
           window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
           window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
@@ -389,6 +391,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     restoredSessionPendingValidationRef.current = false;
     setSessionId(null);
     setParticipantId(null);
+    setGuestToken(null);
+    setGuestDisplayName('');
     setParticipantInfo(null);
     setSelectedOptionId(null);
     setSelectedOptionIds([]);
@@ -498,20 +502,31 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
               );
             }
           } else {
+            // Guard: Never clear storage while restoration or authoritative validation is in progress
+            if (isRestoring || restoredSessionPendingValidationRef.current) {
+              return;
+            }
             window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
             window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
+            window.sessionStorage?.removeItem(COMPETITION_GUEST_TOKEN_KEY);
             window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
           }
         } else {
           if (sessionId && isValidUUID(sessionId)) {
             window.sessionStorage?.setItem(STUDENT_SESSION_STORAGE_KEY, sessionId);
           } else {
+            if (isRestoring || restoredSessionPendingValidationRef.current) {
+              return;
+            }
             window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
           }
 
           if (participantId && isValidUUID(participantId)) {
             window.sessionStorage?.setItem(STUDENT_PARTICIPANT_STORAGE_KEY, participantId);
           } else {
+            if (isRestoring || restoredSessionPendingValidationRef.current) {
+              return;
+            }
             window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
           }
         }
@@ -519,7 +534,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     } catch (_e) {
       // Fail safe
     }
-  }, [sessionId, participantId, guestToken, guestDisplayName, participantInfo?.display_name, isGuestMode]);
+  }, [sessionId, participantId, guestToken, guestDisplayName, participantInfo?.display_name, isGuestMode, isRestoring]);
 
   // Mount Guard
   useEffect(() => {
@@ -542,6 +557,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       const initial = isGuestMode ? getInitialGuestSession() : getInitialStudentSession();
       if (!initial.sessionId || !initial.participantId) {
         setIsRestoring(false);
+        restoredSessionPendingValidationRef.current = false;
         return;
       }
 
@@ -969,6 +985,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
           window.sessionStorage?.removeItem(COMPETITION_GUEST_SESSION_ID_KEY);
           window.sessionStorage?.removeItem(COMPETITION_GUEST_PARTICIPANT_ID_KEY);
           window.sessionStorage?.removeItem(COMPETITION_GUEST_DISPLAY_NAME_KEY);
+          window.sessionStorage?.removeItem(COMPETITION_GUEST_TOKEN_KEY);
         } else {
           window.sessionStorage?.removeItem(STUDENT_SESSION_STORAGE_KEY);
           window.sessionStorage?.removeItem(STUDENT_PARTICIPANT_STORAGE_KEY);
@@ -984,6 +1001,8 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     restoredSessionPendingValidationRef.current = false;
     setSessionId(null);
     setParticipantId(null);
+    setGuestToken(null);
+    setGuestDisplayName('');
     setParticipantInfo(null);
     setSelectedOptionId(null);
     setSelectedOptionIds([]);
