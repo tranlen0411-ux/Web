@@ -1173,7 +1173,22 @@ BEGIN
         );
     END IF;
 
-    -- Materialize snapshot for active question before closing session
+    -- 6. Pre-flight Reward State Guard (BEFORE ANY DATA WRITES)
+    -- When rewards are enabled, verify that reward_status is in an allowed state ('pending' or 'completed').
+    -- If reward_status is invalid ('processing', 'failed', 'not_applicable', NULL, etc.), fail-closed immediately
+    -- WITHOUT materializing active question snapshot or updating competition_scores rank!
+    IF COALESCE(v_session.reward_enabled, false) THEN
+        IF v_session.reward_status NOT IN ('pending', 'completed') THEN
+            RETURN pg_catalog.jsonb_build_object(
+                'success', false,
+                'error_code', 'INVALID_REWARD_STATUS',
+                'message', 'Không thể kết thúc phòng thi: trạng thái trao thưởng không hợp lệ (' || COALESCE(v_session.reward_status, 'NULL') || ').',
+                'reward_status', v_session.reward_status
+            );
+        END IF;
+    END IF;
+
+    -- 7. Materialize snapshot for active question before closing session
     IF v_session.current_question_id IS NOT NULL THEN
         PERFORM private.competition_snapshot_question_result_internal(
             v_session.id,
@@ -1182,7 +1197,7 @@ BEGIN
         );
     END IF;
 
-    -- 6. Atomic Final Rank Calculation and Persistence
+    -- 8. Atomic Final Rank Calculation and Persistence
     WITH ranked AS (
         SELECT id,
                RANK() OVER (
@@ -1199,17 +1214,15 @@ BEGIN
     FROM ranked r
     WHERE s.id = r.id;
 
-    -- 7. Atomic Reward Processing (Mandatory when reward_enabled = true)
+    -- 9. Atomic Reward Processing (Mandatory when reward_enabled = true)
     IF COALESCE(v_session.reward_enabled, false) THEN
         IF v_session.reward_status = 'pending' THEN
             v_reward_res := private.competition_apply_rewards_internal(v_session.id);
             IF (v_reward_res->>'success')::BOOLEAN IS NOT TRUE THEN
-                RETURN pg_catalog.jsonb_build_object(
-                    'success', false,
-                    'error_code', COALESCE(v_reward_res->>'error_code', 'REWARD_APPLICATION_FAILED'),
-                    'message', COALESCE(v_reward_res->>'message', 'Lỗi xử lý trao thưởng cho phòng thi.'),
-                    'reward_status', v_session.reward_status
-                );
+                -- Abort entire transaction to roll back question snapshot and rank persistence
+                RAISE EXCEPTION 'REWARD_APPLICATION_FAILED: % (error_code: %)',
+                    COALESCE(v_reward_res->>'message', 'Lỗi xử lý trao thưởng'),
+                    COALESCE(v_reward_res->>'error_code', 'UNKNOWN_ERROR');
             END IF;
         ELSIF v_session.reward_status = 'completed' THEN
             -- Rewards were already applied previously (e.g. idempotent retry)
@@ -1219,19 +1232,10 @@ BEGIN
                 'reason', 'ALREADY_COMPLETED',
                 'reward_status', 'completed'
             );
-        ELSE
-            -- Fail-closed: reward_enabled is true, but reward_status is invalid ('processing', 'failed', 'not_applicable', NULL, etc.)
-            -- Must NOT finalize session to 'finished' and must NOT omit rewards silently!
-            RETURN pg_catalog.jsonb_build_object(
-                'success', false,
-                'error_code', 'INVALID_REWARD_STATUS',
-                'message', 'Không thể kết thúc phòng thi: trạng thái trao thưởng không hợp lệ (' || COALESCE(v_session.reward_status, 'NULL') || ').',
-                'reward_status', v_session.reward_status
-            );
         END IF;
     END IF;
 
-    -- 8. Update Session State to Finished and Clean Active Timers
+    -- 10. Update Session State to Finished and Clean Active Timers
     v_ended_at := pg_catalog.now();
     UPDATE public.competition_sessions
     SET status = 'finished',
@@ -1242,7 +1246,7 @@ BEGIN
         updated_at = v_ended_at
     WHERE id = v_session.id;
 
-    -- 9. Return Structured Success Response
+    -- 11. Return Structured Success Response
     RETURN pg_catalog.jsonb_build_object(
         'success', true,
         'session_id', v_session.id,

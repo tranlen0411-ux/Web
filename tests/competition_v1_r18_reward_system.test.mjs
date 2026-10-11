@@ -1251,122 +1251,263 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
   });
 
   // =========================================================================
-  // TC-16: Host Finish Session State Consistency: Comprehensive guard across pending, completed, processing, failed, and not_applicable
+  // TC-16: Atomic Finish Guard: Comprehensive state consistency with real participants & answers
   // =========================================================================
-  await t.test('TC-16: Host Finish Session State Consistency: Comprehensive guard across pending, completed, processing, failed, and not_applicable', async () => {
-    // 1. STATE: 'processing' when reward_enabled = true
-    // Expected: Fail-closed (INVALID_REWARD_STATUS), session status remains 'in_progress', NOT 'finished'
-    await setAuthContext(hostId, 'authenticated');
-    const sProc = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Processing'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sProc.session_id]);
-    await db.exec(`SET ROLE postgres; UPDATE public.competition_sessions SET reward_status = 'processing' WHERE id = '${sProc.session_id}';`);
+  await t.test('TC-16: Atomic Finish Guard: Comprehensive state consistency with real participants & answers', async () => {
+    // Helper to setup active session with real submitted answers
+    async function setupActiveSession(title, rewardEnabled, rewardStatusOverride) {
+      await setAuthContext(hostId, 'authenticated');
+      const createRes = await db.query(
+        `SELECT public.competition_host_create_session(
+          $1::text, 'Mô tả test'::text, 'individual'::text, 50::int, $2::jsonb, '[]'::jsonb, $3::boolean, '{}'::jsonb, false::boolean
+        ) AS res`,
+        [title, canonicalQuestions, rewardEnabled]
+      );
+      const sessionObj = createRes.rows[0].res;
+      const sessionId = sessionObj.session_id;
+      const roomCode = sessionObj.room_code;
+      const qRows = await db.query(
+        `SELECT id, question_order FROM public.competition_questions WHERE session_id = $1 ORDER BY question_order ASC`,
+        [sessionId]
+      );
+      const q1Id = qRows.rows[0].id;
+
+      // Student 1 joins & answers correct
+      await setAuthContext(student1Id, 'authenticated');
+      const p1Res = await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [roomCode]);
+      const p1 = p1Res.rows[0].res.participant_id || p1Res.rows[0].res.participant?.id;
+
+      // Student 2 joins & answers wrong
+      await setAuthContext(student2Id, 'authenticated');
+      const p2Res = await db.query(`SELECT public.competition_join_session($1::varchar, 'S2'::varchar) AS res`, [roomCode]);
+      const p2 = p2Res.rows[0].res.participant_id || p2Res.rows[0].res.participant?.id;
+
+      // Host starts session -> current_question_id = q1Id, status = in_progress
+      await setAuthContext(hostId, 'authenticated');
+      await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sessionId]);
+
+      // Submit answers
+      await setAuthContext(student1Id, 'authenticated');
+      await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sessionId, q1Id, p1]);
+
+      await setAuthContext(student2Id, 'authenticated');
+      await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_b"]'::jsonb, null::text)`, [sessionId, q1Id, p2]);
+
+      // Apply status override if requested
+      if (rewardStatusOverride) {
+        await db.exec(`SET ROLE postgres; UPDATE public.competition_sessions SET reward_status = '${rewardStatusOverride}' WHERE id = '${sessionId}';`);
+      }
+
+      await setAuthContext(null, 'postgres');
+      return { sessionId, roomCode, q1Id, p1, p2 };
+    }
+
+    // -----------------------------------------------------------------------
+    // A. Invalid States (processing, failed, not_applicable): Pre-flight fail-closed with ZERO partial mutations
+    // -----------------------------------------------------------------------
+    const invalidStatuses = ['processing', 'failed', 'not_applicable'];
+    for (const statusVal of invalidStatuses) {
+      await db.exec(`SET ROLE postgres; UPDATE public.profiles SET total_stars = 100 WHERE id IN ('${student1Id}', '${student2Id}');`);
+      const { sessionId, q1Id } = await setupActiveSession(`Phòng Invalid ${statusVal}`, true, statusVal);
+
+      // Verify Pre-finish baseline: rank is NULL, question snapshot is not materialized
+      const preRankRows = await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1`, [sessionId]);
+      assert.ok(preRankRows.rows.every(r => r.rank === null), 'Ranks must be NULL before finish');
+      const preSnapCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_question_result_snapshots WHERE session_id = $1 AND question_id = $2`, [sessionId, q1Id])).rows[0].c;
+      assert.equal(preSnapCount, 0, 'Question snapshot must not exist before finish');
+
+      // Host attempts to finish session
+      await setAuthContext(hostId, 'authenticated');
+      const finishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sessionId])).rows[0].res;
+      await setAuthContext(null, 'postgres');
+
+      // 1. Must fail-closed with INVALID_REWARD_STATUS
+      assert.equal(finishRes.success, false, `Finish must fail when reward_status is ${statusVal}`);
+      assert.equal(finishRes.error_code, 'INVALID_REWARD_STATUS');
+
+      // 2. Session status remains in_progress
+      const sessionRow = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sessionId])).rows[0];
+      assert.equal(sessionRow.status, 'in_progress', `Session must remain in_progress under ${statusVal}`);
+      assert.equal(sessionRow.reward_status, statusVal);
+
+      // 3. NO PARTIAL MUTATION: competition_scores.rank must remain NULL (zero leaked rank updates)
+      const postRankRows = await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1`, [sessionId]);
+      assert.ok(postRankRows.rows.every(r => r.rank === null), `competition_scores.rank must remain unmutated (NULL) under ${statusVal}`);
+
+      // 4. NO PARTIAL MUTATION: Question snapshot must remain unmaterialized (0 rows)
+      const postSnapCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_question_result_snapshots WHERE session_id = $1 AND question_id = $2`, [sessionId, q1Id])).rows[0].c;
+      assert.equal(postSnapCount, 0, `Question snapshot must NOT be materialized under ${statusVal}`);
+
+      // 5. profiles.total_stars unchanged
+      const s1Stars = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+      const s2Stars = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student2Id])).rows[0].total_stars;
+      assert.equal(s1Stars, 100, `Student 1 stars must remain 100 under ${statusVal}`);
+      assert.equal(s2Stars, 100, `Student 2 stars must remain 100 under ${statusVal}`);
+
+      // 6. Zero transactions generated in ledger
+      const txCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_reward_transactions WHERE session_id = $1`, [sessionId])).rows[0].c;
+      assert.equal(txCount, 0, `Zero reward transactions under ${statusVal}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // B. State: 'pending' (Standard Happy Path): Full execution & Idempotent retry
+    // -----------------------------------------------------------------------
+    await db.exec(`SET ROLE postgres; UPDATE public.profiles SET total_stars = 10 WHERE id = '${student1Id}'; UPDATE public.profiles SET total_stars = 20 WHERE id = '${student2Id}';`);
+    const { sessionId: pSessionId, q1Id: pQ1Id, p1: s1PartId, p2: s2PartId } = await setupActiveSession('Phòng Pending Chuẩn', true, null);
 
     await setAuthContext(hostId, 'authenticated');
-    const procFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sProc.session_id])).rows[0].res;
-    assert.equal(procFinishRes.success, false, 'Cannot finish session when reward_status is processing');
-    assert.equal(procFinishRes.error_code, 'INVALID_REWARD_STATUS');
-    const procDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sProc.session_id])).rows[0];
-    assert.equal(procDbStatus.status, 'in_progress', 'Session status must NOT be updated to finished');
-    assert.equal(procDbStatus.reward_status, 'processing');
+    const pFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [pSessionId])).rows[0].res;
+    await setAuthContext(null, 'postgres');
+    assert.equal(pFinishRes.success, true, 'Pending session must finish successfully');
+    assert.equal(pFinishRes.status, 'finished');
+    assert.equal(pFinishRes.reward_applied, true);
 
-    // 2. STATE: 'failed' when reward_enabled = true
-    // Expected: Fail-closed (INVALID_REWARD_STATUS), session status remains 'in_progress'
-    const sFail = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Failed'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sFail.session_id]);
-    await db.exec(`SET ROLE postgres; UPDATE public.competition_sessions SET reward_status = 'failed' WHERE id = '${sFail.session_id}';`);
+    // Verify Session & Question snapshot
+    const pSessionRow = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [pSessionId])).rows[0];
+    assert.equal(pSessionRow.status, 'finished');
+    assert.equal(pSessionRow.reward_status, 'completed');
+    const pSnapCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_question_result_snapshots WHERE session_id = $1 AND question_id = $2`, [pSessionId, pQ1Id])).rows[0].c;
+    assert.equal(pSnapCount, 1, 'Question snapshot must be materialized on finish');
+
+    // Verify official ranks (S1 correct = Rank 1, S2 wrong = Rank 2)
+    const s1Rank = (await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1 AND participant_id = $2`, [pSessionId, s1PartId])).rows[0].rank;
+    const s2Rank = (await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1 AND participant_id = $2`, [pSessionId, s2PartId])).rows[0].rank;
+    assert.equal(s1Rank, 1);
+    assert.equal(s2Rank, 2);
+
+    // Verify stars awarded: Top 1 (15), Top 2 (10)
+    const postS1Stars = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    const postS2Stars = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student2Id])).rows[0].total_stars;
+    assert.equal(postS1Stars, 25, '10 initial + 15 Top 1 = 25');
+    assert.equal(postS2Stars, 30, '20 initial + 10 Top 2 = 30');
+
+    // Retry idempotency check: Calling finish again or internal apply does not double-award
+    await setAuthContext(hostId, 'authenticated');
+    const retryRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [pSessionId])).rows[0].res;
+    await setAuthContext(null, 'postgres');
+    assert.equal(retryRes.success, false);
+    assert.equal(retryRes.error_code, 'SESSION_ALREADY_FINISHED');
+    const retryStars = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    assert.equal(retryStars, 25, 'Stars must not increase on retry');
+
+    // -----------------------------------------------------------------------
+    // C. State: 'completed' with an ALREADY EXISTING VALID REWARD LEDGER
+    // -----------------------------------------------------------------------
+    await db.exec(`SET ROLE postgres; UPDATE public.profiles SET total_stars = 50 WHERE id = '${student1Id}'; UPDATE public.profiles SET total_stars = 60 WHERE id = '${student2Id}';`);
+    const { sessionId: cSessionId } = await setupActiveSession('Phòng Completed Với Ledger Thật', true, null);
+
+    // Materialize ranks and apply rewards first (simulating pre-completed rewards)
+    await db.exec(`
+      SET ROLE postgres;
+      WITH ranked AS (
+        SELECT id, RANK() OVER (ORDER BY total_score DESC, correct_count DESC, total_response_time_ms ASC)::INTEGER AS calc_rank
+        FROM public.competition_scores WHERE session_id = '${cSessionId}'
+      )
+      UPDATE public.competition_scores s SET rank = r.calc_rank FROM ranked r WHERE s.id = r.id;
+    `);
+    const initialApplyRes = (await db.query(`SELECT private.competition_apply_rewards_internal($1::uuid) AS res`, [cSessionId])).rows[0].res;
+    assert.equal(initialApplyRes.success, true, 'Initial apply must succeed');
+    assert.equal(initialApplyRes.applied, true);
+
+    // Verify legitimate ledger exists
+    const ledgerCountBefore = (await db.query(`SELECT count(*)::int as c FROM public.competition_reward_transactions WHERE session_id = $1`, [cSessionId])).rows[0].c;
+    assert.equal(ledgerCountBefore, 2, 'Legitimate ledger rows must exist');
+    const s1StarsAfterLegit = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    assert.equal(s1StarsAfterLegit, 65, '50 initial + 15 = 65');
+
+    // Now Host calls finish_session on this session (reward_status is completed, but session was in_progress)
+    await setAuthContext(hostId, 'authenticated');
+    const cFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [cSessionId])).rows[0].res;
+    await setAuthContext(null, 'postgres');
+    assert.equal(cFinishRes.success, true, 'Finish must succeed for completed reward status');
+    assert.equal(cFinishRes.status, 'finished');
+    assert.equal(cFinishRes.reward_applied, false, 'No new rewards must be applied');
+
+    // Verify ledger count and stars DID NOT change
+    const ledgerCountAfter = (await db.query(`SELECT count(*)::int as c FROM public.competition_reward_transactions WHERE session_id = $1`, [cSessionId])).rows[0].c;
+    assert.equal(ledgerCountAfter, ledgerCountBefore, 'Ledger row count must remain exactly 2');
+    const s1StarsFinal = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    assert.equal(s1StarsFinal, 65, 'Stars must NOT be awarded a second time');
+
+    // -----------------------------------------------------------------------
+    // D. Atomic Rollback: Simulated failure during reward application after rank calculation
+    // -----------------------------------------------------------------------
+    const { sessionId: rbSessionId, q1Id: rbQ1Id } = await setupActiveSession('Phòng Test Rollback', true, null);
+
+    // Inject failure trigger on reward transactions insert
+    await db.exec(`
+      SET ROLE postgres;
+      CREATE OR REPLACE FUNCTION public.fail_reward_tx_insert()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'SIMULATED_REWARD_LEDGER_FAILURE';
+      END;
+      $$;
+
+      DROP TRIGGER IF EXISTS trg_fail_reward_tx_insert ON public.competition_reward_transactions;
+      CREATE TRIGGER trg_fail_reward_tx_insert
+      BEFORE INSERT ON public.competition_reward_transactions
+      FOR EACH ROW EXECUTE FUNCTION public.fail_reward_tx_insert();
+    `);
+
+    // Host calls finish_session -> Must abort transaction
+    await setAuthContext(hostId, 'authenticated');
+    let threwRollback = false;
+    try {
+      await db.query(`SELECT public.competition_host_finish_session($1::uuid)`, [rbSessionId]);
+    } catch (err) {
+      threwRollback = true;
+      assert.match(err.message, /SIMULATED_REWARD_LEDGER_FAILURE/);
+    }
+    await setAuthContext(null, 'postgres');
+    assert.ok(threwRollback, 'Finish must abort with exception when reward transaction fails');
+
+    // Verify FULL ATOMIC ROLLBACK:
+    // 1. Session status remains in_progress
+    const rbSessionRow = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [rbSessionId])).rows[0];
+    assert.equal(rbSessionRow.status, 'in_progress', 'Session status must rollback to in_progress');
+    assert.equal(rbSessionRow.reward_status, 'pending', 'reward_status must rollback to pending');
+
+    // 2. competition_scores.rank must be rolled back to NULL
+    const rbRankRows = await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1`, [rbSessionId]);
+    assert.ok(rbRankRows.rows.every(r => r.rank === null), 'Ranks must be rolled back to NULL');
+
+    // 3. Question snapshot must be rolled back to 0 rows
+    const rbSnapCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_question_result_snapshots WHERE session_id = $1 AND question_id = $2`, [rbSessionId, rbQ1Id])).rows[0].c;
+    assert.equal(rbSnapCount, 0, 'Question snapshot must be rolled back');
+
+    // 4. Ledger transactions must be 0
+    const rbTxCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_reward_transactions WHERE session_id = $1`, [rbSessionId])).rows[0].c;
+    assert.equal(rbTxCount, 0, 'Ledger transactions must be 0');
+
+    // Cleanup failure trigger
+    await db.exec(`
+      SET ROLE postgres;
+      DROP TRIGGER IF EXISTS trg_fail_reward_tx_insert ON public.competition_reward_transactions;
+      DROP FUNCTION IF EXISTS public.fail_reward_tx_insert();
+    `);
+
+    // -----------------------------------------------------------------------
+    // E. State: 'not_applicable' when reward_enabled = false (Normal Non-Reward Session)
+    // -----------------------------------------------------------------------
+    const { sessionId: nrSessionId, q1Id: nrQ1Id } = await setupActiveSession('Phòng Không Thưởng', false, null);
 
     await setAuthContext(hostId, 'authenticated');
-    const failFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sFail.session_id])).rows[0].res;
-    assert.equal(failFinishRes.success, false, 'Cannot finish session when reward_status is failed');
-    assert.equal(failFinishRes.error_code, 'INVALID_REWARD_STATUS');
-    const failDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sFail.session_id])).rows[0];
-    assert.equal(failDbStatus.status, 'in_progress', 'Session status must NOT be updated to finished');
-    assert.equal(failDbStatus.reward_status, 'failed');
+    const nrFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [nrSessionId])).rows[0].res;
+    await setAuthContext(null, 'postgres');
+    assert.equal(nrFinishRes.success, true, 'Non-reward session finishes successfully');
+    assert.equal(nrFinishRes.status, 'finished');
+    assert.equal(nrFinishRes.reward_applied, false);
 
-    // 3. STATE: 'not_applicable' when reward_enabled = true (Legacy / Inconsistent Room)
-    // Expected: Fail-closed (INVALID_REWARD_STATUS), session status remains 'in_progress', rewards NOT omitted silently
-    const sLegacy = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Cũ Không Nhất Quán'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sLegacy.session_id]);
-    await db.exec(`SET ROLE postgres; UPDATE public.competition_sessions SET reward_status = 'not_applicable' WHERE id = '${sLegacy.session_id}';`);
+    const nrSessionRow = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [nrSessionId])).rows[0];
+    assert.equal(nrSessionRow.status, 'finished');
+    assert.equal(nrSessionRow.reward_status, 'not_applicable');
 
-    await setAuthContext(hostId, 'authenticated');
-    const legacyFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sLegacy.session_id])).rows[0].res;
-    assert.equal(legacyFinishRes.success, false, 'Cannot finish session with reward_enabled=true but reward_status=not_applicable');
-    assert.equal(legacyFinishRes.error_code, 'INVALID_REWARD_STATUS');
-    const legacyDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sLegacy.session_id])).rows[0];
-    assert.equal(legacyDbStatus.status, 'in_progress', 'Legacy session must NOT finish without valid reward status');
-    assert.equal(legacyDbStatus.reward_status, 'not_applicable');
-
-    // 4. STATE: 'completed' when reward_enabled = true (Idempotent completion path)
-    // Expected: Succeeds, session transitions to finished, reward_applied = false (already applied)
-    const sComp = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Completed'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sComp.session_id]);
-    await db.exec(`SET ROLE postgres; UPDATE public.competition_sessions SET reward_status = 'completed' WHERE id = '${sComp.session_id}';`);
-
-    await setAuthContext(hostId, 'authenticated');
-    const compFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sComp.session_id])).rows[0].res;
-    assert.equal(compFinishRes.success, true, 'Finish succeeds when rewards are already completed');
-    assert.equal(compFinishRes.status, 'finished');
-    assert.equal(compFinishRes.reward_applied, false, 'No new rewards applied');
-    const compDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sComp.session_id])).rows[0];
-    assert.equal(compDbStatus.status, 'finished');
-    assert.equal(compDbStatus.reward_status, 'completed');
-
-    // 5. STATE: 'pending' when reward_enabled = true (Standard Happy Path)
-    // Expected: Succeeds, session transitions to finished, reward_applied = true, reward_status = completed
-    const sPending = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Pending'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sPending.session_id]);
-
-    const pendingFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sPending.session_id])).rows[0].res;
-    assert.equal(pendingFinishRes.success, true, 'Finish succeeds when reward_status is pending');
-    assert.equal(pendingFinishRes.status, 'finished');
-    assert.equal(pendingFinishRes.reward_applied, true, 'Rewards applied successfully');
-    const pendingDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sPending.session_id])).rows[0];
-    assert.equal(pendingDbStatus.status, 'finished');
-    assert.equal(pendingDbStatus.reward_status, 'completed');
-
-    // 6. STATE: 'not_applicable' when reward_enabled = false (Normal Non-Reward Session)
-    // Expected: Succeeds, session transitions to finished, reward_applied = false, reward_status remains not_applicable
-    const sDisabled = (await db.query(
-      `SELECT public.competition_host_create_session(
-        'Phòng Tắt Thưởng'::text, 'Test'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, false::boolean, '{}'::jsonb, false::boolean
-      ) AS res`,
-      [canonicalQuestions]
-    )).rows[0].res;
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sDisabled.session_id]);
-
-    const disabledFinishRes = (await db.query(`SELECT public.competition_host_finish_session($1::uuid) AS res`, [sDisabled.session_id])).rows[0].res;
-    assert.equal(disabledFinishRes.success, true, 'Finish succeeds when rewards are disabled');
-    assert.equal(disabledFinishRes.status, 'finished');
-    assert.equal(disabledFinishRes.reward_applied, false);
-    const disabledDbStatus = (await db.query(`SELECT status, reward_status FROM public.competition_sessions WHERE id = $1`, [sDisabled.session_id])).rows[0];
-    assert.equal(disabledDbStatus.status, 'finished');
-    assert.equal(disabledDbStatus.reward_status, 'not_applicable');
+    // Snapshot and ranks ARE updated normally for non-reward sessions
+    const nrSnapCount = (await db.query(`SELECT count(*)::int as c FROM public.competition_question_result_snapshots WHERE session_id = $1 AND question_id = $2`, [nrSessionId, nrQ1Id])).rows[0].c;
+    assert.equal(nrSnapCount, 1);
+    const nrRankRows = await db.query(`SELECT rank FROM public.competition_scores WHERE session_id = $1`, [nrSessionId]);
+    assert.ok(nrRankRows.rows.every(r => r.rank !== null), 'Ranks are populated for non-reward sessions');
   });
 });
 
