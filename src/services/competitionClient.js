@@ -641,7 +641,7 @@ export async function getSessionSnapshot(sessionId) {
   try {
     const { data, error, status } = await supabase
       .from('competition_sessions')
-      .select('id, room_code, title, description, mode, status, max_participants, current_question_index, current_question_id, question_deadline, review_enabled, started_at, ended_at')
+      .select('id, room_code, title, description, mode, status, max_participants, current_question_index, current_question_id, question_deadline, review_enabled, reward_enabled, reward_config, reward_status, started_at, ended_at')
       .eq('id', sessionId)
       .maybeSingle();
 
@@ -842,6 +842,54 @@ export async function getHostQuestionAnalytics(sessionId) {
 
     if (error) return normalizeResponse(null, error.message);
     return normalizeResponse(data, 'Không thể lấy dữ liệu phân tích câu hỏi.');
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
+// ============================================================================
+// 5B. REWARD LEDGER CLIENT METHODS (R18)
+// ============================================================================
+
+/**
+ * Host: Reads reward transactions ledger for the session (governed by Host RLS).
+ */
+export async function hostGetRewardTransactions(sessionId) {
+  if (!sessionId || !isValidSessionUUID(sessionId)) {
+    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không hợp lệ.' };
+  }
+  try {
+    const { data, error } = await supabase
+      .from('competition_reward_transactions')
+      .select('id, session_id, participant_id, user_id, participant_display_name, rank, reward_tier, stars_awarded, status, created_at')
+      .eq('session_id', sessionId)
+      .order('rank', { ascending: true });
+
+    if (error) return normalizeResponse(null, error.message);
+    return { success: true, data: data || [] };
+  } catch (err) {
+    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
+  }
+}
+
+/**
+ * Student: Reads own reward transaction row for the session (governed by Student RLS).
+ * Only authenticated students can read their own row (user_id = auth.uid()).
+ */
+export async function studentGetRewardTransaction(sessionId, userId) {
+  if (!sessionId || !isValidSessionUUID(sessionId) || !userId) {
+    return { success: false, error_code: 'INVALID_PARAMS', message: 'Thiếu thông tin tra cứu phần thưởng.' };
+  }
+  try {
+    const { data, error } = await supabase
+      .from('competition_reward_transactions')
+      .select('id, session_id, participant_id, user_id, participant_display_name, rank, reward_tier, stars_awarded, status, created_at')
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) return normalizeResponse(null, error.message);
+    return { success: true, data: data || null };
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
   }

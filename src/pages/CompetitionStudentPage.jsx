@@ -31,6 +31,7 @@ import {
   getLeaderboardSnapshot,
   getSessionSnapshot,
   studentGetReview,
+  studentGetRewardTransaction,
 } from '../services/competitionClient.js';
 import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRealtime.js';
 import { StudentQuestionReviewView } from '../components/competition/StudentQuestionReviewView.jsx';
@@ -217,7 +218,7 @@ export const isStudentAuthOrPermanentError = (errorCode, status) => {
 export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const location = useLocation();
   const isGuestMode = Boolean(isPublicJoin || (typeof window !== 'undefined' && location?.pathname?.startsWith('/competition/join')));
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, refreshProfile } = useAuth();
 
   // Session & Identity State
   const initialSession = useMemo(() => {
@@ -301,6 +302,68 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const [reviewData, setReviewData] = useState(null);
   const [isReviewLoading, setIsReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
+
+  // Reward V1 State & Guard Refs (R18 Authenticated Student Ledger)
+  const [finishedSessionSnapshot, setFinishedSessionSnapshot] = useState(null);
+  const [studentRewardTx, setStudentRewardTx] = useState(null);
+  const [isRewardTxLoading, setIsRewardTxLoading] = useState(false);
+  const [rewardTxError, setRewardTxError] = useState(null);
+  const latestStudentRewardRequestIdRef = useRef(0);
+  const hasRefreshedProfileRef = useRef(false);
+
+  // Fetch Authoritative Student Reward Transaction (R18 Student View)
+  const fetchStudentRewardTx = useCallback(async (targetSessionIdParam, targetUserIdParam) => {
+    const targetSessionId = targetSessionIdParam || sessionId;
+    const targetUserId = targetUserIdParam || user?.id;
+
+    // Guest Mode or Unauthenticated: Strictly NO queries to ledger table (Revoked for Anon)
+    if (isGuestMode || !targetUserId || !targetSessionId || !isValidUUID(targetSessionId)) {
+      setStudentRewardTx(null);
+      setIsRewardTxLoading(false);
+      setRewardTxError(null);
+      return;
+    }
+
+    const requestId = ++latestStudentRewardRequestIdRef.current;
+    setIsRewardTxLoading(true);
+    setRewardTxError(null);
+
+    try {
+      const res = await studentGetRewardTransaction(targetSessionId, targetUserId);
+      if (requestId !== latestStudentRewardRequestIdRef.current) return;
+
+      if (res.success) {
+        setStudentRewardTx(res.data);
+        setRewardTxError(null);
+        // If awarded stars and not yet refreshed profile, refresh profile once
+        if (
+          res.data &&
+          res.data.reward_status === 'awarded' &&
+          Number(res.data.stars_awarded) > 0 &&
+          !hasRefreshedProfileRef.current
+        ) {
+          hasRefreshedProfileRef.current = true;
+          if (typeof refreshProfile === 'function') {
+            try {
+              await refreshProfile();
+            } catch (_err) {
+              // Fail safe on profile refresh
+            }
+          }
+        }
+      } else {
+        setRewardTxError(res.message || 'Không thể tải kết quả thưởng sao.');
+      }
+    } catch (_err) {
+      if (requestId === latestStudentRewardRequestIdRef.current) {
+        setRewardTxError('Lỗi mạng khi tải kết quả thưởng sao.');
+      }
+    } finally {
+      if (requestId === latestStudentRewardRequestIdRef.current) {
+        setIsRewardTxLoading(false);
+      }
+    }
+  }, [sessionId, user?.id, isGuestMode, refreshProfile]);
 
   // Authoritative Status & Question Refs
   const sessionStatusRef = useRef(sessionData?.status);
@@ -629,6 +692,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
             }
           }
 
+          setFinishedSessionSnapshot(session);
+          if (session.reward_enabled && !isGuestMode && user?.id) {
+            fetchStudentRewardTx(initial.sessionId, user.id);
+          }
+
           restoredSessionPendingValidationRef.current = false;
           return;
         }
@@ -697,8 +765,12 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       setSubmitResult(null);
       setSubmitError(null);
       setTimeLeftSeconds(null);
+
+      if (sessionData.reward_enabled && !isGuestMode && user?.id && sessionId) {
+        fetchStudentRewardTx(sessionId, user.id);
+      }
     }
-  }, [sessionData?.status]);
+  }, [sessionData?.status, sessionData?.reward_enabled, isGuestMode, user?.id, sessionId, fetchStudentRewardTx]);
 
   // Reset answer selection when authoritative question ID changes
   useEffect(() => {
@@ -1358,7 +1430,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
   const isPaused = sessionData?.status === 'paused';
 
   // 9. FINISHED STATE: STUDENT/GUEST FINAL RESULTS & MINI PODIUM (State G)
-  if (sessionData?.status === 'finished') {
+  const isFinished = sessionData?.status === 'finished' || finishedSessionSnapshot?.status === 'finished';
+  if (isFinished) {
+    const currentSessionRewardEnabled = Boolean(sessionData?.reward_enabled || finishedSessionSnapshot?.reward_enabled);
+    const currentSessionRewardStatus = sessionData?.reward_status || finishedSessionSnapshot?.reward_status || 'completed';
+
     // 9A. REVIEW SUB-VIEW (R5 - Authenticated Students Only)
     if (!isGuestMode && studentViewMode === 'QUESTION_REVIEW') {
       return (
@@ -1476,6 +1552,112 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                   </div>
                 </div>
               </div>
+
+              {/* R18 Star Reward Settlement Card (Authoritative Student Ledger) */}
+              {currentSessionRewardEnabled && (
+                <div className="mt-6 pt-5 border-t-2 border-amber-200/80">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">⭐</span>
+                      <span className="text-sm font-black text-amber-950 uppercase tracking-wide">
+                        Phần Thưởng Sao Đấu Trường
+                      </span>
+                    </div>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                      currentSessionRewardStatus === 'completed'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : currentSessionRewardStatus === 'failed'
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}>
+                      {currentSessionRewardStatus === 'completed' ? 'Đã tổng kết sao' : 'Đang xử lý sao'}
+                    </span>
+                  </div>
+
+                  {isGuestMode ? (
+                    <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 text-left">
+                      <div className="flex items-start gap-2.5">
+                        <span className="text-base text-amber-600 font-bold shrink-0 mt-0.5">⭐ 0</span>
+                        <div>
+                          <div className="text-xs font-bold text-amber-900 mb-0.5">
+                            Chế độ Khách (0 sao)
+                          </div>
+                          <div className="text-xs text-amber-800/90 leading-relaxed">
+                            Bạn đang tham gia với tư cách Khách nên không được ghi nhận sao vào tài khoản. Hãy đăng nhập tài khoản học sinh ở các trận đấu sau để tích lũy sao đổi quà nhé!
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : isRewardTxLoading && !studentRewardTx ? (
+                    <div className="bg-white/80 border border-amber-200 rounded-2xl p-4 text-center text-xs text-amber-800 font-semibold flex items-center justify-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />
+                      Đang đồng bộ kết quả thưởng sao từ máy chủ...
+                    </div>
+                  ) : rewardTxError && !studentRewardTx ? (
+                    <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center justify-between gap-3 text-left">
+                      <div className="flex items-center gap-2 text-xs text-red-700">
+                        <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                        <span>{rewardTxError}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => fetchStudentRewardTx(sessionId, user?.id)}
+                        className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs shrink-0"
+                      >
+                        Thử lại
+                      </button>
+                    </div>
+                  ) : studentRewardTx?.reward_status === 'awarded' ? (
+                    <div className="bg-gradient-to-r from-amber-400 via-amber-300 to-yellow-300 border-2 border-amber-400 rounded-2xl p-4 text-left shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-white/90 border border-amber-300 flex items-center justify-center text-2xl shadow-xs shrink-0">
+                            ⭐
+                          </div>
+                          <div>
+                            <div className="text-sm sm:text-base font-black text-amber-950">
+                              Chúc mừng bạn đã nhận được +{studentRewardTx.stars_awarded} sao!
+                            </div>
+                            <div className="text-xs text-amber-900/90 font-medium mt-0.5">
+                              {studentRewardTx.rank && studentRewardTx.rank <= 3
+                                ? `Phần thưởng xuất sắc đạt Hạng ${studentRewardTx.rank} chung cuộc`
+                                : 'Phần thưởng tham gia tích cực đấu trường'} • Đã cộng vào tổng sao của bạn
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0 hidden sm:block">
+                          <span className="text-2xl font-black text-amber-950">+{studentRewardTx.stars_awarded}</span>
+                          <span className="text-xs font-bold text-amber-900 block">sao thưởng</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : studentRewardTx?.reward_status === 'skipped_no_submission' ? (
+                    <div className="bg-slate-100/90 border border-slate-300 rounded-2xl p-4 text-left">
+                      <div className="flex items-start gap-2.5">
+                        <span className="text-base text-slate-500 font-bold shrink-0 mt-0.5">0 ⭐</span>
+                        <div>
+                          <div className="text-xs font-bold text-slate-700 mb-0.5">
+                            Chưa đủ điều kiện nhận sao (0 sao)
+                          </div>
+                          <div className="text-xs text-slate-600 leading-relaxed">
+                            Bạn chưa gửi câu trả lời nào trong trận đấu nên chưa đạt điều kiện nhận sao (cần nộp ít nhất 1 câu). Cố gắng tích cực trả lời ở trận đấu sau nhé!
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : studentRewardTx?.reward_status === 'skipped_guest' ? (
+                    <div className="bg-slate-100/90 border border-slate-300 rounded-2xl p-4 text-left">
+                      <div className="text-xs text-slate-600">
+                        Tài khoản khách không đủ điều kiện nhận sao thưởng (0 ⭐).
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-center text-xs text-slate-500">
+                      Hệ thống đang hoàn tất quá trình ghi sổ phần thưởng.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 mb-8 text-center sm:text-left flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -1654,8 +1836,15 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                         {item.correct_count ?? 0}
                       </div>
 
-                      <div className="w-24 text-right text-sm font-black text-emerald-600">
-                        {item.total_score ?? 0} đ
+                      <div className="w-24 text-right">
+                        <span className="text-sm font-black text-emerald-600 block">
+                          {item.total_score ?? 0} đ
+                        </span>
+                        {isCurrentParticipant && currentSessionRewardEnabled && studentRewardTx && studentRewardTx.reward_status === 'awarded' && (
+                          <span className="text-[11px] font-black text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300 inline-block mt-0.5 shadow-2xs">
+                            +{studentRewardTx.stars_awarded} ⭐
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
