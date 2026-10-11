@@ -115,7 +115,16 @@ async function setupDatabase() {
   // Migration 15: R18 Reward V1 System (Target Under Test)
   const m15Path = path.resolve('supabase/migrations/20261013000001_competition_v1_r18_reward_system.sql');
   await db.exec(fs.readFileSync(m15Path, 'utf8'));
+
+  // Production-accurate profiles table privileges:
+  // authenticated and anon can SELECT, but CANNOT update total_stars or total_coins directly
+  await db.exec(`
+    REVOKE ALL ON TABLE public.profiles FROM anon, authenticated, PUBLIC;
+    GRANT SELECT ON TABLE public.profiles TO authenticated, anon;
+    GRANT UPDATE (full_name, avatar_url) ON TABLE public.profiles TO authenticated;
+  `);
 }
+
 
 async function setAuthContext(userId = null, role = 'authenticated') {
   const dbRole = role === 'anon' ? 'anon' : role === 'postgres' ? 'postgres' : 'authenticated';
@@ -506,8 +515,8 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
     );
     const q1Id = qRows.rows[0].id;
 
-    // Reset initial stars
-    await db.exec(`UPDATE public.profiles SET total_stars = 0 WHERE id IN ('${student1Id}', '${student2Id}', '${student3Id}')`);
+    // Reset initial stars (performed under postgres role as authenticated is barred from direct total_stars update)
+    await db.exec(`SET ROLE postgres; UPDATE public.profiles SET total_stars = 0 WHERE id IN ('${student1Id}', '${student2Id}', '${student3Id}');`);
 
     // Join Student 1 & Student 2 & Student 3
     await setAuthContext(student1Id, 'authenticated');
@@ -739,9 +748,137 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
   });
 
   // =========================================================================
-  // TC-7: RLS Security Policies on competition_reward_transactions
+  // TC-7: Grants Audit: has_table_privilege and has_column_privilege
   // =========================================================================
-  await t.test('TC-7: RLS Security: Students only see their own transactions, Host sees session, Client cannot insert/update', async () => {
+  await t.test('TC-7: Grants Audit: has_table_privilege and has_column_privilege verify least privilege', async () => {
+    // 1. Check ledger table privileges for anon, authenticated, postgres
+    const privRows = await db.query(`
+      SELECT 
+        has_table_privilege('anon', 'public.competition_reward_transactions', 'SELECT') AS anon_select,
+        has_table_privilege('anon', 'public.competition_reward_transactions', 'INSERT') AS anon_insert,
+        has_table_privilege('anon', 'public.competition_reward_transactions', 'UPDATE') AS anon_update,
+        has_table_privilege('anon', 'public.competition_reward_transactions', 'DELETE') AS anon_delete,
+        has_table_privilege('anon', 'public.competition_reward_transactions', 'TRUNCATE') AS anon_truncate,
+        has_table_privilege('authenticated', 'public.competition_reward_transactions', 'SELECT') AS auth_select,
+        has_table_privilege('authenticated', 'public.competition_reward_transactions', 'INSERT') AS auth_insert,
+        has_table_privilege('authenticated', 'public.competition_reward_transactions', 'UPDATE') AS auth_update,
+        has_table_privilege('authenticated', 'public.competition_reward_transactions', 'DELETE') AS auth_delete,
+        has_table_privilege('authenticated', 'public.competition_reward_transactions', 'TRUNCATE') AS auth_truncate
+    `);
+    const p = privRows.rows[0];
+    assert.equal(p.anon_select, false, 'anon role cannot SELECT ledger');
+    assert.equal(p.anon_insert, false, 'anon role cannot INSERT ledger');
+    assert.equal(p.anon_update, false, 'anon role cannot UPDATE ledger');
+    assert.equal(p.anon_delete, false, 'anon role cannot DELETE ledger');
+    assert.equal(p.anon_truncate, false, 'anon role cannot TRUNCATE ledger');
+
+    assert.equal(p.auth_select, true, 'authenticated role can SELECT ledger (filtered by RLS)');
+    assert.equal(p.auth_insert, false, 'authenticated role CANNOT INSERT ledger');
+    assert.equal(p.auth_update, false, 'authenticated role CANNOT UPDATE ledger');
+    assert.equal(p.auth_delete, false, 'authenticated role CANNOT DELETE ledger');
+    assert.equal(p.auth_truncate, false, 'authenticated role CANNOT TRUNCATE ledger');
+
+    // 2. Check profiles column privileges (Production parity)
+    const colPrivRows = await db.query(`
+      SELECT 
+        has_column_privilege('authenticated', 'public.profiles', 'total_stars', 'SELECT') AS auth_select_stars,
+        has_column_privilege('authenticated', 'public.profiles', 'total_stars', 'UPDATE') AS auth_update_stars,
+        has_column_privilege('anon', 'public.profiles', 'total_stars', 'SELECT') AS anon_select_stars,
+        has_column_privilege('anon', 'public.profiles', 'total_stars', 'UPDATE') AS anon_update_stars,
+        has_column_privilege('authenticated', 'public.profiles', 'full_name', 'UPDATE') AS auth_update_name
+    `);
+    const cp = colPrivRows.rows[0];
+    assert.equal(cp.auth_select_stars, true, 'authenticated can SELECT total_stars');
+    assert.equal(cp.auth_update_stars, false, 'authenticated CANNOT UPDATE total_stars directly (Production parity)');
+    assert.equal(cp.anon_update_stars, false, 'anon CANNOT UPDATE total_stars');
+    assert.equal(cp.auth_update_name, true, 'authenticated can update allowed columns like full_name');
+
+    // 3. Direct UPDATE attempt on profiles.total_stars by authenticated student fails with 42501
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    try {
+      await db.query(`UPDATE public.profiles SET total_stars = 9999 WHERE id = '${student1Id}'`);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Direct UPDATE on profiles.total_stars by authenticated role blocked with 42501 permission denied');
+    }
+    await db.exec(`SET ROLE postgres;`);
+  });
+
+  // =========================================================================
+  // TC-8: Ledger Mutation Denial with VALID Foreign Keys
+  // =========================================================================
+  await t.test('TC-8: Ledger Mutation Denial: Client cannot INSERT/UPDATE/DELETE ledger even with valid FKs (Error 42501)', async () => {
+    // 1. Create a session and participant to obtain 100% valid Foreign Keys
+    await setAuthContext(hostId, 'authenticated');
+    const createRes = await db.query(
+      `SELECT public.competition_host_create_session(
+        'Đấu Trường FK Valid'::text,
+        'Kiểm thử FK hợp lệ'::text,
+        'individual'::text,
+        50::int,
+        $1::jsonb,
+        '[]'::jsonb,
+        true::boolean,
+        '{}'::jsonb,
+        false::boolean
+      ) AS res`,
+      [canonicalQuestions]
+    );
+    const sessionObj = createRes.rows[0].res;
+    const validSessionId = sessionObj.session_id;
+    const roomCode = sessionObj.room_code;
+
+    await setAuthContext(student1Id, 'authenticated');
+    const p1Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [roomCode])).rows[0].res;
+    const validPartId = p1Res.participant?.id || p1Res.participant_id;
+
+    // 2. Direct INSERT attempt under authenticated role WITH 100% VALID FKs
+    // Must fail specifically with 42501 (permission denied), NOT 23503 (foreign_key_violation)!
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    try {
+      await db.query(`
+        INSERT INTO public.competition_reward_transactions (
+          session_id, participant_id, user_id, participant_display_name, session_room_code, session_title, rank, reward_tier, stars_awarded, status
+        ) VALUES (
+          '${validSessionId}', '${validPartId}', '${student1Id}', 'Student 1', '${roomCode}', 'Title', 1, 'top1', 9999, 'awarded'
+        )
+      `);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Direct INSERT with VALID FKs blocked strictly by 42501 permission denied, NOT FK error');
+    }
+
+    // 3. Direct UPDATE attempt under authenticated role
+    try {
+      await db.query(`UPDATE public.competition_reward_transactions SET stars_awarded = 9999 WHERE session_id = '${validSessionId}'`);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Direct UPDATE blocked strictly by 42501 permission denied');
+    }
+
+    // 4. Direct DELETE attempt under authenticated role
+    try {
+      await db.query(`DELETE FROM public.competition_reward_transactions WHERE session_id = '${validSessionId}'`);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Direct DELETE blocked strictly by 42501 permission denied');
+    }
+
+    await db.exec(`SET ROLE postgres;`);
+  });
+
+  // =========================================================================
+  // TC-9: RLS Read Security on Ledger
+  // =========================================================================
+  await t.test('TC-9: RLS Read Policies: Student reads only own rows, Host reads session, Anon blocked', async () => {
     // 1. Check with Student 1 auth context under authenticated role
     await db.exec(`
       SET ROLE authenticated;
@@ -754,36 +891,7 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
       assert.equal(r.user_id, student1Id, 'Student only sees their own transactions via RLS');
     }
 
-    // 2. Direct INSERT attempt by Student (Must fail)
-    let insertFailed = false;
-    try {
-      await db.query(`
-        INSERT INTO public.competition_reward_transactions (
-          session_id, participant_id, user_id, participant_display_name, session_room_code, session_title, rank, reward_tier, stars_awarded, status
-        ) VALUES (
-          gen_random_uuid(), gen_random_uuid(), '${student1Id}', 'Hacked', 'CODE', 'Title', 1, 'top1', 9999, 'awarded'
-        )
-      `);
-    } catch (_err) {
-      insertFailed = true;
-    }
-    assert.ok(insertFailed, 'Client direct INSERT fails under RLS / foreign key restrictions');
-
-    // 3. Direct UPDATE attempt by Student (Must fail with permission denied)
-    let updateFailed = false;
-    try {
-      await db.query(`
-        UPDATE public.competition_reward_transactions
-        SET stars_awarded = 9999
-        WHERE user_id = '${student1Id}'
-      `);
-    } catch (_err) {
-      updateFailed = true;
-    }
-    assert.ok(updateFailed, 'Client direct UPDATE fails under permissions / RLS restrictions');
-
-
-    // 4. Host view under authenticated role
+    // 2. Host view under authenticated role
     await db.exec(`
       SET ROLE authenticated;
       SELECT set_config('request.jwt.claim.sub', '${hostId}', false);
@@ -792,37 +900,85 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
     const hostView = await db.query(`SELECT session_id FROM public.competition_reward_transactions`);
     assert.ok(hostView.rows.length > 0, 'Host can see transactions for sessions they hosted');
 
-    // 5. Anon view under anon role (Must fail with permission denied 42501 because REVOKE ALL FROM anon)
+    // 3. Anon view under anon role (Blocked with 42501 because REVOKE ALL FROM anon)
     await db.exec(`
       SET ROLE anon;
       SELECT set_config('request.jwt.claim.sub', '', false);
       SELECT set_config('request.jwt.claim.role', 'anon', false);
     `);
-    let anonSelectFailed = false;
     try {
       await db.query(`SELECT session_id FROM public.competition_reward_transactions`);
+      assert.fail('Should have failed with 42501');
     } catch (err) {
-      anonSelectFailed = true;
-      assert.equal(err.code, '42501', 'Must fail with permission denied (42501)');
+      assert.equal(err.code, '42501', 'Anon SELECT on ledger blocked with 42501 permission denied');
     }
-    assert.ok(anonSelectFailed, 'Anon cannot select from competition_reward_transactions');
 
-    // Reset back to postgres superuser
     await db.exec(`SET ROLE postgres;`);
   });
 
+  // =========================================================================
+  // TC-10: Foreign Key Isolation (FK vs Privilege)
+  // =========================================================================
+  await t.test('TC-10: Foreign Key Isolation: Invalid composite FK blocked by 23503 foreign_key_violation under privileged role', async () => {
+    // Run under postgres role (which has INSERT privilege) to isolate Foreign Key validation
+    await db.exec(`SET ROLE postgres;`);
+    try {
+      await db.query(`
+        INSERT INTO public.competition_reward_transactions (
+          session_id, participant_id, user_id, participant_display_name, session_room_code, session_title, rank, reward_tier, stars_awarded, status
+        ) VALUES (
+          gen_random_uuid(), gen_random_uuid(), '${student1Id}', 'Ghost', 'ROOM', 'Title', 1, 'top1', 15, 'awarded'
+        )
+      `);
+      assert.fail('Should have failed with 23503');
+    } catch (err) {
+      assert.equal(err.code, '23503', 'Invalid FK must fail specifically with 23503 (foreign_key_violation)');
+    }
+  });
 
   // =========================================================================
-  // TC-8: Final Leaderboard Snapshot RPC matches reward tier rank and scores
+  // TC-11: RPC Privileges Enforcement
   // =========================================================================
-  await t.test('TC-8: Final Leaderboard Snapshot RPC matches reward tier rank and scores', async () => {
+  await t.test('TC-11: RPC Privileges: Direct invocation of internal reward RPC blocked with 42501 for Student and Anon', async () => {
+    // 1. Authenticated student attempting to invoke private.competition_apply_rewards_internal
+    await db.exec(`
+      SET ROLE authenticated;
+      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
+      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+    `);
+    try {
+      await db.query(`SELECT private.competition_apply_rewards_internal(gen_random_uuid())`);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Student direct RPC invocation blocked with 42501 permission denied');
+    }
+
+    // 2. Anon guest attempting to invoke private.competition_apply_rewards_internal
+    await db.exec(`
+      SET ROLE anon;
+      SELECT set_config('request.jwt.claim.sub', '', false);
+      SELECT set_config('request.jwt.claim.role', 'anon', false);
+    `);
+    try {
+      await db.query(`SELECT private.competition_apply_rewards_internal(gen_random_uuid())`);
+      assert.fail('Should have failed with 42501');
+    } catch (err) {
+      assert.equal(err.code, '42501', 'Anon direct RPC invocation blocked with 42501 permission denied');
+    }
+
+    await db.exec(`SET ROLE postgres;`);
+  });
+
+  // =========================================================================
+  // TC-12: Strict State Guard & Fail-Closed
+  // =========================================================================
+  await t.test('TC-12: Strict State Guard: Internal reward RPC is fail-closed when reward_status is not pending', async () => {
+    // 1. Create session with rewards enabled
     await setAuthContext(hostId, 'authenticated');
-
-    // Create session
     const createRes = await db.query(
       `SELECT public.competition_host_create_session(
-        'Đấu Trường Kiểm Tra Leaderboard'::text,
-        'Kiểm tra snapshot'::text,
+        'Đấu Trường State Guard'::text,
+        'Kiểm thử trạng thái'::text,
         'individual'::text,
         50::int,
         $1::jsonb,
@@ -835,89 +991,39 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
     );
     const sessionObj = createRes.rows[0].res;
     const sessionId = sessionObj.session_id;
-    const roomCode = sessionObj.room_code;
-    const q1Id = (await db.query(`SELECT id FROM public.competition_questions WHERE session_id = $1 ORDER BY question_order ASC`, [sessionId])).rows[0].id;
 
-
-    // Student 1 & 2 join
-    await setAuthContext(student1Id, 'authenticated');
-    const p1Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [roomCode])).rows[0].res;
-    const p1 = p1Res.participant?.id || p1Res.participant_id;
-
-    await setAuthContext(student2Id, 'authenticated');
-    const p2Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S2'::varchar) AS res`, [roomCode])).rows[0].res;
-    const p2 = p2Res.participant?.id || p2Res.participant_id;
-
-    // Start & submit
-    await setAuthContext(hostId, 'authenticated');
-    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sessionId]);
-
-    await setAuthContext(student1Id, 'authenticated');
-    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sessionId, q1Id, p1]);
-
-    await setAuthContext(student2Id, 'authenticated');
-    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sessionId, q1Id, p2]);
-
-    // Finish
-    await setAuthContext(hostId, 'authenticated');
-    await db.query(`SELECT public.competition_host_finish_session($1::uuid)`, [sessionId]);
-
-    // Read leaderboard snapshot via public RPC
-    await setAuthContext(student1Id, 'authenticated');
-    const lbRes = await db.query(`SELECT public.competition_get_leaderboard_snapshot($1::uuid, $2::uuid, null::text) AS res`, [sessionId, p1]);
-    assert.equal(lbRes.rows[0].res.success, true);
-    const leaderboard = lbRes.rows[0].res.leaderboard;
-
-    assert.equal(leaderboard.length, 2);
-    assert.equal(leaderboard[0].participant_id, p1);
-    assert.equal(leaderboard[0].rank, 1);
-    assert.equal(leaderboard[1].participant_id, p2);
-    assert.equal(leaderboard[1].rank, 2);
-  });
-
-
-  // =========================================================================
-  // TC-9: Security & Atomicity: Direct execution of internal reward RPC blocked for client
-  // =========================================================================
-  await t.test('TC-9: Security & RPC Privileges: Direct execution of internal reward RPC blocked for Student & Guest', async () => {
-    // 1. Authenticated student attempting to invoke private.competition_apply_rewards_internal
+    // 2. Test invalid reward_status = 'processing'
     await db.exec(`
-      SET ROLE authenticated;
-      SELECT set_config('request.jwt.claim.sub', '${student1Id}', false);
-      SELECT set_config('request.jwt.claim.role', 'authenticated', false);
+      SET ROLE postgres;
+      UPDATE public.competition_sessions SET reward_status = 'processing' WHERE id = '${sessionId}';
     `);
+    const procRes = await db.query(`SELECT private.competition_apply_rewards_internal($1::uuid) AS res`, [sessionId]);
+    assert.equal(procRes.rows[0].res.success, false, 'Must fail when reward_status is processing');
+    assert.equal(procRes.rows[0].res.error_code, 'INVALID_REWARD_STATUS');
+    assert.equal(procRes.rows[0].res.applied, false);
 
-    let studentCallFailed = false;
-    try {
-      await db.query(`SELECT private.competition_apply_rewards_internal(gen_random_uuid())`);
-    } catch (_err) {
-      studentCallFailed = true;
-    }
-    assert.ok(studentCallFailed, 'Student cannot invoke private.competition_apply_rewards_internal');
+    // 3. Test invalid reward_status = 'failed'
+    await db.exec(`UPDATE public.competition_sessions SET reward_status = 'failed' WHERE id = '${sessionId}';`);
+    const failRes = await db.query(`SELECT private.competition_apply_rewards_internal($1::uuid) AS res`, [sessionId]);
+    assert.equal(failRes.rows[0].res.success, false, 'Must fail when reward_status is failed');
+    assert.equal(failRes.rows[0].res.error_code, 'INVALID_REWARD_STATUS');
+    assert.equal(failRes.rows[0].res.applied, false);
 
-    // 2. Anon guest attempting to invoke private.competition_apply_rewards_internal
-    await db.exec(`
-      SET ROLE anon;
-      SELECT set_config('request.jwt.claim.sub', '', false);
-      SELECT set_config('request.jwt.claim.role', 'anon', false);
-    `);
+    // 4. Test invalid reward_status = 'not_applicable' when reward_enabled = true
+    await db.exec(`UPDATE public.competition_sessions SET reward_status = 'not_applicable' WHERE id = '${sessionId}';`);
+    const naRes = await db.query(`SELECT private.competition_apply_rewards_internal($1::uuid) AS res`, [sessionId]);
+    assert.equal(naRes.rows[0].res.success, false, 'Must fail when reward_status is not_applicable');
+    assert.equal(naRes.rows[0].res.error_code, 'INVALID_REWARD_STATUS');
 
-    let anonCallFailed = false;
-    try {
-      await db.query(`SELECT private.competition_apply_rewards_internal(gen_random_uuid())`);
-    } catch (_err) {
-      anonCallFailed = true;
-    }
-    assert.ok(anonCallFailed, 'Guest/Anon cannot invoke private.competition_apply_rewards_internal');
-
-    // Reset back to postgres superuser
-    await db.exec(`SET ROLE postgres;`);
+    // 5. Verify zero rows written to ledger throughout
+    const txCount = await db.query(`SELECT count(*)::int as count FROM public.competition_reward_transactions WHERE session_id = $1`, [sessionId]);
+    assert.equal(txCount.rows[0].count, 0, 'No reward transactions can be written under invalid status');
   });
 
   // =========================================================================
-  // TC-10: Transaction Rollback: Database failure aborts reward and rolls back state
+  // TC-13: Transaction Rollback: Database failure aborts reward and rolls back state
   // =========================================================================
-  await t.test('TC-10: Transaction Rollback: Database failure aborts reward and rolls back state', async () => {
+  await t.test('TC-13: Transaction Rollback: Database failure aborts reward and rolls back state', async () => {
     await setAuthContext(hostId, 'authenticated');
     const createRes = await db.query(
       `SELECT public.competition_host_create_session(
@@ -1007,7 +1113,144 @@ test('Competition V1 R18 - Reward System Backend Implementation', async (t) => {
       UPDATE public.profiles SET total_stars = ${initialBal} WHERE id = '${student1Id}';
     `);
   });
+
+  // =========================================================================
+  // TC-14: Multi-Session Progression: Sequential rewards across multiple sessions aggregate stars correctly
+  // =========================================================================
+  await t.test('TC-14: Multi-Session Progression: Sequential rewards across multiple sessions aggregate stars correctly', async () => {
+    // Reset student1 stars
+    await db.exec(`SET ROLE postgres; UPDATE public.profiles SET total_stars = 10 WHERE id = '${student1Id}';`);
+
+    // Session 1: Student 1 wins Top 1 (15 stars) -> 10 + 15 = 25
+    await setAuthContext(hostId, 'authenticated');
+    const s1Res = await db.query(
+      `SELECT public.competition_host_create_session(
+        'Phiên 1'::text, 'Phiên 1'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
+      ) AS res`,
+      [canonicalQuestions]
+    );
+    const sid1 = s1Res.rows[0].res.session_id;
+    const rcode1 = s1Res.rows[0].res.room_code;
+    const q1Id = (await db.query(`SELECT id FROM public.competition_questions WHERE session_id = $1 ORDER BY question_order ASC`, [sid1])).rows[0].id;
+
+    await setAuthContext(student1Id, 'authenticated');
+    const part1Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [rcode1])).rows[0].res;
+    const part1 = part1Res.participant?.id || part1Res.participant_id;
+
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sid1]);
+
+    await setAuthContext(student1Id, 'authenticated');
+    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sid1, q1Id, part1]);
+
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_finish_session($1::uuid)`, [sid1]);
+
+    const bal1 = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    assert.equal(bal1, 25, 'Balance after session 1 is 10 + 15 = 25');
+
+    // Session 2: Student 1 joins with Student 2. Student 2 answers first (Rank 1, 15 stars), Student 1 answers wrong (Rank 2, 10 stars) -> 25 + 10 = 35
+    const s2Res = await db.query(
+      `SELECT public.competition_host_create_session(
+        'Phiên 2'::text, 'Phiên 2'::text, 'individual'::text, 50::int, $1::jsonb, '[]'::jsonb, true::boolean, '{}'::jsonb, false::boolean
+      ) AS res`,
+      [canonicalQuestions]
+    );
+    const sid2 = s2Res.rows[0].res.session_id;
+    const rcode2 = s2Res.rows[0].res.room_code;
+    const qRows2 = await db.query(`SELECT id FROM public.competition_questions WHERE session_id = $1 ORDER BY question_order ASC`, [sid2]);
+    const q2_1 = qRows2.rows[0].id;
+
+    await setAuthContext(student2Id, 'authenticated');
+    const part2_2 = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S2'::varchar) AS res`, [rcode2])).rows[0].res;
+    const p2_2 = part2_2.participant?.id || part2_2.participant_id;
+
+    await setAuthContext(student1Id, 'authenticated');
+    const part2_1 = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [rcode2])).rows[0].res;
+    const p2_1 = part2_1.participant?.id || part2_1.participant_id;
+
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sid2]);
+
+    // Student 2 answers Q1 correctly
+    await setAuthContext(student2Id, 'authenticated');
+    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sid2, q2_1, p2_2]);
+
+    // Student 1 answers Q1 wrong
+    await setAuthContext(student1Id, 'authenticated');
+    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_b"]'::jsonb, null::text)`, [sid2, q2_1, p2_1]);
+
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_finish_session($1::uuid)`, [sid2]);
+
+    // Student 2 was Rank 1 (15 stars), Student 1 was Rank 2 (10 stars)
+    const finalBal1 = (await db.query(`SELECT total_stars FROM public.profiles WHERE id = $1`, [student1Id])).rows[0].total_stars;
+    assert.equal(finalBal1, 35, 'Balance after session 2 is 25 + 10 = 35 (Sequential multi-session aggregation correct)');
+  });
+
+  // =========================================================================
+  // TC-15: Final Leaderboard Snapshot RPC matches reward tier rank and scores
+  // =========================================================================
+  await t.test('TC-15: Final Leaderboard Snapshot RPC matches reward tier rank and scores', async () => {
+    await setAuthContext(hostId, 'authenticated');
+
+    // Create session
+    const createRes = await db.query(
+      `SELECT public.competition_host_create_session(
+        'Đấu Trường Kiểm Tra Leaderboard'::text,
+        'Kiểm tra snapshot'::text,
+        'individual'::text,
+        50::int,
+        $1::jsonb,
+        '[]'::jsonb,
+        true::boolean,
+        '{}'::jsonb,
+        false::boolean
+      ) AS res`,
+      [canonicalQuestions]
+    );
+    const sessionObj = createRes.rows[0].res;
+    const sessionId = sessionObj.session_id;
+    const roomCode = sessionObj.room_code;
+    const q1Id = (await db.query(`SELECT id FROM public.competition_questions WHERE session_id = $1 ORDER BY question_order ASC`, [sessionId])).rows[0].id;
+
+    // Student 1 & 2 join
+    await setAuthContext(student1Id, 'authenticated');
+    const p1Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S1'::varchar) AS res`, [roomCode])).rows[0].res;
+    const p1 = p1Res.participant?.id || p1Res.participant_id;
+
+    await setAuthContext(student2Id, 'authenticated');
+    const p2Res = (await db.query(`SELECT public.competition_join_session($1::varchar, 'S2'::varchar) AS res`, [roomCode])).rows[0].res;
+    const p2 = p2Res.participant?.id || p2Res.participant_id;
+
+    // Start & submit
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_start_session($1::uuid)`, [sessionId]);
+
+    await setAuthContext(student1Id, 'authenticated');
+    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sessionId, q1Id, p1]);
+
+    await setAuthContext(student2Id, 'authenticated');
+    await db.query(`SELECT public.competition_submit_answer($1::uuid, $2::uuid, $3::uuid, null::text, '["opt_a"]'::jsonb, null::text)`, [sessionId, q1Id, p2]);
+
+    // Finish
+    await setAuthContext(hostId, 'authenticated');
+    await db.query(`SELECT public.competition_host_finish_session($1::uuid)`, [sessionId]);
+
+    // Read leaderboard snapshot via public RPC
+    await setAuthContext(student1Id, 'authenticated');
+    const lbRes = await db.query(`SELECT public.competition_get_leaderboard_snapshot($1::uuid, $2::uuid, null::text) AS res`, [sessionId, p1]);
+    assert.equal(lbRes.rows[0].res.success, true);
+    const leaderboard = lbRes.rows[0].res.leaderboard;
+
+    assert.equal(leaderboard.length, 2);
+    assert.equal(leaderboard[0].participant_id, p1);
+    assert.equal(leaderboard[0].rank, 1);
+    assert.equal(leaderboard[1].participant_id, p2);
+    assert.equal(leaderboard[1].rank, 2);
+  });
 });
+
 
 
 

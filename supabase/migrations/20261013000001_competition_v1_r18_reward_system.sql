@@ -83,8 +83,13 @@ USING (
     )
 );
 
--- Zero mutation permissions for client roles
-REVOKE ALL ON TABLE public.competition_reward_transactions FROM PUBLIC, anon;
+-- Explicitly revoke all privileges from PUBLIC, anon, and authenticated
+REVOKE ALL PRIVILEGES ON TABLE public.competition_reward_transactions FROM PUBLIC, anon, authenticated;
+
+-- Explicitly revoke mutation and admin privileges to ensure zero write permissions
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.competition_reward_transactions FROM PUBLIC, anon, authenticated;
+
+-- Grant strictly SELECT only to authenticated users (reads governed strictly by Row Level Security)
 GRANT SELECT ON TABLE public.competition_reward_transactions TO authenticated;
 
 -- ------------------------------------------------------------
@@ -148,11 +153,24 @@ BEGIN
         );
     END IF;
 
+    -- 5. Strict state guard: Only allow execution when reward_status is strictly 'pending'
+    -- If reward_status is anything else ('not_applicable', 'processing', 'failed', etc.), fail-closed without mutating!
+    IF v_session.reward_status <> 'pending' THEN
+        RETURN pg_catalog.jsonb_build_object(
+            'success', false,
+            'applied', false,
+            'error_code', 'INVALID_REWARD_STATUS',
+            'message', 'Trạng thái trao thưởng không hợp lệ để xử lý: ' || COALESCE(v_session.reward_status, 'NULL'),
+            'reward_status', v_session.reward_status
+        );
+    END IF;
+
     -- Transition state to processing
     UPDATE public.competition_sessions
     SET reward_status = 'processing',
         updated_at = pg_catalog.now()
     WHERE id = p_session_id;
+
 
     -- 5. Calculate and materialize rewards into ledger table atomically
     -- Reward Schedule:
