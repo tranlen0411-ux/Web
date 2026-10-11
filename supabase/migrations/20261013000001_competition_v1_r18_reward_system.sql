@@ -1199,11 +1199,35 @@ BEGIN
     FROM ranked r
     WHERE s.id = r.id;
 
-    -- 7. Atomic Reward Processing (if reward_enabled and reward_status = 'pending')
-    IF COALESCE(v_session.reward_enabled, false) AND v_session.reward_status = 'pending' THEN
-        v_reward_res := private.competition_apply_rewards_internal(v_session.id);
-        IF (v_reward_res->>'success')::BOOLEAN IS NOT TRUE THEN
-            RAISE EXCEPTION 'Lỗi xử lý trao thưởng: %', v_reward_res->>'message';
+    -- 7. Atomic Reward Processing (Mandatory when reward_enabled = true)
+    IF COALESCE(v_session.reward_enabled, false) THEN
+        IF v_session.reward_status = 'pending' THEN
+            v_reward_res := private.competition_apply_rewards_internal(v_session.id);
+            IF (v_reward_res->>'success')::BOOLEAN IS NOT TRUE THEN
+                RETURN pg_catalog.jsonb_build_object(
+                    'success', false,
+                    'error_code', COALESCE(v_reward_res->>'error_code', 'REWARD_APPLICATION_FAILED'),
+                    'message', COALESCE(v_reward_res->>'message', 'Lỗi xử lý trao thưởng cho phòng thi.'),
+                    'reward_status', v_session.reward_status
+                );
+            END IF;
+        ELSIF v_session.reward_status = 'completed' THEN
+            -- Rewards were already applied previously (e.g. idempotent retry)
+            v_reward_res := pg_catalog.jsonb_build_object(
+                'success', true,
+                'applied', false,
+                'reason', 'ALREADY_COMPLETED',
+                'reward_status', 'completed'
+            );
+        ELSE
+            -- Fail-closed: reward_enabled is true, but reward_status is invalid ('processing', 'failed', 'not_applicable', NULL, etc.)
+            -- Must NOT finalize session to 'finished' and must NOT omit rewards silently!
+            RETURN pg_catalog.jsonb_build_object(
+                'success', false,
+                'error_code', 'INVALID_REWARD_STATUS',
+                'message', 'Không thể kết thúc phòng thi: trạng thái trao thưởng không hợp lệ (' || COALESCE(v_session.reward_status, 'NULL') || ').',
+                'reward_status', v_session.reward_status
+            );
         END IF;
     END IF;
 
