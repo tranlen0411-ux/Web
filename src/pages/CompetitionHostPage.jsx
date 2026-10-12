@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Trash2,
   AlertTriangle,
+  AlertCircle,
   RefreshCw,
   Crown,
   Medal,
@@ -44,7 +45,8 @@ import {
   getHostSessionMetadata,
   getHostQuestionResults,
   getHostQuestionResultByOrder,
-  getLeaderboardSnapshot
+  getLeaderboardSnapshot,
+  hostGetRewardTransactions
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
 import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
@@ -248,6 +250,11 @@ export function CompetitionHostPage() {
     setFinishedTab('PODIUM');
     autoResultAttemptRef.current = null;
     setTimeLeftSeconds(null);
+    setRewardTransactions([]);
+    setIsRewardLedgerLoading(false);
+    setRewardLedgerError(null);
+    latestRewardRequestIdRef.current++;
+    isFinishingSessionRef.current = false;
 
     if (failureReason) {
       showToast(failureReason, 'error');
@@ -306,6 +313,11 @@ export function CompetitionHostPage() {
     inFlightResultsRef.current.clear();
     setHistoricalError(null);
     setLoadingOrder(null);
+    setRewardTransactions([]);
+    setIsRewardLedgerLoading(false);
+    setRewardLedgerError(null);
+    latestRewardRequestIdRef.current++;
+    isFinishingSessionRef.current = false;
   }, [activeSessionId]);
 
   // Setup Form State
@@ -313,11 +325,19 @@ export function CompetitionHostPage() {
   const [description, setDescription] = useState('Phòng thi đấu vui học dành cho các bạn học sinh.');
   const [maxParticipants, setMaxParticipants] = useState(30);
   const [reviewEnabled, setReviewEnabled] = useState(false);
+  const [rewardEnabled, setRewardEnabled] = useState(false);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [isQuestionBankModalOpen, setIsQuestionBankModalOpen] = useState(false);
   const [isImportExcelModalOpen, setIsImportExcelModalOpen] = useState(false);
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [setupError, setSetupError] = useState(null);
+
+  // Reward Ledger State (R18 Host View)
+  const [rewardTransactions, setRewardTransactions] = useState([]);
+  const [isRewardLedgerLoading, setIsRewardLedgerLoading] = useState(false);
+  const [rewardLedgerError, setRewardLedgerError] = useState(null);
+  const latestRewardRequestIdRef = useRef(0);
+  const isFinishingSessionRef = useRef(false);
 
   // Polling Hook for Active Session
   const {
@@ -537,6 +557,90 @@ export function CompetitionHostPage() {
     }
   }, [isLeaderboardOpen, activeSessionId, fetchLeaderboard]);
 
+  // Fetch Reward Ledger (Isolated by activeSessionId, with race protection)
+  const fetchRewardLedger = useCallback(async (targetSessionIdParam) => {
+    const targetSessionId = targetSessionIdParam || activeSessionIdRef.current;
+    if (!targetSessionId || !isValidSessionUUID(targetSessionId)) return;
+
+    const requestId = ++latestRewardRequestIdRef.current;
+    setIsRewardLedgerLoading(true);
+    setRewardLedgerError(null);
+
+    try {
+      const res = await hostGetRewardTransactions(targetSessionId);
+      if (requestId !== latestRewardRequestIdRef.current) return;
+      if (activeSessionIdRef.current && targetSessionId !== activeSessionIdRef.current) return;
+
+      if (res.success && Array.isArray(res.data)) {
+        setRewardTransactions(res.data);
+        setRewardLedgerError(null);
+      } else {
+        const msg = res.message || 'Không thể tải sổ cái phần thưởng.';
+        setRewardLedgerError(msg);
+        setRewardTransactions([]);
+      }
+    } catch (_err) {
+      if (requestId === latestRewardRequestIdRef.current) {
+        setRewardLedgerError('Lỗi mạng khi tải sổ cái phần thưởng.');
+        setRewardTransactions([]);
+      }
+    } finally {
+      if (requestId === latestRewardRequestIdRef.current) {
+        setIsRewardLedgerLoading(false);
+      }
+    }
+  }, []);
+
+  // Lookup map: participant_id -> reward transaction
+  const rewardTxMap = useMemo(() => {
+    const map = new Map();
+    if (Array.isArray(rewardTransactions)) {
+      rewardTransactions.forEach((tx) => {
+        if (tx.participant_id) {
+          map.set(tx.participant_id, tx);
+        }
+      });
+    }
+    return map;
+  }, [rewardTransactions]);
+
+  // Aggregate statistics computed strictly from authoritative backend ledger
+  const rewardStats = useMemo(() => {
+    if (!Array.isArray(rewardTransactions) || rewardTransactions.length === 0) {
+      return {
+        totalStarsAwarded: 0,
+        awardedCount: 0,
+        skippedCount: 0,
+        guestCount: 0,
+        totalTransactions: 0
+      };
+    }
+    let totalStars = 0;
+    let awarded = 0;
+    let skipped = 0;
+    let guests = 0;
+
+    rewardTransactions.forEach((tx) => {
+      const txStatus = tx.status || tx.reward_status;
+      if (txStatus === 'awarded') {
+        awarded += 1;
+        totalStars += Number(tx.stars_awarded || 0);
+      } else if (txStatus === 'skipped_no_submission') {
+        skipped += 1;
+      } else if (txStatus === 'skipped_guest') {
+        guests += 1;
+      }
+    });
+
+    return {
+      totalStarsAwarded: totalStars,
+      awardedCount: awarded,
+      skippedCount: skipped,
+      guestCount: guests,
+      totalTransactions: rewardTransactions.length
+    };
+  }, [rewardTransactions]);
+
   // Finished session sync guard (Refresh, Reconnect, or Remote Finish)
   useEffect(() => {
     if (snapshot?.status === 'finished') {
@@ -548,9 +652,12 @@ export function CompetitionHostPage() {
       autoResultAttemptRef.current = null;
       if (activeSessionId) {
         fetchLeaderboard(activeSessionId);
+        if (snapshot.reward_enabled) {
+          fetchRewardLedger(activeSessionId);
+        }
       }
     }
-  }, [snapshot?.status, activeSessionId, fetchLeaderboard]);
+  }, [snapshot?.status, snapshot?.reward_enabled, activeSessionId, fetchLeaderboard, fetchRewardLedger]);
 
   // Safe question results fetcher (fail-closed, no busy loop)
   const fetchResultsSafely = useCallback(async (sessionIdParam) => {
@@ -1212,6 +1319,8 @@ export function CompetitionHostPage() {
         mode: 'individual',
         maxParticipants: parseInt(maxParticipants, 10) || 30,
         reviewEnabled: Boolean(reviewEnabled),
+        rewardEnabled: Boolean(rewardEnabled),
+        rewardConfig: {},
         questions: sanitizedQuestions
       });
 
@@ -1367,8 +1476,9 @@ export function CompetitionHostPage() {
   };
 
   const handleFinishSession = async () => {
-    if (!activeSessionId || actionPending) return;
+    if (!activeSessionId || actionPending || isFinishingSessionRef.current) return;
     setActionPending(true);
+    isFinishingSessionRef.current = true;
     try {
       const res = await hostFinishSession(activeSessionId);
       if (res.success) {
@@ -1380,6 +1490,9 @@ export function CompetitionHostPage() {
         showToast('Phòng thi đã kết thúc và tính toán thứ hạng hoàn tất!', 'success');
         await refreshNow();
         await fetchLeaderboard(activeSessionId);
+        if (snapshot?.reward_enabled) {
+          await fetchRewardLedger(activeSessionId);
+        }
         setHostViewMode('FINAL_RESULTS');
       } else {
         showToast(res.message || 'Không thể kết thúc phòng thi.', 'error');
@@ -1388,6 +1501,7 @@ export function CompetitionHostPage() {
       showToast('Lỗi mạng khi kết thúc phòng thi.', 'error');
     } finally {
       setActionPending(false);
+      isFinishingSessionRef.current = false;
       setConfirmModal(null);
     }
   };
@@ -1629,10 +1743,85 @@ export function CompetitionHostPage() {
                 />
               </div>
 
+              {/* Reward Toggle and Fixed Rules */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                      <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-slate-800 block text-sm">Thưởng sao tích lũy (Reward System)</span>
+                      <span className="text-slate-500 text-xs">Tự động cộng sao vào tài khoản học sinh khi kết thúc đấu trường</span>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={rewardEnabled}
+                      onChange={(e) => setRewardEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-amber-400 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                    <span className="ml-2 text-xs font-bold text-slate-700 min-w-[32px]">
+                      {rewardEnabled ? 'BẬT' : 'TẮT'}
+                    </span>
+                  </label>
+                </div>
+
+                {/* Fixed Reward Rules (Display when Enabled) */}
+                {rewardEnabled && (
+                  <div className="pt-3 border-t border-slate-200 space-y-2.5 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <Award className="w-3.5 h-3.5 text-amber-600" />
+                        Cơ cấu thưởng sao cố định (Backend Rule V1)
+                      </span>
+                      <span className="text-[11px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                        Cố định hệ thống
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <div className="p-2.5 rounded-lg bg-white border border-amber-200 shadow-2xs text-center">
+                        <span className="text-[11px] font-bold text-slate-500 block">Quán Quân (Top 1)</span>
+                        <span className="text-sm font-black text-amber-600">+15 sao</span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-white border border-slate-200 shadow-2xs text-center">
+                        <span className="text-[11px] font-bold text-slate-500 block">Hạng Nhì (Top 2)</span>
+                        <span className="text-sm font-black text-slate-700">+10 sao</span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-white border border-amber-800/20 shadow-2xs text-center">
+                        <span className="text-[11px] font-bold text-slate-500 block">Hạng Ba (Top 3)</span>
+                        <span className="text-sm font-black text-amber-800">+5 sao</span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-white border border-emerald-200 shadow-2xs text-center">
+                        <span className="text-[11px] font-bold text-slate-500 block">Tham gia hợp lệ</span>
+                        <span className="text-sm font-black text-emerald-600">+2 sao</span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-amber-50/80 border border-amber-200/80 rounded-lg text-[11px] text-amber-900 space-y-1">
+                      <p className="font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                        Điều kiện: Học sinh phải nộp bài ít nhất 1 câu hỏi để nhận sao thưởng (0 câu nộp = 0 sao).
+                      </p>
+                      <p className="text-amber-800 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                        Lưu ý: Thí sinh tham gia với tư cách Khách (Guest) không được cộng sao vào hệ thống.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
                 <div className="flex items-center gap-4">
                   <span>Chế độ thi đấu: <strong className="text-slate-800">Cá nhân (Individual)</strong></span>
-                  <span>Phần thưởng: <strong className="text-slate-800">Tắt (Off)</strong></span>
+                  <span>Phần thưởng: <strong className={rewardEnabled ? "text-amber-600 font-bold" : "text-slate-800 font-medium"}>
+                    {rewardEnabled ? 'Bật (15/10/5/2 sao)' : 'Tắt (Off)'}
+                  </strong></span>
                 </div>
                 <label className="flex items-center gap-2 cursor-pointer select-none text-slate-700 font-medium">
                   <input
@@ -2998,6 +3187,110 @@ export function CompetitionHostPage() {
               </div>
             </div>
 
+            {/* R18 Reward Settlement Summary Card (Authoritative Ledger from Backend) */}
+            {snapshot.reward_enabled && (
+              <div className="bg-white rounded-3xl shadow-sm border border-amber-200 p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-amber-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-black text-lg">
+                      ⭐
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                        Tổng Kết Trao Thưởng Sao
+                        <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                          snapshot.reward_status === 'completed'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : snapshot.reward_status === 'failed'
+                            ? 'bg-red-50 text-red-700 border-red-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {snapshot.reward_status === 'completed'
+                            ? 'Đã trao thưởng thành công'
+                            : snapshot.reward_status === 'failed'
+                            ? 'Lỗi xử lý trao thưởng'
+                            : 'Đang xử lý trao thưởng'}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-500">Dữ liệu ghi nhận trực tiếp từ sổ cái máy chủ (competition_reward_transactions)</p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isRewardLedgerLoading}
+                    onClick={() => fetchRewardLedger(activeSessionId)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 text-amber-700 hover:bg-amber-50 text-xs font-semibold transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRewardLedgerLoading ? 'animate-spin' : ''}`} />
+                    Làm Mới Sổ Cái
+                  </button>
+                </div>
+
+                {rewardLedgerError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      <span>{rewardLedgerError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => fetchRewardLedger(activeSessionId)}
+                      className="underline font-bold hover:text-red-900 flex-shrink-0"
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                )}
+
+                {isRewardLedgerLoading && rewardTransactions.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                    <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />
+                    Đang đồng bộ dữ liệu sổ cái phần thưởng từ máy chủ...
+                  </div>
+                ) : rewardLedgerError && rewardTransactions.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500">
+                    Không thể hiển thị thông số trao thưởng do phát sinh lỗi kết nối. Vui lòng bấm &ldquo;Thử lại&rdquo;.
+                  </div>
+                ) : rewardTransactions.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500">
+                    Chưa ghi nhận bản ghi giao dịch thưởng nào cho phiên thi này.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200 text-center">
+                      <span className="text-xs font-semibold text-amber-800 block">Tổng sao thực tế đã trao</span>
+                      <span className="text-2xl font-black text-amber-600 block mt-1">
+                        +{rewardStats.totalStarsAwarded} <span className="text-sm font-bold text-amber-500">⭐</span>
+                      </span>
+                      <span className="text-[10px] text-amber-700/80 mt-0.5 block">Đã ghi sổ vào tài khoản</span>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200 text-center">
+                      <span className="text-xs font-semibold text-emerald-800 block">Học sinh nhận thưởng</span>
+                      <span className="text-2xl font-black text-emerald-600 block mt-1">
+                        {rewardStats.awardedCount} <span className="text-sm font-bold text-emerald-500">bạn</span>
+                      </span>
+                      <span className="text-[10px] text-emerald-700/80 mt-0.5 block">Đủ điều kiện (tối thiểu 1 câu nộp)</span>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+                      <span className="text-xs font-semibold text-slate-600 block">Không đủ điều kiện / Bỏ qua</span>
+                      <span className="text-2xl font-black text-slate-700 block mt-1">
+                        {rewardStats.skippedCount + rewardStats.guestCount} <span className="text-sm font-bold text-slate-500">trường hợp</span>
+                      </span>
+                      <span className="text-[10px] text-slate-500 mt-0.5 block">
+                        {rewardStats.skippedCount > 0 ? `${rewardStats.skippedCount} chưa nộp bài` : ''}
+                        {rewardStats.skippedCount > 0 && rewardStats.guestCount > 0 ? ' • ' : ''}
+                        {rewardStats.guestCount > 0 ? `${rewardStats.guestCount} tài khoản khách` : ''}
+                        {rewardStats.skippedCount === 0 && rewardStats.guestCount === 0 ? 'Tất cả đều đủ điều kiện' : ''}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* R7 Sub-Navigation Tabs: Kết Quả Chung vs Phân Tích Câu Hỏi */}
             <div className="flex items-center gap-2 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 w-fit max-w-full">
               <button
@@ -3139,6 +3432,31 @@ export function CompetitionHostPage() {
                                   <span className="text-base font-black text-slate-700 block">
                                     {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
                                   </span>
+                                  {snapshot.reward_enabled && (() => {
+                                    const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
+                                    if (isRewardLedgerLoading && !tx) {
+                                      return <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">Đang tải sao...</span>;
+                                    }
+                                    if (!tx) return null;
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
+                                      return (
+                                        <span className="inline-flex items-center gap-1 text-xs font-black text-slate-800 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-300 mt-1 shadow-2xs">
+                                          +{tx.stars_awarded} ⭐
+                                        </span>
+                                      );
+                                    }
+                                    if (txStatus === 'skipped_guest') {
+                                      return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Khách (0 ⭐)</span>;
+                                    }
+                                    if (txStatus === 'skipped_no_submission') {
+                                      return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Chưa nộp (0 ⭐)</span>;
+                                    }
+                                    return null;
+                                  })()}
                                 </div>
                                 <div className="text-[11px] text-slate-500 flex items-center justify-center gap-2 pt-1 border-t border-slate-100 font-medium">
                                   <span>Đúng {p.correct_count ?? 0} câu</span>
@@ -3202,6 +3520,31 @@ export function CompetitionHostPage() {
                                   <span className="text-xl font-black text-amber-600 block">
                                     {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
                                   </span>
+                                  {snapshot.reward_enabled && (() => {
+                                    const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
+                                    if (isRewardLedgerLoading && !tx) {
+                                      return <span className="text-[11px] text-amber-600 font-semibold block mt-0.5">Đang tải sao...</span>;
+                                    }
+                                    if (!tx) return null;
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
+                                      return (
+                                        <span className="inline-flex items-center gap-1 text-xs font-black text-amber-900 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 mt-1 shadow-2xs">
+                                          +{tx.stars_awarded} ⭐
+                                        </span>
+                                      );
+                                    }
+                                    if (txStatus === 'skipped_guest') {
+                                      return <span className="text-[10px] text-slate-500 bg-white/80 px-2 py-0.5 rounded-full block mt-1">Khách (0 ⭐)</span>;
+                                    }
+                                    if (txStatus === 'skipped_no_submission') {
+                                      return <span className="text-[10px] text-slate-500 bg-white/80 px-2 py-0.5 rounded-full block mt-1">Chưa nộp (0 ⭐)</span>;
+                                    }
+                                    return null;
+                                  })()}
                                 </div>
                                 <div className="text-xs text-slate-600 flex items-center justify-center gap-2 pt-1.5 border-t border-amber-100 font-semibold">
                                   <span>Đúng {p.correct_count ?? 0} câu</span>
@@ -3260,6 +3603,31 @@ export function CompetitionHostPage() {
                                   <span className="text-base font-black text-amber-900 block">
                                     {p.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
                                   </span>
+                                  {snapshot.reward_enabled && (() => {
+                                    const tx = rewardTxMap.get(p.participant_id);
+                                    if (rewardLedgerError && !tx) {
+                                      return <span className="text-[10px] text-red-500 font-semibold block mt-0.5">Lỗi tải sao</span>;
+                                    }
+                                    if (isRewardLedgerLoading && !tx) {
+                                      return <span className="text-[11px] text-amber-600 font-semibold block mt-0.5">Đang tải sao...</span>;
+                                    }
+                                    if (!tx) return null;
+                                    const txStatus = tx.status || tx.reward_status;
+                                    if (txStatus === 'awarded') {
+                                      return (
+                                        <span className="inline-flex items-center gap-1 text-xs font-black text-amber-900 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300 mt-1">
+                                          +{tx.stars_awarded} ⭐
+                                        </span>
+                                      );
+                                    }
+                                    if (txStatus === 'skipped_guest') {
+                                      return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Khách (0 ⭐)</span>;
+                                    }
+                                    if (txStatus === 'skipped_no_submission') {
+                                      return <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded block mt-1">Chưa nộp (0 ⭐)</span>;
+                                    }
+                                    return null;
+                                  })()}
                                 </div>
                                 <div className="text-[11px] text-slate-500 flex items-center justify-center gap-2 pt-1 border-t border-slate-100 font-medium">
                                   <span>Đúng {p.correct_count ?? 0} câu</span>
@@ -3366,9 +3734,46 @@ export function CompetitionHostPage() {
                               <span className="text-base font-black text-amber-600 block">
                                 {item.total_score ?? 0} <span className="text-xs font-normal text-slate-500">điểm</span>
                               </span>
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-slate-400 block">
                                 Hạng {item.rank}
                               </span>
+                              {snapshot.reward_enabled && (() => {
+                                const tx = rewardTxMap.get(item.participant_id);
+                                if (!tx && isRewardLedgerLoading) {
+                                  return <span className="text-[10px] text-amber-500 block mt-0.5 font-medium">...⭐</span>;
+                                }
+                                if (!tx && rewardLedgerError) {
+                                  return (
+                                    <span className="text-[10px] text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 mt-1 inline-block">
+                                      Lỗi tải sao
+                                    </span>
+                                  );
+                                }
+                                if (!tx) return null;
+                                const txStatus = tx.status || tx.reward_status;
+                                if (txStatus === 'awarded') {
+                                  return (
+                                    <span className="text-xs font-black text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 mt-1 inline-block shadow-2xs">
+                                      +{tx.stars_awarded} ⭐
+                                    </span>
+                                  );
+                                }
+                                if (txStatus === 'skipped_guest') {
+                                  return (
+                                    <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">
+                                      Khách: 0 ⭐
+                                    </span>
+                                  );
+                                }
+                                if (txStatus === 'skipped_no_submission') {
+                                  return (
+                                    <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded mt-1 inline-block">
+                                      Chưa nộp: 0 ⭐
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           </div>
                         );

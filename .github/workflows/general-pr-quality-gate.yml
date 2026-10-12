@@ -62,6 +62,9 @@ jobs:
       - name: Run Competition backend test suite (R18, R17, R16-A)
         run: npm run test:competition
 
+      - name: Run Competition frontend test suite (R16-B, R18 Reward)
+        run: npm run test:competition:frontend
+
       - name: Run Real PostgreSQL Concurrency test suite
         env:
           TEST_POSTGRES_URL: postgres://test_user:test_password@127.0.0.1:5432/postgres_test
