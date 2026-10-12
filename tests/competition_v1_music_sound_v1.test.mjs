@@ -2324,8 +2324,8 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
 
   await t.test('172. final library option count exact', async () => {
     const { ALL_THEME_OPTIONS, MUSIC_THEMES } = await import('../src/services/competitionMusicThemes.js');
-    assert.equal(ALL_THEME_OPTIONS.length, 9, 'Exactly 9 library options in total (1 none + 8 themes)');
-    assert.equal(MUSIC_THEMES.length, 8, 'Exactly 8 themes in MUSIC_THEMES array');
+    assert.equal(ALL_THEME_OPTIONS.length, 10, 'Exactly 10 library options in total (1 none + 9 themes)');
+    assert.equal(MUSIC_THEMES.length, 9, 'Exactly 9 themes in MUSIC_THEMES array');
   });
 
   await t.test('173. SCORM Track still unavailable', async () => {
@@ -2398,5 +2398,316 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
       assert.equal(allFiles.includes(banned), false, `Source SCORM asset ${banned} must not be present in Competition`);
     });
   });
+
+  // --- HEROIC ORCHESTRAL MUSIC EXPANSION (PHASE 2) TESTS (183 - 205) ---
+
+  await t.test('183. heroic_orchestral registry present and valid', async () => {
+    const { getThemeById } = await import('../src/services/competitionMusicThemes.js');
+    const theme = getThemeById('heroic_orchestral');
+    assert.ok(theme, 'heroic_orchestral must exist');
+    assert.equal(theme.id, 'heroic_orchestral');
+    assert.equal(theme.name, 'Heroic Orchestral');
+    assert.equal(theme.available, true);
+    assert.equal(theme.lobbyTrack, '/audio/competition/heroic/at_launch.mp3');
+    assert.equal(theme.questionTrack, '/audio/competition/heroic/titan.mp3');
+  });
+
+  await t.test('184. heroic_orchestral selectable and persists', async () => {
+    const { isSelectableThemeId, getStoredThemeId, setStoredThemeId } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(isSelectableThemeId('heroic_orchestral'), true);
+
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+    try {
+      setStoredThemeId('heroic_orchestral');
+      assert.equal(getStoredThemeId(), 'heroic_orchestral');
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('185. all 5 heroic mp3 files exist in public/audio/competition/heroic', () => {
+    const heroicDir = path.join(ROOT_DIR, 'public/audio/competition/heroic');
+    const requiredFiles = ['titan.mp3', 'at_launch.mp3', 'ignis.mp3', 'the_fury.mp3', 'terminus.mp3'];
+    for (const f of requiredFiles) {
+      const fullPath = path.join(heroicDir, f);
+      assert.ok(fs.existsSync(fullPath), `File ${f} must exist`);
+      assert.ok(fs.statSync(fullPath).size > 5000000, `File ${f} must be substantive (>5MB)`);
+    }
+  });
+
+  await t.test('186. heroic mp3 exact file sizes match official sources', () => {
+    const heroicDir = path.join(ROOT_DIR, 'public/audio/competition/heroic');
+    const expectedSizes = {
+      'titan.mp3': 7034419,
+      'at_launch.mp3': 7533048,
+      'ignis.mp3': 7676027,
+      'the_fury.mp3': 17037217,
+      'terminus.mp3': 10540115,
+    };
+    for (const [file, expectedSize] of Object.entries(expectedSizes)) {
+      const stat = fs.statSync(path.join(heroicDir, file));
+      assert.equal(stat.size, expectedSize, `${file} size must match official source byte count exactly`);
+    }
+  });
+
+  await t.test('187. previous 14 mp3 assets preserved without modification', () => {
+    const compDir = path.join(ROOT_DIR, 'public/audio/competition');
+    const rootFiles = ['lobby_loop.mp3', 'question_active_loop.mp3'];
+    rootFiles.forEach(f => {
+      assert.ok(fs.existsSync(path.join(compDir, f)), `Root asset ${f} must be preserved`);
+    });
+
+    const themeFolders = [
+      'bright_classroom',
+      'calm_focus',
+      'light_gameshow',
+      'scorm_inspired_bright',
+      'scorm_inspired_calm',
+      'scorm_inspired_focus',
+    ];
+    themeFolders.forEach(folder => {
+      assert.ok(fs.existsSync(path.join(compDir, 'themes', folder, 'lobby.mp3')), `${folder}/lobby.mp3 preserved`);
+      assert.ok(fs.existsSync(path.join(compDir, 'themes', folder, 'question.mp3')), `${folder}/question.mp3 preserved`);
+    });
+  });
+
+  await t.test('188. all 7 existing themes remain valid and selectable', async () => {
+    const { isSelectableThemeId } = await import('../src/services/competitionMusicThemes.js');
+    const existingThemes = [
+      'classroom_chill',
+      'light_gameshow',
+      'calm_focus',
+      'bright_classroom',
+      'scorm_inspired_calm',
+      'scorm_inspired_bright',
+      'scorm_inspired_focus',
+    ];
+    existingThemes.forEach(id => {
+      assert.equal(isSelectableThemeId(id), true, `Theme ${id} must remain selectable`);
+    });
+  });
+
+  await t.test('189. HEROIC_TRACKS catalog contains 5 valid CC-BY 4.0 tracks', async () => {
+    const { HEROIC_TRACKS, getHeroicTrackById } = await import('../src/services/competitionMusicThemes.js');
+    assert.equal(HEROIC_TRACKS.length, 5, 'Exactly 5 tracks in HEROIC_TRACKS catalog');
+
+    const expectedTrackIds = ['sb_titan', 'km_at_launch', 'sb_ignis', 'sb_the_fury', 'sb_terminus'];
+    expectedTrackIds.forEach(id => {
+      const track = getHeroicTrackById(id);
+      assert.ok(track, `Track ${id} must exist in catalog`);
+      assert.ok(track.title, 'Track must have title');
+      assert.ok(track.artist, 'Track must have artist');
+      assert.ok(track.src, 'Track must have src');
+      assert.match(track.license, /CC-BY 4\.0|Creative Commons/, 'Track must be CC-BY 4.0');
+      assert.ok(track.attribution, 'Track must have attribution text');
+      assert.ok(track.sourceUrl, 'Track must have official sourceUrl');
+    });
+  });
+
+  await t.test('190. At Launch verified as Kevin MacLeod with CC-BY 4.0', async () => {
+    const { getHeroicTrackById } = await import('../src/services/competitionMusicThemes.js');
+    const track = getHeroicTrackById('km_at_launch');
+    assert.equal(track.artist, 'Kevin MacLeod');
+    assert.equal(track.isrc, 'USUAN1100539');
+    assert.match(track.sourceUrl, /incompetech\.com/);
+    assert.match(track.attribution, /incompetech\.com/);
+  });
+
+  await t.test('191. Scott Buckley tracks verified with CC-BY 4.0 and official URL', async () => {
+    const { getHeroicTrackById } = await import('../src/services/competitionMusicThemes.js');
+    ['sb_titan', 'sb_ignis', 'sb_the_fury', 'sb_terminus'].forEach(id => {
+      const track = getHeroicTrackById(id);
+      assert.equal(track.artist, 'Scott Buckley');
+      assert.match(track.sourceUrl, /scottbuckley\.com\.au/);
+      assert.match(track.attribution, /scottbuckley\.com\.au/);
+    });
+  });
+
+  await t.test('192. custom selection mode persists safely to localStorage', async () => {
+    const {
+      getStoredMusicSelectionMode,
+      setStoredMusicSelectionMode,
+      getStoredCustomLobbyTrack,
+      setStoredCustomLobbyTrack,
+      getStoredCustomQuestionTrack,
+      setStoredCustomQuestionTrack,
+      SELECTION_MODE_CUSTOM,
+      SELECTION_MODE_THEME,
+    } = await import('../src/services/competitionMusicThemes.js');
+
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+    };
+
+    try {
+      assert.equal(getStoredMusicSelectionMode(), SELECTION_MODE_THEME);
+      setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
+      assert.equal(getStoredMusicSelectionMode(), SELECTION_MODE_CUSTOM);
+
+      setStoredCustomLobbyTrack('sb_ignis');
+      assert.equal(getStoredCustomLobbyTrack(), 'sb_ignis');
+
+      setStoredCustomQuestionTrack('sb_the_fury');
+      assert.equal(getStoredCustomQuestionTrack(), 'sb_the_fury');
+    } finally {
+      global.localStorage = originalLocalStorage;
+    }
+  });
+
+  await t.test('193. audio manager plays selected custom tracks in custom mode', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    try {
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: 'sb_ignis',
+        questionTrackId: 'sb_terminus',
+      });
+
+      const lobbySrc = competitionAudioManager.getTrackSrc('lobby');
+      assert.equal(lobbySrc, '/audio/competition/heroic/ignis.mp3');
+
+      const questionSrc = competitionAudioManager.getTrackSrc('question_active');
+      assert.equal(questionSrc, '/audio/competition/heroic/terminus.mp3');
+    } finally {
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('194. individual track preview works safely without 2nd AudioContext', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+
+    let createdSrc = null;
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        createdSrc = src;
+      }
+      play() { return Promise.resolve(); }
+      pause() {}
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      const ok = competitionAudioManager.previewTrack('sb_the_fury');
+      assert.equal(ok, true);
+      assert.equal(competitionAudioManager.previewTrackId, 'sb_the_fury');
+      assert.equal(createdSrc, '/audio/competition/heroic/the_fury.mp3');
+
+      competitionAudioManager.stopPreview(false);
+      assert.equal(competitionAudioManager.previewTrackId, null);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('195. active game disables individual track preview', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    try {
+      competitionAudioManager.currentTrack = 'question_active';
+      const result = competitionAudioManager.previewTrack('sb_titan');
+      assert.equal(result, false, 'Preview track must be disabled during active question');
+    } finally {
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('196. game pause disables individual track preview', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+    try {
+      competitionAudioManager.setGamePaused(true);
+      const result = competitionAudioManager.previewTrack('sb_titan');
+      assert.equal(result, false, 'Preview track must be disabled when game is paused');
+    } finally {
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('197. switching track preview stops old preview immediately', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    competitionAudioManager.stopAll();
+
+    const pausedSources = [];
+    class MockAudio {
+      constructor(src) { this.src = src; }
+      play() { return Promise.resolve(); }
+      pause() { pausedSources.push(this.src); }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.previewTrack('sb_titan');
+      assert.equal(competitionAudioManager.previewTrackId, 'sb_titan');
+
+      competitionAudioManager.previewTrack('km_at_launch');
+      assert.ok(pausedSources.includes('/audio/competition/heroic/titan.mp3'));
+      assert.equal(competitionAudioManager.previewTrackId, 'km_at_launch');
+
+      competitionAudioManager.stopPreview(false);
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+    }
+  });
+
+  await t.test('198. HostAudioControls renders tabs and custom selectors', () => {
+    const freshControlsSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/components/competition/HostAudioControls.jsx'), 'utf8');
+    assert.match(freshControlsSrc, /Chủ đề có sẵn/);
+    assert.match(freshControlsSrc, /Chọn riêng \(Giao hưởng\)/);
+    assert.match(freshControlsSrc, /Bản quyền & Nguồn/);
+    assert.match(freshControlsSrc, /previewTrack/);
+    assert.match(freshControlsSrc, /setCustomLobbyTrack/);
+    assert.match(freshControlsSrc, /setCustomQuestionTrack/);
+  });
+
+  await t.test('199. README documents all 5 heroic orchestral tracks with sources & licenses', () => {
+    const readmeFile = path.join(ROOT_DIR, 'public/audio/competition/README.md');
+    const content = fs.readFileSync(readmeFile, 'utf8');
+    assert.match(content, /Heroic Orchestral/);
+    assert.match(content, /Titan/);
+    assert.match(content, /At Launch/);
+    assert.match(content, /Ignis/);
+    assert.match(content, /The Fury/);
+    assert.match(content, /Terminus/);
+    assert.match(content, /Scott Buckley/);
+    assert.match(content, /Kevin MacLeod/);
+    assert.match(content, /CC-BY 4\.0/);
+    assert.match(content, /USUAN1100539/);
+  });
+
+  await t.test('200. zero source SCORM audio reused in Heroic expansion', () => {
+    const compAudioDir = path.join(ROOT_DIR, 'public/audio/competition');
+    const allFiles = [];
+    function scanDir(dir) {
+      fs.readdirSync(dir, { withFileTypes: true }).forEach(ent => {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) scanDir(full);
+        else allFiles.push(ent.name);
+      });
+    }
+    scanDir(compAudioDir);
+    ['sound1.mp3', 'sound2.mp3', 'sound3.mp3', 'sound4.mp3', 'sound5.mp3', 'video1.mp4', 'video2.mp4', 'video3.mp4'].forEach(banned => {
+      assert.equal(allFiles.includes(banned), false, `Banned SCORM file ${banned} must not exist`);
+    });
+  });
 });
+
 
