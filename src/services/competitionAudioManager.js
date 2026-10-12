@@ -98,14 +98,18 @@ class CompetitionAudioManager {
     const validMode = mode === SELECTION_MODE_CUSTOM ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
     if (this.selectionMode === validMode) return;
 
-    this.stopPreview(false);
-    if (this.currentTrack) {
-      this.stopCurrentAudioElement();
-    }
-
+    const oldSrc = this.currentTrack ? this.getTrackSrc(this.currentTrack) : null;
     this.selectionMode = validMode;
+    const newSrc = this.currentTrack ? this.getTrackSrc(this.currentTrack) : null;
 
     if (this.currentTrack) {
+      if (oldSrc === newSrc) {
+        return;
+      }
+
+      this.stopPreview(false);
+      this.stopCurrentAudioElement();
+
       if (this.selectionMode === SELECTION_MODE_THEME && this.currentThemeId === 'none') {
         this.needsPlaybackRetry = false;
         return;
@@ -126,17 +130,22 @@ class CompetitionAudioManager {
    * Set custom tracks for lobby and question
    */
   setCustomTracks({ lobbyTrackId, questionTrackId }) {
-    let changed = false;
+    let affectsActivePlayback = false;
+
     if (lobbyTrackId && this.customLobbyTrackId !== lobbyTrackId) {
       this.customLobbyTrackId = lobbyTrackId;
-      changed = true;
+      if (this.currentTrack === 'lobby') {
+        affectsActivePlayback = true;
+      }
     }
     if (questionTrackId && this.customQuestionTrackId !== questionTrackId) {
       this.customQuestionTrackId = questionTrackId;
-      changed = true;
+      if (this.currentTrack === 'question_active') {
+        affectsActivePlayback = true;
+      }
     }
 
-    if (changed && this.selectionMode === SELECTION_MODE_CUSTOM && this.currentTrack) {
+    if (affectsActivePlayback && this.selectionMode === SELECTION_MODE_CUSTOM && this.currentTrack) {
       this.stopPreview(false);
       this.stopCurrentAudioElement();
       if (!this.isGamePaused && this.globalSoundEnabled && this.musicEnabled) {

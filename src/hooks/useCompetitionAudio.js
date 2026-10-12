@@ -75,12 +75,12 @@ export function useCompetitionAudio({
     competitionAudioManager.setMusicEnabled(isMusicEnabled);
     competitionAudioManager.setSfxEnabled(isSfxEnabled);
     competitionAudioManager.setVolume(volume);
-    competitionAudioManager.setSelectionMode(selectionMode);
+    competitionAudioManager.setTheme(themeId);
     competitionAudioManager.setCustomTracks({
       lobbyTrackId: customLobbyTrackId,
       questionTrackId: customQuestionTrackId,
     });
-    competitionAudioManager.setTheme(themeId);
+    competitionAudioManager.setSelectionMode(selectionMode);
   }, []);
 
   // Synchronize local sub-controls into audio manager
@@ -125,8 +125,8 @@ export function useCompetitionAudio({
     setCustomLobbyTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
-    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ lobbyTrackId: trackId });
+    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
   }, []);
 
   const setCustomQuestionTrack = useCallback((trackId) => {
@@ -134,8 +134,8 @@ export function useCompetitionAudio({
     setCustomQuestionTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
-    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ questionTrackId: trackId });
+    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
   }, []);
 
   // Preview Theme callback

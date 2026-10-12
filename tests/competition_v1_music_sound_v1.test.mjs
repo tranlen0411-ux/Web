@@ -2708,6 +2708,434 @@ test('COMPETITION V1 — MUSIC & SOUND EFFECTS V1 TEST SUITE', async (t) => {
       assert.equal(allFiles.includes(banned), false, `Banned SCORM file ${banned} must not exist`);
     });
   });
+
+  // --- HEROIC MUSIC V1 PREVIEW BLOCKER FIX & REGRESSION TESTS (201 - 207) ---
+
+  await t.test('201. Regression: select Ignis for Lobby, The Fury for Question, F5/remount Host preserves selectionMode and exact playback paths', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const {
+      getStoredMusicSelectionMode,
+      setStoredMusicSelectionMode,
+      getStoredThemeId,
+      setStoredThemeId,
+      getStoredCustomLobbyTrack,
+      setStoredCustomLobbyTrack,
+      getStoredCustomQuestionTrack,
+      setStoredCustomQuestionTrack,
+      SELECTION_MODE_CUSTOM,
+      SELECTION_MODE_THEME,
+    } = await import('../src/services/competitionMusicThemes.js');
+
+    const originalLocalStorage = global.localStorage;
+    const store = new Map();
+    global.localStorage = {
+      getItem: (key) => store.get(key) || null,
+      setItem: (key, val) => store.set(key, String(val)),
+      removeItem: (key) => store.delete(key),
+    };
+
+    try {
+      // 1. Host chooses Ignis for Lobby and The Fury for Question
+      setStoredCustomLobbyTrack('sb_ignis');
+      setStoredCustomQuestionTrack('sb_the_fury');
+      setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
+      setStoredThemeId('classroom_chill'); // Existing preset theme in storage
+
+      assert.equal(getStoredCustomLobbyTrack(), 'sb_ignis');
+      assert.equal(getStoredCustomQuestionTrack(), 'sb_the_fury');
+      assert.equal(getStoredMusicSelectionMode(), SELECTION_MODE_CUSTOM);
+
+      // 2. Simulate F5 page reload or Host remount: read rehydrated state
+      const rehydratedMode = getStoredMusicSelectionMode();
+      const rehydratedThemeId = getStoredThemeId();
+      const rehydratedLobby = getStoredCustomLobbyTrack();
+      const rehydratedQuestion = getStoredCustomQuestionTrack();
+
+      // 3. Execute mount effect sequence as fixed in useCompetitionAudio.js:
+      // Must call setTheme -> setCustomTracks -> setSelectionMode
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setTheme(rehydratedThemeId);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: rehydratedLobby,
+        questionTrackId: rehydratedQuestion,
+      });
+      competitionAudioManager.setSelectionMode(rehydratedMode);
+
+      // 4. Invariant: selectionMode in audio manager must match custom mode (NOT overwritten by setTheme)
+      assert.equal(
+        competitionAudioManager.getSelectionMode(),
+        SELECTION_MODE_CUSTOM,
+        'selectionMode in Audio Manager must remain CUSTOM after remount/rehydration'
+      );
+
+      // 5. Invariant: resolved playback paths match Ignis and The Fury
+      const lobbySrc = competitionAudioManager.getTrackSrc('lobby');
+      const questionSrc = competitionAudioManager.getTrackSrc('question_active');
+      assert.equal(lobbySrc, '/audio/competition/heroic/ignis.mp3', 'Lobby track must resolve to Ignis');
+      assert.equal(questionSrc, '/audio/competition/heroic/the_fury.mp3', 'Question track must resolve to The Fury');
+
+      // 6. Verify static hook source guarantees setTheme is invoked BEFORE setSelectionMode
+      const freshHookSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/hooks/useCompetitionAudio.js'), 'utf8');
+      const mountEffectMatch = freshHookSrc.match(/useEffect\(\(\)\s*=>\s*\{([\s\S]*?)\},\s*\[\]\)/);
+      assert.ok(mountEffectMatch, 'Mount effect must exist in useCompetitionAudio.js');
+      const effectBody = mountEffectMatch[1];
+      const themeIndex = effectBody.indexOf('competitionAudioManager.setTheme(themeId)');
+      const modeIndex = effectBody.indexOf('competitionAudioManager.setSelectionMode(selectionMode)');
+      assert.ok(themeIndex !== -1, 'setTheme must be called in mount effect');
+      assert.ok(modeIndex !== -1, 'setSelectionMode must be called in mount effect');
+      assert.ok(
+        themeIndex < modeIndex,
+        'CRITICAL: setTheme must be called BEFORE setSelectionMode to prevent theme mode overwrite'
+      );
+    } finally {
+      global.localStorage = originalLocalStorage;
+      competitionAudioManager.stopAll();
+      competitionAudioManager.setTheme('classroom_chill');
+    }
+  });
+
+  await t.test('202. Regression: switching between theme and custom mode does not produce duplicate / overlapping audio playback', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM, SELECTION_MODE_THEME } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    const playedTracks = [];
+    const stoppedTracks = [];
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 1;
+        this.paused = false;
+      }
+      play() {
+        this.paused = false;
+        playedTracks.push(this.src);
+        return Promise.resolve();
+      }
+      pause() {
+        this.paused = true;
+        stoppedTracks.push(this.src);
+      }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.setGamePaused(false);
+
+      // Start in lobby with theme mode
+      competitionAudioManager.setTheme('classroom_chill');
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(competitionAudioManager.currentTrack, 'lobby');
+      assert.ok(playedTracks.includes('/audio/competition/lobby_loop.mp3'));
+
+      // Switch to custom mode
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: 'sb_ignis',
+        questionTrackId: 'sb_the_fury',
+      });
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+
+      // Old track must have been stopped
+      assert.ok(stoppedTracks.includes('/audio/competition/lobby_loop.mp3'));
+      // New custom track must be playing
+      assert.ok(playedTracks.includes('/audio/competition/heroic/ignis.mp3'));
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/heroic/ignis.mp3');
+
+      // Switch back to theme mode
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
+      assert.ok(stoppedTracks.includes('/audio/competition/heroic/ignis.mp3'));
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/lobby_loop.mp3');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+      competitionAudioManager.audioElements.clear();
+    }
+  });
+
+  await t.test('203. Regression: global mute, game pause, and SFX remain fully operational under custom selection mode', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    const playedTracks = [];
+    const stoppedTracks = [];
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 1;
+      }
+      play() {
+        playedTracks.push(this.src);
+        return Promise.resolve();
+      }
+      pause() {
+        stoppedTracks.push(this.src);
+      }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: 'sb_ignis',
+        questionTrackId: 'sb_the_fury',
+      });
+
+      // Play question track in custom mode
+      competitionAudioManager.playMusic('question_active');
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/heroic/the_fury.mp3');
+
+      // 1. Test Game Pause
+      competitionAudioManager.setGamePaused(true);
+      assert.equal(competitionAudioManager.isGamePaused, true);
+      assert.ok(stoppedTracks.includes('/audio/competition/heroic/the_fury.mp3'));
+
+      // Resume game
+      competitionAudioManager.setGamePaused(false);
+      assert.equal(competitionAudioManager.isGamePaused, false);
+
+      // 2. Test Global Mute
+      competitionAudioManager.setGlobalSoundEnabled(false);
+      assert.equal(competitionAudioManager.globalSoundEnabled, false);
+      // PlayMusic while globally muted must not play
+      competitionAudioManager.playMusic('question_active');
+
+      // Unmute
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      assert.equal(competitionAudioManager.globalSoundEnabled, true);
+
+      // 3. Test SFX fail-safe execution
+      assert.doesNotThrow(() => {
+        competitionAudioManager.playSfx('competition_question_open');
+        competitionAudioManager.playSfx('competition_countdown_tick');
+        competitionAudioManager.playSfx('competition_time_up');
+      });
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+      competitionAudioManager.audioElements.clear();
+      competitionAudioManager.setTheme('classroom_chill');
+    }
+  });
+
+  await t.test('204. Regression: selecting custom lobby track while live question is active does NOT trigger unintended question music switch / restart', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    let playCalls = 0;
+    let stopCalls = 0;
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 1;
+      }
+      play() {
+        playCalls++;
+        return Promise.resolve();
+      }
+      pause() {
+        stopCalls++;
+      }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: 'km_at_launch',
+        questionTrackId: 'sb_titan',
+      });
+
+      // Question is currently active
+      competitionAudioManager.playMusic('question_active');
+      const initialPlayCalls = playCalls;
+      const initialStopCalls = stopCalls;
+      assert.equal(competitionAudioManager.currentTrack, 'question_active');
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/heroic/titan.mp3');
+
+      // Host switches LOBBY track to Ignis while question is LIVE
+      competitionAudioManager.setCustomTracks({ lobbyTrackId: 'sb_ignis' });
+
+      // Invariant: Question music must NOT be stopped or re-triggered!
+      assert.equal(
+        playCalls,
+        initialPlayCalls,
+        'Question music must NOT play/restart when lobby track selection changes'
+      );
+      assert.equal(
+        stopCalls,
+        initialStopCalls,
+        'Question music must NOT be paused when lobby track selection changes'
+      );
+      assert.equal(competitionAudioManager.currentTrack, 'question_active');
+      assert.equal(competitionAudioManager.customLobbyTrackId, 'sb_ignis');
+
+      // Now host switches QUESTION track to The Fury: this MUST switch
+      competitionAudioManager.setCustomTracks({ questionTrackId: 'sb_the_fury' });
+      assert.ok(playCalls > initialPlayCalls, 'Question music MUST switch when question track selection changes');
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/heroic/the_fury.mp3');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+      competitionAudioManager.audioElements.clear();
+      competitionAudioManager.setTheme('classroom_chill');
+    }
+  });
+
+  await t.test('205. Regression: selecting custom question track while in lobby does NOT trigger unintended lobby music restart', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+
+    let playCalls = 0;
+    let stopCalls = 0;
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 1;
+      }
+      play() {
+        playCalls++;
+        return Promise.resolve();
+      }
+      pause() {
+        stopCalls++;
+      }
+    }
+    const originalAudio = global.Audio;
+    global.Audio = MockAudio;
+
+    try {
+      competitionAudioManager.setGlobalSoundEnabled(true);
+      competitionAudioManager.setMusicEnabled(true);
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: 'sb_ignis',
+        questionTrackId: 'sb_titan',
+      });
+
+      // Lobby is currently active
+      competitionAudioManager.playMusic('lobby');
+      const initialPlayCalls = playCalls;
+      const initialStopCalls = stopCalls;
+      assert.equal(competitionAudioManager.currentTrack, 'lobby');
+      assert.equal(competitionAudioManager.activeAudio.src, '/audio/competition/heroic/ignis.mp3');
+
+      // Host switches QUESTION track to The Fury while in LOBBY
+      competitionAudioManager.setCustomTracks({ questionTrackId: 'sb_the_fury' });
+
+      // Invariant: Lobby music must NOT be stopped or re-triggered!
+      assert.equal(
+        playCalls,
+        initialPlayCalls,
+        'Lobby music must NOT play/restart when question track selection changes'
+      );
+      assert.equal(
+        stopCalls,
+        initialStopCalls,
+        'Lobby music must NOT be paused when question track selection changes'
+      );
+      assert.equal(competitionAudioManager.currentTrack, 'lobby');
+      assert.equal(competitionAudioManager.customQuestionTrackId, 'sb_the_fury');
+    } finally {
+      global.Audio = originalAudio;
+      competitionAudioManager.stopAll();
+      competitionAudioManager.audioElements.clear();
+      competitionAudioManager.setTheme('classroom_chill');
+    }
+  });
+
+  await t.test('206. Regression: theme none (Không phát nhạc) preserved across mode switches & preserves SFX', async () => {
+    const { competitionAudioManager } = await import('../src/services/competitionAudioManager.js');
+    const { SELECTION_MODE_CUSTOM, SELECTION_MODE_THEME } = await import('../src/services/competitionMusicThemes.js');
+
+    competitionAudioManager.stopAll();
+    competitionAudioManager.audioElements.clear();
+    // Reset custom tracks to defaults for clean assertion
+    competitionAudioManager.setCustomTracks({
+      lobbyTrackId: 'km_at_launch',
+      questionTrackId: 'sb_titan',
+    });
+
+    try {
+      // 1. Select none theme
+      competitionAudioManager.setTheme('none');
+      assert.equal(competitionAudioManager.getTheme(), 'none');
+      assert.equal(competitionAudioManager.getSelectionMode(), SELECTION_MODE_THEME);
+
+      // Track src must be null
+      assert.equal(competitionAudioManager.getTrackSrc('lobby'), null);
+      assert.equal(competitionAudioManager.getTrackSrc('question_active'), null);
+
+      // 2. Play music does nothing
+      competitionAudioManager.playMusic('lobby');
+      assert.equal(competitionAudioManager.activeAudio, null);
+
+      // 3. Switch to custom
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      assert.equal(competitionAudioManager.getTrackSrc('lobby'), '/audio/competition/heroic/at_launch.mp3');
+
+      // 4. Switch back to theme
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
+      assert.equal(competitionAudioManager.getTrackSrc('lobby'), null);
+
+      // 5. SFX still safe and callable
+      assert.doesNotThrow(() => {
+        competitionAudioManager.playSfx('competition_question_open');
+      });
+    } finally {
+      competitionAudioManager.stopAll();
+      competitionAudioManager.audioElements.clear();
+      competitionAudioManager.setTheme('classroom_chill');
+    }
+  });
+
+  await t.test('207. Regression: independent metadata & browser decodability check for all 5 heroic MP3s', () => {
+    const heroicDir = path.join(ROOT_DIR, 'public/audio/competition/heroic');
+    const expectedTracks = {
+      'titan.mp3': { size: 7034419, id3Version: 3 },
+      'at_launch.mp3': { size: 7533048, id3Version: 2 },
+      'ignis.mp3': { size: 7676027, id3Version: 3 },
+      'the_fury.mp3': { size: 17037217, id3Version: 3 },
+      'terminus.mp3': { size: 10540115, id3Version: 3 },
+    };
+
+    for (const [filename, expected] of Object.entries(expectedTracks)) {
+      const fullPath = path.join(heroicDir, filename);
+      assert.ok(fs.existsSync(fullPath), `${filename} must exist`);
+      const stat = fs.statSync(fullPath);
+      assert.equal(stat.size, expected.size, `${filename} size mismatch`);
+
+      const buffer = fs.readFileSync(fullPath);
+      // Verify ID3 magic tag 'ID3'
+      const id3Magic = buffer.subarray(0, 3).toString('utf8');
+      assert.equal(id3Magic, 'ID3', `${filename} must start with standard ID3 header`);
+      // Verify ID3 major version byte
+      const majorVersion = buffer[3];
+      assert.equal(majorVersion, expected.id3Version, `${filename} must have valid ID3 major version`);
+    }
+  });
 });
 
 
