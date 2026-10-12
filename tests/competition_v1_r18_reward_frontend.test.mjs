@@ -641,4 +641,45 @@ test('COMPETITION V1 R18 – REWARD FRONTEND BEHAVIORAL & INTEGRATION TEST SUITE
     });
   });
 
+  // =========================================================================
+  // SUITE 11: REGRESSION – REACT HOOK IMPORT INTEGRITY AUDIT
+  // =========================================================================
+  await t.test('Suite 11: Regression – React Hook Import Integrity Audit', async (t) => {
+    await t.test('11.1. CompetitionHostPage must import useMemo and all invoked React hooks', () => {
+      const hooks = ['useState', 'useEffect', 'useRef', 'useCallback', 'useMemo'];
+      const importMatch = hostPageContent.match(/import\s+(?:React(?:\s*,\s*)?)?\{([^}]+)\}\s+from\s+['"]react['"]/);
+      assert.ok(importMatch, 'CompetitionHostPage phải có câu lệnh import { ... } from "react"');
+      const importedHooks = importMatch[1].split(',').map((h) => h.trim());
+
+      for (const hook of hooks) {
+        const hookUsage = new RegExp(`(?<!React\\.)\\b${hook}\\s*\\(`, 'g');
+        if (hookUsage.test(hostPageContent)) {
+          assert.ok(
+            importedHooks.includes(hook),
+            `CompetitionHostPage sử dụng ${hook} nhưng chưa import từ 'react' (ReferenceError prevention)`
+          );
+        }
+      }
+      assert.ok(importedHooks.includes('useMemo'), 'CompetitionHostPage bắt buộc phải import useMemo');
+    });
+
+    await t.test('11.2. CompetitionStudentPage must import all invoked React hooks', () => {
+      const hooks = ['useState', 'useEffect', 'useRef', 'useCallback', 'useMemo'];
+      const importMatch = studentPageContent.match(/import\s+(?:React(?:\s*,\s*)?)?\{([^}]+)\}\s+from\s+['"]react['"]/);
+      assert.ok(importMatch, 'CompetitionStudentPage phải có câu lệnh import { ... } from "react"');
+      const importedHooks = importMatch[1].split(',').map((h) => h.trim());
+
+      for (const hook of hooks) {
+        const hookUsage = new RegExp(`(?<!React\\.)\\b${hook}\\s*\\(`, 'g');
+        if (hookUsage.test(studentPageContent)) {
+          assert.ok(
+            importedHooks.includes(hook),
+            `CompetitionStudentPage sử dụng ${hook} nhưng chưa import từ 'react'`
+          );
+        }
+      }
+    });
+  });
+
 });
+
