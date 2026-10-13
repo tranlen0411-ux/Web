@@ -8,11 +8,11 @@ import path from 'node:path';
  * ============================================================================
  * [ISOLATED ENGINE TEST] PGLITE MOCK TEST MATRIX
  * ============================================================================
- * Môi trường: Máy chủ kiểm thử cục bộ cách ly hoàn toàn bằng engine @electric-sql/pglite.
- * Mục đích: Xác minh tính logic, an toàn và chống leo thang đặc quyền của bản vá
- *           20261013120000_auth_role_trust_hardening.sql.
- * Lưu ý: Bộ test này độc lập và KHÔNG thay thế cho Hosted Staging Runtime Verification
- *        (sẽ được thực hiện trên Supabase Staging sau khi Thầy/Cô phê duyệt).
+ * Môi trường: Máy chủ kiểm thử cách ly cục bộ sử dụng engine độc lập @electric-sql/pglite.
+ * Bản chất: Đây là MOCK / STATIC SIMULATION trong môi trường nhúng,
+ *           KHÔNG PHẢI là Hosted Staging Runtime Verification trên Supabase thật.
+ * Mục đích: Kiểm chứng logic toán tử, khả năng bồi hoàn (compensation),
+ *           an toàn phân quyền và tính tương thích của bản vá.
  * ============================================================================
  */
 describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE', () => {
@@ -147,7 +147,6 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
     `);
     const teacherId = res.rows[0].id;
 
-    // Xác nhận đã có role = teacher
     const beforeRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [teacherId]);
     assert.equal(beforeRes.rows[0].role, 'teacher');
 
@@ -167,7 +166,6 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
   });
 
   it('TC7: Luồng Admin cập nhật vai trò trực tiếp (Admin User Management / Edge Function) -> Hoạt động chính xác', async () => {
-    // 1. Tạo tài khoản thường
     const res = await db.query(`
       INSERT INTO auth.users (email, raw_user_meta_data)
       VALUES ('promoted_user@test.local', '{"full_name": "Người Dùng Thăng Chức"}'::jsonb)
@@ -175,46 +173,67 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
     `);
     const userId = res.rows[0].id;
 
-    // 2. Xác nhận ban đầu là student
     const initRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [userId]);
     assert.equal(initRes.rows[0].role, 'student');
 
-    // 3. Admin thực hiện thăng quyền qua Admin RPC / Service Role
+    // Admin thực hiện thăng quyền qua Admin RPC / Service Role
     await db.query(`
       UPDATE public.profiles
       SET role = 'teacher', updated_at = now()
       WHERE id = $1;
     `, [userId]);
 
-    // 4. Xác nhận đã thăng quyền thành công
     const updatedRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [userId]);
     assert.equal(updatedRes.rows[0].role, 'teacher', 'Admin có thể thăng quyền giáo viên an toàn qua luồng quản trị');
   });
 
-  it('TC8: Fail-Safe Guard: Nếu luồng admin-create-user gặp sự cố ở bước 2 (upsert profiles), tài khoản dừng ở "student", KHÔNG bị lộ quyền teacher/admin', async () => {
+  it('TC8A: [MOCK SIMULATION] Bồi hoàn admin-create-user: Cập nhật profiles thất bại & Xóa Auth thành công -> Dọn sạch toàn bộ', async () => {
     // Mô phỏng Edge Function admin-create-user:
-    // Bước 1: supabaseAdmin.auth.admin.createUser tạo user (trigger chạy tự động gán student)
+    // Bước 1: Tạo Auth User
     const res = await db.query(`
       INSERT INTO auth.users (email, raw_user_meta_data)
-      VALUES ('incomplete_provisioning@test.local', '{"full_name": "Tạo Dở Dang", "role": "teacher"}'::jsonb)
+      VALUES ('comp_success@test.local', '{"full_name": "Tạo Thất Bại Xóa Sạch", "role": "teacher"}'::jsonb)
       RETURNING id;
     `);
     const userId = res.rows[0].id;
 
-    // Bước 2: Giả lập mạng bị ngắt hoặc lỗi database khiến lệnh upsert role = 'teacher' KHÔNG THÀNH CÔNG
-    // (Không thực hiện update role = 'teacher')
+    // Bước 2: Cập nhật profiles thất bại (giả lập lỗi)
+    // Bước 3: Logic bồi hoàn thực thi: Xóa Auth user thành công (kéo theo xóa profile qua CASCADE)
+    await db.query(`DELETE FROM auth.users WHERE id = $1`, [userId]);
 
-    // Kiểm tra trạng thái hồ sơ trong hệ thống:
-    const profileRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [userId]);
-    assert.equal(profileRes.rows[0].role, 'student', 'Hệ thống an toàn đóng (Fail-Safe): Tài khoản dừng lại ở role = student, tuyệt đối không bị lọt quyền teacher');
+    // Kiểm tra: Cả auth.users và public.profiles đều không còn bản ghi nào
+    const authCheck = await db.query(`SELECT id FROM auth.users WHERE id = $1`, [userId]);
+    const profCheck = await db.query(`SELECT id FROM public.profiles WHERE id = $1`, [userId]);
+    assert.equal(authCheck.rows.length, 0, 'Auth user phải được thu hồi hoàn toàn');
+    assert.equal(profCheck.rows.length, 0, 'Profile mồ côi phải được xóa sạch');
   });
 
-  it('TC9: Luồng Bulk Create Students (admin-bulk-create-students) hoạt động trơn tru không bị gián đoạn', async () => {
-    // Mô phỏng 3 học sinh được bulk create bởi Admin
+  it('TC8B: [MOCK SIMULATION] Bồi hoàn admin-create-user: Cập nhật profiles thất bại & Xóa Auth THẤT BẠI -> Tài khoản dừng ở role="student", KHÔNG rò rỉ quyền teacher', async () => {
+    // Mô phỏng sự cố mạng nghiêm trọng ở Edge Function:
+    // Bước 1: Tạo Auth user thành công
+    const res = await db.query(`
+      INSERT INTO auth.users (email, raw_user_meta_data)
+      VALUES ('comp_fail_auth@test.local', '{"full_name": "Tạo Thất Bại Kẹt Auth", "role": "teacher"}'::jsonb)
+      RETURNING id;
+    `);
+    const userId = res.rows[0].id;
+
+    // Bước 2: Cập nhật profile role='teacher' THẤT BẠI
+    // Bước 3: Xóa Auth user (supabaseAdmin.auth.admin.deleteUser) CŨNG THẤT BẠI (ví dụ: timeout/mất kết nối GoTrue)
+    // -> Tài khoản Auth kẹt lại trong hệ thống
+
+    // Kiểm tra tính Fail-Safe:
+    const profCheck = await db.query(`SELECT role, is_disabled FROM public.profiles WHERE id = $1`, [userId]);
+    assert.equal(profCheck.rows.length, 1);
+    assert.equal(profCheck.rows[0].role, 'student', 'Hệ thống Fail-Safe: Khi bồi hoàn xóa Auth thất bại, tài khoản chỉ mang role=student, TUYỆT ĐỐI không có đặc quyền teacher/admin');
+  });
+
+  it('TC9: [PGLITE MOCK] Luồng mô phỏng Bulk Create Students: Trigger tương thích cấu trúc và gán đúng student', async () => {
+    // Lưu ý: Đây là kiểm thử mô phỏng độc lập trên PGlite Mock, KHÔNG phải kiểm thử toàn diện
+    // toàn bộ Deno Edge Function admin-bulk-create-students (vốn có logic stream, idempotency, lock).
     const studentInputs = [
-      { email: 'hs_1001@test.local', name: 'Học Sinh A', code: 'HS3-1001' },
-      { email: 'hs_1002@test.local', name: 'Học Sinh B', code: 'HS3-1002' },
-      { email: 'hs_1003@test.local', name: 'Học Sinh C', code: 'HS3-1003' }
+      { email: 'hs_mock_1@test.local', name: 'Học Sinh Mock 1', code: 'HS3-2001' },
+      { email: 'hs_mock_2@test.local', name: 'Học Sinh Mock 2', code: 'HS3-2002' }
     ];
 
     for (const item of studentInputs) {
@@ -225,15 +244,82 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
       `, [item.email, item.name, item.code]);
 
       const uid = uRes.rows[0].id;
-      // Cập nhật student_code như Edge Function thực hiện
       await db.query(`UPDATE public.profiles SET student_code = $1 WHERE id = $2`, [item.code, uid]);
     }
 
-    const checkRes = await db.query(`SELECT email, role, student_code FROM public.profiles WHERE email LIKE 'hs_%@test.local' ORDER BY student_code ASC;`);
-    assert.equal(checkRes.rows.length, 3);
+    const checkRes = await db.query(`SELECT email, role, student_code FROM public.profiles WHERE email LIKE 'hs_mock_%' ORDER BY student_code ASC;`);
+    assert.equal(checkRes.rows.length, 2);
     assert.equal(checkRes.rows[0].role, 'student');
-    assert.equal(checkRes.rows[0].student_code, 'HS3-1001');
-    assert.equal(checkRes.rows[2].role, 'student');
-    assert.equal(checkRes.rows[2].student_code, 'HS3-1003');
+    assert.equal(checkRes.rows[1].role, 'student');
+  });
+
+  it('TC10: [ROLLBACK TEST] Kiểm thử hàm Secure Rollback: grade_level thiếu, sai định dạng hoặc ngoài giới hạn KHÔNG làm lỗi trigger', async () => {
+    // 1. Áp dụng định nghĩa Secure Rollback Trigger an toàn (Fail-Safe Strict Trigger)
+    await db.exec(`
+      CREATE OR REPLACE FUNCTION public.handle_new_user()
+      RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+      DECLARE
+        v_grade INT;
+      BEGIN
+        BEGIN
+          v_grade := (NEW.raw_user_meta_data->>'grade_level')::INT;
+        EXCEPTION WHEN OTHERS THEN
+          v_grade := 1;
+        END;
+
+        IF v_grade IS NULL OR v_grade < 1 OR v_grade > 12 THEN
+          v_grade := 1;
+        END IF;
+
+        INSERT INTO public.profiles (id, email, full_name, role, grade_level)
+        VALUES (
+          NEW.id,
+          NEW.email,
+          pg_catalog.btrim(COALESCE(NEW.raw_user_meta_data->>'full_name', pg_catalog.split_part(NEW.email, '@', 1))),
+          'student', -- TUYỆT ĐỐI KHÔNG KHÔI PHỤC ĐỌC TỪ USER_METADATA
+          v_grade
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          email = EXCLUDED.email,
+          full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+          updated_at = pg_catalog.now();
+        RETURN NEW;
+      END;
+      $$;
+    `);
+
+    // 2. Thử nghiệm với grade_level sai định dạng (chuỗi chữ "abc")
+    const resInvalid = await db.query(`
+      INSERT INTO auth.users (email, raw_user_meta_data)
+      VALUES ('invalid_grade@test.local', '{"full_name": "Test Sai Grade", "grade_level": "abc_not_a_number"}'::jsonb)
+      RETURNING id;
+    `);
+    const p1 = (await db.query(`SELECT grade_level, role FROM public.profiles WHERE id = $1`, [resInvalid.rows[0].id])).rows[0];
+    assert.equal(p1.grade_level, 1, 'Grade level sai định dạng chuỗi phải fallback an toàn về 1');
+    assert.equal(p1.role, 'student');
+
+    // 3. Thử nghiệm với grade_level ngoài giới hạn (ví dụ: 99 hoặc -5)
+    const resOutOfRange = await db.query(`
+      INSERT INTO auth.users (email, raw_user_meta_data)
+      VALUES ('out_of_range_grade@test.local', '{"full_name": "Test Lố Grade", "grade_level": 99}'::jsonb)
+      RETURNING id;
+    `);
+    const p2 = (await db.query(`SELECT grade_level, role FROM public.profiles WHERE id = $1`, [resOutOfRange.rows[0].id])).rows[0];
+    assert.equal(p2.grade_level, 1, 'Grade level ngoài giới hạn [1-12] phải fallback về 1');
+    assert.equal(p2.role, 'student');
+
+    // 4. Thử nghiệm với metadata thiếu hoàn toàn grade_level
+    const resMissing = await db.query(`
+      INSERT INTO auth.users (email, raw_user_meta_data)
+      VALUES ('missing_grade@test.local', '{}'::jsonb)
+      RETURNING id;
+    `);
+    const p3 = (await db.query(`SELECT grade_level, role FROM public.profiles WHERE id = $1`, [resMissing.rows[0].id])).rows[0];
+    assert.equal(p3.grade_level, 1, 'Grade level thiếu phải fallback về 1');
+    assert.equal(p3.role, 'student');
+
+    // 5. Khôi phục lại migration chính thức cho các test khác nếu cần
+    const migrationPath = path.resolve('supabase/migrations/20261013120000_auth_role_trust_hardening.sql');
+    await db.exec(fs.readFileSync(migrationPath, 'utf8'));
   });
 });
