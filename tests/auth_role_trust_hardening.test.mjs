@@ -56,10 +56,68 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
       );
     `);
 
-    // 2. Nạp migration mới 20261013120000_auth_role_trust_hardening.sql
+    // 2. Thiết lập trigger và function HIỆN HỮU (Baseline State như trên Staging/Production)
+    await db.exec(`
+      CREATE OR REPLACE FUNCTION public.handle_new_user()
+      RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+      BEGIN
+        INSERT INTO public.profiles (id, email, full_name, role)
+        VALUES (
+          NEW.id,
+          NEW.email,
+          COALESCE(NEW.raw_user_meta_data->>'full_name', 'Baseline User'),
+          COALESCE(NEW.raw_user_meta_data->>'role', 'student')
+        );
+        RETURN NEW;
+      END;
+      $$;
+
+      CREATE TRIGGER on_auth_user_created
+        AFTER INSERT ON auth.users
+        FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+    `);
+
+    // Ghi nhận trạng thái và OID của trigger hiện hữu trước khi chạy migration
+    const preTriggerRes = await db.query(`
+      SELECT 
+        t.oid, 
+        t.tgname, 
+        t.tgenabled, 
+        p.proname AS function_name,
+        n.nspname AS schema_name
+      FROM pg_trigger t
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE t.tgname = 'on_auth_user_created';
+    `);
+    assert.equal(preTriggerRes.rows.length, 1, 'Trigger on_auth_user_created ban đầu phải tồn tại');
+    assert.equal(preTriggerRes.rows[0].schema_name, 'public');
+    assert.equal(preTriggerRes.rows[0].function_name, 'handle_new_user');
+    const preTriggerOid = preTriggerRes.rows[0].oid;
+
+    // 3. Nạp migration tối thiểu mới: CHỈ CREATE OR REPLACE FUNCTION (KHÔNG DROP/RECREATE TRIGGER)
     const migrationPath = path.resolve('supabase/migrations/20261013120000_auth_role_trust_hardening.sql');
     const migrationSql = fs.readFileSync(migrationPath, 'utf8');
     await db.exec(migrationSql);
+
+    // Xác minh trigger sau migration: Giữ nguyên liên kết, OID không đổi, trạng thái ENABLED
+    const postTriggerRes = await db.query(`
+      SELECT 
+        t.oid, 
+        t.tgname, 
+        t.tgenabled, 
+        p.proname AS function_name,
+        n.nspname AS schema_name
+      FROM pg_trigger t
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE t.tgname = 'on_auth_user_created';
+    `);
+    assert.equal(postTriggerRes.rows.length, 1, 'Trigger phải vẫn tồn tại sau migration');
+    assert.equal(postTriggerRes.rows[0].oid, preTriggerOid, 'OID của trigger phải được bảo toàn nguyên vẹn (Không bị DROP / RECREATE)');
+    assert.equal(postTriggerRes.rows[0].tgenabled, 'O', 'Trigger phải đang ở trạng thái ENABLED (O = origin)');
+    assert.equal(postTriggerRes.rows[0].schema_name, 'public');
+    assert.equal(postTriggerRes.rows[0].function_name, 'handle_new_user', 'Trigger vẫn liên kết đúng public.handle_new_user()');
   });
 
   after(async () => {
@@ -253,40 +311,29 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
     assert.equal(checkRes.rows[1].role, 'student');
   });
 
-  it('TC10: [ROLLBACK TEST] Kiểm thử hàm Secure Rollback: grade_level thiếu, sai định dạng hoặc ngoài giới hạn KHÔNG làm lỗi trigger', async () => {
-    // 1. Áp dụng định nghĩa Secure Rollback Trigger an toàn (Fail-Safe Strict Trigger)
-    await db.exec(`
-      CREATE OR REPLACE FUNCTION public.handle_new_user()
-      RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-      DECLARE
-        v_grade INT;
-      BEGIN
-        BEGIN
-          v_grade := (NEW.raw_user_meta_data->>'grade_level')::INT;
-        EXCEPTION WHEN OTHERS THEN
-          v_grade := 1;
-        END;
+  it('TC10: [ROLLBACK TEST] Kiểm thử tệp Secure Rollback riêng biệt: grade_level thiếu, sai định dạng hoặc ngoài giới hạn KHÔNG làm lỗi trigger', async () => {
+    // 1. Áp dụng trực tiếp tệp Secure Rollback từ đĩa: supabase/migrations/20261013120000_auth_role_trust_hardening_rollback.sql
+    const rollbackPath = path.resolve('supabase/migrations/20261013120000_auth_role_trust_hardening_rollback.sql');
+    assert.equal(fs.existsSync(rollbackPath), true, 'Tệp Secure Rollback phải tồn tại trên nhánh bảo mật');
+    const rollbackSql = fs.readFileSync(rollbackPath, 'utf8');
+    await db.exec(rollbackSql);
 
-        IF v_grade IS NULL OR v_grade < 1 OR v_grade > 12 THEN
-          v_grade := 1;
-        END IF;
-
-        INSERT INTO public.profiles (id, email, full_name, role, grade_level)
-        VALUES (
-          NEW.id,
-          NEW.email,
-          pg_catalog.btrim(COALESCE(NEW.raw_user_meta_data->>'full_name', pg_catalog.split_part(NEW.email, '@', 1))),
-          'student', -- TUYỆT ĐỐI KHÔNG KHÔI PHỤC ĐỌC TỪ USER_METADATA
-          v_grade
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          email = EXCLUDED.email,
-          full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
-          updated_at = pg_catalog.now();
-        RETURN NEW;
-      END;
-      $$;
+    // Xác nhận trigger vẫn tồn tại và trỏ đúng public.handle_new_user sau rollback
+    const rollbackTriggerRes = await db.query(`
+      SELECT 
+        t.tgname, 
+        t.tgenabled, 
+        p.proname AS function_name,
+        n.nspname AS schema_name
+      FROM pg_trigger t
+      JOIN pg_proc p ON p.oid = t.tgfoid
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE t.tgname = 'on_auth_user_created';
     `);
+    assert.equal(rollbackTriggerRes.rows.length, 1, 'Trigger vẫn tồn tại sau khi áp dụng rollback script');
+    assert.equal(rollbackTriggerRes.rows[0].tgenabled, 'O', 'Trigger vẫn ENABLED sau rollback');
+    assert.equal(rollbackTriggerRes.rows[0].schema_name, 'public');
+    assert.equal(rollbackTriggerRes.rows[0].function_name, 'handle_new_user');
 
     // 2. Thử nghiệm với grade_level sai định dạng (chuỗi chữ "abc")
     const resInvalid = await db.query(`
@@ -296,7 +343,7 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
     `);
     const p1 = (await db.query(`SELECT grade_level, role FROM public.profiles WHERE id = $1`, [resInvalid.rows[0].id])).rows[0];
     assert.equal(p1.grade_level, 1, 'Grade level sai định dạng chuỗi phải fallback an toàn về 1');
-    assert.equal(p1.role, 'student');
+    assert.equal(p1.role, 'student', 'Rollback TUYỆT ĐỐI không khôi phục tự cấp quyền từ metadata');
 
     // 3. Thử nghiệm với grade_level ngoài giới hạn (ví dụ: 99 hoặc -5)
     const resOutOfRange = await db.query(`
@@ -318,7 +365,7 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
     assert.equal(p3.grade_level, 1, 'Grade level thiếu phải fallback về 1');
     assert.equal(p3.role, 'student');
 
-    // 5. Khôi phục lại migration chính thức cho các test khác nếu cần
+    // 5. Nạp lại migration chính thức từ đĩa
     const migrationPath = path.resolve('supabase/migrations/20261013120000_auth_role_trust_hardening.sql');
     await db.exec(fs.readFileSync(migrationPath, 'utf8'));
   });

@@ -110,11 +110,5 @@ BEGIN
 END;
 $$;
 
--- Đảm bảo trigger on_auth_user_created gắn chặt với hàm an toàn mới
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
 COMMENT ON FUNCTION public.handle_new_user() IS 
 'Trigger an toàn tự động khởi tạo hồ sơ người dùng. Khóa cứng vai trò student cho mọi lượt tự đăng ký; chỉ tin cậy vai trò từ raw_app_meta_data của Quản trị viên.';
