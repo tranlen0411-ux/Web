@@ -312,9 +312,9 @@ describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE
   });
 
   it('TC10: [ROLLBACK TEST] Kiểm thử tệp Secure Rollback riêng biệt: grade_level thiếu, sai định dạng hoặc ngoài giới hạn KHÔNG làm lỗi trigger', async () => {
-    // 1. Áp dụng trực tiếp tệp Secure Rollback từ đĩa: supabase/migrations/20261013120000_auth_role_trust_hardening_rollback.sql
-    const rollbackPath = path.resolve('supabase/migrations/20261013120000_auth_role_trust_hardening_rollback.sql');
-    assert.equal(fs.existsSync(rollbackPath), true, 'Tệp Secure Rollback phải tồn tại trên nhánh bảo mật');
+    // 1. Áp dụng trực tiếp tệp Secure Rollback từ đĩa: docs/security/rollback/auth_role_trust_hardening_rollback.sql
+    const rollbackPath = path.resolve('docs/security/rollback/auth_role_trust_hardening_rollback.sql');
+    assert.equal(fs.existsSync(rollbackPath), true, 'Tệp Secure Rollback phải tồn tại tại docs/security/rollback/');
     const rollbackSql = fs.readFileSync(rollbackPath, 'utf8');
     await db.exec(rollbackSql);
 
