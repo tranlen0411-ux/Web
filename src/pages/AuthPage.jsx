@@ -14,7 +14,6 @@ export const AuthPage = () => {
   const location = useLocation();
 
   const [mode, setMode] = useState('student_quick'); // 'student_quick' | 'email_login' | 'email_signup' | 'forgot_password'
-  const [role, setRole] = useState('student');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');

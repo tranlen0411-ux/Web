@@ -4,13 +4,24 @@ import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-describe('P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE', () => {
+/**
+ * ============================================================================
+ * [ISOLATED ENGINE TEST] PGLITE MOCK TEST MATRIX
+ * ============================================================================
+ * Môi trường: Máy chủ kiểm thử cục bộ cách ly hoàn toàn bằng engine @electric-sql/pglite.
+ * Mục đích: Xác minh tính logic, an toàn và chống leo thang đặc quyền của bản vá
+ *           20261013120000_auth_role_trust_hardening.sql.
+ * Lưu ý: Bộ test này độc lập và KHÔNG thay thế cho Hosted Staging Runtime Verification
+ *        (sẽ được thực hiện trên Supabase Staging sau khi Thầy/Cô phê duyệt).
+ * ============================================================================
+ */
+describe('[ISOLATED ENGINE TEST] P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE', () => {
   let db;
 
   before(async () => {
     db = new PGlite();
 
-    // 1. Tạo mock schema auth và public
+    // 1. Tạo mock schema auth và public theo chuẩn Supabase PostgreSQL
     await db.exec(`
       CREATE SCHEMA IF NOT EXISTS auth;
       CREATE SCHEMA IF NOT EXISTS public;
@@ -178,5 +189,51 @@ describe('P0 AUTH ROLE TRUST HARDENING AUDIT & TEST SUITE', () => {
     // 4. Xác nhận đã thăng quyền thành công
     const updatedRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [userId]);
     assert.equal(updatedRes.rows[0].role, 'teacher', 'Admin có thể thăng quyền giáo viên an toàn qua luồng quản trị');
+  });
+
+  it('TC8: Fail-Safe Guard: Nếu luồng admin-create-user gặp sự cố ở bước 2 (upsert profiles), tài khoản dừng ở "student", KHÔNG bị lộ quyền teacher/admin', async () => {
+    // Mô phỏng Edge Function admin-create-user:
+    // Bước 1: supabaseAdmin.auth.admin.createUser tạo user (trigger chạy tự động gán student)
+    const res = await db.query(`
+      INSERT INTO auth.users (email, raw_user_meta_data)
+      VALUES ('incomplete_provisioning@test.local', '{"full_name": "Tạo Dở Dang", "role": "teacher"}'::jsonb)
+      RETURNING id;
+    `);
+    const userId = res.rows[0].id;
+
+    // Bước 2: Giả lập mạng bị ngắt hoặc lỗi database khiến lệnh upsert role = 'teacher' KHÔNG THÀNH CÔNG
+    // (Không thực hiện update role = 'teacher')
+
+    // Kiểm tra trạng thái hồ sơ trong hệ thống:
+    const profileRes = await db.query(`SELECT role FROM public.profiles WHERE id = $1`, [userId]);
+    assert.equal(profileRes.rows[0].role, 'student', 'Hệ thống an toàn đóng (Fail-Safe): Tài khoản dừng lại ở role = student, tuyệt đối không bị lọt quyền teacher');
+  });
+
+  it('TC9: Luồng Bulk Create Students (admin-bulk-create-students) hoạt động trơn tru không bị gián đoạn', async () => {
+    // Mô phỏng 3 học sinh được bulk create bởi Admin
+    const studentInputs = [
+      { email: 'hs_1001@test.local', name: 'Học Sinh A', code: 'HS3-1001' },
+      { email: 'hs_1002@test.local', name: 'Học Sinh B', code: 'HS3-1002' },
+      { email: 'hs_1003@test.local', name: 'Học Sinh C', code: 'HS3-1003' }
+    ];
+
+    for (const item of studentInputs) {
+      const uRes = await db.query(`
+        INSERT INTO auth.users (email, raw_user_meta_data)
+        VALUES ($1, jsonb_build_object('full_name', $2::text, 'student_code', $3::text, 'role', 'student'))
+        RETURNING id;
+      `, [item.email, item.name, item.code]);
+
+      const uid = uRes.rows[0].id;
+      // Cập nhật student_code như Edge Function thực hiện
+      await db.query(`UPDATE public.profiles SET student_code = $1 WHERE id = $2`, [item.code, uid]);
+    }
+
+    const checkRes = await db.query(`SELECT email, role, student_code FROM public.profiles WHERE email LIKE 'hs_%@test.local' ORDER BY student_code ASC;`);
+    assert.equal(checkRes.rows.length, 3);
+    assert.equal(checkRes.rows[0].role, 'student');
+    assert.equal(checkRes.rows[0].student_code, 'HS3-1001');
+    assert.equal(checkRes.rows[2].role, 'student');
+    assert.equal(checkRes.rows[2].student_code, 'HS3-1003');
   });
 });
