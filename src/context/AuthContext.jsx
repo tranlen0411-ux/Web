@@ -125,8 +125,8 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
-  // Đăng ký tài khoản
-  const signUp = async ({ email, password, fullName, role = 'student', gradeLevel = 1 }) => {
+  // Đăng ký tài khoản (Tự đăng ký người dùng - bảo vệ mặc định vai trò học sinh)
+  const signUp = async ({ email, password, fullName, gradeLevel = 1 }) => {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signUp({
@@ -135,8 +135,7 @@ export const AuthProvider = ({ children }) => {
         options: {
           data: {
             full_name: fullName,
-            role,
-            grade_level: parseInt(gradeLevel),
+            grade_level: parseInt(gradeLevel) || 1,
             avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fullName)}`
           }
         }

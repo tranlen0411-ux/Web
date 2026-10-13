@@ -77,7 +77,7 @@ export const AuthPage = () => {
         triggerSound('victory');
         navigate('/');
       } else if (mode === 'email_signup') {
-        const res = await signUp({ email: email.trim(), password, fullName: fullName.trim(), role, gradeLevel });
+        const res = await signUp({ email: email.trim(), password, fullName: fullName.trim(), gradeLevel });
         if (res.error) throw res.error;
         triggerSound('victory');
         navigate('/');
@@ -336,15 +336,23 @@ export const AuthPage = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-black text-slate-700 mb-1">Đăng ký vai trò:</label>
+                    <label className="block text-xs font-black text-slate-700 mb-1">Khối Lớp:</label>
                     <select
-                      value={role}
-                      onChange={(e) => setRole(e.target.value)}
+                      value={gradeLevel}
+                      onChange={(e) => setGradeLevel(Number(e.target.value))}
                       className="w-full p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl font-bold text-sm bg-white"
                     >
-                      <option value="teacher">👩‍🏫 Giáo Viên Tiểu Học</option>
-                      <option value="student">🎒 Học Sinh Tiểu Học</option>
+                      <option value={1}>Lớp 1</option>
+                      <option value={2}>Lớp 2</option>
+                      <option value={3}>Lớp 3</option>
+                      <option value={4}>Lớp 4</option>
+                      <option value={5}>Lớp 5</option>
                     </select>
+                  </div>
+
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] font-bold text-amber-900 flex items-start gap-2">
+                    <span className="text-sm">ℹ️</span>
+                    <span>Tài khoản tự đăng ký mặc định là tài khoản Học sinh. Tài khoản Giáo viên và Quản trị viên do Nhà trường cấp qua hệ thống quản lý nội bộ.</span>
                   </div>
                 </>
               )}
@@ -423,7 +431,7 @@ export const AuthPage = () => {
                 onClick={() => { setMode('email_signup'); setErrorMsg(''); setSuccessMsg(''); }}
                 className="text-xs font-bold text-sky-600 hover:underline"
               >
-                Chưa có tài khoản? Tạo tài khoản Giáo viên / Học sinh mới
+                Chưa có tài khoản? Đăng ký tài khoản học tập mới
               </button>
             ) : (
               <button
