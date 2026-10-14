@@ -432,8 +432,9 @@ export function CompetitionHostPage() {
     }
     if (decision.nextStatus === 'saved' && snapshot?.audio_config_persisted) {
       lastSavedAudioConfigRef.current = snapshot.audio_config;
-      if (snapshot._fetched_at) {
-        lastAudioConfigSavedAtRef.current = Math.max(lastAudioConfigSavedAtRef.current, snapshot._fetched_at);
+      const snapshotAudioTimestamp = snapshot._audio_fetched_at || snapshot._fetched_at;
+      if (snapshotAudioTimestamp) {
+        lastAudioConfigSavedAtRef.current = Math.max(lastAudioConfigSavedAtRef.current, snapshotAudioTimestamp);
       }
     }
   }, [
@@ -444,6 +445,7 @@ export function CompetitionHostPage() {
     snapshot?.audio_config_error,
     snapshot?.audio_config,
     snapshot?._fetched_at,
+    snapshot?._audio_fetched_at,
     activeSessionId,
     audioConfigStatus
   ]);

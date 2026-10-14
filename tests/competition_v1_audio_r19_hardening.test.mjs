@@ -719,14 +719,16 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
 
     // 12.9. Stale Polling Snapshot Arriving After RPC Saved Avoids Reverting To legacy_missing
     await st.test('12.9. Stale Polling Snapshot Arriving After RPC Saved Avoids Reverting To legacy_missing', () => {
-      // Current status is already 'saved' (e.g. Host successfully persisted via RPC)
+      // Current status is already 'saved' (e.g. Host successfully persisted via RPC at T = 1000)
       const currentStatus = 'saved';
       const activeSessionId = 'session-123';
+      const lastSavedAt = 1000;
 
-      // Stale polling snapshot (persisted: false, missing config) arrives after RPC succeeded
+      // Stale polling snapshot (persisted: false, missing config) fetched at T = 800 BEFORE RPC succeeded at T = 1000
       const staleSnapshot = {
         id: 'session-123',
         status: 'waiting',
+        _audio_fetched_at: 800,
         audio_config_persisted: false,
         audio_config_state: 'missing',
         audio_config: null,
@@ -736,6 +738,7 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         snapshot: staleSnapshot,
         activeSessionId,
         currentStatus,
+        lastSavedAt,
         pendingAudioConfig: null,
       });
 
@@ -917,6 +920,176 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       assert.strictEqual(decision.action, 'RESTORE_FROM_DB');
       assert.strictEqual(decision.nextStatus, 'saved');
       assert.strictEqual(decision.nextMode, 'in_class');
+    });
+
+    // 12.13. Fresh Missing Snapshot After Saved Online Transitions to failed (NOT legacy_missing) & Preserves Online Mode
+    await st.test('12.13. Fresh Missing Snapshot After Saved Online Transitions to failed & Preserves Online Mode', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 2000;
+      const currentStatus = 'saved';
+      const onlineConfig = {
+        mode: 'online',
+        selection_mode: 'theme',
+        theme_id: 'classroom_chill',
+        custom_lobby_track_id: null,
+        custom_question_track_id: null,
+      };
+
+      // A fresh snapshot arrives fetched at T = 2200 >= 2000 (after RPC save succeeded), but reports missing!
+      const freshMissingSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _audio_fetched_at: 2200,
+        _fetched_at: 2150,
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config_error: null,
+        audio_config: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: freshMissingSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: onlineConfig,
+        lastSavedAt,
+        pendingAudioConfig: null,
+      });
+
+      // MUST transition to failed, NOT legacy_missing!
+      assert.strictEqual(decision.action, 'FRESH_MISSING_AFTER_SAVED');
+      assert.strictEqual(decision.nextStatus, 'failed', 'Must transition to failed (NOT legacy_missing)');
+      assert.strictEqual(decision.nextMode, null, 'Must preserve Host online mode (nextMode: null)');
+      assert.strictEqual(decision.shouldAutoHeal, false, 'Must NEVER auto-heal in_class');
+      assert.ok(decision.nextError.includes('chưa được ghi nhận trên máy chủ'));
+    });
+
+    // 12.14. Stale Missing Snapshot Arriving After Saved Online Is Dropped (Does NOT Demote saved)
+    await st.test('12.14. Stale Missing Snapshot Arriving After Saved Online Is Dropped', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 2000;
+      const currentStatus = 'saved';
+      const onlineConfig = {
+        mode: 'online',
+        selection_mode: 'theme',
+        theme_id: 'classroom_chill',
+        custom_lobby_track_id: null,
+        custom_question_track_id: null,
+      };
+
+      // Stale in-flight snapshot fetched at T = 1800 (< 2000)
+      const staleMissingSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _audio_fetched_at: 1800,
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config_error: null,
+        audio_config: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: staleMissingSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: onlineConfig,
+        lastSavedAt,
+        pendingAudioConfig: null,
+      });
+
+      assert.strictEqual(decision.action, 'IGNORE_STALE_UNPERSISTED_SNAPSHOT');
+      assert.strictEqual(decision.nextStatus, null, 'nextStatus is null, saved is NOT demoted');
+      assert.strictEqual(decision.nextMode, null);
+    });
+
+    // 12.15. Fresh 403 Forbidden Query Error Transitions to failed & Preserves Online Mode
+    await st.test('12.15. Fresh 403 Forbidden Query Error Transitions to failed & Preserves Online Mode', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 2000;
+      const currentStatus = 'saved';
+
+      const fresh403Snapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _audio_fetched_at: 2300,
+        audio_config_persisted: false,
+        audio_config_state: 'error',
+        audio_config_error: '403 Forbidden: Insufficient privileges on audio table',
+        audio_config: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: fresh403Snapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: { mode: 'online' },
+        lastSavedAt,
+      });
+
+      assert.strictEqual(decision.action, 'QUERY_ERROR');
+      assert.strictEqual(decision.nextStatus, 'failed');
+      assert.strictEqual(decision.nextMode, null, 'Must preserve Online mode selection');
+      assert.strictEqual(decision.shouldAutoHeal, false);
+      assert.ok(decision.nextError.includes('403 Forbidden'));
+    });
+
+    // 12.16. Truly Legacy R18 Waiting Room Transitions to legacy_missing
+    await st.test('12.16. Truly Legacy R18 Waiting Room Transitions to legacy_missing', () => {
+      const activeSessionId = 'session-legacy-r18';
+
+      // No lastSavedConfig, lastSavedAt: 0, currentStatus: idle
+      const legacySnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config_error: null,
+        audio_config: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: legacySnapshot,
+        activeSessionId,
+        currentStatus: 'idle',
+        lastSavedConfig: null,
+        lastSavedAt: 0,
+      });
+
+      assert.strictEqual(decision.action, 'LEGACY_MISSING_NEEDS_CONFIRMATION');
+      assert.strictEqual(decision.nextStatus, 'legacy_missing');
+      assert.strictEqual(decision.nextMode, 'in_class');
+      assert.strictEqual(decision.shouldAutoHeal, false, 'Does NOT auto-heal without Host click');
+    });
+
+    // 12.17. _audio_fetched_at Precision Prevents False Stale Detection When Session Fetch Started Before Save
+    await st.test('12.17. _audio_fetched_at Precision Prevents False Stale Detection', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 2000;
+      const currentStatus = 'saved';
+
+      // getSessionSnapshot began at T = 1900 (< 2000), but audio query began at T = 2050 (>= 2000)
+      const snapshotWithBothTimestamps = {
+        id: activeSessionId,
+        status: 'waiting',
+        _fetched_at: 1900,
+        _audio_fetched_at: 2050, // >= 2000 -> FRESH for audio!
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config_error: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: snapshotWithBothTimestamps,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: { mode: 'online' },
+        lastSavedAt,
+      });
+
+      // Must be treated as FRESH because audio query occurred after save!
+      assert.strictEqual(decision.action, 'FRESH_MISSING_AFTER_SAVED');
+      assert.strictEqual(decision.nextStatus, 'failed');
+      assert.strictEqual(decision.nextMode, null);
     });
   });
 });

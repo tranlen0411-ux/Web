@@ -691,6 +691,7 @@ export async function getSessionSnapshot(sessionId) {
     if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.', status: 404 };
 
     // Attach audio_config: explicitly distinguish persisted record from missing legacy and query errors
+    const audioFetchStartTime = Date.now();
     try {
       const { data: audioRow, error: audioErr, status: audioStatus } = await supabase
         .from('competition_session_audio_configs')
@@ -725,6 +726,7 @@ export async function getSessionSnapshot(sessionId) {
     }
 
     data._fetched_at = fetchStartTime;
+    data._audio_fetched_at = audioFetchStartTime;
     return { success: true, data };
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };

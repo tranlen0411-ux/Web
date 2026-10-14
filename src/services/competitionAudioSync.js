@@ -128,11 +128,16 @@ export function classifyAudioSnapshotState({
     };
   }
 
-  // Freshness check: Determine if snapshot was fetched BEFORE the last successful save
+  // Freshness check: Determine if snapshot audio query was initiated BEFORE the last successful save.
+  // Use _audio_fetched_at if available (when audio config was specifically queried), falling back to _fetched_at.
+  const audioFetchedAt = typeof snapshot._audio_fetched_at === 'number'
+    ? snapshot._audio_fetched_at
+    : snapshot._fetched_at;
+
   const isSnapshotStale = Boolean(
     lastSavedAt > 0 &&
-    typeof snapshot._fetched_at === 'number' &&
-    snapshot._fetched_at < lastSavedAt
+    typeof audioFetchedAt === 'number' &&
+    audioFetchedAt < lastSavedAt
   );
 
   // Situation 2: Query failed (401/403/500/network)
@@ -160,10 +165,10 @@ export function classifyAudioSnapshotState({
     };
   }
 
-  // Guard 3: If current status is ALREADY 'saved' and snapshot is unpersisted:
-  // - If it was fetched BEFORE the save completed (stale) or is missing from lag, drop it so it doesn't demote 'saved'
-  if (currentStatus === 'saved' && snapshot.audio_config_persisted === false) {
-    if (isSnapshotStale || snapshot.audio_config_state === 'missing') {
+  // Guard 3: If Host already saved R19 configuration (or currentStatus === 'saved') and snapshot is unpersisted:
+  if ((currentStatus === 'saved' || lastSavedConfig) && snapshot.audio_config_persisted === false) {
+    // 3.1: If the unpersisted snapshot is actually stale (fetched before save completed), safely drop it
+    if (isSnapshotStale) {
       return {
         action: 'IGNORE_STALE_UNPERSISTED_SNAPSHOT',
         nextStatus: null,
@@ -173,6 +178,19 @@ export function classifyAudioSnapshotState({
         shouldAutoHeal: false,
       };
     }
+
+    // 3.2: FRESH missing snapshot arriving AFTER save has completed:
+    // The database does NOT have the saved record (e.g. save did not persist or row was removed).
+    // MUST transition to 'failed' (NOT 'legacy_missing' because Host already saved R19).
+    // STRICTLY preserve Host's chosen mode (e.g. online) and DO NOT auto-heal in_class!
+    return {
+      action: 'FRESH_MISSING_AFTER_SAVED',
+      nextStatus: 'failed',
+      nextMode: null, // PRESERVE Host's selected online mode!
+      nextError: 'Cấu hình âm thanh chưa được ghi nhận trên máy chủ sau khi lưu.',
+      shouldClearPending: false,
+      shouldAutoHeal: false, // STRICTLY PROHIBITED to write default in_class!
+    };
   }
 
   // Guard 4: Authoritative DB record exists
