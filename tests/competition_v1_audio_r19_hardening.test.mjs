@@ -212,20 +212,29 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         `);
       }, /permission denied for function competition_host_set_audio_config/i, 'Anon role must be denied execute on host RPC');
 
-      // 2. Role anon: SELECT on waiting session is GRANTED
-      await db.exec(`
-        SET ROLE anon;
-        SELECT * FROM public.competition_session_audio_configs WHERE session_id = '${sessionId}';
-        RESET ROLE;
-      `);
+      // 2. Role anon: SELECT on waiting session is GRANTED & returns actual row with valid config
+      await db.exec(`SET ROLE anon;`);
+      const anonSelectRes = await db.query(
+        `SELECT session_id, config FROM public.competition_session_audio_configs WHERE session_id = '${sessionId}';`
+      );
+      await db.exec(`RESET ROLE;`);
+      assert.strictEqual(anonSelectRes.rows.length, 1, 'Anon role must be able to read waiting session audio config');
+      assert.strictEqual(anonSelectRes.rows[0].config.mode, 'in_class', 'Anon reads correct persisted mode');
+      assert.strictEqual(anonSelectRes.rows[0].config.selection_mode, 'theme', 'Anon reads correct selection_mode');
 
-      // 3. Role authenticated: executing host RPC is permitted at SQL level
+      // 3. Role authenticated: executing host RPC is permitted at SQL level & returns success: true with exact config
       await db.exec(`
         SET ROLE authenticated;
         SET request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
-        SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig});
-        RESET ROLE;
       `);
+      const hostRpcRes = await db.query(
+        `SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig}) as result;`
+      );
+      await db.exec(`RESET ROLE;`);
+      const rpcResult = hostRpcRes.rows[0].result;
+      assert.strictEqual(rpcResult.success, true, 'Host RPC result must be success: true');
+      assert.strictEqual(rpcResult.audio_config.mode, 'in_class', 'Host RPC must return configured mode');
+      assert.strictEqual(rpcResult.audio_config.theme_id, 'classroom_chill', 'Host RPC must return configured theme');
     });
   });
 
@@ -249,8 +258,8 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // 8.2. Audio Save State Machine & Persistence verification
     assert.match(hostPageSrc, /const \[audioConfigStatus, setAudioConfigStatus\] = useState\('idle'\);/, 'Audio config status state present');
     assert.match(hostPageSrc, /setAudioConfigStatus\('saving'\)/, 'Sets saving state before RPC');
-    assert.match(hostPageSrc, /snapshot\?\.audio_config_persisted === true/, 'Only marks saved when audio_config_persisted is true');
-    assert.match(hostPageSrc, /snapshot\.audio_config_persisted === false/, 'Marks failed when DB row is missing');
+    assert.match(hostPageSrc, /snapshot\.audio_config_persisted === true && isValidAudioConfig\(snapshot\.audio_config\)/, 'Only marks saved when persisted is true and config is valid');
+    assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)\s*\{\s*return;?\s*\}/, 'Protects saving state from polling or stale snapshot overwrite');
 
     // 8.3. Start Session locked until saved
     assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)/, 'Blocks start while saving');
@@ -258,7 +267,7 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(hostPageSrc, /disabled=\{actionPending \|\| participants\.length === 0 \|\| audioConfigStatus !== 'saved'\}/, 'Start button disabled when not saved');
 
     // 8.4. Timeout re-verification without creating a new room
-    assert.match(hostPageSrc, /verifyRes\.data\?\.audio_config_persisted === true/, 'Re-verifies from DB on timeout before concluding failure');
+    assert.match(hostPageSrc, /isAudioConfigMatching\(verifyRes\.data\?\.audio_config, audioPayload\)/, 'Re-verifies exact config match on timeout before concluding failure');
     assert.match(hostPageSrc, /const handleRetrySaveAudioConfig = async/, 'handleRetrySaveAudioConfig present');
     assert.match(hostPageSrc, /sessionId: activeSessionId/, 'Retries for current activeSessionId without creating room');
   });
@@ -279,9 +288,10 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(studentPageSrc, /import { StudentAudioControls }/, 'Student page imports StudentAudioControls');
     assert.match(studentPageSrc, /<StudentAudioControls {\.\.\.studentAudio} \/>/, 'StudentAudioControls rendered in student page');
 
-    // 9.4. Anti-stale question open SFX on F5 or mid-question unlock
-    assert.match(studentHookSrc, /if \(currentQuestionId && currentPhase === 'QUESTION_ACTIVE'\)/, 'F5 mount guard present');
-    assert.match(studentHookSrc, /if \(!isStudentAudioUnlocked && currentQuestionId\)/, 'Locked question change guard present');
+    // 9.4. Anti-stale SFX on F5 or late unlock for all 3 phases (QUESTION_ACTIVE, TIME_UP, QUESTION_RESULTS)
+    assert.match(studentHookSrc, /if \(currentPhase === 'QUESTION_ACTIVE'\)/, 'Pre-consumes QUESTION_ACTIVE SFX');
+    assert.match(studentHookSrc, /if \(currentPhase === 'TIME_UP'\)/, 'Pre-consumes TIME_UP SFX');
+    assert.match(studentHookSrc, /if \(currentPhase === 'QUESTION_RESULTS'\)/, 'Pre-consumes QUESTION_RESULTS SFX');
   });
 
   await t.test('10. Audio Track Synchronization & Multi-Device Simulation', () => {
@@ -313,5 +323,20 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // Clean reset
     competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
     competitionAudioManager.setTheme(DEFAULT_MUSIC_THEME);
+  });
+
+  await t.test('11. Legacy R18 Session Compatibility (Zero Audio Record in Database)', () => {
+    // 11.1. In an R18 room without audio row, fallback applies seamlessly
+    assert.strictEqual(DEFAULT_SESSION_AUDIO_CONFIG.mode, 'in_class');
+    assert.strictEqual(DEFAULT_SESSION_AUDIO_CONFIG.selection_mode, 'theme');
+
+    // 11.2. Host in-progress or finished controls are not gated on audioConfigStatus
+    assert.match(hostPageSrc, /handleNextQuestion/, 'handleNextQuestion present for in_progress sessions');
+    assert.match(hostPageSrc, /handleCloseQuestion/, 'handleCloseQuestion present for in_progress sessions');
+    assert.match(hostPageSrc, /handleFinishSession/, 'handleFinishSession present for in_progress sessions');
+
+    // 11.3. Student audio stays completely silent for in_class fallback
+    assert.match(studentHookSrc, /if \(isInClass\)/, 'isInClass halts and silences student audio completely');
+    assert.match(studentHookSrc, /competitionAudioManager\.stopAll\(\)/, 'Stops all audio when isInClass is true');
   });
 });

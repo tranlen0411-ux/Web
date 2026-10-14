@@ -116,27 +116,48 @@ export function useCompetitionStudentAudio({
     }
   }, [sessionId]);
 
-  // Mount guard for F5 or late join during active question
+  // Mount guard for F5 or late join: pre-consume all current and past SFX events
   useEffect(() => {
-    if (currentQuestionId && currentPhase === 'QUESTION_ACTIVE') {
-      const openKey = `${sessionId}:${currentQuestionId}:QUESTION_OPEN`;
-      lastPlayedSfxSetRef.current.add(openKey);
+    if (currentQuestionId) {
+      if (currentPhase === 'QUESTION_ACTIVE') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+      } else if (currentPhase === 'TIME_UP') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:TIME_UP`);
+      } else if (currentPhase === 'QUESTION_RESULTS') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:TIME_UP`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_RESULTS`);
+      }
     }
   }, []); // Run once on initial mount to prevent stale fanfare on F5
 
-  // Question change reset
+  // Question change reset & Late unlock guard
   useEffect(() => {
     if (prevQuestionIdRef.current !== currentQuestionId) {
       prevQuestionIdRef.current = currentQuestionId;
-      lastPlayedSfxSetRef.current.delete(`${sessionId}:${currentQuestionId}:TIME_UP`);
-
-      // If audio is locked when question changes, pre-consume QUESTION_OPEN
-      // so clicking "Bật âm thanh" mid-question will NOT fire a delayed fanfare!
-      if (!isStudentAudioUnlocked && currentQuestionId) {
-        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+      if (currentQuestionId) {
+        lastPlayedSfxSetRef.current.delete(`${sessionId}:${currentQuestionId}:TIME_UP`);
+        lastPlayedSfxSetRef.current.delete(`${sessionId}:${currentQuestionId}:QUESTION_RESULTS`);
       }
     }
-  }, [currentQuestionId, sessionId, isStudentAudioUnlocked]);
+
+    // While audio is locked, pre-consume whichever SFX events occur
+    // so clicking "Bật âm thanh" late (in QUESTION_ACTIVE, TIME_UP, or QUESTION_RESULTS)
+    // will NOT fire past SFX!
+    if (!isStudentAudioUnlocked && currentQuestionId) {
+      if (currentPhase === 'QUESTION_ACTIVE') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+      } else if (currentPhase === 'TIME_UP') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:TIME_UP`);
+      } else if (currentPhase === 'QUESTION_RESULTS') {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:TIME_UP`);
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_RESULTS`);
+      }
+    }
+  }, [currentQuestionId, currentPhase, sessionId, isStudentAudioUnlocked]);
 
   // Master Audio Execution Effect
   useEffect(() => {

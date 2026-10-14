@@ -356,27 +356,54 @@ export function CompetitionHostPage() {
     setSnapshot
   } = useHostCompetitionPolling(activeSessionId);
 
+// Audio configuration validation helpers
+const isValidAudioConfig = (cfg) => {
+  if (!cfg || typeof cfg !== 'object') return false;
+  if (!['in_class', 'online'].includes(cfg.mode)) return false;
+  if (!['theme', 'custom'].includes(cfg.selection_mode)) return false;
+  if (typeof cfg.theme_id !== 'string') return false;
+  return true;
+};
+
+const isAudioConfigMatching = (actual, requested) => {
+  if (!actual || typeof actual !== 'object' || !requested || typeof requested !== 'object') {
+    return false;
+  }
+  return (
+    actual.mode === requested.mode &&
+    actual.selection_mode === requested.selection_mode &&
+    actual.theme_id === requested.theme_id &&
+    actual.custom_lobby_track_id === requested.custom_lobby_track_id &&
+    actual.custom_question_track_id === requested.custom_question_track_id
+  );
+};
+
   // Synchronize audio configuration status from restored snapshot
   useEffect(() => {
     if (!activeSessionId) {
       setAudioConfigStatus('idle');
       return;
     }
-    // Only mark 'saved' when audio_config_persisted is explicitly TRUE from database
-    if (snapshot?.audio_config_persisted === true) {
-      setAudioConfigStatus('saved');
-      setAudioConfigError(null);
-      if (snapshot.audio_config?.mode) {
-        setCompetitionAudioMode(snapshot.audio_config.mode);
-      }
-    } else if (snapshot && snapshot.id === activeSessionId && snapshot.audio_config_persisted === false) {
-      // If snapshot is loaded for activeSessionId but no DB record exists and not in saving process
-      if (audioConfigStatus !== 'saving') {
+
+    // Guard: Background polling or stale snapshot MUST NEVER overwrite 'saving' in progress
+    if (audioConfigStatus === 'saving') {
+      return;
+    }
+
+    // Only process snapshot if it authoritatively matches activeSessionId
+    if (snapshot && snapshot.id === activeSessionId) {
+      if (snapshot.audio_config_persisted === true && isValidAudioConfig(snapshot.audio_config)) {
+        setAudioConfigStatus('saved');
+        setAudioConfigError(null);
+        if (snapshot.audio_config?.mode) {
+          setCompetitionAudioMode(snapshot.audio_config.mode);
+        }
+      } else if (snapshot.audio_config_persisted === false) {
         setAudioConfigStatus('failed');
         setAudioConfigError('Cấu hình âm thanh chưa được lưu vào cơ sở dữ liệu.');
       }
     }
-  }, [snapshot?.audio_config_persisted, snapshot?.audio_config, activeSessionId, audioConfigStatus]);
+  }, [snapshot?.id, snapshot?.audio_config_persisted, snapshot?.audio_config, activeSessionId, audioConfigStatus]);
 
   // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
   useEffect(() => {
@@ -1412,10 +1439,14 @@ export function CompetitionHostPage() {
               saved = true;
             } else {
               lastErrMsg = audioRes.message || 'Lỗi lưu cấu hình âm thanh.';
-              // Double check via snapshot if it was actually persisted in database
+              // Double check via snapshot if it was actually persisted in database with exact matching config
               try {
                 const verifyRes = await getSessionSnapshot(newSessionId);
-                if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+                if (
+                  verifyRes.success &&
+                  verifyRes.data?.audio_config_persisted === true &&
+                  isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
+                ) {
                   saved = true;
                   break;
                 }
@@ -1426,10 +1457,14 @@ export function CompetitionHostPage() {
             }
           } catch (err) {
             lastErrMsg = err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.';
-            // Timeout/network error: verify if the row actually made it to the DB!
+            // Timeout/network error: verify if the row actually made it to the DB with exact matching config!
             try {
               const verifyRes = await getSessionSnapshot(newSessionId);
-              if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+              if (
+                verifyRes.success &&
+                verifyRes.data?.audio_config_persisted === true &&
+                isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
+              ) {
                 saved = true;
                 break;
               }
@@ -1483,10 +1518,14 @@ export function CompetitionHostPage() {
         setAudioConfigError(null);
         showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
       } else {
-        // Re-verify from database before concluding failure
+        // Re-verify from database before concluding failure (must match exact requested config)
         try {
           const verifyRes = await getSessionSnapshot(activeSessionId);
-          if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+          if (
+            verifyRes.success &&
+            verifyRes.data?.audio_config_persisted === true &&
+            isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
+          ) {
             setAudioConfigStatus('saved');
             setAudioConfigError(null);
             showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
@@ -1499,10 +1538,14 @@ export function CompetitionHostPage() {
         showToast(audioRes.message || 'Chưa thể lưu cấu hình âm thanh.', 'error');
       }
     } catch (err) {
-      // Timeout/network error: re-verify from database before concluding failure
+      // Timeout/network error: re-verify from database before concluding failure (must match exact requested config)
       try {
         const verifyRes = await getSessionSnapshot(activeSessionId);
-        if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+        if (
+          verifyRes.success &&
+          verifyRes.data?.audio_config_persisted === true &&
+          isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
+        ) {
           setAudioConfigStatus('saved');
           setAudioConfigError(null);
           showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
