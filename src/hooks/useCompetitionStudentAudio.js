@@ -19,6 +19,7 @@ import {
  * - Zero restart on Polling / Reconnect (Guarded via 5-Tuple compound key)
  * - Authoritative server signal for Results: isInterimLeaderboardActive (Zero host view mode coupling)
  * - Browser Autoplay compliance: Starts muted in online mode until explicit Student gesture
+ * - Anti-stale SFX: Unlocking mid-question or after F5 does NOT replay question-open fanfare
  * - Safe Pause & Resume without track restart
  * - Fail-silent execution: Never blocks question taking or error displays
  */
@@ -115,13 +116,27 @@ export function useCompetitionStudentAudio({
     }
   }, [sessionId]);
 
+  // Mount guard for F5 or late join during active question
+  useEffect(() => {
+    if (currentQuestionId && currentPhase === 'QUESTION_ACTIVE') {
+      const openKey = `${sessionId}:${currentQuestionId}:QUESTION_OPEN`;
+      lastPlayedSfxSetRef.current.add(openKey);
+    }
+  }, []); // Run once on initial mount to prevent stale fanfare on F5
+
   // Question change reset
   useEffect(() => {
     if (prevQuestionIdRef.current !== currentQuestionId) {
       prevQuestionIdRef.current = currentQuestionId;
       lastPlayedSfxSetRef.current.delete(`${sessionId}:${currentQuestionId}:TIME_UP`);
+
+      // If audio is locked when question changes, pre-consume QUESTION_OPEN
+      // so clicking "Bật âm thanh" mid-question will NOT fire a delayed fanfare!
+      if (!isStudentAudioUnlocked && currentQuestionId) {
+        lastPlayedSfxSetRef.current.add(`${sessionId}:${currentQuestionId}:QUESTION_OPEN`);
+      }
     }
-  }, [currentQuestionId, sessionId]);
+  }, [currentQuestionId, sessionId, isStudentAudioUnlocked]);
 
   // Master Audio Execution Effect
   useEffect(() => {

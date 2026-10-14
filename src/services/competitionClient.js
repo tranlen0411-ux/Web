@@ -689,17 +689,25 @@ export async function getSessionSnapshot(sessionId) {
     }
     if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.', status: 404 };
 
-    // Attach audio_config non-destructively; default to in_class if absent or query fails
+    // Attach audio_config: explicitly distinguish persisted record from fallback
     try {
-      const { data: audioRow } = await supabase
+      const { data: audioRow, error: audioErr } = await supabase
         .from('competition_session_audio_configs')
         .select('config')
         .eq('session_id', sessionId)
         .maybeSingle();
 
-      data.audio_config = (audioRow && audioRow.config) ? audioRow.config : DEFAULT_SESSION_AUDIO_CONFIG;
+      if (!audioErr && audioRow && audioRow.config && typeof audioRow.config === 'object') {
+        data.audio_config = audioRow.config;
+        data.audio_config_persisted = true;
+      } else {
+        data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
+        data.audio_config_persisted = false;
+        data.audio_config_error = audioErr ? audioErr.message : null;
+      }
     } catch (_audioErr) {
       data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
+      data.audio_config_persisted = false;
     }
 
     return { success: true, data };

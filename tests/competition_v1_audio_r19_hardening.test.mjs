@@ -8,8 +8,6 @@ import {
   DEFAULT_MUSIC_THEME,
   SELECTION_MODE_CUSTOM,
   SELECTION_MODE_THEME,
-  getThemeById,
-  getHeroicTrackById,
 } from '../src/services/competitionMusicThemes.js';
 import { DEFAULT_SESSION_AUDIO_CONFIG } from '../src/services/competitionClient.js';
 
@@ -96,6 +94,8 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         title TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'waiting'
       );
+      GRANT SELECT ON public.competition_sessions TO anon, authenticated;
+      GRANT SELECT ON public.profiles TO anon, authenticated;
     `);
 
     // Apply the full R19 migration draft
@@ -198,13 +198,43 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         `);
       }, /permission denied/i, 'Direct DELETE by anon user must be denied');
     });
+
+    await pt.test('6.4. Real Database Role Privilege Checks (SET ROLE anon & authenticated)', async () => {
+      const validConfig = `'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`;
+      const sessionId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+      // 1. Role anon: executing host RPC is DENIED at SQL level (REVOKE EXECUTE)
+      await assert.rejects(async () => {
+        await db.exec(`
+          SET ROLE anon;
+          SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig});
+          RESET ROLE;
+        `);
+      }, /permission denied for function competition_host_set_audio_config/i, 'Anon role must be denied execute on host RPC');
+
+      // 2. Role anon: SELECT on waiting session is GRANTED
+      await db.exec(`
+        SET ROLE anon;
+        SELECT * FROM public.competition_session_audio_configs WHERE session_id = '${sessionId}';
+        RESET ROLE;
+      `);
+
+      // 3. Role authenticated: executing host RPC is permitted at SQL level
+      await db.exec(`
+        SET ROLE authenticated;
+        SET request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+        SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig});
+        RESET ROLE;
+      `);
+    });
   });
 
-  await t.test('7. Client Service: competitionClient.js exports DEFAULT_SESSION_AUDIO_CONFIG & hostSetAudioConfig', () => {
+  await t.test('7. Client Service: competitionClient.js exports DEFAULT_SESSION_AUDIO_CONFIG & distinguishes persisted from fallback', () => {
     assert.match(clientSrc, /export const DEFAULT_SESSION_AUDIO_CONFIG = Object\.freeze\({/, 'DEFAULT_SESSION_AUDIO_CONFIG exported');
     assert.match(clientSrc, /mode: 'in_class'/, 'Default mode is in_class');
     assert.match(clientSrc, /export async function hostSetAudioConfig\({/, 'hostSetAudioConfig exported');
-    assert.match(clientSrc, /from\('competition_session_audio_configs'\)/, 'getSessionSnapshot queries audio config table');
+    assert.match(clientSrc, /data\.audio_config_persisted = true;/, 'Flags persisted = true when row found in database');
+    assert.match(clientSrc, /data\.audio_config_persisted = false;/, 'Flags persisted = false on fallback default');
     assert.match(clientSrc, /DEFAULT_SESSION_AUDIO_CONFIG/, 'Fallback applied when audio row absent');
   });
 
@@ -216,23 +246,24 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(hostPageSrc, /mode: competitionAudioMode/, 'Passes selected mode into audioPayload');
     assert.match(hostPageSrc, /mode: 'individual'/, 'Preserves session table mode as individual');
 
-    // 8.2. Audio Save State Machine
+    // 8.2. Audio Save State Machine & Persistence verification
     assert.match(hostPageSrc, /const \[audioConfigStatus, setAudioConfigStatus\] = useState\('idle'\);/, 'Audio config status state present');
     assert.match(hostPageSrc, /setAudioConfigStatus\('saving'\)/, 'Sets saving state before RPC');
-    assert.match(hostPageSrc, /setAudioConfigStatus\('saved'\)/, 'Sets saved state on success');
-    assert.match(hostPageSrc, /setAudioConfigStatus\('failed'\)/, 'Sets failed state on error');
+    assert.match(hostPageSrc, /snapshot\?\.audio_config_persisted === true/, 'Only marks saved when audio_config_persisted is true');
+    assert.match(hostPageSrc, /snapshot\.audio_config_persisted === false/, 'Marks failed when DB row is missing');
 
     // 8.3. Start Session locked until saved
     assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)/, 'Blocks start while saving');
     assert.match(hostPageSrc, /if \(audioConfigStatus === 'failed'\)/, 'Blocks start if save failed');
     assert.match(hostPageSrc, /disabled=\{actionPending \|\| participants\.length === 0 \|\| audioConfigStatus !== 'saved'\}/, 'Start button disabled when not saved');
 
-    // 8.4. Retry Save Audio Config without creating a new room
+    // 8.4. Timeout re-verification without creating a new room
+    assert.match(hostPageSrc, /verifyRes\.data\?\.audio_config_persisted === true/, 'Re-verifies from DB on timeout before concluding failure');
     assert.match(hostPageSrc, /const handleRetrySaveAudioConfig = async/, 'handleRetrySaveAudioConfig present');
     assert.match(hostPageSrc, /sessionId: activeSessionId/, 'Retries for current activeSessionId without creating room');
   });
 
-  await t.test('9. Student Audio Controls Component & Integration Tests', () => {
+  await t.test('9. Student Audio Controls Component & Anti-Stale SFX Tests', () => {
     // 9.1. Component structure & in_class mute badge
     assert.match(studentControlsSrc, /export function StudentAudioControls/, 'StudentAudioControls component exported');
     assert.match(studentControlsSrc, /if \(isInClass\)/, 'Detects in_class mode');
@@ -247,6 +278,10 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // 9.3. Student Page integration
     assert.match(studentPageSrc, /import { StudentAudioControls }/, 'Student page imports StudentAudioControls');
     assert.match(studentPageSrc, /<StudentAudioControls {\.\.\.studentAudio} \/>/, 'StudentAudioControls rendered in student page');
+
+    // 9.4. Anti-stale question open SFX on F5 or mid-question unlock
+    assert.match(studentHookSrc, /if \(currentQuestionId && currentPhase === 'QUESTION_ACTIVE'\)/, 'F5 mount guard present');
+    assert.match(studentHookSrc, /if \(!isStudentAudioUnlocked && currentQuestionId\)/, 'Locked question change guard present');
   });
 
   await t.test('10. Audio Track Synchronization & Multi-Device Simulation', () => {

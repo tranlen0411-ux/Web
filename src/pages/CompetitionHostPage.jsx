@@ -358,13 +358,25 @@ export function CompetitionHostPage() {
 
   // Synchronize audio configuration status from restored snapshot
   useEffect(() => {
-    if (snapshot?.audio_config) {
+    if (!activeSessionId) {
+      setAudioConfigStatus('idle');
+      return;
+    }
+    // Only mark 'saved' when audio_config_persisted is explicitly TRUE from database
+    if (snapshot?.audio_config_persisted === true) {
       setAudioConfigStatus('saved');
-      if (snapshot.audio_config.mode) {
+      setAudioConfigError(null);
+      if (snapshot.audio_config?.mode) {
         setCompetitionAudioMode(snapshot.audio_config.mode);
       }
+    } else if (snapshot && snapshot.id === activeSessionId && snapshot.audio_config_persisted === false) {
+      // If snapshot is loaded for activeSessionId but no DB record exists and not in saving process
+      if (audioConfigStatus !== 'saving') {
+        setAudioConfigStatus('failed');
+        setAudioConfigError('Cấu hình âm thanh chưa được lưu vào cơ sở dữ liệu.');
+      }
     }
-  }, [snapshot?.audio_config]);
+  }, [snapshot?.audio_config_persisted, snapshot?.audio_config, activeSessionId, audioConfigStatus]);
 
   // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
   useEffect(() => {
@@ -1400,12 +1412,29 @@ export function CompetitionHostPage() {
               saved = true;
             } else {
               lastErrMsg = audioRes.message || 'Lỗi lưu cấu hình âm thanh.';
+              // Double check via snapshot if it was actually persisted in database
+              try {
+                const verifyRes = await getSessionSnapshot(newSessionId);
+                if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+                  saved = true;
+                  break;
+                }
+              } catch (_vErr) {}
               if (attempts < 3) {
                 await new Promise((r) => setTimeout(r, attempts * 500));
               }
             }
           } catch (err) {
             lastErrMsg = err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.';
+            // Timeout/network error: verify if the row actually made it to the DB!
+            try {
+              const verifyRes = await getSessionSnapshot(newSessionId);
+              if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+                saved = true;
+                break;
+              }
+            } catch (_vErr) {}
+
             if (attempts < 3) {
               await new Promise((r) => setTimeout(r, attempts * 500));
             }
@@ -1454,11 +1483,33 @@ export function CompetitionHostPage() {
         setAudioConfigError(null);
         showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
       } else {
+        // Re-verify from database before concluding failure
+        try {
+          const verifyRes = await getSessionSnapshot(activeSessionId);
+          if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+            setAudioConfigStatus('saved');
+            setAudioConfigError(null);
+            showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+            return;
+          }
+        } catch (_vErr) {}
+
         setAudioConfigStatus('failed');
         setAudioConfigError(audioRes.message || 'Lỗi lưu cấu hình âm thanh.');
         showToast(audioRes.message || 'Chưa thể lưu cấu hình âm thanh.', 'error');
       }
     } catch (err) {
+      // Timeout/network error: re-verify from database before concluding failure
+      try {
+        const verifyRes = await getSessionSnapshot(activeSessionId);
+        if (verifyRes.success && verifyRes.data?.audio_config_persisted === true) {
+          setAudioConfigStatus('saved');
+          setAudioConfigError(null);
+          showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+          return;
+        }
+      } catch (_vErr) {}
+
       setAudioConfigStatus('failed');
       setAudioConfigError(err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.');
       showToast('Lỗi mạng khi thử lưu cấu hình âm thanh.', 'error');
