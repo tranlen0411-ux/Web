@@ -17,6 +17,7 @@ import {
   isAudioConfigMatching,
   classifyAudioSnapshotState,
   canStartSession,
+  resetAudioStateForSessionSwitch,
 } from '../src/services/competitionAudioSync.js';
 import { HostAudioLobbyBanner } from '../src/components/competition/HostAudioLobbyBanner.js';
 
@@ -632,13 +633,23 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       })();
 
       // 2. While Room A RPC is still in-flight, Host switches to Room B!
-      currentSessionId = 'room-B';
-      activeSessionIdRef.current = currentSessionId;
-      latestAudioConfigRequestIdRef.current++; // session switch generation advance (now 2)
-      pendingAudioConfigRef.current = null;
-      audioConfigStatus = 'idle';
-      audioConfigError = null;
-      competitionAudioMode = 'in_class';
+      // EXECUTE PRODUCTION LOGIC: resetAudioStateForSessionSwitch isolates Room A's pendingAudioConfigRef
+      const switchResult = resetAudioStateForSessionSwitch({
+        activeSessionIdRef,
+        nextSessionId: 'room-B',
+        latestAudioConfigRequestIdRef,
+        pendingAudioConfigRef,
+        lastSavedConfigRef: { current: null },
+        lastAudioConfigSavedAtRef: { current: 0 },
+      });
+      audioConfigStatus = switchResult.nextStatus;
+      audioConfigError = switchResult.nextError;
+      competitionAudioMode = switchResult.nextMode;
+
+      // Verify production function strictly cleared pendingAudioConfigRef of Room A!
+      assert.strictEqual(pendingAudioConfigRef.current, null, 'Production resetAudioStateForSessionSwitch must clear Room A pending config');
+      assert.strictEqual(activeSessionIdRef.current, 'room-B', 'activeSessionIdRef transitioned to room-B');
+      assert.strictEqual(latestAudioConfigRequestIdRef.current, 2, 'Generation bumped to invalidate Room A RPC');
 
       // Room B snapshot arrives from DB restoring Room B state to saved in_class
       const snapshotB = {
@@ -742,6 +753,170 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         componentStatus = decision.nextStatus;
       }
       assert.strictEqual(componentStatus, 'saved', 'Component audioConfigStatus remains saved');
+    });
+
+    // 12.10. Fresh Query Error (401/403/500) While Status Is Saved Is Surfaced And Never Ignored (Point 1)
+    await st.test('12.10. Fresh Query Error (401/403/500) While Status Is Saved Is Surfaced And Never Ignored', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 1000;
+      const currentStatus = 'saved';
+
+      // 10.1: A fresh polling snapshot arrives (fetched AFTER the save landed) with 403 Forbidden
+      const freshErrorSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _fetched_at: 1100, // fetched at 1100 >= 1000 (FRESH)
+        audio_config_persisted: false,
+        audio_config_state: 'error',
+        audio_config_error: '403 Forbidden: Phiên làm việc của Host đã hết hạn',
+        audio_config: null,
+      };
+
+      const freshDecision = classifyAudioSnapshotState({
+        snapshot: freshErrorSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedAt,
+        lastSavedConfig: { mode: 'online', selection_mode: 'theme', theme_id: 'classroom_chill' },
+      });
+
+      // MUST NOT be ignored just because currentStatus is saved!
+      assert.strictEqual(freshDecision.action, 'QUERY_ERROR', 'Fresh query error is surfaced');
+      assert.strictEqual(freshDecision.nextStatus, 'failed', 'Transitions status to failed');
+      assert.strictEqual(freshDecision.nextError, '403 Forbidden: Phiên làm việc của Host đã hết hạn');
+      assert.strictEqual(freshDecision.nextMode, null, 'Preserves Host chosen mode');
+
+      // 10.2: Contrast with a STALE query error (fetched BEFORE the save completed)
+      const staleErrorSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _fetched_at: 900, // fetched at 900 < 1000 (STALE)
+        audio_config_persisted: false,
+        audio_config_state: 'error',
+        audio_config_error: '500 Internal Server Error (Transient during save)',
+        audio_config: null,
+      };
+
+      const staleDecision = classifyAudioSnapshotState({
+        snapshot: staleErrorSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedAt,
+        lastSavedConfig: { mode: 'online', selection_mode: 'theme', theme_id: 'classroom_chill' },
+      });
+
+      // Stale query error is dropped to prevent disrupting the newly saved session
+      assert.strictEqual(staleDecision.action, 'IGNORE_STALE_QUERY_ERROR');
+      assert.strictEqual(staleDecision.nextStatus, null);
+    });
+
+    // 12.11. Stale In-Flight Polling With Old Persisted in_class Does NOT Overwrite Freshly Saved Online Mode (Point 2)
+    await st.test('12.11. Stale In-Flight Polling With Old Persisted in_class Does NOT Overwrite Freshly Saved Online Mode', () => {
+      const activeSessionId = 'session-123';
+      const lastSavedAt = 2000;
+      const currentStatus = 'saved';
+      const newlySavedOnlineConfig = {
+        mode: 'online',
+        selection_mode: 'theme',
+        theme_id: 'classroom_chill',
+        custom_lobby_track_id: null,
+        custom_question_track_id: null,
+      };
+
+      // In-flight polling snapshot started at T = 1500 (< 2000) returns with old persisted in_class config
+      const staleInFlightSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _fetched_at: 1500, // < 2000 (STALE)
+        audio_config_persisted: true,
+        audio_config_state: 'persisted',
+        audio_config_error: null,
+        audio_config: {
+          mode: 'in_class',
+          selection_mode: 'theme',
+          theme_id: 'classroom_chill',
+          custom_lobby_track_id: null,
+          custom_question_track_id: null,
+        },
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: staleInFlightSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: newlySavedOnlineConfig,
+        lastSavedAt,
+        pendingAudioConfig: null,
+      });
+
+      // MUST NOT overwrite online mode with in_class!
+      assert.strictEqual(decision.action, 'IGNORE_STALE_OUTDATED_CONFIG');
+      assert.strictEqual(decision.nextStatus, null, 'nextStatus is null');
+      assert.strictEqual(decision.nextMode, null, 'nextMode is null so Online mode is protected from overwrite');
+
+      // Contrast with fresh polling snapshot (fetched at T = 2200 >= 2000) that reflects newly saved Online config
+      const freshOnlineSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        _fetched_at: 2200,
+        audio_config_persisted: true,
+        audio_config_state: 'persisted',
+        audio_config_error: null,
+        audio_config: newlySavedOnlineConfig,
+      };
+
+      const freshDecision = classifyAudioSnapshotState({
+        snapshot: freshOnlineSnapshot,
+        activeSessionId,
+        currentStatus,
+        lastSavedConfig: newlySavedOnlineConfig,
+        lastSavedAt,
+        pendingAudioConfig: null,
+      });
+
+      assert.strictEqual(freshDecision.action, 'RESTORE_FROM_DB');
+      assert.strictEqual(freshDecision.nextStatus, 'saved');
+      assert.strictEqual(freshDecision.nextMode, 'online');
+    });
+
+    // 12.12. Cross-Session Pending Audio Config Strict Isolation (Point 3)
+    await st.test('12.12. Cross-Session Pending Audio Config Strict Isolation', () => {
+      // Room A pending config tagged with session ID
+      const pendingRoomA = {
+        _sessionId: 'room-A',
+        mode: 'online',
+        selection_mode: 'theme',
+        theme_id: 'classroom_chill',
+        custom_lobby_track_id: null,
+        custom_question_track_id: null,
+      };
+
+      // Room B snapshot arrives
+      const snapshotB = {
+        id: 'room-B',
+        status: 'waiting',
+        audio_config_persisted: true,
+        audio_config: {
+          mode: 'in_class',
+          selection_mode: 'theme',
+          theme_id: 'classroom_chill',
+          custom_lobby_track_id: null,
+          custom_question_track_id: null,
+        },
+      };
+
+      // Even if pendingRoomA was passed without being cleared, classifyAudioSnapshotState MUST isolate it!
+      const decision = classifyAudioSnapshotState({
+        snapshot: snapshotB,
+        activeSessionId: 'room-B',
+        currentStatus: 'idle',
+        pendingAudioConfig: pendingRoomA, // Room A pending config
+      });
+
+      // It must ignore pendingRoomA and restore Room B's DB config directly
+      assert.strictEqual(decision.action, 'RESTORE_FROM_DB');
+      assert.strictEqual(decision.nextStatus, 'saved');
+      assert.strictEqual(decision.nextMode, 'in_class');
     });
   });
 });

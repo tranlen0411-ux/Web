@@ -28,6 +28,42 @@ export const isAudioConfigMatching = (actual, requested) => {
 };
 
 /**
+ * Executes clean session isolation for audio states on session switch.
+ * Guarantees that pending configs, generations, and errors of previous session
+ * are strictly isolated and cannot leak into the new session.
+ */
+export function resetAudioStateForSessionSwitch({
+  activeSessionIdRef,
+  nextSessionId,
+  latestAudioConfigRequestIdRef,
+  pendingAudioConfigRef,
+  lastSavedConfigRef,
+  lastAudioConfigSavedAtRef,
+}) {
+  if (latestAudioConfigRequestIdRef) {
+    latestAudioConfigRequestIdRef.current++;
+  }
+  if (pendingAudioConfigRef) {
+    pendingAudioConfigRef.current = null;
+  }
+  if (lastSavedConfigRef) {
+    lastSavedConfigRef.current = null;
+  }
+  if (lastAudioConfigSavedAtRef) {
+    lastAudioConfigSavedAtRef.current = 0;
+  }
+  if (activeSessionIdRef) {
+    activeSessionIdRef.current = nextSessionId;
+  }
+
+  return {
+    nextStatus: 'idle',
+    nextMode: 'in_class',
+    nextError: null,
+  };
+}
+
+/**
  * Classifies snapshot state and determines next audio config status.
  * Pure function: zero side-effects, 100% testable in isolation.
  *
@@ -40,12 +76,16 @@ export const isAudioConfigMatching = (actual, requested) => {
  * - NEVER automatically writes DEFAULT_SESSION_AUDIO_CONFIG when query fails or pending save exists.
  * - NEVER overwrites Host's online choice.
  * - NEVER triggers an auto-retry loop.
+ * - NEVER ignores real 401/403/500 query errors even when currentStatus is saved.
+ * - NEVER allows stale in-flight polling snapshots to overwrite freshly saved online mode.
  */
 export function classifyAudioSnapshotState({
   snapshot,
   activeSessionId,
   currentStatus,
   pendingAudioConfig = null,
+  lastSavedConfig = null,
+  lastSavedAt = 0,
 }) {
   // Guard 0: No active session
   if (!activeSessionId) {
@@ -71,6 +111,11 @@ export function classifyAudioSnapshotState({
     };
   }
 
+  // Guard 1b: If pendingAudioConfig is bound to a different session, isolate it completely
+  if (pendingAudioConfig && pendingAudioConfig._sessionId && pendingAudioConfig._sessionId !== activeSessionId) {
+    pendingAudioConfig = null;
+  }
+
   // Guard 2: Host save is in progress -> background polling MUST NEVER overwrite
   if (currentStatus === 'saving') {
     return {
@@ -83,22 +128,56 @@ export function classifyAudioSnapshotState({
     };
   }
 
-  // Guard 3: If current status is ALREADY 'saved', a stale unpersisted snapshot (e.g. from an in-flight poll
-  // initiated before RPC completed) MUST NEVER demote 'saved' back to 'legacy_missing' or 'failed'!
-  if (currentStatus === 'saved' && snapshot.audio_config_persisted === false) {
+  // Freshness check: Determine if snapshot was fetched BEFORE the last successful save
+  const isSnapshotStale = Boolean(
+    lastSavedAt > 0 &&
+    typeof snapshot._fetched_at === 'number' &&
+    snapshot._fetched_at < lastSavedAt
+  );
+
+  // Situation 2: Query failed (401/403/500/network)
+  if (snapshot.audio_config_state === 'error' || Boolean(snapshot.audio_config_error)) {
+    // If this error belongs to a stale in-flight request started BEFORE the save completed, drop it
+    if (isSnapshotStale) {
+      return {
+        action: 'IGNORE_STALE_QUERY_ERROR',
+        nextStatus: null,
+        nextMode: null,
+        nextError: null,
+        shouldClearPending: false,
+        shouldAutoHeal: false,
+      };
+    }
+    // FRESH QUERY ERROR: MUST NEVER be ignored, even if currentStatus === 'saved'!
+    // Surfacing real 401/403/500 errors avoids falsely confirming wrong configurations.
     return {
-      action: 'IGNORE_STALE_UNPERSISTED_SNAPSHOT',
-      nextStatus: null,
-      nextMode: null,
-      nextError: null,
-      shouldClearPending: false,
-      shouldAutoHeal: false,
+      action: 'QUERY_ERROR',
+      nextStatus: 'failed',
+      nextMode: null, // Preserve Host's current selection!
+      nextError: snapshot.audio_config_error || 'Lỗi kết nối khi tải cấu hình âm thanh từ máy chủ.',
+      shouldClearPending: false, // Keep pending for retry!
+      shouldAutoHeal: false, // STRICTLY PROHIBITED
     };
   }
 
-  // Authoritative DB record exists
+  // Guard 3: If current status is ALREADY 'saved' and snapshot is unpersisted:
+  // - If it was fetched BEFORE the save completed (stale) or is missing from lag, drop it so it doesn't demote 'saved'
+  if (currentStatus === 'saved' && snapshot.audio_config_persisted === false) {
+    if (isSnapshotStale || snapshot.audio_config_state === 'missing') {
+      return {
+        action: 'IGNORE_STALE_UNPERSISTED_SNAPSHOT',
+        nextStatus: null,
+        nextMode: null,
+        nextError: null,
+        shouldClearPending: false,
+        shouldAutoHeal: false,
+      };
+    }
+  }
+
+  // Guard 4: Authoritative DB record exists
   if (snapshot.audio_config_persisted === true && isValidAudioConfig(snapshot.audio_config)) {
-    // If Host has a pending save or retry, verify DB matches Host's requested config!
+    // Subcase 4A: Host has a pending save or retry, verify DB matches Host's requested config!
     if (pendingAudioConfig) {
       if (isAudioConfigMatching(snapshot.audio_config, pendingAudioConfig)) {
         return {
@@ -123,7 +202,31 @@ export function classifyAudioSnapshotState({
       }
     }
 
-    // No pending save (e.g. F5 reload, restore, or idle): trust DB record
+    // Subcase 4B: RPC has already saved a config (e.g. Online saved), but a stale snapshot arrives
+    // with an outdated config (e.g. in_class fetched before RPC finished)
+    if (lastSavedConfig && !isAudioConfigMatching(snapshot.audio_config, lastSavedConfig)) {
+      if (isSnapshotStale) {
+        return {
+          action: 'IGNORE_STALE_OUTDATED_CONFIG',
+          nextStatus: null,
+          nextMode: null,
+          nextError: null,
+          shouldClearPending: false,
+          shouldAutoHeal: false,
+        };
+      }
+      // Fresh snapshot after save, but DB config does not match what Host saved:
+      return {
+        action: 'SAVED_CONFIG_MISMATCH',
+        nextStatus: 'failed',
+        nextMode: null, // Never overwrite Host's mode!
+        nextError: 'Cấu hình âm thanh trên máy chủ chưa khớp với cấu hình đã lưu.',
+        shouldClearPending: false,
+        shouldAutoHeal: false,
+      };
+    }
+
+    // Subcase 4C: No pending save (e.g. F5 reload, restore, or idle): trust DB record
     return {
       action: 'RESTORE_FROM_DB',
       nextStatus: 'saved',
@@ -131,19 +234,6 @@ export function classifyAudioSnapshotState({
       nextError: null,
       shouldClearPending: true,
       shouldAutoHeal: false,
-    };
-  }
-
-  // audio_config_persisted === false
-  // Situation 2: Query failed (401/403/500/network)
-  if (snapshot.audio_config_state === 'error' || Boolean(snapshot.audio_config_error)) {
-    return {
-      action: 'QUERY_ERROR',
-      nextStatus: 'failed',
-      nextMode: null, // Preserve Host's current selection!
-      nextError: snapshot.audio_config_error || 'Lỗi kết nối khi tải cấu hình âm thanh từ máy chủ.',
-      shouldClearPending: false, // Keep pending for retry!
-      shouldAutoHeal: false, // STRICTLY PROHIBITED
     };
   }
 
@@ -160,7 +250,6 @@ export function classifyAudioSnapshotState({
   }
 
   // Situation 1: DB truly does NOT have audio_config row (Legacy R18 room)
-  // snapshot.audio_config_state === 'missing' (or persisted === false and no error)
   if (snapshot.status === 'waiting') {
     return {
       action: 'LEGACY_MISSING_NEEDS_CONFIRMATION',

@@ -70,7 +70,8 @@ import { HostAudioLobbyBanner } from '../components/competition/HostAudioLobbyBa
 import {
   classifyAudioSnapshotState,
   isAudioConfigMatching,
-  isValidAudioConfig
+  isValidAudioConfig,
+  resetAudioStateForSessionSwitch
 } from '../services/competitionAudioSync.js';
 
 // Default starter questions for quick session creation
@@ -269,11 +270,17 @@ export function CompetitionHostPage() {
     isFinishingSessionRef.current = false;
 
     // Reset audio state to idle on returning to setup
-    pendingAudioConfigRef.current = null;
-    latestAudioConfigRequestIdRef.current++;
-    setAudioConfigStatus('idle');
-    setAudioConfigError(null);
-    setCompetitionAudioMode('in_class');
+    const audioReset = resetAudioStateForSessionSwitch({
+      activeSessionIdRef,
+      nextSessionId: null,
+      latestAudioConfigRequestIdRef,
+      pendingAudioConfigRef,
+      lastSavedConfigRef: lastSavedAudioConfigRef,
+      lastAudioConfigSavedAtRef,
+    });
+    setAudioConfigStatus(audioReset.nextStatus);
+    setAudioConfigError(audioReset.nextError);
+    setCompetitionAudioMode(audioReset.nextMode);
 
     if (failureReason) {
       showToast(failureReason, 'error');
@@ -345,13 +352,18 @@ export function CompetitionHostPage() {
       // Invalidate any in-flight audio requests belonging to the previous session
       latestAudioConfigRequestIdRef.current++;
 
-      // When switching sessions, if there is no pending save already set for the new session,
-      // reset audio state to idle so the new session can restore cleanly from snapshot DB
-      if (!pendingAudioConfigRef.current) {
-        setAudioConfigStatus('idle');
-        setAudioConfigError(null);
-        setCompetitionAudioMode('in_class');
-      }
+      // Production session switch isolation:
+      const reset = resetAudioStateForSessionSwitch({
+        activeSessionIdRef,
+        nextSessionId: activeSessionId,
+        latestAudioConfigRequestIdRef,
+        pendingAudioConfigRef,
+        lastSavedConfigRef: lastSavedAudioConfigRef,
+        lastAudioConfigSavedAtRef,
+      });
+      setAudioConfigStatus(reset.nextStatus);
+      setAudioConfigError(reset.nextError);
+      setCompetitionAudioMode(reset.nextMode);
     }
   }, [activeSessionId]);
 
@@ -366,6 +378,8 @@ export function CompetitionHostPage() {
   const [audioConfigError, setAudioConfigError] = useState(null);
   const pendingAudioConfigRef = useRef(null);
   const latestAudioConfigRequestIdRef = useRef(0);
+  const lastSavedAudioConfigRef = useRef(null);
+  const lastAudioConfigSavedAtRef = useRef(0);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [isQuestionBankModalOpen, setIsQuestionBankModalOpen] = useState(false);
   const [isImportExcelModalOpen, setIsImportExcelModalOpen] = useState(false);
@@ -398,6 +412,8 @@ export function CompetitionHostPage() {
       activeSessionId,
       currentStatus: audioConfigStatus,
       pendingAudioConfig: pendingAudioConfigRef.current,
+      lastSavedConfig: lastSavedAudioConfigRef.current,
+      lastSavedAt: lastAudioConfigSavedAtRef.current,
     });
 
     if (decision.shouldClearPending) {
@@ -414,6 +430,12 @@ export function CompetitionHostPage() {
     } else if (decision.nextStatus === 'saved') {
       setAudioConfigError(null);
     }
+    if (decision.nextStatus === 'saved' && snapshot?.audio_config_persisted) {
+      lastSavedAudioConfigRef.current = snapshot.audio_config;
+      if (snapshot._fetched_at) {
+        lastAudioConfigSavedAtRef.current = Math.max(lastAudioConfigSavedAtRef.current, snapshot._fetched_at);
+      }
+    }
   }, [
     snapshot?.id,
     snapshot?.status,
@@ -421,6 +443,7 @@ export function CompetitionHostPage() {
     snapshot?.audio_config_state,
     snapshot?.audio_config_error,
     snapshot?.audio_config,
+    snapshot?._fetched_at,
     activeSessionId,
     audioConfigStatus
   ]);
@@ -1507,6 +1530,8 @@ export function CompetitionHostPage() {
 
         if (saved) {
           pendingAudioConfigRef.current = null;
+          lastSavedAudioConfigRef.current = audioPayload;
+          lastAudioConfigSavedAtRef.current = Date.now();
           setAudioConfigStatus('saved');
           setAudioConfigError(null);
           showToast('Tạo phòng thi và lưu cấu hình âm thanh thành công! Mã phòng đã sẵn sàng.', 'success');
@@ -1549,6 +1574,8 @@ export function CompetitionHostPage() {
       if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
       if (audioRes.success) {
         pendingAudioConfigRef.current = null;
+        lastSavedAudioConfigRef.current = audioPayload;
+        lastAudioConfigSavedAtRef.current = Date.now();
         setAudioConfigStatus('saved');
         setAudioConfigError(null);
         showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
@@ -1563,6 +1590,8 @@ export function CompetitionHostPage() {
             isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
           ) {
             pendingAudioConfigRef.current = null;
+            lastSavedAudioConfigRef.current = audioPayload;
+            lastAudioConfigSavedAtRef.current = Date.now();
             setAudioConfigStatus('saved');
             setAudioConfigError(null);
             showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
@@ -1587,6 +1616,8 @@ export function CompetitionHostPage() {
           isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
         ) {
           pendingAudioConfigRef.current = null;
+          lastSavedAudioConfigRef.current = audioPayload;
+          lastAudioConfigSavedAtRef.current = Date.now();
           setAudioConfigStatus('saved');
           setAudioConfigError(null);
           showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
@@ -1616,6 +1647,8 @@ export function CompetitionHostPage() {
       if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
       if (res.success) {
         pendingAudioConfigRef.current = null;
+        lastSavedAudioConfigRef.current = DEFAULT_SESSION_AUDIO_CONFIG;
+        lastAudioConfigSavedAtRef.current = Date.now();
         setAudioConfigStatus('saved');
         setAudioConfigError(null);
         setCompetitionAudioMode('in_class');

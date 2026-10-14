@@ -671,6 +671,7 @@ export async function getLeaderboardSnapshot({
  * Non-destructively attaches audio_config from dedicated table with in_class fallback.
  */
 export async function getSessionSnapshot(sessionId) {
+  const fetchStartTime = Date.now();
   try {
     const { data, error, status } = await supabase
       .from('competition_sessions')
@@ -723,6 +724,7 @@ export async function getSessionSnapshot(sessionId) {
       data.audio_config_error = _audioErr?.message || 'Lỗi kết nối khi tải cấu hình âm thanh';
     }
 
+    data._fetched_at = fetchStartTime;
     return { success: true, data };
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
