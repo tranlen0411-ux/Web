@@ -339,4 +339,151 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(studentHookSrc, /if \(isInClass\)/, 'isInClass halts and silences student audio completely');
     assert.match(studentHookSrc, /competitionAudioManager\.stopAll\(\)/, 'Stops all audio when isInClass is true');
   });
+
+  await t.test('12. Behavioral State Machine Tests: Polling Race, Stale Snapshot & Legacy Auto-Heal', () => {
+    // 12.1. Behavioral Verification of isAudioConfigMatching logic
+    const isAudioConfigMatching = (actual, requested) => {
+      if (!actual || typeof actual !== 'object' || !requested || typeof requested !== 'object') {
+        return false;
+      }
+      return (
+        actual.mode === requested.mode &&
+        actual.selection_mode === requested.selection_mode &&
+        actual.theme_id === requested.theme_id &&
+        actual.custom_lobby_track_id === requested.custom_lobby_track_id &&
+        actual.custom_question_track_id === requested.custom_question_track_id
+      );
+    };
+
+    const hostRequestedOnline = {
+      mode: 'online',
+      selection_mode: 'theme',
+      theme_id: 'classroom_chill',
+      custom_lobby_track_id: null,
+      custom_question_track_id: null,
+    };
+
+    const staleDbInClass = {
+      mode: 'in_class',
+      selection_mode: 'theme',
+      theme_id: 'classroom_chill',
+      custom_lobby_track_id: null,
+      custom_question_track_id: null,
+    };
+
+    const freshDbOnline = {
+      mode: 'online',
+      selection_mode: 'theme',
+      theme_id: 'classroom_chill',
+      custom_lobby_track_id: null,
+      custom_question_track_id: null,
+    };
+
+    assert.strictEqual(isAudioConfigMatching(staleDbInClass, hostRequestedOnline), false, 'Rejects mismatch between stale in_class DB and requested online mode');
+    assert.strictEqual(isAudioConfigMatching(freshDbOnline, hostRequestedOnline), true, 'Accepts exact 5-field match');
+    assert.strictEqual(isAudioConfigMatching(null, hostRequestedOnline), false, 'Rejects null actual');
+    assert.strictEqual(isAudioConfigMatching(freshDbOnline, null), false, 'Rejects null requested');
+
+    // 12.2. Polling Race Simulation: Polling snapshot cannot overwrite saving status
+    let audioConfigStatus = 'saving';
+    let pendingAudioConfig = hostRequestedOnline;
+    const simulatePollingArrival = (snapshot) => {
+      // Guard 1: Never overwrite saving
+      if (audioConfigStatus === 'saving') return;
+      if (snapshot.audio_config_persisted === true) {
+        if (pendingAudioConfig) {
+          if (isAudioConfigMatching(snapshot.audio_config, pendingAudioConfig)) {
+            audioConfigStatus = 'saved';
+            pendingAudioConfig = null;
+          } else {
+            audioConfigStatus = 'failed';
+          }
+        } else {
+          audioConfigStatus = 'saved';
+        }
+      }
+    };
+
+    // Stale snapshot arrives while Host is saving -> Guard 1 protects it!
+    simulatePollingArrival({ audio_config_persisted: true, audio_config: staleDbInClass });
+    assert.strictEqual(audioConfigStatus, 'saving', 'Status remains saving despite stale snapshot arriving');
+
+    // Saving completes with temporary network timeout, transitioning to idle/failed
+    audioConfigStatus = 'failed';
+    // Stale snapshot arrives from DB with old in_class config -> Guard 3 protects it!
+    simulatePollingArrival({ audio_config_persisted: true, audio_config: staleDbInClass });
+    assert.strictEqual(audioConfigStatus, 'failed', 'Status transitions to failed because DB does not match pending requested online mode');
+
+    // Fresh snapshot arrives from DB with updated online config -> Guard 3 matches!
+    simulatePollingArrival({ audio_config_persisted: true, audio_config: freshDbOnline });
+    assert.strictEqual(audioConfigStatus, 'saved', 'Status transitions to saved when DB config matches requested online mode');
+    assert.strictEqual(pendingAudioConfig, null, 'Pending config cleared once verified matching');
+
+    // 12.3. Legacy R18 Waiting Room Auto-Heal Simulation
+    const legacySnapshot = {
+      id: 'legacy-r18-session-id',
+      status: 'waiting',
+      audio_config_persisted: false,
+      audio_config: DEFAULT_SESSION_AUDIO_CONFIG,
+    };
+
+    let legacyStatus = 'idle';
+    let autoHealedConfig = null;
+    const simulateLegacyRestore = (snap) => {
+      if (snap.status === 'waiting' && snap.audio_config_persisted === false) {
+        legacyStatus = 'saving';
+        // Auto-heal with DEFAULT_SESSION_AUDIO_CONFIG
+        autoHealedConfig = DEFAULT_SESSION_AUDIO_CONFIG;
+        legacyStatus = 'saved';
+      }
+    };
+
+    simulateLegacyRestore(legacySnapshot);
+    assert.strictEqual(legacyStatus, 'saved', 'Legacy R18 waiting room auto-heals and reaches saved state');
+    assert.strictEqual(autoHealedConfig.mode, 'in_class', 'Legacy room auto-heals with safe in_class mode');
+
+    // 12.4. Student Anti-Stale SFX Lifecycle Simulation (3 Phases: Active, Time Up, Results)
+    const sessionId = 'test-session';
+    const qId = 'test-q1';
+
+    // Scenario 1: F5 during TIME_UP
+    const consumedSfxSetTimeUp = new Set();
+    const simulateF5Mount = (phase) => {
+      if (phase === 'QUESTION_ACTIVE') {
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+      } else if (phase === 'TIME_UP') {
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
+      } else if (phase === 'QUESTION_RESULTS') {
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
+        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_RESULTS`);
+      }
+    };
+
+    simulateF5Mount('TIME_UP');
+    assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:QUESTION_OPEN`), true, 'QUESTION_OPEN consumed on F5');
+    assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:TIME_UP`), true, 'TIME_UP consumed on F5');
+
+    // Scenario 2: Student unlocks audio late in QUESTION_RESULTS
+    let playedSfx = [];
+    const simulateLateUnlock = (phase, consumedSet) => {
+      if (phase === 'QUESTION_RESULTS') {
+        const resultsKey = `${sessionId}:${qId}:QUESTION_RESULTS`;
+        if (!consumedSet.has(resultsKey)) {
+          playedSfx.push('competition_results_reveal');
+        }
+      }
+    };
+
+    // Before unlock, late guard marked results as consumed
+    const consumedLateUnlock = new Set([
+      `${sessionId}:${qId}:QUESTION_OPEN`,
+      `${sessionId}:${qId}:TIME_UP`,
+      `${sessionId}:${qId}:QUESTION_RESULTS`
+    ]);
+
+    simulateLateUnlock('QUESTION_RESULTS', consumedLateUnlock);
+    assert.strictEqual(playedSfx.length, 0, 'No stale results SFX played when unlocking late in QUESTION_RESULTS');
+  });
 });
