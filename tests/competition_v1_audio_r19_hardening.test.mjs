@@ -281,7 +281,10 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // 8.4. Timeout re-verification without creating a new room
     assert.match(hostPageSrc, /isAudioConfigMatching\(verifyRes\.data\?\.audio_config, audioPayload\)/, 'Re-verifies exact config match on timeout before concluding failure');
     assert.match(hostPageSrc, /const handleRetrySaveAudioConfig = async/, 'handleRetrySaveAudioConfig present');
-    assert.match(hostPageSrc, /sessionId: activeSessionId/, 'Retries for current activeSessionId without creating room');
+    assert.match(hostPageSrc, /sessionId:\s*(activeSessionId|targetSessionId)/, 'Retries for current activeSessionId/targetSessionId without creating room');
+    assert.match(hostPageSrc, /activeSessionIdRef\.current !== targetSessionId/, 'Uses activeSessionIdRef.current for stale session guard');
+    assert.match(hostPageSrc, /latestAudioConfigRequestIdRef/, 'Uses request-generation guard for audio config responses');
+    assert.match(hostPageSrc, /isSessionSwitch/, 'Detects session switch to isolate audio lifecycle');
   });
 
   await t.test('9. Student Audio Controls Component & Anti-Stale SFX Tests', () => {
@@ -584,6 +587,161 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
 
       simulateLateUnlock('QUESTION_RESULTS', consumedLateUnlock);
       assert.strictEqual(playedSfx.length, 0, 'No stale results SFX played when unlocking late in QUESTION_RESULTS');
+    });
+
+    // 12.8. Real Asynchronous Deferred Promise Session Switch Guard Simulation
+    await st.test('12.8. Real Asynchronous Deferred Promise Session Switch Guard Simulation', async () => {
+      // Setup state imitating CompetitionHostPage
+      let currentSessionId = 'room-A';
+      const activeSessionIdRef = { current: currentSessionId };
+      const latestAudioConfigRequestIdRef = { current: 0 };
+      const pendingAudioConfigRef = { current: null };
+      let audioConfigStatus = 'idle';
+      let audioConfigError = null;
+      let competitionAudioMode = 'online';
+
+      // 1. Host begins saving audio for Room A with real deferred Promise
+      const targetSessionIdA = activeSessionIdRef.current;
+      const requestIdA = ++latestAudioConfigRequestIdRef.current; // 1
+      audioConfigStatus = 'saving';
+      audioConfigError = null;
+      const payloadA = { mode: 'online', selection_mode: 'theme', theme_id: 'cyberpunk' };
+      pendingAudioConfigRef.current = payloadA;
+
+      let resolveDeferredA;
+      const deferredRpcA = new Promise((resolve) => {
+        resolveDeferredA = resolve;
+      });
+
+      // Simulation of async runner for Room A
+      const roomARunnerPromise = (async () => {
+        const audioRes = await deferredRpcA;
+        // Guard check at response time: activeSessionIdRef.current must match targetSessionId AND generation must match
+        if (activeSessionIdRef.current !== targetSessionIdA || requestIdA !== latestAudioConfigRequestIdRef.current) {
+          return { aborted: true };
+        }
+        if (audioRes.success) {
+          pendingAudioConfigRef.current = null;
+          audioConfigStatus = 'saved';
+          audioConfigError = null;
+        } else {
+          audioConfigStatus = 'failed';
+          audioConfigError = audioRes.message;
+        }
+        return { aborted: false };
+      })();
+
+      // 2. While Room A RPC is still in-flight, Host switches to Room B!
+      currentSessionId = 'room-B';
+      activeSessionIdRef.current = currentSessionId;
+      latestAudioConfigRequestIdRef.current++; // session switch generation advance (now 2)
+      pendingAudioConfigRef.current = null;
+      audioConfigStatus = 'idle';
+      audioConfigError = null;
+      competitionAudioMode = 'in_class';
+
+      // Room B snapshot arrives from DB restoring Room B state to saved in_class
+      const snapshotB = {
+        id: 'room-B',
+        status: 'waiting',
+        audio_config_persisted: true,
+        audio_config: { mode: 'in_class', selection_mode: 'theme', theme_id: 'classroom_chill' },
+      };
+      const decisionB = classifyAudioSnapshotState({
+        snapshot: snapshotB,
+        activeSessionId: activeSessionIdRef.current,
+        currentStatus: audioConfigStatus,
+        pendingAudioConfig: pendingAudioConfigRef.current,
+      });
+      assert.strictEqual(decisionB.action, 'RESTORE_FROM_DB');
+      audioConfigStatus = decisionB.nextStatus;
+      competitionAudioMode = decisionB.nextMode;
+
+      assert.strictEqual(audioConfigStatus, 'saved');
+      assert.strictEqual(competitionAudioMode, 'in_class');
+
+      // 3. Now, Room A deferred RPC resolves late!
+      resolveDeferredA({ success: true, message: 'Room A audio saved successfully' });
+      const runnerResult = await roomARunnerPromise;
+
+      // 4. Verify Room A response was safely dropped and Room B was untouched!
+      assert.strictEqual(runnerResult.aborted, true, 'Room A response was aborted by guard');
+      assert.strictEqual(activeSessionIdRef.current, 'room-B', 'Active session remains room-B');
+      assert.strictEqual(audioConfigStatus, 'saved', 'Room B audioConfigStatus was not modified by Room A');
+      assert.strictEqual(competitionAudioMode, 'in_class', 'Room B audioMode was not modified by Room A');
+      assert.strictEqual(audioConfigError, null, 'Room B has no error');
+      assert.strictEqual(pendingAudioConfigRef.current, null, 'pendingAudioConfigRef was not overwritten by Room A');
+
+      // 5. Test overlapping requests for same room: Request 1 vs Request 2
+      const targetSessionIdB = activeSessionIdRef.current;
+      const reqId1 = ++latestAudioConfigRequestIdRef.current; // 3
+      let resolveReq1;
+      const deferredReq1 = new Promise((r) => { resolveReq1 = r; });
+
+      // Host rapidly triggers Request 2
+      const reqId2 = ++latestAudioConfigRequestIdRef.current; // 4
+      let resolveReq2;
+      const deferredReq2 = new Promise((r) => { resolveReq2 = r; });
+
+      const handleResponse = (reqId, res) => {
+        if (activeSessionIdRef.current !== targetSessionIdB || reqId !== latestAudioConfigRequestIdRef.current) {
+          return false; // dropped
+        }
+        audioConfigStatus = res.success ? 'saved' : 'failed';
+        return true;
+      };
+
+      // Req 1 completes late with a failure
+      resolveReq1({ success: false, message: 'Network timeout' });
+      const res1 = await deferredReq1;
+      const accepted1 = handleResponse(reqId1, res1);
+      assert.strictEqual(accepted1, false, 'Overlapping stale request 1 was dropped');
+      assert.strictEqual(audioConfigStatus, 'saved', 'Status remained saved, not set to failed by req 1');
+
+      // Req 2 completes successfully
+      resolveReq2({ success: true });
+      const res2 = await deferredReq2;
+      const accepted2 = handleResponse(reqId2, res2);
+      assert.strictEqual(accepted2, true, 'Latest request 2 was accepted');
+      assert.strictEqual(audioConfigStatus, 'saved');
+    });
+
+    // 12.9. Stale Polling Snapshot Arriving After RPC Saved Avoids Reverting To legacy_missing
+    await st.test('12.9. Stale Polling Snapshot Arriving After RPC Saved Avoids Reverting To legacy_missing', () => {
+      // Current status is already 'saved' (e.g. Host successfully persisted via RPC)
+      const currentStatus = 'saved';
+      const activeSessionId = 'session-123';
+
+      // Stale polling snapshot (persisted: false, missing config) arrives after RPC succeeded
+      const staleSnapshot = {
+        id: 'session-123',
+        status: 'waiting',
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config: null,
+      };
+
+      const decision = classifyAudioSnapshotState({
+        snapshot: staleSnapshot,
+        activeSessionId,
+        currentStatus,
+        pendingAudioConfig: null,
+      });
+
+      // Guard 3 must trigger
+      assert.strictEqual(decision.action, 'IGNORE_STALE_UNPERSISTED_SNAPSHOT');
+      assert.strictEqual(decision.nextStatus, null, 'nextStatus is null so state machine does not change status');
+      assert.strictEqual(decision.nextMode, null, 'nextMode is null');
+      assert.strictEqual(decision.nextError, null, 'nextError is null');
+      assert.strictEqual(decision.shouldClearPending, false);
+      assert.strictEqual(decision.shouldAutoHeal, false);
+
+      // Verify that in component logic: nextStatus !== null is required to update status
+      let componentStatus = currentStatus;
+      if (decision.nextStatus !== null) {
+        componentStatus = decision.nextStatus;
+      }
+      assert.strictEqual(componentStatus, 'saved', 'Component audioConfigStatus remains saved');
     });
   });
 });

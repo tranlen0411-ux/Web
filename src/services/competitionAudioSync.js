@@ -83,6 +83,19 @@ export function classifyAudioSnapshotState({
     };
   }
 
+  // Guard 3: If current status is ALREADY 'saved', a stale unpersisted snapshot (e.g. from an in-flight poll
+  // initiated before RPC completed) MUST NEVER demote 'saved' back to 'legacy_missing' or 'failed'!
+  if (currentStatus === 'saved' && snapshot.audio_config_persisted === false) {
+    return {
+      action: 'IGNORE_STALE_UNPERSISTED_SNAPSHOT',
+      nextStatus: null,
+      nextMode: null,
+      nextError: null,
+      shouldClearPending: false,
+      shouldAutoHeal: false,
+    };
+  }
+
   // Authoritative DB record exists
   if (snapshot.audio_config_persisted === true && isValidAudioConfig(snapshot.audio_config)) {
     // If Host has a pending save or retry, verify DB matches Host's requested config!
