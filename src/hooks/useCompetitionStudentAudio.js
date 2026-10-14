@@ -1,0 +1,214 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSound } from '../context/SoundContext.jsx';
+import { competitionAudioManager, BACKGROUND_MUSIC_AVAILABLE } from '../services/competitionAudioManager.js';
+import {
+  getThemeById,
+  getHeroicTrackById,
+  DEFAULT_MUSIC_THEME,
+  SELECTION_MODE_CUSTOM,
+} from '../services/competitionMusicThemes.js';
+
+/**
+ * COMPETITION STUDENT AUDIO HOOK (Competition V1 - R19)
+ *
+ * Guaranteed Invariants:
+ * - 100% Mute when mode === 'in_class' (Host main room speaker only)
+ * - Single background audio instance via competitionAudioManager
+ * - Zero restart on Polling / Reconnect (Guarded via 5-Tuple compound key)
+ * - Authoritative server signal for Results: isInterimLeaderboardActive (Zero host view mode coupling)
+ * - Browser Autoplay compliance: Starts muted in online mode until explicit Student gesture
+ * - Safe Pause & Resume without track restart
+ * - Fail-silent execution: Never blocks question taking or error displays
+ */
+export function useCompetitionStudentAudio({
+  sessionId = null,
+  status = 'waiting',
+  currentQuestionId = null,
+  timeLeftSeconds = null,
+  isInterimLeaderboardActive = false,
+  audioConfig = null,
+}) {
+  // Sync with global sound preference from repository SoundContext
+  const { isSoundEnabled } = useSound();
+
+  // Local student mute preference (starts muted until explicit student user action)
+  const [isStudentAudioUnlocked, setIsStudentAudioUnlocked] = useState(false);
+  const [isStudentMuted, setIsStudentMuted] = useState(false);
+
+  // Extract config with in_class fallback
+  const mode = audioConfig?.mode || 'in_class';
+  const selectionMode = audioConfig?.selection_mode || 'theme';
+  const themeId = audioConfig?.theme_id || DEFAULT_MUSIC_THEME;
+  const customLobbyTrackId = audioConfig?.custom_lobby_track_id || null;
+  const customQuestionTrackId = audioConfig?.custom_question_track_id || null;
+
+  // Invariant 1: In-class mode enforces 100% client-side mute
+  const isInClass = mode === 'in_class';
+
+  // Determine actual playable tracks
+  const resolvedLobbyTrackSrc = selectionMode === SELECTION_MODE_CUSTOM
+    ? (getHeroicTrackById(customLobbyTrackId)?.src || null)
+    : (getThemeById(themeId)?.lobbyTrack || null);
+
+  const resolvedQuestionTrackSrc = selectionMode === SELECTION_MODE_CUSTOM
+    ? (getHeroicTrackById(customQuestionTrackId)?.src || null)
+    : (getThemeById(themeId)?.questionTrack || null);
+
+  // Determine current effective phase
+  let currentPhase = 'INACTIVE';
+  if (status === 'waiting') {
+    currentPhase = 'LOBBY';
+  } else if (status === 'in_progress') {
+    if (isInterimLeaderboardActive) {
+      currentPhase = 'QUESTION_RESULTS';
+    } else if (timeLeftSeconds !== null && timeLeftSeconds <= 0) {
+      currentPhase = 'TIME_UP';
+    } else {
+      currentPhase = 'QUESTION_ACTIVE';
+    }
+  } else if (status === 'paused') {
+    currentPhase = 'PAUSED';
+  } else if (status === 'finished') {
+    currentPhase = 'FINISHED';
+  }
+
+  // Determine active track for the phase
+  const activeTrackSrc = currentPhase === 'LOBBY'
+    ? resolvedLobbyTrackSrc
+    : (currentPhase === 'QUESTION_ACTIVE' ? resolvedQuestionTrackSrc : null);
+
+  // Compound 5-Tuple Event Guard: Prevents duplicate triggers from Polling / F5 / Reconnect
+  const lastCompoundKeyRef = useRef(null);
+  const lastPlayedSfxSetRef = useRef(new Set());
+  const prevSessionIdRef = useRef(sessionId);
+  const prevQuestionIdRef = useRef(currentQuestionId);
+
+  // Session reset
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId;
+      lastCompoundKeyRef.current = null;
+      lastPlayedSfxSetRef.current.clear();
+      competitionAudioManager.stopAll();
+    }
+  }, [sessionId]);
+
+  // Question change reset
+  useEffect(() => {
+    if (prevQuestionIdRef.current !== currentQuestionId) {
+      prevQuestionIdRef.current = currentQuestionId;
+      lastPlayedSfxSetRef.current.delete(`${sessionId}:${currentQuestionId}:TIME_UP`);
+    }
+  }, [currentQuestionId, sessionId]);
+
+  // Master Audio Execution Effect
+  useEffect(() => {
+    // 1. If in_class, globally disabled, or student muted -> STOP ALL & EXIT
+    if (isInClass || !isSoundEnabled || isStudentMuted || !isStudentAudioUnlocked) {
+      competitionAudioManager.stopAll();
+      lastCompoundKeyRef.current = null;
+      return;
+    }
+
+    // 2. PAUSED state
+    if (currentPhase === 'PAUSED') {
+      competitionAudioManager.setGamePaused(true);
+      return;
+    } else {
+      competitionAudioManager.setGamePaused(false);
+    }
+
+    // 3. FINISHED or CANCELLED
+    if (currentPhase === 'FINISHED' || status === 'cancelled') {
+      competitionAudioManager.stopAll();
+      return;
+    }
+
+    // 4. Construct 5-Tuple Invariant Guard Key
+    const compoundKey = `${sessionId}:${currentQuestionId || 'lobby'}:${currentPhase}:${selectionMode}:${activeTrackSrc || 'none'}`;
+
+    // 5. Anti-restart guard for Polling rerenders
+    if (lastCompoundKeyRef.current === compoundKey) {
+      return; // Already in desired state; do not restart playback
+    }
+    lastCompoundKeyRef.current = compoundKey;
+
+    // 6. State Machine Transitions
+    if (currentPhase === 'LOBBY') {
+      if (resolvedLobbyTrackSrc) {
+        competitionAudioManager.playMusic('lobby');
+      } else {
+        competitionAudioManager.stopMusic();
+      }
+    } else if (currentPhase === 'QUESTION_ACTIVE') {
+      const openKey = `${sessionId}:${currentQuestionId}:QUESTION_OPEN`;
+      if (!lastPlayedSfxSetRef.current.has(openKey)) {
+        lastPlayedSfxSetRef.current.add(openKey);
+        competitionAudioManager.playSfx('competition_question_open');
+      }
+      if (resolvedQuestionTrackSrc) {
+        competitionAudioManager.playMusic('question_active');
+      } else {
+        competitionAudioManager.stopMusic();
+      }
+    } else if (currentPhase === 'TIME_UP') {
+      const timeUpKey = `${sessionId}:${currentQuestionId}:TIME_UP`;
+      competitionAudioManager.stopMusic();
+      if (!lastPlayedSfxSetRef.current.has(timeUpKey)) {
+        lastPlayedSfxSetRef.current.add(timeUpKey);
+        competitionAudioManager.playSfx('competition_time_up');
+      }
+    } else if (currentPhase === 'QUESTION_RESULTS') {
+      const resultsKey = `${sessionId}:${currentQuestionId}:QUESTION_RESULTS`;
+      competitionAudioManager.stopMusic();
+      if (!lastPlayedSfxSetRef.current.has(resultsKey)) {
+        lastPlayedSfxSetRef.current.add(resultsKey);
+        competitionAudioManager.playSfx('competition_results_reveal');
+      }
+    }
+  }, [
+    sessionId,
+    status,
+    currentPhase,
+    currentQuestionId,
+    isInClass,
+    isSoundEnabled,
+    isStudentMuted,
+    isStudentAudioUnlocked,
+    selectionMode,
+    activeTrackSrc,
+    resolvedLobbyTrackSrc,
+    resolvedQuestionTrackSrc,
+  ]);
+
+  // Unmount cleanup
+  useEffect(() => {
+    return () => {
+      competitionAudioManager.setGamePaused(false);
+      competitionAudioManager.stopAll();
+    };
+  }, []);
+
+  // Explicit user gesture unlock for browser Autoplay compliance
+  const unlockStudentAudio = useCallback(async () => {
+    const unlocked = await competitionAudioManager.unlock();
+    setIsStudentAudioUnlocked(unlocked);
+    setIsStudentMuted(false);
+    return unlocked;
+  }, []);
+
+  const toggleStudentMute = useCallback(() => {
+    setIsStudentMuted((prev) => !prev);
+  }, []);
+
+  return {
+    isInClass,
+    isOnline: mode === 'online',
+    isStudentAudioUnlocked,
+    isStudentMuted,
+    unlockStudentAudio,
+    toggleStudentMute,
+    isMusicAvailable: BACKGROUND_MUSIC_AVAILABLE,
+    currentPhase,
+  };
+}

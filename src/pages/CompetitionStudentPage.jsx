@@ -34,6 +34,7 @@ import {
   studentGetRewardTransaction,
 } from '../services/competitionClient.js';
 import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRealtime.js';
+import { useCompetitionStudentAudio } from '../hooks/useCompetitionStudentAudio.js';
 import { StudentQuestionReviewView } from '../components/competition/StudentQuestionReviewView.jsx';
 
 // ============================================================================
@@ -295,6 +296,16 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     if (!interimLeaderboard || !participantId) return null;
     return interimLeaderboard.find((item) => item.participant_id === participantId) || null;
   }, [interimLeaderboard, participantId]);
+
+  // Competition Student Audio Hook (R19 Online / In-Class State Machine)
+  const studentAudio = useCompetitionStudentAudio({
+    sessionId,
+    status: sessionData?.status || 'waiting',
+    currentQuestionId: currentQuestion?.id || null,
+    timeLeftSeconds,
+    isInterimLeaderboardActive,
+    audioConfig: sessionData?.audio_config || null,
+  });
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 

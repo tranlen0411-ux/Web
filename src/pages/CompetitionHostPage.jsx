@@ -46,7 +46,8 @@ import {
   getHostQuestionResults,
   getHostQuestionResultByOrder,
   getLeaderboardSnapshot,
-  hostGetRewardTransactions
+  hostGetRewardTransactions,
+  hostSetAudioConfig
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
 import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
@@ -1356,6 +1357,38 @@ export function CompetitionHostPage() {
         setReviewedQuestionOrder(null);
         setReviewedQuestionResults(null);
         autoResultAttemptRef.current = null;
+
+        // Persist audio configuration using newSessionId with decoupled retry
+        const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
+        const audioPayload = {
+          mode: 'in_class',
+          selection_mode: currentSelectionMode,
+          theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
+          custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
+          custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
+        };
+
+        (async () => {
+          let attempts = 0;
+          let saved = false;
+          while (attempts < 3 && !saved) {
+            attempts++;
+            try {
+              const audioRes = await hostSetAudioConfig({
+                sessionId: newSessionId,
+                audioConfig: audioPayload,
+              });
+              if (audioRes.success) {
+                saved = true;
+              } else if (attempts < 3) {
+                await new Promise((r) => setTimeout(r, attempts * 500));
+              }
+            } catch (_err) {
+              if (attempts < 3) await new Promise((r) => setTimeout(r, attempts * 500));
+            }
+          }
+        })();
+
         showToast('Tạo phòng thi thành công! Mã phòng đã sẵn sàng.', 'success');
       } else {
         setSetupError(res.message || 'Không thể tạo phòng thi. Vui lòng thử lại.');
