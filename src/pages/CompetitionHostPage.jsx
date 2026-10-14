@@ -31,7 +31,8 @@ import {
   PieChart,
   Flame,
   Star,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Volume2
 } from 'lucide-react';
 import {
   hostCreateSession,
@@ -327,6 +328,9 @@ export function CompetitionHostPage() {
   const [maxParticipants, setMaxParticipants] = useState(30);
   const [reviewEnabled, setReviewEnabled] = useState(false);
   const [rewardEnabled, setRewardEnabled] = useState(false);
+  const [competitionAudioMode, setCompetitionAudioMode] = useState('in_class'); // 'in_class' | 'online'
+  const [audioConfigStatus, setAudioConfigStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'failed'
+  const [audioConfigError, setAudioConfigError] = useState(null);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [isQuestionBankModalOpen, setIsQuestionBankModalOpen] = useState(false);
   const [isImportExcelModalOpen, setIsImportExcelModalOpen] = useState(false);
@@ -351,6 +355,16 @@ export function CompetitionHostPage() {
     refreshNow,
     setSnapshot
   } = useHostCompetitionPolling(activeSessionId);
+
+  // Synchronize audio configuration status from restored snapshot
+  useEffect(() => {
+    if (snapshot?.audio_config) {
+      setAudioConfigStatus('saved');
+      if (snapshot.audio_config.mode) {
+        setCompetitionAudioMode(snapshot.audio_config.mode);
+      }
+    }
+  }, [snapshot?.audio_config]);
 
   // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
   useEffect(() => {
@@ -1358,38 +1372,55 @@ export function CompetitionHostPage() {
         setReviewedQuestionResults(null);
         autoResultAttemptRef.current = null;
 
-        // Persist audio configuration using newSessionId with decoupled retry
+        // Persist audio configuration using newSessionId with state-tracked retry
         const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
         const audioPayload = {
-          mode: 'in_class',
+          mode: competitionAudioMode,
           selection_mode: currentSelectionMode,
           theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
           custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
           custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
         };
 
-        (async () => {
-          let attempts = 0;
-          let saved = false;
-          while (attempts < 3 && !saved) {
-            attempts++;
-            try {
-              const audioRes = await hostSetAudioConfig({
-                sessionId: newSessionId,
-                audioConfig: audioPayload,
-              });
-              if (audioRes.success) {
-                saved = true;
-              } else if (attempts < 3) {
+        setAudioConfigStatus('saving');
+        setAudioConfigError(null);
+
+        let attempts = 0;
+        let saved = false;
+        let lastErrMsg = null;
+
+        while (attempts < 3 && !saved) {
+          attempts++;
+          try {
+            const audioRes = await hostSetAudioConfig({
+              sessionId: newSessionId,
+              audioConfig: audioPayload,
+            });
+            if (audioRes.success) {
+              saved = true;
+            } else {
+              lastErrMsg = audioRes.message || 'Lỗi lưu cấu hình âm thanh.';
+              if (attempts < 3) {
                 await new Promise((r) => setTimeout(r, attempts * 500));
               }
-            } catch (_err) {
-              if (attempts < 3) await new Promise((r) => setTimeout(r, attempts * 500));
+            }
+          } catch (err) {
+            lastErrMsg = err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.';
+            if (attempts < 3) {
+              await new Promise((r) => setTimeout(r, attempts * 500));
             }
           }
-        })();
+        }
 
-        showToast('Tạo phòng thi thành công! Mã phòng đã sẵn sàng.', 'success');
+        if (saved) {
+          setAudioConfigStatus('saved');
+          setAudioConfigError(null);
+          showToast('Tạo phòng thi và lưu cấu hình âm thanh thành công! Mã phòng đã sẵn sàng.', 'success');
+        } else {
+          setAudioConfigStatus('failed');
+          setAudioConfigError(lastErrMsg || 'Chưa thể lưu cấu hình âm thanh vào phòng thi.');
+          showToast('Đã tạo phòng thi nhưng chưa thể lưu cấu hình âm thanh. Vui lòng bấm "Thử lại lưu âm thanh" trước khi bắt đầu!', 'error');
+        }
       } else {
         setSetupError(res.message || 'Không thể tạo phòng thi. Vui lòng thử lại.');
       }
@@ -1400,9 +1431,54 @@ export function CompetitionHostPage() {
     }
   };
 
+  // Dedicated retry handler to save audio config without creating a new session
+  const handleRetrySaveAudioConfig = async () => {
+    if (!activeSessionId || audioConfigStatus === 'saving') return;
+    setAudioConfigStatus('saving');
+    setAudioConfigError(null);
+    const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
+    const audioPayload = {
+      mode: competitionAudioMode,
+      selection_mode: currentSelectionMode,
+      theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
+      custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
+      custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
+    };
+    try {
+      const audioRes = await hostSetAudioConfig({
+        sessionId: activeSessionId,
+        audioConfig: audioPayload,
+      });
+      if (audioRes.success) {
+        setAudioConfigStatus('saved');
+        setAudioConfigError(null);
+        showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+      } else {
+        setAudioConfigStatus('failed');
+        setAudioConfigError(audioRes.message || 'Lỗi lưu cấu hình âm thanh.');
+        showToast(audioRes.message || 'Chưa thể lưu cấu hình âm thanh.', 'error');
+      }
+    } catch (err) {
+      setAudioConfigStatus('failed');
+      setAudioConfigError(err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.');
+      showToast('Lỗi mạng khi thử lưu cấu hình âm thanh.', 'error');
+    }
+  };
+
   // Host Lifecycle Actions
   const handleStartSession = async () => {
     if (!activeSessionId || actionPending) return;
+
+    // Guard: Audio configuration MUST be confirmed before starting
+    if (audioConfigStatus === 'saving') {
+      showToast('Đang lưu cấu hình âm thanh, vui lòng chờ trong giây lát...', 'info');
+      return;
+    }
+    if (audioConfigStatus === 'failed') {
+      showToast('Cấu hình âm thanh chưa được lưu thành công. Vui lòng bấm "Thử lại lưu âm thanh" trước khi bắt đầu.', 'error');
+      return;
+    }
+
     setActionPending(true);
     // Explicit user click gesture: seamlessly unlock audio controller
     audioControls.unlockAudio().catch(() => {});
@@ -1847,6 +1923,62 @@ export function CompetitionHostPage() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Hình thức tổ chức & Âm thanh phòng thi */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 border-b border-slate-200/80 pb-2">
+                  <Volume2 className="w-4 h-4 text-sky-600" />
+                  <span className="font-bold text-slate-800 text-sm">Hình thức tổ chức &amp; Âm thanh phòng thi (Audio Mode)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label
+                    className={`p-3.5 rounded-xl border-2 cursor-pointer transition flex items-start gap-3 ${
+                      competitionAudioMode === 'in_class'
+                        ? 'bg-sky-50 border-sky-500 shadow-2xs'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="competitionAudioMode"
+                      value="in_class"
+                      checked={competitionAudioMode === 'in_class'}
+                      onChange={() => setCompetitionAudioMode('in_class')}
+                      className="mt-0.5 text-sky-600 focus:ring-sky-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="font-bold text-xs text-slate-800 block">Thi tại lớp (In-Class)</span>
+                      <span className="text-[11px] text-slate-500 leading-relaxed block mt-0.5">
+                        Âm thanh chỉ phát qua loa của Giáo viên. Thiết bị học sinh hoàn toàn tắt tiếng để tránh ồn lớp học.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`p-3.5 rounded-xl border-2 cursor-pointer transition flex items-start gap-3 ${
+                      competitionAudioMode === 'online'
+                        ? 'bg-sky-50 border-sky-500 shadow-2xs'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="competitionAudioMode"
+                      value="online"
+                      checked={competitionAudioMode === 'online'}
+                      onChange={() => setCompetitionAudioMode('online')}
+                      className="mt-0.5 text-sky-600 focus:ring-sky-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="font-bold text-xs text-slate-800 block">Thi trực tuyến (Online)</span>
+                      <span className="text-[11px] text-slate-500 leading-relaxed block mt-0.5">
+                        Âm thanh phát đồng bộ trên máy Giáo viên và từng thiết bị của Học sinh (học sinh có nút bật/tắt tiếng riêng).
+                      </span>
+                    </div>
+                  </label>
+                </div>
               </div>
 
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
@@ -2297,6 +2429,36 @@ export function CompetitionHostPage() {
               </div>
 
               {/* Lobby Action Controls */}
+              {/* Audio Configuration Status Banner in Waiting Lobby */}
+              {audioConfigStatus === 'saving' && (
+                <div className="flex items-center gap-2 p-3 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-800 font-semibold animate-pulse">
+                  <RefreshCw className="w-4 h-4 animate-spin text-sky-600 shrink-0" />
+                  <span>Đang lưu và xác thực cấu hình âm thanh phòng thi ({competitionAudioMode === 'in_class' ? 'Thi tại lớp' : 'Thi trực tuyến'})...</span>
+                </div>
+              )}
+              {audioConfigStatus === 'failed' && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Chưa lưu được cấu hình âm thanh: {audioConfigError || 'Lỗi mạng hoặc timeout'}.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRetrySaveAudioConfig}
+                    disabled={audioConfigStatus === 'saving'}
+                    className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-xs shadow-xs transition shrink-0"
+                  >
+                    Thử lại lưu âm thanh
+                  </button>
+                </div>
+              )}
+              {audioConfigStatus === 'saved' && (
+                <div className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Cấu hình âm thanh: <strong>{competitionAudioMode === 'in_class' ? 'Thi tại lớp (Chỉ phát trên máy Giáo viên)' : 'Thi trực tuyến (Phát trên máy Giáo viên & Học sinh)'}</strong> đã được xác nhận.</span>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <button
                   type="button"
@@ -2314,7 +2476,7 @@ export function CompetitionHostPage() {
 
                 <button
                   type="button"
-                  disabled={actionPending || participants.length === 0}
+                  disabled={actionPending || participants.length === 0 || audioConfigStatus !== 'saved'}
                   onClick={handleStartSession}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
                 >

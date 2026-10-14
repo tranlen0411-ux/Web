@@ -6,6 +6,7 @@ import {
   getHeroicTrackById,
   DEFAULT_MUSIC_THEME,
   SELECTION_MODE_CUSTOM,
+  SELECTION_MODE_THEME,
 } from '../services/competitionMusicThemes.js';
 
 /**
@@ -13,6 +14,7 @@ import {
  *
  * Guaranteed Invariants:
  * - 100% Mute when mode === 'in_class' (Host main room speaker only)
+ * - Synchronizes authoritative theme or custom tracks directly into competitionAudioManager
  * - Single background audio instance via competitionAudioManager
  * - Zero restart on Polling / Reconnect (Guarded via 5-Tuple compound key)
  * - Authoritative server signal for Results: isInterimLeaderboardActive (Zero host view mode coupling)
@@ -31,9 +33,10 @@ export function useCompetitionStudentAudio({
   // Sync with global sound preference from repository SoundContext
   const { isSoundEnabled } = useSound();
 
-  // Local student mute preference (starts muted until explicit student user action)
+  // Local student mute & volume preference
   const [isStudentAudioUnlocked, setIsStudentAudioUnlocked] = useState(false);
   const [isStudentMuted, setIsStudentMuted] = useState(false);
+  const [volume, setVolumeState] = useState(0.5);
 
   // Extract config with in_class fallback
   const mode = audioConfig?.mode || 'in_class';
@@ -45,7 +48,26 @@ export function useCompetitionStudentAudio({
   // Invariant 1: In-class mode enforces 100% client-side mute
   const isInClass = mode === 'in_class';
 
-  // Determine actual playable tracks
+  // Synchronize authoritative tracks from session audioConfig into competitionAudioManager
+  useEffect(() => {
+    if (isInClass) {
+      competitionAudioManager.stopAll();
+      return;
+    }
+    // Only configure audio manager if in online mode
+    if (selectionMode === SELECTION_MODE_CUSTOM) {
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: customLobbyTrackId,
+        questionTrackId: customQuestionTrackId,
+      });
+    } else {
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
+      competitionAudioManager.setTheme(themeId);
+    }
+  }, [isInClass, selectionMode, themeId, customLobbyTrackId, customQuestionTrackId]);
+
+  // Determine actual playable tracks for local guard key
   const resolvedLobbyTrackSrc = selectionMode === SELECTION_MODE_CUSTOM
     ? (getHeroicTrackById(customLobbyTrackId)?.src || null)
     : (getThemeById(themeId)?.lobbyTrack || null);
@@ -198,7 +220,17 @@ export function useCompetitionStudentAudio({
   }, []);
 
   const toggleStudentMute = useCallback(() => {
-    setIsStudentMuted((prev) => !prev);
+    setIsStudentMuted((prev) => {
+      const next = !prev;
+      competitionAudioManager.setMusicEnabled(!next);
+      return next;
+    });
+  }, []);
+
+  const setVolume = useCallback((newVol) => {
+    const clamped = Math.max(0, Math.min(1, typeof newVol === 'number' ? newVol : 0.5));
+    setVolumeState(clamped);
+    competitionAudioManager.setVolume(clamped);
   }, []);
 
   return {
@@ -208,6 +240,8 @@ export function useCompetitionStudentAudio({
     isStudentMuted,
     unlockStudentAudio,
     toggleStudentMute,
+    volume,
+    setVolume,
     isMusicAvailable: BACKGROUND_MUSIC_AVAILABLE,
     currentPhase,
   };

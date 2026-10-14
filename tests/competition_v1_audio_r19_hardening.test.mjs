@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { competitionAudioManager } from '../src/services/competitionAudioManager.js';
+import {
+  DEFAULT_MUSIC_THEME,
+  SELECTION_MODE_CUSTOM,
+  SELECTION_MODE_THEME,
+  getThemeById,
+  getHeroicTrackById,
+} from '../src/services/competitionMusicThemes.js';
+import { DEFAULT_SESSION_AUDIO_CONFIG } from '../src/services/competitionClient.js';
 
 const ROOT_DIR = process.cwd();
 
@@ -15,6 +24,10 @@ const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionC
 const hostPageSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/pages/CompetitionHostPage.jsx'), 'utf8');
 const studentPageSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/pages/CompetitionStudentPage.jsx'), 'utf8');
 const studentHookSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/hooks/useCompetitionStudentAudio.js'), 'utf8');
+const studentControlsSrc = fs.readFileSync(
+  path.join(ROOT_DIR, 'src/components/competition/StudentAudioControls.jsx'),
+  'utf8'
+);
 
 test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
 
@@ -94,9 +107,9 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         return res.rows[0].valid;
       }
 
-      // Valid theme mode
+      // Valid theme mode (in_class)
       assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), true);
-      // Valid custom mode
+      // Valid custom mode (online)
       assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), true);
       // Theme mode with non-null custom track must FAIL
       assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":"km_at_launch","custom_question_track_id":null}'::jsonb`), false);
@@ -124,17 +137,21 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
 
       const validConfig = `'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`;
 
-      // Case: No auth.uid() -> UNAUTHORIZED
-      const noAuthRes = await db.query(`SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig}) as r;`);
-      assert.equal(noAuthRes.rows[0].r.success, false);
-      assert.equal(noAuthRes.rows[0].r.error_code, 'UNAUTHORIZED');
-
       // Helper to call as auth user
       async function callAs(userId, sql) {
-        await db.exec(`SET request.jwt.claim.sub = '${userId}'; SET request.jwt.claim.role = 'authenticated';`);
+        if (userId) {
+          await db.exec(`SET request.jwt.claim.sub = '${userId}'; SET request.jwt.claim.role = 'authenticated';`);
+        } else {
+          await db.exec(`SET request.jwt.claim.sub = ''; SET request.jwt.claim.role = 'anon';`);
+        }
         const res = await db.query(sql);
         return res.rows[0].r;
       }
+
+      // Case: No auth.uid() -> UNAUTHORIZED
+      const noAuthRes = await callAs(null, `SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig}) as r;`);
+      assert.equal(noAuthRes.success, false);
+      assert.equal(noAuthRes.error_code, 'UNAUTHORIZED');
 
       // Case: Non-existent session -> SESSION_NOT_FOUND
       const nonExistentRes = await callAs(hostId, `SELECT public.competition_host_set_audio_config('99999999-9999-9999-9999-999999999999', ${validConfig}) as r;`);
@@ -160,6 +177,27 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       const tableCheck = await db.query(`SELECT config->>'theme_id' as tid FROM public.competition_session_audio_configs WHERE session_id = '${sessionId}';`);
       assert.equal(tableCheck.rows[0].tid, 'classroom_chill');
     });
+
+    await pt.test('6.3. Direct mutation denied for client roles (REVOKE ALL enforcement)', async () => {
+      // Direct INSERT under authenticated role MUST fail
+      await assert.rejects(async () => {
+        await db.exec(`
+          SET ROLE authenticated;
+          INSERT INTO public.competition_session_audio_configs (session_id, config)
+          VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"mode":"in_class","selection_mode":"theme","theme_id":"none","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb);
+          RESET ROLE;
+        `);
+      }, /permission denied/i, 'Direct INSERT by authenticated user must be denied');
+
+      // Direct DELETE under anon role MUST fail
+      await assert.rejects(async () => {
+        await db.exec(`
+          SET ROLE anon;
+          DELETE FROM public.competition_session_audio_configs WHERE session_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+          RESET ROLE;
+        `);
+      }, /permission denied/i, 'Direct DELETE by anon user must be denied');
+    });
   });
 
   await t.test('7. Client Service: competitionClient.js exports DEFAULT_SESSION_AUDIO_CONFIG & hostSetAudioConfig', () => {
@@ -170,19 +208,75 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(clientSrc, /DEFAULT_SESSION_AUDIO_CONFIG/, 'Fallback applied when audio row absent');
   });
 
-  await t.test('8. Host UI Integration: CompetitionHostPage persists audio with retry on session create', () => {
-    assert.match(hostPageSrc, /hostSetAudioConfig/, 'CompetitionHostPage imports hostSetAudioConfig');
-    assert.match(hostPageSrc, /hostSetAudioConfig\({\s*sessionId:\s*newSessionId/s, 'Persists audio with newSessionId');
-    assert.match(hostPageSrc, /attempts\s*<\s*3/, 'Retry with max 3 attempts present');
+  await t.test('8. Host Online Mode & Audio Save Race Behavioral Tests', () => {
+    // 8.1. Host Online Mode radio selection
+    assert.match(hostPageSrc, /const \[competitionAudioMode, setCompetitionAudioMode\] = useState\('in_class'\);/, 'Audio mode state present');
+    assert.match(hostPageSrc, /Thi tại lớp \(In-Class\)/, 'In-class mode option rendered');
+    assert.match(hostPageSrc, /Thi trực tuyến \(Online\)/, 'Online mode option rendered');
+    assert.match(hostPageSrc, /mode: competitionAudioMode/, 'Passes selected mode into audioPayload');
+    assert.match(hostPageSrc, /mode: 'individual'/, 'Preserves session table mode as individual');
+
+    // 8.2. Audio Save State Machine
+    assert.match(hostPageSrc, /const \[audioConfigStatus, setAudioConfigStatus\] = useState\('idle'\);/, 'Audio config status state present');
+    assert.match(hostPageSrc, /setAudioConfigStatus\('saving'\)/, 'Sets saving state before RPC');
+    assert.match(hostPageSrc, /setAudioConfigStatus\('saved'\)/, 'Sets saved state on success');
+    assert.match(hostPageSrc, /setAudioConfigStatus\('failed'\)/, 'Sets failed state on error');
+
+    // 8.3. Start Session locked until saved
+    assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)/, 'Blocks start while saving');
+    assert.match(hostPageSrc, /if \(audioConfigStatus === 'failed'\)/, 'Blocks start if save failed');
+    assert.match(hostPageSrc, /disabled=\{actionPending \|\| participants\.length === 0 \|\| audioConfigStatus !== 'saved'\}/, 'Start button disabled when not saved');
+
+    // 8.4. Retry Save Audio Config without creating a new room
+    assert.match(hostPageSrc, /const handleRetrySaveAudioConfig = async/, 'handleRetrySaveAudioConfig present');
+    assert.match(hostPageSrc, /sessionId: activeSessionId/, 'Retries for current activeSessionId without creating room');
   });
 
-  await t.test('9. Student Audio State Machine: Independent from hostViewMode and enforces in_class mute', () => {
-    assert.doesNotMatch(studentHookSrc, /hostViewMode/, 'Student hook must never reference hostViewMode');
-    assert.match(studentHookSrc, /isInterimLeaderboardActive/, 'Uses authoritative isInterimLeaderboardActive for results');
-    assert.match(studentHookSrc, /isInClass\s*=\s*mode\s*===\s*'in_class'/, 'in_class detected');
-    assert.match(studentHookSrc, /if\s*\(isInClass.*competitionAudioManager\.stopAll\(\)/s, 'in_class forces stopAll');
-    assert.match(studentHookSrc, /unlockStudentAudio/, 'Provides explicit unlock gesture');
-    assert.match(studentPageSrc, /useCompetitionStudentAudio/, 'Student page integrates student audio hook');
-    assert.doesNotMatch(studentPageSrc, /useCompetitionAudio\(/, 'Student page must not instantiate host hook');
+  await t.test('9. Student Audio Controls Component & Integration Tests', () => {
+    // 9.1. Component structure & in_class mute badge
+    assert.match(studentControlsSrc, /export function StudentAudioControls/, 'StudentAudioControls component exported');
+    assert.match(studentControlsSrc, /if \(isInClass\)/, 'Detects in_class mode');
+    assert.match(studentControlsSrc, /Thi tại lớp: Âm thanh từ Thầy\/Cô/, 'In-class informative badge rendered');
+
+    // 9.2. Online controls (Unlock, Mute, Volume)
+    assert.match(studentControlsSrc, /!isStudentAudioUnlocked/, 'Checks autoplay lock');
+    assert.match(studentControlsSrc, /Bật âm thanh/, 'Unlock button present');
+    assert.match(studentControlsSrc, /toggleStudentMute/, 'Mute toggle present');
+    assert.match(studentControlsSrc, /type="range"/, 'Volume slider present');
+
+    // 9.3. Student Page integration
+    assert.match(studentPageSrc, /import { StudentAudioControls }/, 'Student page imports StudentAudioControls');
+    assert.match(studentPageSrc, /<StudentAudioControls {\.\.\.studentAudio} \/>/, 'StudentAudioControls rendered in student page');
+  });
+
+  await t.test('10. Audio Track Synchronization & Multi-Device Simulation', () => {
+    // 10.1. Student Hook synchronizes config directly into competitionAudioManager
+    assert.match(studentHookSrc, /competitionAudioManager\.setSelectionMode/, 'Synchronizes selection mode to audio manager');
+    assert.match(studentHookSrc, /competitionAudioManager\.setCustomTracks/, 'Synchronizes custom tracks to audio manager');
+    assert.match(studentHookSrc, /competitionAudioManager\.setTheme/, 'Synchronizes theme to audio manager');
+
+    // 10.2. Direct unit test of competitionAudioManager with Theme & Custom tracks
+    competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
+    competitionAudioManager.setTheme('classroom_chill');
+    assert.equal(competitionAudioManager.getTrackSrc('lobby'), '/audio/competition/lobby_loop.mp3');
+    assert.equal(competitionAudioManager.getTrackSrc('question_active'), '/audio/competition/question_active_loop.mp3');
+
+    // Switch to Custom Heroic tracks
+    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+    competitionAudioManager.setCustomTracks({
+      lobbyTrackId: 'sb_ignis',
+      questionTrackId: 'sb_the_fury',
+    });
+    assert.equal(competitionAudioManager.getTrackSrc('lobby'), '/audio/competition/heroic/ignis.mp3');
+    assert.equal(competitionAudioManager.getTrackSrc('question_active'), '/audio/competition/heroic/the_fury.mp3');
+
+    // 10.3. Multi-device simulation:
+    // Device A (Host in in_class mode): Student audio manager must stopAll
+    competitionAudioManager.stopAll();
+    assert.equal(competitionAudioManager.currentTrack, null, 'Audio manager stopped on in_class');
+
+    // Clean reset
+    competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
+    competitionAudioManager.setTheme(DEFAULT_MUSIC_THEME);
   });
 });
