@@ -4,12 +4,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { competitionAudioManager } from '../src/services/competitionAudioManager.js';
+import React from 'react';
+import { renderToString } from 'react-dom/server';
 import {
   DEFAULT_MUSIC_THEME,
   SELECTION_MODE_CUSTOM,
   SELECTION_MODE_THEME,
 } from '../src/services/competitionMusicThemes.js';
 import { DEFAULT_SESSION_AUDIO_CONFIG } from '../src/services/competitionClient.js';
+import {
+  isValidAudioConfig,
+  isAudioConfigMatching,
+  classifyAudioSnapshotState,
+  canStartSession,
+} from '../src/services/competitionAudioSync.js';
+import { HostAudioLobbyBanner } from '../src/components/competition/HostAudioLobbyBanner.js';
 
 const ROOT_DIR = process.cwd();
 
@@ -26,6 +35,8 @@ const studentControlsSrc = fs.readFileSync(
   path.join(ROOT_DIR, 'src/components/competition/StudentAudioControls.jsx'),
   'utf8'
 );
+const syncSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionAudioSync.js'), 'utf8');
+const bannerSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/components/competition/HostAudioLobbyBanner.js'), 'utf8');
 
 test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
 
@@ -258,8 +269,9 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // 8.2. Audio Save State Machine & Persistence verification
     assert.match(hostPageSrc, /const \[audioConfigStatus, setAudioConfigStatus\] = useState\('idle'\);/, 'Audio config status state present');
     assert.match(hostPageSrc, /setAudioConfigStatus\('saving'\)/, 'Sets saving state before RPC');
-    assert.match(hostPageSrc, /snapshot\.audio_config_persisted === true && isValidAudioConfig\(snapshot\.audio_config\)/, 'Only marks saved when persisted is true and config is valid');
-    assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)\s*\{\s*return;?\s*\}/, 'Protects saving state from polling or stale snapshot overwrite');
+    assert.match(hostPageSrc, /classifyAudioSnapshotState/, 'Uses pure classification state machine for snapshot audio sync');
+    assert.match(syncSrc, /snapshot\.audio_config_persisted === true && isValidAudioConfig\(snapshot\.audio_config\)/, 'Only marks saved when persisted is true and config is valid');
+    assert.match(syncSrc, /if \(currentStatus === 'saving'\)/, 'Protects saving state from polling or stale snapshot overwrite');
 
     // 8.3. Start Session locked until saved
     assert.match(hostPageSrc, /if \(audioConfigStatus === 'saving'\)/, 'Blocks start while saving');
@@ -338,23 +350,21 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     // 11.3. Student audio stays completely silent for in_class fallback
     assert.match(studentHookSrc, /if \(isInClass\)/, 'isInClass halts and silences student audio completely');
     assert.match(studentHookSrc, /competitionAudioManager\.stopAll\(\)/, 'Stops all audio when isInClass is true');
+
+    // 11.4. Legacy Safety Invariant: Host page NEVER auto-heals on snapshot read
+    assert.doesNotMatch(hostPageSrc, /isAutoHealingLegacyRef/, 'isAutoHealingLegacyRef is removed completely');
+    assert.doesNotMatch(hostPageSrc, /isAutoHealingLegacyRef\.current/, 'Zero auto-heal flag references in Host page');
+
+    // 11.5. Starting Invariant: handleStartSession has ZERO auto-heal fallback
+    assert.doesNotMatch(hostPageSrc, /healRes\s*=/, 'handleStartSession does not auto-heal audio config');
+    assert.match(hostPageSrc, /audioConfigStatus !== 'saved'/, 'handleStartSession strictly requires audioConfigStatus === saved');
+
+    // 11.6. Explicit Host Confirmation: Host page provides handleApplyLegacyAudioConfig on same session_id
+    assert.match(hostPageSrc, /handleApplyLegacyAudioConfig/, 'handleApplyLegacyAudioConfig present for Host confirmation');
+    assert.match(hostPageSrc, /<HostAudioLobbyBanner/, 'HostAudioLobbyBanner rendered in waiting lobby');
   });
 
-  await t.test('12. Behavioral State Machine Tests: Polling Race, Stale Snapshot & Legacy Auto-Heal', () => {
-    // 12.1. Behavioral Verification of isAudioConfigMatching logic
-    const isAudioConfigMatching = (actual, requested) => {
-      if (!actual || typeof actual !== 'object' || !requested || typeof requested !== 'object') {
-        return false;
-      }
-      return (
-        actual.mode === requested.mode &&
-        actual.selection_mode === requested.selection_mode &&
-        actual.theme_id === requested.theme_id &&
-        actual.custom_lobby_track_id === requested.custom_lobby_track_id &&
-        actual.custom_question_track_id === requested.custom_question_track_id
-      );
-    };
-
+  await t.test('12. Behavioral State Machine Tests: Polling Race, Stale Snapshot & Production React Integration', async (st) => {
     const hostRequestedOnline = {
       mode: 'online',
       selection_mode: 'theme',
@@ -379,111 +389,201 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       custom_question_track_id: null,
     };
 
-    assert.strictEqual(isAudioConfigMatching(staleDbInClass, hostRequestedOnline), false, 'Rejects mismatch between stale in_class DB and requested online mode');
-    assert.strictEqual(isAudioConfigMatching(freshDbOnline, hostRequestedOnline), true, 'Accepts exact 5-field match');
-    assert.strictEqual(isAudioConfigMatching(null, hostRequestedOnline), false, 'Rejects null actual');
-    assert.strictEqual(isAudioConfigMatching(freshDbOnline, null), false, 'Rejects null requested');
+    // 12.1. Production isAudioConfigMatching verification
+    await st.test('12.1. isAudioConfigMatching production logic', () => {
+      assert.strictEqual(isAudioConfigMatching(staleDbInClass, hostRequestedOnline), false, 'Rejects mismatch between stale in_class DB and requested online mode');
+      assert.strictEqual(isAudioConfigMatching(freshDbOnline, hostRequestedOnline), true, 'Accepts exact 5-field match');
+      assert.strictEqual(isAudioConfigMatching(null, hostRequestedOnline), false, 'Rejects null actual');
+      assert.strictEqual(isAudioConfigMatching(freshDbOnline, null), false, 'Rejects null requested');
+    });
 
-    // 12.2. Polling Race Simulation: Polling snapshot cannot overwrite saving status
-    let audioConfigStatus = 'saving';
-    let pendingAudioConfig = hostRequestedOnline;
-    const simulatePollingArrival = (snapshot) => {
-      // Guard 1: Never overwrite saving
-      if (audioConfigStatus === 'saving') return;
-      if (snapshot.audio_config_persisted === true) {
-        if (pendingAudioConfig) {
-          if (isAudioConfigMatching(snapshot.audio_config, pendingAudioConfig)) {
-            audioConfigStatus = 'saved';
-            pendingAudioConfig = null;
-          } else {
-            audioConfigStatus = 'failed';
+    // 12.2. Production classifyAudioSnapshotState with Host Pending Save (Online Mode)
+    await st.test('12.2. classifyAudioSnapshotState preserves Host online choice during polling race', () => {
+      const activeSessionId = 'test-session-123';
+
+      // While saving is in progress, snapshot MUST be ignored
+      const savingDecision = classifyAudioSnapshotState({
+        snapshot: { id: activeSessionId, audio_config_persisted: true, audio_config: staleDbInClass },
+        activeSessionId,
+        currentStatus: 'saving',
+        pendingAudioConfig: hostRequestedOnline,
+      });
+      assert.strictEqual(savingDecision.action, 'IGNORE_SAVING_IN_PROGRESS');
+      assert.strictEqual(savingDecision.nextStatus, null);
+
+      // Stale snapshot arrives from DB with old in_class config while Host requested online
+      const mismatchDecision = classifyAudioSnapshotState({
+        snapshot: { id: activeSessionId, audio_config_persisted: true, audio_config: staleDbInClass },
+        activeSessionId,
+        currentStatus: 'failed',
+        pendingAudioConfig: hostRequestedOnline,
+      });
+      assert.strictEqual(mismatchDecision.action, 'PENDING_CONFIG_MISMATCH');
+      assert.strictEqual(mismatchDecision.nextStatus, 'failed');
+      assert.strictEqual(mismatchDecision.nextMode, null, 'Never overwrites Host online mode with stale in_class mode');
+      assert.strictEqual(mismatchDecision.shouldClearPending, false, 'Preserves pending config for Host retry');
+      assert.strictEqual(mismatchDecision.shouldAutoHeal, false, 'Never auto-heals on mismatch');
+
+      // Matching snapshot arrives from DB with requested online config
+      const matchingDecision = classifyAudioSnapshotState({
+        snapshot: { id: activeSessionId, audio_config_persisted: true, audio_config: freshDbOnline },
+        activeSessionId,
+        currentStatus: 'failed',
+        pendingAudioConfig: hostRequestedOnline,
+      });
+      assert.strictEqual(matchingDecision.action, 'MATCH_PENDING_CONFIRMED');
+      assert.strictEqual(matchingDecision.nextStatus, 'saved');
+      assert.strictEqual(matchingDecision.nextMode, 'online');
+      assert.strictEqual(matchingDecision.shouldClearPending, true);
+      assert.strictEqual(matchingDecision.shouldAutoHeal, false);
+    });
+
+    // 12.3. Query Error (Situation 2: 401/403/500/network error)
+    await st.test('12.3. Query error never triggers auto-heal and preserves pending config', () => {
+      const activeSessionId = 'test-session-123';
+
+      const queryErrorSnapshot = {
+        id: activeSessionId,
+        audio_config_persisted: false,
+        audio_config_state: 'error',
+        audio_config_error: '500 Internal Server Error: Connection refused',
+      };
+
+      const errorDecision = classifyAudioSnapshotState({
+        snapshot: queryErrorSnapshot,
+        activeSessionId,
+        currentStatus: 'failed',
+        pendingAudioConfig: hostRequestedOnline,
+      });
+
+      assert.strictEqual(errorDecision.action, 'QUERY_ERROR');
+      assert.strictEqual(errorDecision.nextStatus, 'failed');
+      assert.strictEqual(errorDecision.nextMode, null, 'Must NOT reset Host online mode to default in_class');
+      assert.strictEqual(errorDecision.shouldClearPending, false, 'Must keep pendingAudioConfigRef intact for retry');
+      assert.strictEqual(errorDecision.shouldAutoHeal, false, 'Auto-heal strictly forbidden on query error');
+    });
+
+    // 12.4. Legacy R18 Waiting Room (Situation 1: DB truly has no audio_config row)
+    await st.test('12.4. Legacy R18 waiting room sets legacy_missing without auto-writing on snapshot read', () => {
+      const activeSessionId = 'legacy-r18-sess';
+
+      const legacyMissingSnapshot = {
+        id: activeSessionId,
+        status: 'waiting',
+        audio_config_persisted: false,
+        audio_config_state: 'missing',
+        audio_config_error: null,
+      };
+
+      const legacyDecision = classifyAudioSnapshotState({
+        snapshot: legacyMissingSnapshot,
+        activeSessionId,
+        currentStatus: 'idle',
+        pendingAudioConfig: null,
+      });
+
+      assert.strictEqual(legacyDecision.action, 'LEGACY_MISSING_NEEDS_CONFIRMATION');
+      assert.strictEqual(legacyDecision.nextStatus, 'legacy_missing');
+      assert.strictEqual(legacyDecision.shouldAutoHeal, false, 'NEVER auto-heals or writes to DB on snapshot read');
+    });
+
+    // 12.5. canStartSession gate verification
+    await st.test('12.5. canStartSession gate strictly enforces saved audio status', () => {
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'legacy_missing', participantCount: 5 }), false);
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'failed', participantCount: 5 }), false);
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'saving', participantCount: 5 }), false);
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'saved', participantCount: 0 }), false);
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'saved', participantCount: 3, actionPending: false }), true);
+      assert.strictEqual(canStartSession({ audioConfigStatus: 'saved', participantCount: 3, actionPending: true }), false);
+    });
+
+    // 12.6. Real Production React Component Integration: HostAudioLobbyBanner
+    await st.test('12.6. Real React Component Integration: HostAudioLobbyBanner renders all 4 distinct states', () => {
+      // State 1: saving
+      const savingHtml = renderToString(React.createElement(HostAudioLobbyBanner, {
+        audioConfigStatus: 'saving',
+        competitionAudioMode: 'online',
+      }));
+      assert.ok(savingHtml.includes('data-testid="audio-banner-saving"'));
+      assert.ok(savingHtml.includes('Đang lưu và xác thực cấu hình âm thanh'));
+
+      // State 2: failed with retry button
+      const failedHtml = renderToString(React.createElement(HostAudioLobbyBanner, {
+        audioConfigStatus: 'failed',
+        audioConfigError: 'Lỗi 403 Forbidden',
+        competitionAudioMode: 'online',
+      }));
+      assert.ok(failedHtml.includes('data-testid="audio-banner-failed"'));
+      assert.ok(failedHtml.includes('data-testid="btn-retry-save-audio"'));
+      assert.ok(failedHtml.includes('Thử lại lưu âm thanh'));
+      assert.ok(failedHtml.includes('Lỗi 403 Forbidden'));
+
+      // State 3: legacy_missing with explicit confirmation button
+      const legacyHtml = renderToString(React.createElement(HostAudioLobbyBanner, {
+        audioConfigStatus: 'legacy_missing',
+        competitionAudioMode: 'in_class',
+      }));
+      assert.ok(legacyHtml.includes('data-testid="audio-banner-legacy-missing"'));
+      assert.ok(legacyHtml.includes('data-testid="btn-apply-legacy-default"'));
+      assert.ok(legacyHtml.includes('Áp dụng cấu hình mặc định'));
+      assert.ok(legacyHtml.includes('Phòng thi từ phiên bản trước chưa có cấu hình âm thanh'));
+
+      // State 4: saved
+      const savedHtml = renderToString(React.createElement(HostAudioLobbyBanner, {
+        audioConfigStatus: 'saved',
+        competitionAudioMode: 'online',
+      }));
+      assert.ok(savedHtml.includes('data-testid="audio-banner-saved"'));
+      assert.ok(savedHtml.includes('đã được xác nhận'));
+
+      // State 5: idle returns empty
+      const idleHtml = renderToString(React.createElement(HostAudioLobbyBanner, {
+        audioConfigStatus: 'idle',
+      }));
+      assert.strictEqual(idleHtml, '');
+    });
+
+    // 12.7. Student Anti-Stale SFX Lifecycle Simulation (3 Phases: Active, Time Up, Results)
+    await st.test('12.7. Student Anti-Stale SFX Lifecycle Simulation', () => {
+      const sessionId = 'test-session';
+      const qId = 'test-q1';
+
+      const consumedSfxSetTimeUp = new Set();
+      const simulateF5Mount = (phase) => {
+        if (phase === 'QUESTION_ACTIVE') {
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+        } else if (phase === 'TIME_UP') {
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
+        } else if (phase === 'QUESTION_RESULTS') {
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
+          consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_RESULTS`);
+        }
+      };
+
+      simulateF5Mount('TIME_UP');
+      assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:QUESTION_OPEN`), true, 'QUESTION_OPEN consumed on F5');
+      assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:TIME_UP`), true, 'TIME_UP consumed on F5');
+
+      let playedSfx = [];
+      const simulateLateUnlock = (phase, consumedSet) => {
+        if (phase === 'QUESTION_RESULTS') {
+          const resultsKey = `${sessionId}:${qId}:QUESTION_RESULTS`;
+          if (!consumedSet.has(resultsKey)) {
+            playedSfx.push('competition_results_reveal');
           }
-        } else {
-          audioConfigStatus = 'saved';
         }
-      }
-    };
+      };
 
-    // Stale snapshot arrives while Host is saving -> Guard 1 protects it!
-    simulatePollingArrival({ audio_config_persisted: true, audio_config: staleDbInClass });
-    assert.strictEqual(audioConfigStatus, 'saving', 'Status remains saving despite stale snapshot arriving');
+      const consumedLateUnlock = new Set([
+        `${sessionId}:${qId}:QUESTION_OPEN`,
+        `${sessionId}:${qId}:TIME_UP`,
+        `${sessionId}:${qId}:QUESTION_RESULTS`
+      ]);
 
-    // Saving completes with temporary network timeout, transitioning to idle/failed
-    audioConfigStatus = 'failed';
-    // Stale snapshot arrives from DB with old in_class config -> Guard 3 protects it!
-    simulatePollingArrival({ audio_config_persisted: true, audio_config: staleDbInClass });
-    assert.strictEqual(audioConfigStatus, 'failed', 'Status transitions to failed because DB does not match pending requested online mode');
-
-    // Fresh snapshot arrives from DB with updated online config -> Guard 3 matches!
-    simulatePollingArrival({ audio_config_persisted: true, audio_config: freshDbOnline });
-    assert.strictEqual(audioConfigStatus, 'saved', 'Status transitions to saved when DB config matches requested online mode');
-    assert.strictEqual(pendingAudioConfig, null, 'Pending config cleared once verified matching');
-
-    // 12.3. Legacy R18 Waiting Room Auto-Heal Simulation
-    const legacySnapshot = {
-      id: 'legacy-r18-session-id',
-      status: 'waiting',
-      audio_config_persisted: false,
-      audio_config: DEFAULT_SESSION_AUDIO_CONFIG,
-    };
-
-    let legacyStatus = 'idle';
-    let autoHealedConfig = null;
-    const simulateLegacyRestore = (snap) => {
-      if (snap.status === 'waiting' && snap.audio_config_persisted === false) {
-        legacyStatus = 'saving';
-        // Auto-heal with DEFAULT_SESSION_AUDIO_CONFIG
-        autoHealedConfig = DEFAULT_SESSION_AUDIO_CONFIG;
-        legacyStatus = 'saved';
-      }
-    };
-
-    simulateLegacyRestore(legacySnapshot);
-    assert.strictEqual(legacyStatus, 'saved', 'Legacy R18 waiting room auto-heals and reaches saved state');
-    assert.strictEqual(autoHealedConfig.mode, 'in_class', 'Legacy room auto-heals with safe in_class mode');
-
-    // 12.4. Student Anti-Stale SFX Lifecycle Simulation (3 Phases: Active, Time Up, Results)
-    const sessionId = 'test-session';
-    const qId = 'test-q1';
-
-    // Scenario 1: F5 during TIME_UP
-    const consumedSfxSetTimeUp = new Set();
-    const simulateF5Mount = (phase) => {
-      if (phase === 'QUESTION_ACTIVE') {
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
-      } else if (phase === 'TIME_UP') {
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
-      } else if (phase === 'QUESTION_RESULTS') {
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_OPEN`);
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:TIME_UP`);
-        consumedSfxSetTimeUp.add(`${sessionId}:${qId}:QUESTION_RESULTS`);
-      }
-    };
-
-    simulateF5Mount('TIME_UP');
-    assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:QUESTION_OPEN`), true, 'QUESTION_OPEN consumed on F5');
-    assert.strictEqual(consumedSfxSetTimeUp.has(`${sessionId}:${qId}:TIME_UP`), true, 'TIME_UP consumed on F5');
-
-    // Scenario 2: Student unlocks audio late in QUESTION_RESULTS
-    let playedSfx = [];
-    const simulateLateUnlock = (phase, consumedSet) => {
-      if (phase === 'QUESTION_RESULTS') {
-        const resultsKey = `${sessionId}:${qId}:QUESTION_RESULTS`;
-        if (!consumedSet.has(resultsKey)) {
-          playedSfx.push('competition_results_reveal');
-        }
-      }
-    };
-
-    // Before unlock, late guard marked results as consumed
-    const consumedLateUnlock = new Set([
-      `${sessionId}:${qId}:QUESTION_OPEN`,
-      `${sessionId}:${qId}:TIME_UP`,
-      `${sessionId}:${qId}:QUESTION_RESULTS`
-    ]);
-
-    simulateLateUnlock('QUESTION_RESULTS', consumedLateUnlock);
-    assert.strictEqual(playedSfx.length, 0, 'No stale results SFX played when unlocking late in QUESTION_RESULTS');
+      simulateLateUnlock('QUESTION_RESULTS', consumedLateUnlock);
+      assert.strictEqual(playedSfx.length, 0, 'No stale results SFX played when unlocking late in QUESTION_RESULTS');
+    });
   });
 });

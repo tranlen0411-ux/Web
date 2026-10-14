@@ -689,9 +689,9 @@ export async function getSessionSnapshot(sessionId) {
     }
     if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.', status: 404 };
 
-    // Attach audio_config: explicitly distinguish persisted record from fallback
+    // Attach audio_config: explicitly distinguish persisted record from missing legacy and query errors
     try {
-      const { data: audioRow, error: audioErr } = await supabase
+      const { data: audioRow, error: audioErr, status: audioStatus } = await supabase
         .from('competition_session_audio_configs')
         .select('config')
         .eq('session_id', sessionId)
@@ -700,14 +700,27 @@ export async function getSessionSnapshot(sessionId) {
       if (!audioErr && audioRow && audioRow.config && typeof audioRow.config === 'object') {
         data.audio_config = audioRow.config;
         data.audio_config_persisted = true;
-      } else {
+        data.audio_config_state = 'persisted';
+        data.audio_config_error = null;
+      } else if (!audioErr && !audioRow) {
+        // DB truly does NOT have audio_config row for this session (legacy R18 session)
         data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
         data.audio_config_persisted = false;
-        data.audio_config_error = audioErr ? audioErr.message : null;
+        data.audio_config_state = 'missing';
+        data.audio_config_error = null;
+      } else {
+        // Query had an error (401/403/500/network error)
+        data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
+        data.audio_config_persisted = false;
+        data.audio_config_state = 'error';
+        data.audio_config_error = audioErr ? audioErr.message : 'Lỗi truy vấn cấu hình âm thanh';
+        data.audio_config_status = audioStatus || (audioErr?.code === '42501' ? 403 : 500);
       }
     } catch (_audioErr) {
       data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
       data.audio_config_persisted = false;
+      data.audio_config_state = 'error';
+      data.audio_config_error = _audioErr?.message || 'Lỗi kết nối khi tải cấu hình âm thanh';
     }
 
     return { success: true, data };
