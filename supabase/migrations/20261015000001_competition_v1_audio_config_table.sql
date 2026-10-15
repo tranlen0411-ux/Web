@@ -118,13 +118,13 @@ BEGIN
             RETURN FALSE;
         END IF;
 
-        -- theme_id chuẩn hóa là 'none' hoặc thuộc whitelist (hoặc null)
-        IF v_theme_type = 'string' THEN
-            v_theme_id := p_cfg->>'theme_id';
-            IF v_theme_id NOT IN ('none', 'classroom_chill', 'heroic_orchestral', 'light_gameshow', 'calm_focus', 'bright_classroom', 'scorm_inspired_calm', 'scorm_inspired_bright', 'scorm_inspired_focus') THEN
-                RETURN FALSE;
-            END IF;
-        ELSIF v_theme_type <> 'null' THEN
+        -- Ở chế độ custom: theme_id BẮT BUỘC là chuỗi 'none' (chuẩn hóa hợp đồng Frontend/Backend)
+        IF v_theme_type <> 'string' THEN
+            RETURN FALSE;
+        END IF;
+
+        v_theme_id := p_cfg->>'theme_id';
+        IF v_theme_id <> 'none' THEN
             RETURN FALSE;
         END IF;
 

@@ -119,18 +119,71 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
         return res.rows[0].valid;
       }
 
-      // Valid theme mode (in_class)
-      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), true);
-      // Valid custom mode (online)
-      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), true);
+      // 1. custom + theme_id='none' -> HỢP LỆ (cả online và in_class)
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), true, 'custom + online + theme_id none must PASS');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"sb_ignis","custom_question_track_id":"sb_the_fury"}'::jsonb`), true, 'custom + in_class + theme_id none must PASS');
+
+      // 2. custom + theme_id=null -> KHÔNG HỢP LỆ (cấm null)
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":null,"custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom + theme_id null must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"custom","theme_id":null,"custom_lobby_track_id":"sb_ignis","custom_question_track_id":"sb_the_fury"}'::jsonb`), false, 'custom + in_class + theme_id null must FAIL');
+
+      // 3. custom + theme_id khác 'none' -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"classroom_chill","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom + theme_id classroom_chill must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"heroic_orchestral","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom + theme_id heroic_orchestral must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"custom_unknown","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom + theme_id custom_unknown must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom + empty theme_id must FAIL');
+
+      // 4. theme + theme_id hợp lệ -> HỢP LỆ (tất cả 9 theme chuẩn)
+      const validThemes = [
+        'none',
+        'classroom_chill',
+        'heroic_orchestral',
+        'light_gameshow',
+        'calm_focus',
+        'bright_classroom',
+        'scorm_inspired_calm',
+        'scorm_inspired_bright',
+        'scorm_inspired_focus'
+      ];
+      for (const th of validThemes) {
+        assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"${th}","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), true, `theme + in_class + theme_id '${th}' must PASS`);
+        assert.equal(await validate(`'{"mode":"online","selection_mode":"theme","theme_id":"${th}","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), true, `theme + online + theme_id '${th}' must PASS`);
+      }
+
+      // theme + theme_id không hợp lệ -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":null,"custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'theme + theme_id null must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"unknown_theme","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'theme + unknown theme must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'theme + empty theme must FAIL');
+
       // Theme mode with non-null custom track must FAIL
-      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":"km_at_launch","custom_question_track_id":null}'::jsonb`), false);
-      // Custom mode with null track must FAIL
-      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":null,"custom_question_track_id":"sb_titan"}'::jsonb`), false);
-      // Extra key must FAIL
-      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null,"extra":1}'::jsonb`), false);
-      // Injected URL must FAIL
-      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"https://evil.com/audio.mp3","custom_question_track_id":"sb_titan"}'::jsonb`), false);
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":"km_at_launch","custom_question_track_id":null}'::jsonb`), false, 'theme + non-null custom_lobby_track_id must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":"sb_titan"}'::jsonb`), false, 'theme + non-null custom_question_track_id must FAIL');
+
+      // 5. Thiếu khóa (4 khóa thay vì 5) -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'{"selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'Missing mode must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'Missing selection_mode must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'Missing theme_id must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_question_track_id":null}'::jsonb`), false, 'Missing custom_lobby_track_id must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null}'::jsonb`), false, 'Missing custom_question_track_id must FAIL');
+
+      // Thừa khóa (6 khóa thay vì 5) -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null,"extra":1}'::jsonb`), false, 'Extra key in theme mode must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"km_at_launch","custom_question_track_id":"sb_titan","hack":true}'::jsonb`), false, 'Extra key in custom mode must FAIL');
+
+      // Sai kiểu JSON cấp gốc -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'null'::jsonb`), false, 'null jsonb must FAIL');
+      assert.equal(await validate(`'"just a string"'::jsonb`), false, 'string jsonb must FAIL');
+      assert.equal(await validate(`'123'::jsonb`), false, 'number jsonb must FAIL');
+      assert.equal(await validate(`'true'::jsonb`), false, 'boolean jsonb must FAIL');
+      assert.equal(await validate(`'["mode", "online"]'::jsonb`), false, 'array jsonb must FAIL');
+
+      // Sai kiểu dữ liệu các trường bên trong -> KHÔNG HỢP LỆ
+      assert.equal(await validate(`'{"mode":123,"selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'mode as number must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":123,"theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'selection_mode as number must FAIL');
+      assert.equal(await validate(`'{"mode":"in_class","selection_mode":"theme","theme_id":123,"custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`), false, 'theme_id as number must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":123,"custom_question_track_id":"sb_titan"}'::jsonb`), false, 'custom_lobby_track_id as number must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"km_at_launch","custom_question_track_id":null}'::jsonb`), false, 'custom mode with null track must FAIL');
+      assert.equal(await validate(`'{"mode":"online","selection_mode":"custom","theme_id":"none","custom_lobby_track_id":"https://evil.com/audio.mp3","custom_question_track_id":"sb_titan"}'::jsonb`), false, 'Injected URL must FAIL');
     });
 
     await pt.test('6.2. RPC competition_host_set_audio_config enforces security & state', async () => {
@@ -392,6 +445,52 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       custom_lobby_track_id: null,
       custom_question_track_id: null,
     };
+
+    // 12.0. Production isValidAudioConfig contract alignment
+    await st.test('12.0. isValidAudioConfig production logic (Frontend & Backend contract alignment)', () => {
+      // custom + theme_id='none' -> hợp lệ
+      assert.strictEqual(isValidAudioConfig({
+        mode: 'online',
+        selection_mode: 'custom',
+        theme_id: 'none',
+        custom_lobby_track_id: 'km_at_launch',
+        custom_question_track_id: 'sb_titan'
+      }), true, 'custom with theme_id none must be valid');
+
+      // custom + theme_id=null -> không hợp lệ
+      assert.strictEqual(isValidAudioConfig({
+        mode: 'online',
+        selection_mode: 'custom',
+        theme_id: null,
+        custom_lobby_track_id: 'km_at_launch',
+        custom_question_track_id: 'sb_titan'
+      }), false, 'custom with theme_id null must be invalid');
+
+      // custom + theme_id undefined -> không hợp lệ
+      assert.strictEqual(isValidAudioConfig({
+        mode: 'online',
+        selection_mode: 'custom',
+        custom_lobby_track_id: 'km_at_launch',
+        custom_question_track_id: 'sb_titan'
+      }), false, 'custom without theme_id must be invalid');
+
+      // theme + theme_id hợp lệ -> hợp lệ
+      assert.strictEqual(isValidAudioConfig({
+        mode: 'in_class',
+        selection_mode: 'theme',
+        theme_id: 'classroom_chill',
+        custom_lobby_track_id: null,
+        custom_question_track_id: null
+      }), true, 'theme with valid string theme_id must be valid');
+
+      // Non-object or invalid types -> không hợp lệ
+      assert.strictEqual(isValidAudioConfig(null), false, 'null must be invalid');
+      assert.strictEqual(isValidAudioConfig(undefined), false, 'undefined must be invalid');
+      assert.strictEqual(isValidAudioConfig('string'), false, 'string must be invalid');
+      assert.strictEqual(isValidAudioConfig(123), false, 'number must be invalid');
+      assert.strictEqual(isValidAudioConfig({ mode: 'invalid_mode', selection_mode: 'theme', theme_id: 'classroom_chill' }), false, 'invalid mode must be invalid');
+      assert.strictEqual(isValidAudioConfig({ mode: 'in_class', selection_mode: 'invalid_selection', theme_id: 'classroom_chill' }), false, 'invalid selection_mode must be invalid');
+    });
 
     // 12.1. Production isAudioConfigMatching verification
     await st.test('12.1. isAudioConfigMatching production logic', () => {
