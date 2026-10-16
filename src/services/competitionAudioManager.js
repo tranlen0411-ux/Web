@@ -60,6 +60,7 @@ class CompetitionAudioManager {
     this.audioElements = new Map(); // src -> HTMLAudioElement
     this.isMusicPaused = false;
     this.needsPlaybackRetry = false;
+    this.playGeneration = 0; // Monotonic counter to invalidate superseded playback promises
   }
 
   /**
@@ -228,6 +229,52 @@ class CompetitionAudioManager {
   }
 
   /**
+   * Safe execution of HTMLAudioElement.play() with generational tracking and AbortError discrimination
+   */
+  safePlayAudio(audio, trackKey, src) {
+    const generation = ++this.playGeneration;
+    audio.volume = this.volume;
+
+    let playPromise;
+    try {
+      playPromise = audio.play();
+    } catch (syncErr) {
+      if (!this.isMusicPaused && !this.isGamePaused && this.currentTrack === trackKey) {
+        this.needsPlaybackRetry = true;
+      }
+      return;
+    }
+
+    if (playPromise && typeof playPromise.then === 'function') {
+      playPromise
+        .then(() => {
+          // Stale Promise Guard: Only clear retry flag if this track and generation are still active
+          if (this.currentTrack === trackKey && this.playGeneration === generation) {
+            this.needsPlaybackRetry = false;
+          }
+        })
+        .catch((err) => {
+          // 1. Stale Promise Guard: If currentTrack or generation changed, ignore superseded promise
+          if (this.currentTrack !== trackKey || this.playGeneration !== generation) {
+            return;
+          }
+          // 2. AbortError Guard: Intentional pause / track switch must not flag retry
+          if (err && err.name === 'AbortError') {
+            return;
+          }
+          // 3. Genuine playback rejection (e.g. NotAllowedError or media decode failure)
+          if (!this.isMusicPaused && !this.isGamePaused) {
+            this.needsPlaybackRetry = true;
+          }
+        });
+    } else {
+      if (this.currentTrack === trackKey && this.playGeneration === generation) {
+        this.needsPlaybackRetry = false;
+      }
+    }
+  }
+
+  /**
    * Dedicated safe retry/resume method for background track after unlock gesture
    */
   retryCurrentBackgroundTrack() {
@@ -260,21 +307,7 @@ class CompetitionAudioManager {
       }
       this.activeAudio = audio;
 
-      audio.volume = this.volume;
-      const playPromise = audio.play();
-      if (playPromise && typeof playPromise.then === 'function') {
-        playPromise
-          .then(() => {
-            this.needsPlaybackRetry = false;
-          })
-          .catch((_err) => {
-            if (!this.isMusicPaused && !this.isGamePaused) {
-              this.needsPlaybackRetry = true;
-            }
-          });
-      } else {
-        this.needsPlaybackRetry = false;
-      }
+      this.safePlayAudio(audio, this.currentTrack, src);
     } catch (_err) {
       if (!this.isMusicPaused && !this.isGamePaused) {
         this.needsPlaybackRetry = true;
@@ -401,7 +434,7 @@ class CompetitionAudioManager {
       return;
     }
 
-    this.needsPlaybackRetry = true;
+    this.needsPlaybackRetry = false;
 
     if (!this.globalSoundEnabled || !this.musicEnabled) {
       this.needsPlaybackRetry = false;
@@ -428,21 +461,7 @@ class CompetitionAudioManager {
       }
 
       this.activeAudio = audio;
-      audio.volume = this.volume;
-      const playPromise = audio.play();
-      if (playPromise && typeof playPromise.then === 'function') {
-        playPromise
-          .then(() => {
-            this.needsPlaybackRetry = false;
-          })
-          .catch((_err) => {
-            if (!this.isMusicPaused && !this.isGamePaused) {
-              this.needsPlaybackRetry = true;
-            }
-          });
-      } else {
-        this.needsPlaybackRetry = false;
-      }
+      this.safePlayAudio(audio, trackKey, src);
     } catch (_err) {
       if (!this.isMusicPaused && !this.isGamePaused) {
         this.needsPlaybackRetry = true;
@@ -638,21 +657,7 @@ class CompetitionAudioManager {
     if (audio) {
       this.activeAudio = audio;
       try {
-        audio.volume = this.volume;
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.then === 'function') {
-          playPromise
-            .then(() => {
-              this.needsPlaybackRetry = false;
-            })
-            .catch(() => {
-              if (!this.isMusicPaused && !this.isGamePaused) {
-                this.needsPlaybackRetry = true;
-              }
-            });
-        } else {
-          this.needsPlaybackRetry = false;
-        }
+        this.safePlayAudio(audio, this.currentTrack, src);
       } catch (_err) {
         if (!this.isMusicPaused && !this.isGamePaused) {
           this.needsPlaybackRetry = true;
@@ -676,6 +681,7 @@ class CompetitionAudioManager {
    * Internal helper to stop active audio element
    */
   stopCurrentAudioElement() {
+    this.playGeneration++; // Invalidate any pending play promises for the element being stopped
     if (this.activeAudio) {
       try {
         this.activeAudio.pause();

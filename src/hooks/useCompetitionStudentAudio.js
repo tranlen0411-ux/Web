@@ -86,8 +86,10 @@ export function useCompetitionStudentAudio({
       currentPhase = 'QUESTION_RESULTS';
     } else if (timeLeftSeconds !== null && timeLeftSeconds <= 0) {
       currentPhase = 'TIME_UP';
-    } else {
+    } else if (currentQuestionId) {
       currentPhase = 'QUESTION_ACTIVE';
+    } else {
+      currentPhase = 'QUESTION_LOADING';
     }
   } else if (status === 'paused') {
     currentPhase = 'PAUSED';
@@ -183,7 +185,7 @@ export function useCompetitionStudentAudio({
     }
 
     // 4. Construct 5-Tuple Invariant Guard Key
-    const compoundKey = `${sessionId}:${currentQuestionId || 'lobby'}:${currentPhase}:${selectionMode}:${activeTrackSrc || 'none'}`;
+    const compoundKey = `${sessionId}:${currentQuestionId || 'pending'}:${currentPhase}:${selectionMode}:${activeTrackSrc || 'none'}`;
 
     // 5. Anti-restart guard for Polling rerenders
     if (lastCompoundKeyRef.current === compoundKey) {
@@ -198,6 +200,9 @@ export function useCompetitionStudentAudio({
       } else {
         competitionAudioManager.stopMusic();
       }
+    } else if (currentPhase === 'QUESTION_LOADING') {
+      // Holding phase: clean transition from lobby without premature question sound triggers
+      competitionAudioManager.stopMusic();
     } else if (currentPhase === 'QUESTION_ACTIVE') {
       const openKey = `${sessionId}:${currentQuestionId}:QUESTION_OPEN`;
       if (!lastPlayedSfxSetRef.current.has(openKey)) {
