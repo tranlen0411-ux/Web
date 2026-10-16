@@ -4,16 +4,23 @@ import react from '@vitejs/plugin-react';
 const STAGING_REF = 'rcqgxmcqolxbrahhyxji';
 const PROD_REF = 'nddimmxpymipalpxlops';
 
+/**
+ * Strictly extract and validate project ref from Supabase URL:
+ * - Protocol MUST be strictly 'https:'
+ * - Zero userinfo, custom ports, paths, query, or hash
+ * - Hostname MUST strictly match '<project-ref>.supabase.co'
+ */
 function getProjectRef(url) {
   if (!url || typeof url !== 'string') return null;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
-    const parts = parsed.hostname.split('.');
-    if (parts.length >= 3 && parts[1] === 'supabase' && parts[2] === 'co') {
-      return parts[0];
-    }
-    return parsed.hostname;
+    if (parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (parsed.port && parsed.port !== '443') return null;
+    if (parsed.pathname !== '/' && parsed.pathname !== '') return null;
+    if (parsed.search || parsed.hash) return null;
+    const match = parsed.hostname.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    return match ? match[1] : null;
   } catch {
     return null;
   }
@@ -23,6 +30,7 @@ function getProjectRef(url) {
  * Build-time verification plugin:
  * Guarantees that Preview builds only accept Staging Supabase,
  * and Production builds only accept Production Supabase.
+ * Any attempt to bundle Production Supabase outside verified Production environment is rejected.
  */
 function supabaseBuildGuardPlugin() {
   return {
@@ -52,6 +60,13 @@ function supabaseBuildGuardPlugin() {
             `Detected ref: ${ref || 'MISSING'}.`
           );
         }
+      }
+
+      // Reject any attempt to bundle Production ref outside official Vercel Production:
+      if (ref === PROD_REF && vercelEnv !== 'production') {
+        throw new Error(
+          `[SECURITY BUILD GUARD] Production Supabase project (${PROD_REF}) cannot be bundled outside official Vercel Production environment!`
+        );
       }
     }
   };

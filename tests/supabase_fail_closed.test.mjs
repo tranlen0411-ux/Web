@@ -297,4 +297,110 @@ test('SUPABASE FAIL-CLOSED & ENVIRONMENT ISOLATION HARDENING SUITE', async (t) =
     scanDir(path.join(ROOT_DIR, 'src'));
   });
 
+  // TEST 11: URL giả mạo hostname có phần mở rộng (suffix spoofing)
+  await t.test('11. Chặn đứng URL giả mạo hostname suffix (e.g. .invalid.example)', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'preview',
+      VITE_SUPABASE_URL: `https://${STAGING_REF}.supabase.co.invalid.example`,
+      VITE_SUPABASE_ANON_KEY: 'test-key'
+    });
+    assert.equal(res.extractedRef, null, 'extractedRef phải là null khi hostname có đuôi giả mạo');
+    assert.equal(res.isSupabaseConfigured, false, 'URL giả mạo phải bị fail-closed');
+    assert.equal(res.supabaseUrl, '');
+  });
+
+  // TEST 12: URL dùng giao thức HTTP
+  await t.test('12. Chặn đứng URL dùng giao thức HTTP không an toàn', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'preview',
+      VITE_SUPABASE_URL: `http://${STAGING_REF}.supabase.co`,
+      VITE_SUPABASE_ANON_KEY: 'test-key'
+    });
+    assert.equal(res.extractedRef, null, 'Giao thức HTTP không được chấp nhận');
+    assert.equal(res.isSupabaseConfigured, false, 'HTTP phải bị fail-closed');
+    assert.equal(res.supabaseUrl, '');
+  });
+
+  // TEST 13: URL chứa userinfo, port lạ hoặc path bất thường
+  await t.test('13. Chặn đứng URL chứa userinfo, port lạ hoặc path bất thường', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'preview',
+      VITE_SUPABASE_URL: `https://user:pass@${STAGING_REF}.supabase.co:8443/evil/path?param=1#leak`,
+      VITE_SUPABASE_ANON_KEY: 'test-key'
+    });
+    assert.equal(res.extractedRef, null, 'URL có userinfo/port/path lạ phải bị từ chối');
+    assert.equal(res.isSupabaseConfigured, false, 'URL dị thường phải bị fail-closed');
+  });
+
+  // TEST 14: Preview nhận URL Supabase với project ref ngẫu nhiên ngoài Staging
+  await t.test('14. Preview nhận project ref ngẫu nhiên ngoài Staging -> BẮT BUỘC CHẶN', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'preview',
+      VITE_SUPABASE_URL: 'https://randomref1234567890.supabase.co',
+      VITE_SUPABASE_ANON_KEY: 'test-key'
+    });
+    assert.equal(res.detectedEnvironment, 'preview');
+    assert.equal(res.isSupabaseConfigured, false, 'Preview chỉ được phép nhận Staging ref');
+    assert.match(res.queryResult.errorMsg, /Preview environment must strictly use Staging Supabase project/);
+  });
+
+  // TEST 15: Production nhận URL Supabase với project ref ngẫu nhiên ngoài Production
+  await t.test('15. Production nhận project ref ngẫu nhiên ngoài Production -> BẮT BUỘC CHẶN', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'production',
+      VITE_SUPABASE_URL: 'https://randomref1234567890.supabase.co',
+      VITE_SUPABASE_ANON_KEY: 'test-key'
+    });
+    assert.equal(res.detectedEnvironment, 'production');
+    assert.equal(res.isSupabaseConfigured, false, 'Production chỉ được phép nhận Production ref');
+    assert.match(res.queryResult.errorMsg, /Production environment must strictly use Production Supabase project/);
+  });
+
+  // TEST 16: Môi trường không xác định khi chỉ có MODE=production
+  await t.test('16. Môi trường không xác định (kể cả có MODE=production) -> FAIL-CLOSED', () => {
+    const res = runClientSimulation({
+      MODE: 'production',
+      VITE_SUPABASE_URL: `https://${PROD_REF}.supabase.co`,
+      VITE_SUPABASE_ANON_KEY: 'prod-key'
+    });
+    assert.equal(res.detectedEnvironment, 'unknown', 'MODE=production đơn lẻ không được nhận là production');
+    assert.equal(res.isSupabaseConfigured, false, 'Môi trường unknown phải fail-closed hoàn toàn');
+    assert.equal(res.supabaseUrl, '', 'URL phải rỗng');
+    assert.match(res.queryResult.errorMsg, /Unknown or unverified environment cannot connect to Supabase/);
+  });
+
+  // TEST 17: Build Guard chặn đứng URL giả mạo hostname suffix khi build
+  await t.test('17. Build Guard chặn đứng build khi Preview nhận URL giả mạo hostname suffix', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = { ...process.env, VERCEL_ENV: 'preview', VITE_SUPABASE_URL: 'https://${STAGING_REF}.supabase.co.invalid.example' };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('[SECURITY BUILD GUARD]');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build BẮT BUỘC ném lỗi [SECURITY BUILD GUARD] khi hostname bị giả mạo!');
+  });
+
+  // TEST 18: Build Guard chặn đứng build Production ref ngoài môi trường Production
+  await t.test('18. Build Guard chặn đứng build Production ref ngoài môi trường Production', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = { ...process.env, VERCEL_ENV: 'development', VITE_SUPABASE_URL: 'https://${PROD_REF}.supabase.co' };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('[SECURITY BUILD GUARD]');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build BẮT BUỘC ném lỗi [SECURITY BUILD GUARD] khi Prod ref bị build ngoài Prod!');
+  });
+
 });

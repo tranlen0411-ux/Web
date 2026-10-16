@@ -17,21 +17,39 @@ function resolveEnv(key) {
 }
 
 /**
- * Accurately extract project ref from Supabase URL using standard URL parser.
- * Strictly verifies protocol (https or http) and domain structure (*.supabase.co).
+ * Strictly extract and validate project ref from Supabase URL using standard URL parser.
+ * Requirements:
+ * - Protocol MUST be strictly 'https:'
+ * - Zero userinfo (no username or password)
+ * - Zero custom port (only default 443 or empty)
+ * - Zero path (pathname must be strictly '/' or '')
+ * - Zero search query and zero hash
+ * - Hostname MUST strictly match '<project-ref>.supabase.co' with no appended subdomains
  */
 export function extractProjectRef(urlStr) {
   if (!urlStr || typeof urlStr !== 'string') return null;
   try {
     const parsed = new URL(urlStr);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    if (parsed.protocol !== 'https:') {
       return null;
     }
-    const hostParts = parsed.hostname.split('.');
-    if (hostParts.length >= 3 && hostParts[1] === 'supabase' && hostParts[2] === 'co') {
-      return hostParts[0];
+    if (parsed.username || parsed.password) {
+      return null;
     }
-    return parsed.hostname;
+    if (parsed.port && parsed.port !== '443') {
+      return null;
+    }
+    if (parsed.pathname !== '/' && parsed.pathname !== '') {
+      return null;
+    }
+    if (parsed.search || parsed.hash) {
+      return null;
+    }
+    const match = parsed.hostname.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    if (!match) {
+      return null;
+    }
+    return match[1];
   } catch {
     return null;
   }
@@ -39,7 +57,8 @@ export function extractProjectRef(urlStr) {
 
 /**
  * Accurately detect environment without relying on a single heuristic.
- * Combines Vercel system environment, Vite MODE, and browser hostname.
+ * Combines Vercel system environment, browser hostname, and Vite development mode.
+ * NOTE: Vite MODE=production alone is NEVER trusted as proof of Production environment.
  */
 export function detectEnvironment() {
   const vercelEnv = resolveEnv('VITE_VERCEL_ENV') || resolveEnv('VERCEL_ENV');
@@ -55,9 +74,9 @@ export function detectEnvironment() {
   }
 
   const mode = resolveEnv('MODE');
-  if (mode === 'production') return 'production';
   if (mode === 'development') return 'development';
 
+  // Unknown or unverified environment: fail-closed by default
   return 'unknown';
 }
 
@@ -71,17 +90,37 @@ const detectedRef = extractProjectRef(trimmedUrl);
 const currentEnv = detectEnvironment();
 
 // Strict Environment Isolation Guard:
-// 1. Preview environment MUST NOT use Production project ref!
-// 2. Production environment MUST NOT use Staging project ref!
+// 1. Preview environment MUST strictly use Staging project ref!
+// 2. Production environment MUST strictly use Production project ref!
+// 3. Unknown or unverified environment MUST fail-closed!
+// 4. Development environment allows Staging project ref, never Production ref!
 let isEnvironmentMismatch = false;
 let mismatchReason = '';
 
-if (currentEnv === 'preview' && detectedRef === PROD_PROJECT_REF) {
+if (currentEnv === 'unknown') {
   isEnvironmentMismatch = true;
-  mismatchReason = `Preview environment cannot connect to Production Supabase project (${PROD_PROJECT_REF}).`;
-} else if (currentEnv === 'production' && detectedRef === STAGING_PROJECT_REF) {
-  isEnvironmentMismatch = true;
-  mismatchReason = `Production environment cannot connect to Staging Supabase project (${STAGING_PROJECT_REF}).`;
+  mismatchReason = 'Unknown or unverified environment cannot connect to Supabase (fail-closed).';
+} else if (currentEnv === 'preview') {
+  if (detectedRef === PROD_PROJECT_REF) {
+    isEnvironmentMismatch = true;
+    mismatchReason = `Preview environment cannot connect to Production Supabase project (${PROD_PROJECT_REF}).`;
+  } else if (detectedRef !== STAGING_PROJECT_REF) {
+    isEnvironmentMismatch = true;
+    mismatchReason = `Preview environment must strictly use Staging Supabase project (${STAGING_PROJECT_REF}). Detected ref: ${detectedRef || 'NONE'}.`;
+  }
+} else if (currentEnv === 'production') {
+  if (detectedRef === STAGING_PROJECT_REF) {
+    isEnvironmentMismatch = true;
+    mismatchReason = `Production environment cannot connect to Staging Supabase project (${STAGING_PROJECT_REF}).`;
+  } else if (detectedRef !== PROD_PROJECT_REF) {
+    isEnvironmentMismatch = true;
+    mismatchReason = `Production environment must strictly use Production Supabase project (${PROD_PROJECT_REF}). Detected ref: ${detectedRef || 'NONE'}.`;
+  }
+} else if (currentEnv === 'development') {
+  if (detectedRef === PROD_PROJECT_REF) {
+    isEnvironmentMismatch = true;
+    mismatchReason = `Development environment cannot connect to Production Supabase project (${PROD_PROJECT_REF}).`;
+  }
 }
 
 // Validation: URL must parse cleanly, key must be non-empty, and environment must not mismatch
@@ -214,14 +253,18 @@ if (isSupabaseConfigured) {
   });
 } else {
   let reason = '';
-  if (isEnvironmentMismatch) {
-    reason = mismatchReason;
-  } else if (!isValidUrl && !isValidKey) {
+  if (!trimmedUrl && !trimmedKey) {
     reason = 'VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are missing.';
-  } else if (!isValidUrl) {
-    reason = 'VITE_SUPABASE_URL is missing, invalid or malformed.';
-  } else {
+  } else if (!trimmedUrl) {
+    reason = 'VITE_SUPABASE_URL is missing.';
+  } else if (!trimmedKey) {
     reason = 'VITE_SUPABASE_ANON_KEY is missing.';
+  } else if (!detectedRef) {
+    reason = 'VITE_SUPABASE_URL is missing, invalid or malformed.';
+  } else if (isEnvironmentMismatch) {
+    reason = mismatchReason;
+  } else {
+    reason = 'VITE_SUPABASE_URL is missing, invalid or malformed.';
   }
   console.warn(`[Supabase Fail-Closed] ${reason}`);
   clientInstance = createFailClosedClient(reason);
