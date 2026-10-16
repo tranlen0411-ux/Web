@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase.js';
+import { supabase, supabaseUrl, supabaseAnonKey, isSupabaseConfigured } from '../lib/supabase.js';
 
 /**
  * COMPETITION CLIENT SERVICE (Competition V1)
@@ -24,19 +24,36 @@ import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase.js';
  * - Uses public/anon key only (Zero service_role key)
  * - Zero auth persistence (persistSession: false, autoRefreshToken: false)
  * - setAuth() applied strictly to this instance, never mutating shared supabase.realtime
+ * - Fail-closed: Never connects if Supabase configuration is missing or invalid
  */
-export const competitionRealtimeClient = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-    detectSessionInUrl: false,
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 10,
-    },
-  },
-});
+export const competitionRealtimeClient = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      realtime: {
+        params: {
+          eventsPerSecond: 10,
+        },
+      },
+    })
+  : {
+      realtime: { setAuth: () => {} },
+      channel: () => ({
+        on: function() { return this; },
+        subscribe: function(callback) {
+          if (typeof callback === 'function') {
+            try { callback('CLOSED'); } catch {}
+          }
+          return this;
+        },
+        unsubscribe: async () => 'ok',
+        send: async () => 'ok',
+      }),
+      removeChannel: async () => {},
+    };
 
 // In-memory cache for short-lived HMAC capability tokens: Map<key, { token, expiresAt, timerId }>
 const inMemoryTokenCache = new Map();

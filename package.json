@@ -12,9 +12,10 @@
     "validate:exercises": "node scripts/validateAcademicExercises.mjs",
     "test:pglite": "node scripts/run_all_pglite_tests.js",
     "test:competition": "node tests/competition_v1_r18_reward_system.test.mjs && node tests/competition_v1_r17_interim_leaderboard.test.mjs && node tests/competition_v1_r16a_matching_backend.test.mjs",
-    "test:competition:frontend": "node tests/competition_v1_r16b_matching_frontend.test.mjs && node tests/competition_v1_r18_reward_frontend.test.mjs && node tests/competition_v1_r19_audio_hardening.test.mjs",
+    "test:competition:frontend": "node tests/competition_v1_r16b_matching_frontend.test.mjs && node tests/competition_v1_r18_reward_frontend.test.mjs && node tests/competition_v1_r19_audio_hardening.test.mjs && node tests/supabase_fail_closed.test.mjs",
+    "test:fail-closed": "node tests/supabase_fail_closed.test.mjs",
     "test:postgres-concurrency": "node tests/admin_class_management.postgres_concurrency.test.mjs && node tests/admin_only_class_governance.postgres.test.mjs",
-    "test": "npm run test:pglite && npm run test:competition"
+    "test": "npm run test:fail-closed && npm run test:pglite && npm run test:competition"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.46.1",
