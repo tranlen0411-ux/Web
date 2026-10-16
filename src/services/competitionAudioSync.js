@@ -128,6 +128,18 @@ export function classifyAudioSnapshotState({
     };
   }
 
+  // Guard 2b: Host has unsynced local changes -> background polling MUST NEVER overwrite
+  if (currentStatus === 'unsynced') {
+    return {
+      action: 'IGNORE_UNSYNCED_CHANGES',
+      nextStatus: null,
+      nextMode: null,
+      nextError: null,
+      shouldClearPending: false,
+      shouldAutoHeal: false,
+    };
+  }
+
   // Freshness check: Determine if snapshot audio query was initiated BEFORE the last successful save.
   // Use _audio_fetched_at if available (when audio config was specifically queried), falling back to _fetched_at.
   const audioFetchedAt = typeof snapshot._audio_fetched_at === 'number'

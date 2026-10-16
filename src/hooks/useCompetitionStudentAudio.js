@@ -34,17 +34,48 @@ export function useCompetitionStudentAudio({
   // Sync with global sound preference from repository SoundContext
   const { isSoundEnabled } = useSound();
 
-  // Local student mute & volume preference
+  // Local student mute & volume preference (starts locked per session)
   const [isStudentAudioUnlocked, setIsStudentAudioUnlocked] = useState(false);
+  const [needsPlaybackRetry, setNeedsPlaybackRetry] = useState(
+    () => Boolean(competitionAudioManager.needsPlaybackRetry)
+  );
   const [isStudentMuted, setIsStudentMuted] = useState(false);
   const [volume, setVolumeState] = useState(0.5);
 
+  // Subscribe to audio manager retry updates (strictly updates retry flag, never alters session unlock)
+  useEffect(() => {
+    const handleRetry = (retryNeeded) => {
+      setNeedsPlaybackRetry(Boolean(retryNeeded));
+    };
+    competitionAudioManager.addRetryListener?.(handleRetry);
+    setNeedsPlaybackRetry(Boolean(competitionAudioManager.needsPlaybackRetry));
+    return () => {
+      competitionAudioManager.removeRetryListener?.(handleRetry);
+    };
+  }, []);
+
+  // Session-bound audio config isolation: never leaks Room A config to Room B
+  const lastKnownAudioConfigRef = useRef(null);
+  const lastConfigSessionIdRef = useRef(sessionId);
+
+  if (lastConfigSessionIdRef.current !== sessionId) {
+    lastConfigSessionIdRef.current = sessionId;
+    lastKnownAudioConfigRef.current = null;
+  }
+
+  if (audioConfig && typeof audioConfig === 'object') {
+    lastKnownAudioConfigRef.current = audioConfig;
+  }
+  const effectiveConfig = (sessionId && lastConfigSessionIdRef.current === sessionId)
+    ? (audioConfig || lastKnownAudioConfigRef.current)
+    : null;
+
   // Extract config with in_class fallback
-  const mode = audioConfig?.mode || 'in_class';
-  const selectionMode = audioConfig?.selection_mode || 'theme';
-  const themeId = audioConfig?.theme_id || DEFAULT_MUSIC_THEME;
-  const customLobbyTrackId = audioConfig?.custom_lobby_track_id || null;
-  const customQuestionTrackId = audioConfig?.custom_question_track_id || null;
+  const mode = effectiveConfig?.mode || 'in_class';
+  const selectionMode = effectiveConfig?.selection_mode || 'theme';
+  const themeId = effectiveConfig?.theme_id || DEFAULT_MUSIC_THEME;
+  const customLobbyTrackId = effectiveConfig?.custom_lobby_track_id || null;
+  const customQuestionTrackId = effectiveConfig?.custom_question_track_id || null;
 
   // Invariant 1: In-class mode enforces 100% client-side mute
   const isInClass = mode === 'in_class';
@@ -108,12 +139,15 @@ export function useCompetitionStudentAudio({
   const prevSessionIdRef = useRef(sessionId);
   const prevQuestionIdRef = useRef(currentQuestionId);
 
-  // Session reset
+  // Session reset & clean isolation across room switches
   useEffect(() => {
     if (prevSessionIdRef.current !== sessionId) {
       prevSessionIdRef.current = sessionId;
       lastCompoundKeyRef.current = null;
       lastPlayedSfxSetRef.current.clear();
+      lastKnownAudioConfigRef.current = null;
+      setIsStudentAudioUnlocked(false);
+      setNeedsPlaybackRetry(false);
       competitionAudioManager.stopAll();
     }
   }, [sessionId]);
@@ -257,6 +291,16 @@ export function useCompetitionStudentAudio({
     const unlocked = await competitionAudioManager.unlock();
     setIsStudentAudioUnlocked(unlocked);
     setIsStudentMuted(false);
+    setNeedsPlaybackRetry(Boolean(competitionAudioManager.needsPlaybackRetry));
+    return unlocked;
+  }, []);
+
+  // Dedicated recovery action based on valid user gesture
+  const retryStudentAudio = useCallback(async () => {
+    const unlocked = await competitionAudioManager.unlock();
+    setIsStudentAudioUnlocked(unlocked);
+    setIsStudentMuted(false);
+    setNeedsPlaybackRetry(Boolean(competitionAudioManager.needsPlaybackRetry));
     return unlocked;
   }, []);
 
@@ -278,8 +322,10 @@ export function useCompetitionStudentAudio({
     isInClass,
     isOnline: mode === 'online',
     isStudentAudioUnlocked,
-    isStudentMuted,
+    needsPlaybackRetry,
     unlockStudentAudio,
+    retryStudentAudio,
+    isStudentMuted,
     toggleStudentMute,
     volume,
     setVolume,

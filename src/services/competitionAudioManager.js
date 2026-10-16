@@ -60,7 +60,34 @@ class CompetitionAudioManager {
     this.audioElements = new Map(); // src -> HTMLAudioElement
     this.isMusicPaused = false;
     this.needsPlaybackRetry = false;
+    this.retryListeners = new Set();
     this.playGeneration = 0; // Monotonic counter to invalidate superseded playback promises
+  }
+
+  setNeedsPlaybackRetry(val) {
+    const nextVal = Boolean(val);
+    if (this.needsPlaybackRetry !== nextVal) {
+      this.needsPlaybackRetry = nextVal;
+      this.notifyRetryListeners();
+    }
+  }
+
+  addRetryListener(listener) {
+    if (typeof listener === 'function') {
+      this.retryListeners.add(listener);
+    }
+  }
+
+  removeRetryListener(listener) {
+    this.retryListeners.delete(listener);
+  }
+
+  notifyRetryListeners() {
+    this.retryListeners.forEach((fn) => {
+      try {
+        fn(this.needsPlaybackRetry);
+      } catch (_e) {}
+    });
   }
 
   /**
@@ -176,7 +203,7 @@ class CompetitionAudioManager {
 
     if (this.currentTrack) {
       if (this.currentThemeId === 'none') {
-        this.needsPlaybackRetry = false;
+        this.setNeedsPlaybackRetry(false);
         return;
       }
 
@@ -240,7 +267,7 @@ class CompetitionAudioManager {
       playPromise = audio.play();
     } catch (syncErr) {
       if (!this.isMusicPaused && !this.isGamePaused && this.currentTrack === trackKey) {
-        this.needsPlaybackRetry = true;
+        this.setNeedsPlaybackRetry(true);
       }
       return;
     }
@@ -250,7 +277,7 @@ class CompetitionAudioManager {
         .then(() => {
           // Stale Promise Guard: Only clear retry flag if this track and generation are still active
           if (this.currentTrack === trackKey && this.playGeneration === generation) {
-            this.needsPlaybackRetry = false;
+            this.setNeedsPlaybackRetry(false);
           }
         })
         .catch((err) => {
@@ -264,12 +291,12 @@ class CompetitionAudioManager {
           }
           // 3. Genuine playback rejection (e.g. NotAllowedError or media decode failure)
           if (!this.isMusicPaused && !this.isGamePaused) {
-            this.needsPlaybackRetry = true;
+            this.setNeedsPlaybackRetry(true);
           }
         });
     } else {
       if (this.currentTrack === trackKey && this.playGeneration === generation) {
-        this.needsPlaybackRetry = false;
+        this.setNeedsPlaybackRetry(false);
       }
     }
   }
@@ -310,7 +337,7 @@ class CompetitionAudioManager {
       this.safePlayAudio(audio, this.currentTrack, src);
     } catch (_err) {
       if (!this.isMusicPaused && !this.isGamePaused) {
-        this.needsPlaybackRetry = true;
+        this.setNeedsPlaybackRetry(true);
       }
     }
   }
@@ -418,26 +445,26 @@ class CompetitionAudioManager {
 
     if (this.isGamePaused) {
       this.isMusicPaused = true;
-      this.needsPlaybackRetry = false;
+      this.setNeedsPlaybackRetry(false);
       return;
     }
 
     this.isMusicPaused = false;
 
     if (this.selectionMode === SELECTION_MODE_THEME && this.currentThemeId === 'none') {
-      this.needsPlaybackRetry = false;
+      this.setNeedsPlaybackRetry(false);
       return;
     }
 
     if (!this.isMusicAvailable) {
-      this.needsPlaybackRetry = false;
+      this.setNeedsPlaybackRetry(false);
       return;
     }
 
-    this.needsPlaybackRetry = false;
+    this.setNeedsPlaybackRetry(false);
 
     if (!this.globalSoundEnabled || !this.musicEnabled) {
-      this.needsPlaybackRetry = false;
+      this.setNeedsPlaybackRetry(false);
       return;
     }
 
@@ -447,7 +474,7 @@ class CompetitionAudioManager {
 
     const src = this.getTrackSrc(trackKey);
     if (!src) {
-      this.needsPlaybackRetry = false;
+      this.setNeedsPlaybackRetry(false);
       return;
     }
 
@@ -464,7 +491,7 @@ class CompetitionAudioManager {
       this.safePlayAudio(audio, trackKey, src);
     } catch (_err) {
       if (!this.isMusicPaused && !this.isGamePaused) {
-        this.needsPlaybackRetry = true;
+        this.setNeedsPlaybackRetry(true);
       }
     }
   }
@@ -660,7 +687,7 @@ class CompetitionAudioManager {
         this.safePlayAudio(audio, this.currentTrack, src);
       } catch (_err) {
         if (!this.isMusicPaused && !this.isGamePaused) {
-          this.needsPlaybackRetry = true;
+          this.setNeedsPlaybackRetry(true);
         }
       }
     }
@@ -674,7 +701,7 @@ class CompetitionAudioManager {
     this.stopCurrentAudioElement();
     this.currentTrack = null;
     this.isMusicPaused = false;
-    this.needsPlaybackRetry = false;
+    this.setNeedsPlaybackRetry(false);
   }
 
   /**

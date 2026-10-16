@@ -21,6 +21,7 @@ export function HostAudioLobbyBanner({
   audioConfigError = null,
   competitionAudioMode = 'in_class',
   onRetrySave,
+  onSaveAndSync,
   onApplyDefault,
   disabled = false,
 }) {
@@ -31,6 +32,37 @@ export function HostAudioLobbyBanner({
   const modeLabel = competitionAudioMode === 'in_class'
     ? 'Thi tại lớp (Chỉ phát trên máy Giáo viên)'
     : 'Thi trực tuyến (Phát trên máy Giáo viên & Học sinh)';
+
+  if (audioConfigStatus === 'unsynced') {
+    return React.createElement(
+      'div',
+      {
+        'data-testid': 'audio-banner-unsynced',
+        className: 'flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900',
+      },
+      React.createElement(
+        'div',
+        { className: 'flex items-center gap-2 font-semibold' },
+        React.createElement(AlertTriangle, { className: 'w-4 h-4 text-amber-600 shrink-0' }),
+        React.createElement(
+          'span',
+          null,
+          'Cấu hình âm thanh đã thay đổi nhưng chưa được đồng bộ với phòng thi. Vui lòng lưu cấu hình trước khi bắt đầu.'
+        )
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          'data-testid': 'btn-save-sync-audio',
+          onClick: onSaveAndSync || onRetrySave,
+          disabled: disabled,
+          className: 'px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shadow-xs transition shrink-0 disabled:opacity-50 flex items-center gap-1.5',
+        },
+        'Lưu & Đồng bộ âm thanh'
+      )
+    );
+  }
 
   if (audioConfigStatus === 'saving') {
     return React.createElement(

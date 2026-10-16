@@ -102,14 +102,16 @@ export function useCompetitionAudio({
 
   // Selection mode switcher
   const setSelectionMode = useCallback((newMode) => {
+    if (isGameActive) return;
     const valid = newMode === SELECTION_MODE_CUSTOM ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
     setStoredMusicSelectionMode(valid);
     setSelectionModeState(valid);
     competitionAudioManager.setSelectionMode(valid);
-  }, []);
+  }, [isGameActive]);
 
   // Theme selection callback
   const setThemeId = useCallback((newThemeId) => {
+    if (isGameActive) return;
     const valid = isSelectableThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
     setStoredThemeId(valid);
     setThemeIdState(valid);
@@ -117,25 +119,54 @@ export function useCompetitionAudio({
     setStoredMusicSelectionMode(SELECTION_MODE_THEME);
     setSelectionModeState(SELECTION_MODE_THEME);
     competitionAudioManager.setTheme(valid);
-  }, []);
+  }, [isGameActive]);
 
   // Custom tracks selection callbacks
   const setCustomLobbyTrack = useCallback((trackId) => {
+    if (isGameActive) return;
     setStoredCustomLobbyTrack(trackId);
     setCustomLobbyTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ lobbyTrackId: trackId });
     competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
-  }, []);
+  }, [isGameActive]);
 
   const setCustomQuestionTrack = useCallback((trackId) => {
+    if (isGameActive) return;
     setStoredCustomQuestionTrack(trackId);
     setCustomQuestionTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ questionTrackId: trackId });
     competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
+  }, [isGameActive]);
+
+  // Authoritative sync callback: Syncs local state directly from room's saved config
+  const syncFromAuthoritativeConfig = useCallback((audioConfig) => {
+    if (!audioConfig || typeof audioConfig !== 'object') return;
+    const mode = audioConfig.selection_mode === 'custom' ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
+    setSelectionModeState(mode);
+    setStoredMusicSelectionMode(mode);
+    competitionAudioManager.setSelectionMode(mode);
+
+    if (mode === SELECTION_MODE_CUSTOM) {
+      const lobbyTrack = audioConfig.custom_lobby_track_id || 'km_at_launch';
+      const questionTrack = audioConfig.custom_question_track_id || 'sb_titan';
+      setCustomLobbyTrackIdState(lobbyTrack);
+      setCustomQuestionTrackIdState(questionTrack);
+      setStoredCustomLobbyTrack(lobbyTrack);
+      setStoredCustomQuestionTrack(questionTrack);
+      competitionAudioManager.setCustomTracks({
+        lobbyTrackId: lobbyTrack,
+        questionTrackId: questionTrack,
+      });
+    } else {
+      const theme = isSelectableThemeId(audioConfig.theme_id) ? audioConfig.theme_id : DEFAULT_MUSIC_THEME;
+      setThemeIdState(theme);
+      setStoredThemeId(theme);
+      competitionAudioManager.setTheme(theme);
+    }
   }, []);
 
   // Preview Theme callback
@@ -407,5 +438,6 @@ export function useCompetitionAudio({
     setCustomQuestionTrack,
     previewTrack,
     previewingTrackId,
+    syncFromAuthoritativeConfig,
   };
 }

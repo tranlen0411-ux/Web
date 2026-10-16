@@ -560,6 +560,53 @@ export function CompetitionHostPage() {
     isReviewingHistory,
   });
 
+  // Derive sanitized current host audio configuration
+  const currentHostAudioConfig = useMemo(() => {
+    const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
+    return {
+      mode: competitionAudioMode,
+      selection_mode: currentSelectionMode,
+      theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
+      custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
+      custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
+    };
+  }, [
+    competitionAudioMode,
+    audioControls.selectionMode,
+    audioControls.themeId,
+    audioControls.customLobbyTrackId,
+    audioControls.customQuestionTrackId,
+  ]);
+
+  // Track unsynced audio configuration changes while in WAITING lobby
+  useEffect(() => {
+    if (!activeSessionId || snapshot?.status !== 'waiting') return;
+    if (audioConfigStatus === 'saving') return;
+    if (!lastSavedAudioConfigRef.current) return;
+
+    const matchesSaved = isAudioConfigMatching(lastSavedAudioConfigRef.current, currentHostAudioConfig);
+    if (!matchesSaved && audioConfigStatus === 'saved') {
+      setAudioConfigStatus('unsynced');
+    } else if (matchesSaved && (audioConfigStatus === 'unsynced' || audioConfigStatus === 'failed')) {
+      setAudioConfigStatus('saved');
+      setAudioConfigError(null);
+    }
+  }, [activeSessionId, snapshot?.status, currentHostAudioConfig, audioConfigStatus]);
+
+  // Synchronize Host local audioControls when restoring from database snapshot
+  const lastSyncedSnapshotConfigRef = useRef(null);
+  useEffect(() => {
+    if (
+      snapshot?.audio_config_persisted === true &&
+      isValidAudioConfig(snapshot.audio_config) &&
+      audioConfigStatus === 'saved' &&
+      !isAudioConfigMatching(lastSyncedSnapshotConfigRef.current, snapshot.audio_config)
+    ) {
+      lastSyncedSnapshotConfigRef.current = snapshot.audio_config;
+      audioControls.syncFromAuthoritativeConfig?.(snapshot.audio_config);
+    }
+  }, [snapshot?.audio_config_persisted, snapshot?.audio_config, audioConfigStatus, audioControls.syncFromAuthoritativeConfig]);
+
   // UI Visibility Contract & Consistency Guard for Live Submission Stats (S2)
   const isSubmissionStatsAuthoritative = Boolean(
     hostViewMode === 'LIVE_QUESTION' &&
@@ -1552,21 +1599,14 @@ export function CompetitionHostPage() {
     }
   };
 
-  // Dedicated retry handler to save audio config without creating a new session
-  const handleRetrySaveAudioConfig = async () => {
+  // Dedicated handler to save & synchronize audio configuration to Supabase
+  const handleSaveAndSyncAudioConfig = async () => {
     if (!activeSessionIdRef.current || audioConfigStatus === 'saving') return;
     const targetSessionId = activeSessionIdRef.current;
     const requestId = ++latestAudioConfigRequestIdRef.current;
     setAudioConfigStatus('saving');
     setAudioConfigError(null);
-    const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
-    const audioPayload = {
-      mode: competitionAudioMode,
-      selection_mode: currentSelectionMode,
-      theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
-      custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
-      custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
-    };
+    const audioPayload = currentHostAudioConfig;
     pendingAudioConfigRef.current = audioPayload;
     try {
       const audioRes = await hostSetAudioConfig({
@@ -1580,7 +1620,8 @@ export function CompetitionHostPage() {
         lastAudioConfigSavedAtRef.current = Date.now();
         setAudioConfigStatus('saved');
         setAudioConfigError(null);
-        showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+        showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
+        await refreshNow();
       } else {
         // Re-verify from database before concluding failure (must match exact requested config)
         try {
@@ -1596,7 +1637,8 @@ export function CompetitionHostPage() {
             lastAudioConfigSavedAtRef.current = Date.now();
             setAudioConfigStatus('saved');
             setAudioConfigError(null);
-            showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+            showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
+            await refreshNow();
             return;
           }
         } catch (_vErr) {}
@@ -1622,7 +1664,8 @@ export function CompetitionHostPage() {
           lastAudioConfigSavedAtRef.current = Date.now();
           setAudioConfigStatus('saved');
           setAudioConfigError(null);
-          showToast('Đã lưu cấu hình âm thanh thành công!', 'success');
+          showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
+          await refreshNow();
           return;
         }
       } catch (_vErr) {}
@@ -1633,6 +1676,8 @@ export function CompetitionHostPage() {
       showToast('Lỗi mạng khi thử lưu cấu hình âm thanh.', 'error');
     }
   };
+
+  const handleRetrySaveAudioConfig = handleSaveAndSyncAudioConfig;
 
   // Explicit Host confirmation to apply default in_class config for legacy R18 waiting sessions
   const handleApplyLegacyAudioConfig = async () => {
@@ -1683,6 +1728,10 @@ export function CompetitionHostPage() {
     }
     if (audioConfigStatus === 'failed') {
       showToast('Cấu hình âm thanh chưa được lưu thành công. Vui lòng bấm "Thử lại lưu âm thanh" trước khi bắt đầu.', 'error');
+      return;
+    }
+    if (audioConfigStatus === 'unsynced') {
+      showToast('Cấu hình âm thanh đã thay đổi nhưng chưa được lưu và đồng bộ. Vui lòng bấm "Lưu & Đồng bộ âm thanh" trước khi bắt đầu!', 'error');
       return;
     }
     if (audioConfigStatus !== 'saved') {
@@ -1931,7 +1980,11 @@ export function CompetitionHostPage() {
 
           {activeSessionId && (
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-              <HostAudioControls {...audioControls} />
+              <HostAudioControls
+                {...audioControls}
+                audioConfigStatus={audioConfigStatus}
+                onSaveAndSync={handleSaveAndSyncAudioConfig}
+              />
               <button
                 type="button"
                 onClick={() => setIsLeaderboardOpen(!isLeaderboardOpen)}
@@ -2645,7 +2698,8 @@ export function CompetitionHostPage() {
                 audioConfigStatus={audioConfigStatus}
                 audioConfigError={audioConfigError}
                 competitionAudioMode={competitionAudioMode}
-                onRetrySave={handleRetrySaveAudioConfig}
+                onSaveAndSync={handleSaveAndSyncAudioConfig}
+                onRetrySave={handleSaveAndSyncAudioConfig}
                 onApplyDefault={handleApplyLegacyAudioConfig}
                 disabled={actionPending}
               />

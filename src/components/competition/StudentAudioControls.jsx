@@ -15,7 +15,9 @@ export function StudentAudioControls({
   isInClass = true,
   isOnline = false,
   isStudentAudioUnlocked = false,
+  needsPlaybackRetry = false,
   unlockStudentAudio,
+  retryStudentAudio,
   isStudentMuted = false,
   toggleStudentMute,
   volume = 0.5,
@@ -56,16 +58,29 @@ export function StudentAudioControls({
   // 2. Chế độ Thi trực tuyến (Online Mode)
   return (
     <div className="relative inline-flex items-center gap-1.5" ref={popoverRef}>
-      {/* Nút mở khóa Autoplay nếu trình duyệt đang chặn */}
+      {/* Nút mở khóa Autoplay nếu trình duyệt chưa kích hoạt */}
       {!isStudentAudioUnlocked ? (
         <button
           type="button"
           onClick={unlockStudentAudio}
+          data-testid="btn-student-audio-unlock"
           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-sm animate-pulse transition"
           title="Bấm để kích hoạt âm thanh thi đấu trên thiết bị của bạn"
         >
           <Volume2 className="w-3.5 h-3.5" />
           <span>Bật âm thanh</span>
+        </button>
+      ) : needsPlaybackRetry ? (
+        /* Nút khôi phục nếu trình duyệt từ chối tự phát bài mới trong nền */
+        <button
+          type="button"
+          onClick={retryStudentAudio || unlockStudentAudio}
+          data-testid="btn-student-audio-retry"
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-sm animate-pulse transition"
+          title="Trình duyệt tạm dừng bài nhạc mới. Bấm để khôi phục âm thanh!"
+        >
+          <Volume2 className="w-3.5 h-3.5" />
+          <span>Khôi phục âm thanh</span>
         </button>
       ) : (
         /* Nút chuyển đổi Tắt/Bật tiếng & Menu âm lượng */
