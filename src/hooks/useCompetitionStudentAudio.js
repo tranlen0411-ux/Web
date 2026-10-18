@@ -88,11 +88,11 @@ export function useCompetitionStudentAudio({
     }
     // Only configure audio manager if in online mode
     if (selectionMode === SELECTION_MODE_CUSTOM) {
-      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
       competitionAudioManager.setCustomTracks({
         lobbyTrackId: customLobbyTrackId,
         questionTrackId: customQuestionTrackId,
       });
+      competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
     } else {
       competitionAudioManager.setSelectionMode(SELECTION_MODE_THEME);
       competitionAudioManager.setTheme(themeId);
@@ -291,6 +291,7 @@ export function useCompetitionStudentAudio({
     const unlocked = await competitionAudioManager.unlock();
     setIsStudentAudioUnlocked(unlocked);
     setIsStudentMuted(false);
+    competitionAudioManager.setMusicEnabled(true);
     setNeedsPlaybackRetry(Boolean(competitionAudioManager.needsPlaybackRetry));
     return unlocked;
   }, []);
@@ -300,6 +301,7 @@ export function useCompetitionStudentAudio({
     const unlocked = await competitionAudioManager.unlock();
     setIsStudentAudioUnlocked(unlocked);
     setIsStudentMuted(false);
+    competitionAudioManager.setMusicEnabled(true);
     setNeedsPlaybackRetry(Boolean(competitionAudioManager.needsPlaybackRetry));
     return unlocked;
   }, []);

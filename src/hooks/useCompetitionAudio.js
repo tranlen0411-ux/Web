@@ -100,18 +100,16 @@ export function useCompetitionAudio({
     competitionAudioManager.setVolume(clamped);
   }, []);
 
-  // Selection mode switcher
+  // Selection mode switcher (available before and during live competition)
   const setSelectionMode = useCallback((newMode) => {
-    if (isGameActive) return;
     const valid = newMode === SELECTION_MODE_CUSTOM ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
     setStoredMusicSelectionMode(valid);
     setSelectionModeState(valid);
     competitionAudioManager.setSelectionMode(valid);
-  }, [isGameActive]);
+  }, []);
 
-  // Theme selection callback
+  // Theme selection callback (available before and during live competition)
   const setThemeId = useCallback((newThemeId) => {
-    if (isGameActive) return;
     const valid = isSelectableThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
     setStoredThemeId(valid);
     setThemeIdState(valid);
@@ -119,28 +117,26 @@ export function useCompetitionAudio({
     setStoredMusicSelectionMode(SELECTION_MODE_THEME);
     setSelectionModeState(SELECTION_MODE_THEME);
     competitionAudioManager.setTheme(valid);
-  }, [isGameActive]);
+  }, []);
 
-  // Custom tracks selection callbacks
+  // Custom tracks selection callbacks (available before and during live competition)
   const setCustomLobbyTrack = useCallback((trackId) => {
-    if (isGameActive) return;
     setStoredCustomLobbyTrack(trackId);
     setCustomLobbyTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ lobbyTrackId: trackId });
     competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
-  }, [isGameActive]);
+  }, []);
 
   const setCustomQuestionTrack = useCallback((trackId) => {
-    if (isGameActive) return;
     setStoredCustomQuestionTrack(trackId);
     setCustomQuestionTrackIdState(trackId);
     setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
     setSelectionModeState(SELECTION_MODE_CUSTOM);
     competitionAudioManager.setCustomTracks({ questionTrackId: trackId });
     competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
-  }, [isGameActive]);
+  }, []);
 
   // Authoritative sync callback: Syncs local state directly from room's saved config
   const syncFromAuthoritativeConfig = useCallback((audioConfig) => {
@@ -169,9 +165,8 @@ export function useCompetitionAudio({
     }
   }, []);
 
-  // Preview Theme callback
+  // Preview Theme callback (Host only, plays on Host device without affecting students)
   const previewTheme = useCallback((targetThemeId) => {
-    if (isGameActive) return;
     if (previewingThemeId === targetThemeId) {
       competitionAudioManager.stopPreview(true);
       setPreviewingThemeId(null);
@@ -186,11 +181,10 @@ export function useCompetitionAudio({
       setPreviewingThemeId(targetThemeId);
       setPreviewingTrackId(null);
     }
-  }, [isGameActive, previewingThemeId]);
+  }, [previewingThemeId]);
 
-  // Preview Individual Track callback
+  // Preview Individual Track callback (Host only, plays on Host device without affecting students)
   const previewTrack = useCallback((targetTrackId) => {
-    if (isGameActive) return;
     if (previewingTrackId === targetTrackId) {
       competitionAudioManager.stopPreview(true);
       setPreviewingTrackId(null);
@@ -205,22 +199,13 @@ export function useCompetitionAudio({
       setPreviewingTrackId(targetTrackId);
       setPreviewingThemeId(null);
     }
-  }, [isGameActive, previewingTrackId]);
+  }, [previewingTrackId]);
 
   const stopPreview = useCallback(() => {
     competitionAudioManager.stopPreview(true);
     setPreviewingThemeId(null);
     setPreviewingTrackId(null);
   }, []);
-
-  // Disallow preview during active game
-  useEffect(() => {
-    if (isGameActive) {
-      competitionAudioManager.stopPreview(false);
-      setPreviewingThemeId(null);
-      setPreviewingTrackId(null);
-    }
-  }, [isGameActive]);
 
   // Explicit unlock callback on user gesture (Top-bar button or Start Session click)
   const unlockAudio = useCallback(async () => {

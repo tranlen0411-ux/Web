@@ -51,6 +51,10 @@ const rpcMigrationSql = fs.readFileSync(
   path.join(ROOT_DIR, 'supabase/migrations/20261015000001_competition_v1_audio_config_table.sql'),
   'utf8'
 );
+const liveSyncMigrationSql = fs.readFileSync(
+  path.join(ROOT_DIR, 'supabase/migrations/20261018000001_competition_v1_r19_live_audio_sync.sql'),
+  'utf8'
+);
 
 test('R19 AUDIO SYNCHRONIZATION & COMPLETE SESSION ISOLATION REGRESSION SUITE', async (t) => {
 
@@ -359,28 +363,28 @@ test('R19 AUDIO SYNCHRONIZATION & COMPLETE SESSION ISOLATION REGRESSION SUITE', 
   });
 
   // =========================================================================
-  // TEST 7: Không cho đổi nhạc khi trận đấu đang chạy (Frontend + RPC Server Guard)
+  // TEST 7: Cho phép đổi nhạc khi trận đấu đang chạy (Live Music Sync Frontend + RPC Server Guard)
   // =========================================================================
-  await t.test('Test 7: Không cho đổi nhạc khi trận đấu đang chạy (Frontend Guard + RPC Server Guard)', () => {
+  await t.test('Test 7: Cho phép đổi nhạc khi trận đấu đang chạy (Live Music Sync Frontend + RPC Server Guard)', () => {
     assert.ok(
       hostAudioHookSrc.includes('const isGameActive = status === \'in_progress\' || status === \'paused\';'),
       'useCompetitionAudio must define isGameActive'
     );
     assert.ok(
-      hostAudioHookSrc.includes('if (isGameActive) return;'),
-      'useCompetitionAudio setters must return early when isGameActive'
+      !hostAudioHookSrc.includes('if (isGameActive) return;'),
+      'useCompetitionAudio setters must allow music selection during active game'
     );
     assert.ok(
-      hostControlsSrc.includes('disabled={isGameActive}'),
-      'All track selection buttons must be disabled during active game'
+      !hostControlsSrc.includes('disabled={isGameActive}'),
+      'Track selection buttons must not be disabled during active game'
     );
     assert.ok(
-      rpcMigrationSql.includes("IF v_session.status <> 'waiting' THEN"),
-      'RPC competition_host_set_audio_config must verify session status is waiting'
+      liveSyncMigrationSql.includes("v_session.status NOT IN ('waiting', 'in_progress', 'paused')"),
+      'RPC competition_host_set_audio_config must allow waiting, in_progress, and paused'
     );
     assert.ok(
-      rpcMigrationSql.includes('INVALID_SESSION_STATE'),
-      'RPC must return INVALID_SESSION_STATE if attempted during match'
+      liveSyncMigrationSql.includes('INVALID_SESSION_STATE'),
+      'RPC must return INVALID_SESSION_STATE if attempted on finished or cancelled sessions'
     );
   });
 

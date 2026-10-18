@@ -578,9 +578,10 @@ export function CompetitionHostPage() {
     audioControls.customQuestionTrackId,
   ]);
 
-  // Track unsynced audio configuration changes while in WAITING lobby
+  // Track unsynced audio configuration changes while in WAITING lobby OR LIVE MATCH (in_progress / paused)
   useEffect(() => {
-    if (!activeSessionId || snapshot?.status !== 'waiting') return;
+    if (!activeSessionId) return;
+    if (snapshot?.status !== 'waiting' && snapshot?.status !== 'in_progress' && snapshot?.status !== 'paused') return;
     if (audioConfigStatus === 'saving') return;
     if (!lastSavedAudioConfigRef.current) return;
 
@@ -1677,7 +1678,9 @@ export function CompetitionHostPage() {
     }
   };
 
-  const handleRetrySaveAudioConfig = handleSaveAndSyncAudioConfig;
+  const handleRetrySaveAudioConfig = async () => {
+    await handleSaveAndSyncAudioConfig();
+  };
 
   // Explicit Host confirmation to apply default in_class config for legacy R18 waiting sessions
   const handleApplyLegacyAudioConfig = async () => {

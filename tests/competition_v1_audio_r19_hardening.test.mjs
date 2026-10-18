@@ -28,6 +28,10 @@ const migrationSql = fs.readFileSync(
   path.join(ROOT_DIR, 'supabase/migrations/20261015000001_competition_v1_audio_config_table.sql'),
   'utf8'
 );
+const liveSyncMigrationSql = fs.readFileSync(
+  path.join(ROOT_DIR, 'supabase/migrations/20261018000001_competition_v1_r19_live_audio_sync.sql'),
+  'utf8'
+);
 const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/competitionClient.js'), 'utf8');
 const hostPageSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/pages/CompetitionHostPage.jsx'), 'utf8');
 const studentPageSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/pages/CompetitionStudentPage.jsx'), 'utf8');
@@ -70,8 +74,8 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
     assert.match(migrationSql, /SECURITY DEFINER/, 'Must be SECURITY DEFINER');
     assert.match(migrationSql, /SET search_path = ''/, 'Must enforce clean search_path');
     assert.match(migrationSql, /FOR UPDATE/, 'Row lock present');
-    assert.match(migrationSql, /v_session\.host_id <> v_caller_id/, 'Host ownership check present');
-    assert.match(migrationSql, /v_session\.status <> 'waiting'/, 'Waiting status guard present');
+    assert.match(migrationSql, /v_session\.status <> 'waiting'/, 'Historical waiting status guard present');
+    assert.match(liveSyncMigrationSql, /v_session\.status NOT IN \('waiting', 'in_progress', 'paused'\)/, 'Live sync migration allows in_progress and paused');
     assert.match(migrationSql, /GRANT EXECUTE ON FUNCTION public\.competition_host_set_audio_config.*TO authenticated;/, 'Granted to authenticated');
     assert.match(migrationSql, /REVOKE EXECUTE ON FUNCTION public\.competition_host_set_audio_config.*FROM PUBLIC, anon;/, 'Revoked from anon');
   });
@@ -110,8 +114,9 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       GRANT SELECT ON public.profiles TO anon, authenticated;
     `);
 
-    // Apply the full R19 migration draft
+    // Apply the full R19 baseline migration draft and live sync patch
     await db.exec(migrationSql);
+    await db.exec(liveSyncMigrationSql);
 
     await pt.test('6.1. Validator rejects invalid payloads and accepts V2 contract', async () => {
       async function validate(json) {
@@ -191,13 +196,15 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       const otherHostId = '22222222-2222-2222-2222-222222222222';
       const sessionId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
       const inProgressSessionId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+      const finishedSessionId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
       await db.exec(`
         INSERT INTO public.profiles (id, role) VALUES ('${hostId}', 'teacher'), ('${otherHostId}', 'teacher');
         INSERT INTO public.competition_sessions (id, host_id, room_code, title, status)
         VALUES 
           ('${sessionId}', '${hostId}', 'ROOM01', 'Test Waiting Room', 'waiting'),
-          ('${inProgressSessionId}', '${hostId}', 'ROOM02', 'Test Active Room', 'in_progress');
+          ('${inProgressSessionId}', '${hostId}', 'ROOM02', 'Test Active Room', 'in_progress'),
+          ('${finishedSessionId}', '${hostId}', 'ROOM03', 'Test Finished Room', 'finished');
       `);
 
       const validConfig = `'{"mode":"in_class","selection_mode":"theme","theme_id":"classroom_chill","custom_lobby_track_id":null,"custom_question_track_id":null}'::jsonb`;
@@ -228,10 +235,15 @@ test('COMPETITION V1 AUDIO R19 HARDENING SUITE', async (t) => {
       assert.equal(forbiddenRes.success, false);
       assert.equal(forbiddenRes.error_code, 'FORBIDDEN');
 
-      // Case: In-progress session -> INVALID_SESSION_STATE
-      const stateRes = await callAs(hostId, `SELECT public.competition_host_set_audio_config('${inProgressSessionId}', ${validConfig}) as r;`);
-      assert.equal(stateRes.success, false);
-      assert.equal(stateRes.error_code, 'INVALID_SESSION_STATE');
+      // Case: In-progress session with live sync migration -> SUCCESS
+      const inProgressRes = await callAs(hostId, `SELECT public.competition_host_set_audio_config('${inProgressSessionId}', ${validConfig}) as r;`);
+      assert.equal(inProgressRes.success, true);
+      assert.equal(inProgressRes.session_id, inProgressSessionId);
+
+      // Case: Finished session -> INVALID_SESSION_STATE
+      const finishedRes = await callAs(hostId, `SELECT public.competition_host_set_audio_config('${finishedSessionId}', ${validConfig}) as r;`);
+      assert.equal(finishedRes.success, false);
+      assert.equal(finishedRes.error_code, 'INVALID_SESSION_STATE');
 
       // Case: Valid host on waiting session -> SUCCESS
       const successRes = await callAs(hostId, `SELECT public.competition_host_set_audio_config('${sessionId}', ${validConfig}) as r;`);

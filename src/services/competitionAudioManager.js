@@ -500,7 +500,7 @@ class CompetitionAudioManager {
    * Preview a theme's lobby track safely
    */
   previewTheme(themeId, onEnd) {
-    if (this.isGamePaused || this.currentTrack === 'question_active') {
+    if (this.isGamePaused) {
       return false;
     }
     if (!themeId || themeId === 'none' || !isValidThemeId(themeId)) {
@@ -520,7 +520,7 @@ class CompetitionAudioManager {
    * Preview an individual heroic track safely
    */
   previewTrack(trackId, onEnd) {
-    if (this.isGamePaused || this.currentTrack === 'question_active') {
+    if (this.isGamePaused) {
       return false;
     }
     const track = getHeroicTrackById(trackId);
@@ -716,16 +716,13 @@ class CompetitionAudioManager {
       } catch (_err) {}
       this.activeAudio = null;
     }
-    if (this.currentTrack) {
-      const src = this.getTrackSrc(this.currentTrack);
-      const audio = src && this.audioElements.get(src);
-      if (audio) {
-        try {
-          audio.pause();
-          audio.currentTime = 0;
-        } catch (_err) {}
-      }
-    }
+    // Rigorously pause all tracked audio elements to guarantee zero concurrent audio playback
+    this.audioElements.forEach((audio) => {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch (_err) {}
+    });
   }
 
   /**

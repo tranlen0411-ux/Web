@@ -132,6 +132,9 @@ export function HostAudioControls({
           <VolumeX className="w-4 h-4 text-slate-400" />
         )}
         <span className="hidden sm:inline">Âm thanh</span>
+        {audioConfigStatus === 'unsynced' && (
+          <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Có thay đổi nhạc chưa lưu & đồng bộ" />
+        )}
         <ChevronDown className="w-3.5 h-3.5 opacity-70" />
       </button>
 
@@ -245,8 +248,8 @@ export function HostAudioControls({
             </div>
           </div>
 
-          {/* SYNC STATUS BAR: When unsynced or saving in Waiting room */}
-          {!isGameActive && audioConfigStatus === 'unsynced' && (
+          {/* SYNC STATUS BAR: When unsynced or saving (both in Waiting and Live Game) */}
+          {audioConfigStatus === 'unsynced' && (
             <div className="flex items-center justify-between p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 shadow-2xs">
               <div className="flex items-center gap-1.5 font-semibold">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -262,16 +265,32 @@ export function HostAudioControls({
               </button>
             </div>
           )}
-          {!isGameActive && audioConfigStatus === 'saving' && (
+          {audioConfigStatus === 'saving' && (
             <div className="flex items-center gap-2 p-2 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-800 font-semibold animate-pulse">
               <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
               <span>Đang lưu và đồng bộ với phòng thi...</span>
             </div>
           )}
-          {isGameActive && (
-            <div className="flex items-center gap-2 p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-[11px] text-slate-700 font-medium">
-              <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-              <span>Trận đấu đang diễn ra — Nhạc thi đấu đã được khóa cố định cho phòng.</span>
+          {audioConfigStatus === 'failed' && (
+            <div className="flex items-center justify-between p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>Chưa thể lưu cấu hình âm thanh</span>
+              </div>
+              <button
+                type="button"
+                data-testid="popover-btn-retry-save-audio"
+                onClick={onSaveAndSync}
+                className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-xs shadow-xs transition"
+              >
+                Thử lại
+              </button>
+            </div>
+          )}
+          {isGameActive && audioConfigStatus === 'saved' && (
+            <div className="flex items-center gap-2 p-2.5 bg-sky-50 border border-sky-200 rounded-xl text-[11px] text-sky-800 font-medium">
+              <Radio className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+              <span>Trận đấu đang diễn ra • Bạn có thể chọn nhạc mới bất kỳ lúc nào và bấm <strong>Lưu & Đồng bộ</strong> để chuyển bài cho học sinh.</span>
             </div>
           )}
 
@@ -388,12 +407,9 @@ export function HostAudioControls({
                         {hasPreview ? (
                           <button
                             type="button"
-                            disabled={isGameActive}
                             onClick={() => previewTheme && previewTheme(theme.id)}
                             title={
-                              isGameActive
-                                ? 'Không khả dụng khi trận đấu đang diễn ra'
-                                : isPreviewing
+                              isPreviewing
                                 ? 'Dừng nghe thử'
                                 : 'Nghe thử bản nhạc sảnh chờ'
                             }
@@ -430,13 +446,13 @@ export function HostAudioControls({
                         {/* Chọn button */}
                         <button
                           type="button"
-                          disabled={isGameActive || isSelected || !isAvailable}
+                          disabled={isSelected || !isAvailable}
                           onClick={() => setThemeId && setThemeId(theme.id)}
-                          title={isGameActive ? 'Không thể thay đổi bài nhạc khi trận đấu đang diễn ra' : !isAvailable ? 'Học liệu chưa được duyệt' : undefined}
+                          title={!isAvailable ? 'Học liệu chưa được duyệt' : undefined}
                           className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition ${
                             isSelected
                               ? 'bg-amber-200/60 text-amber-900 cursor-default font-bold'
-                              : isGameActive || !isAvailable
+                              : !isAvailable
                               ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
                               : 'bg-amber-500 hover:bg-amber-600 active:scale-95 text-white shadow-xs'
                           }`}
@@ -503,7 +519,6 @@ export function HostAudioControls({
                             {/* Preview button */}
                             <button
                               type="button"
-                              disabled={isGameActive}
                               onClick={() => previewTrack && previewTrack(track.id)}
                               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition ${
                                 isPreviewing
@@ -527,14 +542,10 @@ export function HostAudioControls({
                             {/* Select for Lobby */}
                             <button
                               type="button"
-                              disabled={isGameActive}
                               onClick={() => setCustomLobbyTrack && setCustomLobbyTrack(track.id)}
-                              title={isGameActive ? 'Không thể thay đổi bài nhạc khi trận đấu đang diễn ra' : undefined}
                               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
                                 isLobbySelected
                                   ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
-                                  : isGameActive
-                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
                               }`}
                             >
@@ -544,14 +555,10 @@ export function HostAudioControls({
                             {/* Select for Question */}
                             <button
                               type="button"
-                              disabled={isGameActive}
                               onClick={() => setCustomQuestionTrack && setCustomQuestionTrack(track.id)}
-                              title={isGameActive ? 'Không thể thay đổi bài nhạc khi trận đấu đang diễn ra' : undefined}
                               className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
                                 isQuestionSelected
                                   ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                                  : isGameActive
-                                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
                               }`}
                             >
