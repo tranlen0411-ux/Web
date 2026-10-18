@@ -34,7 +34,9 @@ import {
   studentGetRewardTransaction,
 } from '../services/competitionClient.js';
 import { useStudentCompetitionRealtime } from '../hooks/useStudentCompetitionRealtime.js';
+import { useCompetitionStudentAudio } from '../hooks/useCompetitionStudentAudio.js';
 import { StudentQuestionReviewView } from '../components/competition/StudentQuestionReviewView.jsx';
+import { StudentAudioControls } from '../components/competition/StudentAudioControls.jsx';
 
 // ============================================================================
 // STORAGE KEYS & VALIDATION HELPERS (R4 PERSISTENCE CONTRACT & GUEST KEYS)
@@ -295,6 +297,16 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
     if (!interimLeaderboard || !participantId) return null;
     return interimLeaderboard.find((item) => item.participant_id === participantId) || null;
   }, [interimLeaderboard, participantId]);
+
+  // Competition Student Audio Hook (R19 Online / In-Class State Machine)
+  const studentAudio = useCompetitionStudentAudio({
+    sessionId,
+    status: sessionData?.status || 'waiting',
+    currentQuestionId: currentQuestion?.id || null,
+    timeLeftSeconds,
+    isInterimLeaderboardActive,
+    audioConfig: sessionData?.audio_config || null,
+  });
 
   const [isRetryingLeaderboard, setIsRetryingLeaderboard] = useState(false);
 
@@ -1428,8 +1440,11 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
                 {connectionStatus === 'connected' ? 'Đã kết nối' : 'Đang đồng bộ...'}
               </span>
             </div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-100 rounded-full text-sky-800 text-xs font-black font-mono">
-              Phòng: {sessionData.room_code}
+            <div className="flex items-center gap-2">
+              <StudentAudioControls {...studentAudio} />
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-100 rounded-full text-sky-800 text-xs font-black font-mono">
+                Phòng: {sessionData.room_code}
+              </div>
             </div>
           </div>
 
@@ -2021,7 +2036,7 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
       {/* Main Arena Card */}
       <div className="bg-white rounded-3xl border-4 border-sky-200 shadow-md overflow-hidden">
         {/* Arena Top Status Header */}
-        <div className="px-6 py-4 bg-slate-50 border-b-2 border-slate-100 flex items-center justify-between">
+        <div className="px-6 py-4 bg-slate-50 border-b-2 border-slate-100 flex items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <span className="px-3.5 py-1.5 bg-sky-500 text-white font-black text-xs sm:text-sm rounded-xl shadow-sm">
               Câu {currentQuestion?.question_order || sessionData?.current_question_index || 1}
@@ -2031,27 +2046,30 @@ export const CompetitionStudentPage = ({ isPublicJoin = false }) => {
             </span>
           </div>
 
-          {/* Countdown Clock or Closed Status Pill */}
-          {timeLeftSeconds !== null && !isInterimLeaderboardActive && (
-            <div
-              className={`flex items-center gap-2 px-4 py-1.5 rounded-xl font-black text-sm sm:text-base border-2 ${
-                timeLeftSeconds <= 5
-                  ? 'bg-rose-50 text-rose-600 border-rose-300 animate-bounce'
-                  : timeLeftSeconds <= 10
-                  ? 'bg-amber-50 text-amber-700 border-amber-300'
-                  : 'bg-sky-50 text-sky-700 border-sky-300'
-              }`}
-            >
-              <Clock className="w-4 h-4" />
-              <span>{timeLeftSeconds}s</span>
-            </div>
-          )}
-          {isInterimLeaderboardActive && (
-            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-black text-xs sm:text-sm bg-emerald-50 text-emerald-700 border-2 border-emerald-300">
-              <Trophy className="w-4 h-4 text-amber-500" />
-              <span>Đã chốt câu hỏi</span>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <StudentAudioControls {...studentAudio} />
+            {/* Countdown Clock or Closed Status Pill */}
+            {timeLeftSeconds !== null && !isInterimLeaderboardActive && (
+              <div
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-xl font-black text-sm sm:text-base border-2 ${
+                  timeLeftSeconds <= 5
+                    ? 'bg-rose-50 text-rose-600 border-rose-300 animate-bounce'
+                    : timeLeftSeconds <= 10
+                    ? 'bg-amber-50 text-amber-700 border-amber-300'
+                    : 'bg-sky-50 text-sky-700 border-sky-300'
+                }`}
+              >
+                <Clock className="w-4 h-4" />
+                <span>{timeLeftSeconds}s</span>
+              </div>
+            )}
+            {isInterimLeaderboardActive && (
+              <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-black text-xs sm:text-sm bg-emerald-50 text-emerald-700 border-2 border-emerald-300">
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <span>Đã chốt câu hỏi</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Interim Leaderboard View OR Question & Options Content */}
