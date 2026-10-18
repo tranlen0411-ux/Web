@@ -14,6 +14,21 @@ const PROD_REF = 'nddimmxpymipalpxlops';
  */
 function runClientSimulation(envOverrides) {
   const runnerScript = `
+    // Test environment stub: Provide a minimal, inert WebSocket stub when running in Node.js < 22 without native WebSocket.
+    // Strictly used for environment detection testing without initiating any network connection.
+    if (typeof globalThis.WebSocket === 'undefined') {
+      class TestWebSocketStub {
+        constructor() {
+          this.readyState = 0;
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        send() {}
+        close() {}
+      }
+      globalThis.WebSocket = TestWebSocketStub;
+    }
+
     const { supabase, supabaseUrl, supabaseAnonKey, isSupabaseConfigured, extractProjectRef, detectEnvironment } = await import('./src/lib/supabase.js');
     const { competitionRealtimeClient } = await import('./src/services/competitionClient.js');
 
