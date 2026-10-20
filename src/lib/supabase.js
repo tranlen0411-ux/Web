@@ -28,8 +28,11 @@ function resolveEnv(key) {
  */
 export function extractProjectRef(urlStr) {
   if (!urlStr || typeof urlStr !== 'string') return null;
+  const trimmed = urlStr.trim();
+  // Reject quotes explicitly (strict validation - malformed input must be blocked, not auto-stripped)
+  if (trimmed.includes('"') || trimmed.includes("'")) return null;
   try {
-    const parsed = new URL(urlStr);
+    const parsed = new URL(trimmed);
     if (parsed.protocol !== 'https:') {
       return null;
     }
@@ -125,7 +128,7 @@ if (currentEnv === 'unknown') {
 
 // Validation: URL must parse cleanly, key must be non-empty, and environment must not mismatch
 const isValidUrl = Boolean(detectedRef && !isEnvironmentMismatch);
-const isValidKey = Boolean(trimmedKey && trimmedKey.length > 0);
+const isValidKey = Boolean(trimmedKey && trimmedKey.length > 0 && !trimmedKey.includes('"') && !trimmedKey.includes("'"));
 
 export const isSupabaseConfigured = isValidUrl && isValidKey;
 

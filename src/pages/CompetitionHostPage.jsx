@@ -31,8 +31,7 @@ import {
   PieChart,
   Flame,
   Star,
-  ArrowLeftRight,
-  Volume2
+  ArrowLeftRight
 } from 'lucide-react';
 import {
   hostCreateSession,
@@ -47,10 +46,7 @@ import {
   getHostQuestionResults,
   getHostQuestionResultByOrder,
   getLeaderboardSnapshot,
-  hostGetRewardTransactions,
-  hostSetAudioConfig,
-  DEFAULT_SESSION_AUDIO_CONFIG,
-  getSessionSnapshot
+  hostGetRewardTransactions
 } from '../services/competitionClient.js';
 import { useHostCompetitionPolling, DEFAULT_SUBMISSION_STATS } from '../hooks/useHostCompetitionPolling.js';
 import { HostQuestionAnalyticsView } from '../components/competition/HostQuestionAnalyticsView.jsx';
@@ -66,13 +62,6 @@ import {
 } from '../utils/competitionQuestionAdapters.js';
 import { useCompetitionAudio } from '../hooks/useCompetitionAudio.js';
 import { HostAudioControls } from '../components/competition/HostAudioControls.jsx';
-import { HostAudioLobbyBanner } from '../components/competition/HostAudioLobbyBanner.js';
-import {
-  classifyAudioSnapshotState,
-  isAudioConfigMatching,
-  isValidAudioConfig,
-  resetAudioStateForSessionSwitch
-} from '../services/competitionAudioSync.js';
 
 // Default starter questions for quick session creation
 const DEFAULT_QUESTIONS = [
@@ -210,7 +199,6 @@ export function CompetitionHostPage() {
   const initialResolvedId = getInitialActiveSessionId();
   const [activeSessionId, setActiveSessionId] = useState(initialResolvedId);
   const activeSessionIdRef = useRef(activeSessionId);
-  const prevSessionIdRef = useRef(activeSessionId);
   const restoredSessionPendingValidationRef = useRef(Boolean(initialResolvedId));
 
   const [createdQuestionCount, setCreatedQuestionCount] = useState(3);
@@ -243,7 +231,6 @@ export function CompetitionHostPage() {
     } catch (_e) {}
 
     activeSessionIdRef.current = null;
-    prevSessionIdRef.current = null;
     setActiveSessionId(null);
     restoredSessionPendingValidationRef.current = false;
     setQuestions(DEFAULT_QUESTIONS);
@@ -268,19 +255,6 @@ export function CompetitionHostPage() {
     setRewardLedgerError(null);
     latestRewardRequestIdRef.current++;
     isFinishingSessionRef.current = false;
-
-    // Reset audio state to idle on returning to setup
-    const audioReset = resetAudioStateForSessionSwitch({
-      activeSessionIdRef,
-      nextSessionId: null,
-      latestAudioConfigRequestIdRef,
-      pendingAudioConfigRef,
-      lastSavedConfigRef: lastSavedAudioConfigRef,
-      lastAudioConfigSavedAtRef,
-    });
-    setAudioConfigStatus(audioReset.nextStatus);
-    setAudioConfigError(audioReset.nextError);
-    setCompetitionAudioMode(audioReset.nextMode);
 
     if (failureReason) {
       showToast(failureReason, 'error');
@@ -334,37 +308,16 @@ export function CompetitionHostPage() {
 
   // Clear / isolate in-memory cache when active session changes (Phase 7 & Phase 9)
   useEffect(() => {
-    const isSessionSwitch = prevSessionIdRef.current !== activeSessionId;
-    prevSessionIdRef.current = activeSessionId;
-
-    if (isSessionSwitch) {
-      historicalResultsCacheRef.current.clear();
-      orderToQuestionIdMapRef.current.clear();
-      inFlightResultsRef.current.clear();
-      setHistoricalError(null);
-      setLoadingOrder(null);
-      setRewardTransactions([]);
-      setIsRewardLedgerLoading(false);
-      setRewardLedgerError(null);
-      latestRewardRequestIdRef.current++;
-      isFinishingSessionRef.current = false;
-
-      // Invalidate any in-flight audio requests belonging to the previous session
-      latestAudioConfigRequestIdRef.current++;
-
-      // Production session switch isolation:
-      const reset = resetAudioStateForSessionSwitch({
-        activeSessionIdRef,
-        nextSessionId: activeSessionId,
-        latestAudioConfigRequestIdRef,
-        pendingAudioConfigRef,
-        lastSavedConfigRef: lastSavedAudioConfigRef,
-        lastAudioConfigSavedAtRef,
-      });
-      setAudioConfigStatus(reset.nextStatus);
-      setAudioConfigError(reset.nextError);
-      setCompetitionAudioMode(reset.nextMode);
-    }
+    historicalResultsCacheRef.current.clear();
+    orderToQuestionIdMapRef.current.clear();
+    inFlightResultsRef.current.clear();
+    setHistoricalError(null);
+    setLoadingOrder(null);
+    setRewardTransactions([]);
+    setIsRewardLedgerLoading(false);
+    setRewardLedgerError(null);
+    latestRewardRequestIdRef.current++;
+    isFinishingSessionRef.current = false;
   }, [activeSessionId]);
 
   // Setup Form State
@@ -373,13 +326,6 @@ export function CompetitionHostPage() {
   const [maxParticipants, setMaxParticipants] = useState(30);
   const [reviewEnabled, setReviewEnabled] = useState(false);
   const [rewardEnabled, setRewardEnabled] = useState(false);
-  const [competitionAudioMode, setCompetitionAudioMode] = useState('in_class'); // 'in_class' | 'online'
-  const [audioConfigStatus, setAudioConfigStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'failed' | 'legacy_missing'
-  const [audioConfigError, setAudioConfigError] = useState(null);
-  const pendingAudioConfigRef = useRef(null);
-  const latestAudioConfigRequestIdRef = useRef(0);
-  const lastSavedAudioConfigRef = useRef(null);
-  const lastAudioConfigSavedAtRef = useRef(0);
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [isQuestionBankModalOpen, setIsQuestionBankModalOpen] = useState(false);
   const [isImportExcelModalOpen, setIsImportExcelModalOpen] = useState(false);
@@ -404,51 +350,6 @@ export function CompetitionHostPage() {
     refreshNow,
     setSnapshot
   } = useHostCompetitionPolling(activeSessionId);
-
-  // Synchronize audio configuration status from restored snapshot using pure classification
-  useEffect(() => {
-    const decision = classifyAudioSnapshotState({
-      snapshot,
-      activeSessionId,
-      currentStatus: audioConfigStatus,
-      pendingAudioConfig: pendingAudioConfigRef.current,
-      lastSavedConfig: lastSavedAudioConfigRef.current,
-      lastSavedAt: lastAudioConfigSavedAtRef.current,
-    });
-
-    if (decision.shouldClearPending) {
-      pendingAudioConfigRef.current = null;
-    }
-    if (decision.nextStatus !== null) {
-      setAudioConfigStatus(decision.nextStatus);
-    }
-    if (decision.nextMode && !pendingAudioConfigRef.current) {
-      setCompetitionAudioMode(decision.nextMode);
-    }
-    if (decision.nextError !== null) {
-      setAudioConfigError(decision.nextError);
-    } else if (decision.nextStatus === 'saved') {
-      setAudioConfigError(null);
-    }
-    if (decision.nextStatus === 'saved' && snapshot?.audio_config_persisted) {
-      lastSavedAudioConfigRef.current = snapshot.audio_config;
-      const snapshotAudioTimestamp = snapshot._audio_fetched_at || snapshot._fetched_at;
-      if (snapshotAudioTimestamp) {
-        lastAudioConfigSavedAtRef.current = Math.max(lastAudioConfigSavedAtRef.current, snapshotAudioTimestamp);
-      }
-    }
-  }, [
-    snapshot?.id,
-    snapshot?.status,
-    snapshot?.audio_config_persisted,
-    snapshot?.audio_config_state,
-    snapshot?.audio_config_error,
-    snapshot?.audio_config,
-    snapshot?._fetched_at,
-    snapshot?._audio_fetched_at,
-    activeSessionId,
-    audioConfigStatus
-  ]);
 
   // Restored Session Validation Guard (Fail-closed on Authoritative Failure, Retain on Transient Error)
   useEffect(() => {
@@ -559,54 +460,6 @@ export function CompetitionHostPage() {
     finishedTab,
     isReviewingHistory,
   });
-
-  // Derive sanitized current host audio configuration
-  const currentHostAudioConfig = useMemo(() => {
-    const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
-    return {
-      mode: competitionAudioMode,
-      selection_mode: currentSelectionMode,
-      theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
-      custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
-      custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
-    };
-  }, [
-    competitionAudioMode,
-    audioControls.selectionMode,
-    audioControls.themeId,
-    audioControls.customLobbyTrackId,
-    audioControls.customQuestionTrackId,
-  ]);
-
-  // Track unsynced audio configuration changes while in WAITING lobby OR LIVE MATCH (in_progress / paused)
-  useEffect(() => {
-    if (!activeSessionId) return;
-    if (snapshot?.status !== 'waiting' && snapshot?.status !== 'in_progress' && snapshot?.status !== 'paused') return;
-    if (audioConfigStatus === 'saving') return;
-    if (!lastSavedAudioConfigRef.current) return;
-
-    const matchesSaved = isAudioConfigMatching(lastSavedAudioConfigRef.current, currentHostAudioConfig);
-    if (!matchesSaved && audioConfigStatus === 'saved') {
-      setAudioConfigStatus('unsynced');
-    } else if (matchesSaved && (audioConfigStatus === 'unsynced' || audioConfigStatus === 'failed')) {
-      setAudioConfigStatus('saved');
-      setAudioConfigError(null);
-    }
-  }, [activeSessionId, snapshot?.status, currentHostAudioConfig, audioConfigStatus]);
-
-  // Synchronize Host local audioControls when restoring from database snapshot
-  const lastSyncedSnapshotConfigRef = useRef(null);
-  useEffect(() => {
-    if (
-      snapshot?.audio_config_persisted === true &&
-      isValidAudioConfig(snapshot.audio_config) &&
-      audioConfigStatus === 'saved' &&
-      !isAudioConfigMatching(lastSyncedSnapshotConfigRef.current, snapshot.audio_config)
-    ) {
-      lastSyncedSnapshotConfigRef.current = snapshot.audio_config;
-      audioControls.syncFromAuthoritativeConfig?.(snapshot.audio_config);
-    }
-  }, [snapshot?.audio_config_persisted, snapshot?.audio_config, audioConfigStatus, audioControls.syncFromAuthoritativeConfig]);
 
   // UI Visibility Contract & Consistency Guard for Live Submission Stats (S2)
   const isSubmissionStatsAuthoritative = Boolean(
@@ -1476,7 +1329,6 @@ export function CompetitionHostPage() {
       if (res.success && newSessionId) {
         restoredSessionPendingValidationRef.current = false;
         activeSessionIdRef.current = newSessionId;
-        prevSessionIdRef.current = newSessionId;
         setActiveSessionId(newSessionId);
         try {
           if (typeof window !== 'undefined' && isValidSessionUUID(newSessionId)) {
@@ -1504,92 +1356,7 @@ export function CompetitionHostPage() {
         setReviewedQuestionOrder(null);
         setReviewedQuestionResults(null);
         autoResultAttemptRef.current = null;
-
-        // Persist audio configuration using newSessionId with state-tracked retry
-        const currentSelectionMode = audioControls.selectionMode === 'custom' ? 'custom' : 'theme';
-        const audioPayload = {
-          mode: competitionAudioMode,
-          selection_mode: currentSelectionMode,
-          theme_id: currentSelectionMode === 'custom' ? 'none' : (audioControls.themeId || 'classroom_chill'),
-          custom_lobby_track_id: currentSelectionMode === 'custom' ? (audioControls.customLobbyTrackId || 'km_at_launch') : null,
-          custom_question_track_id: currentSelectionMode === 'custom' ? (audioControls.customQuestionTrackId || 'sb_titan') : null,
-        };
-
-        const createRequestId = ++latestAudioConfigRequestIdRef.current;
-        pendingAudioConfigRef.current = audioPayload;
-        setAudioConfigStatus('saving');
-        setAudioConfigError(null);
-
-        let attempts = 0;
-        let saved = false;
-        let lastErrMsg = null;
-
-        while (attempts < 3 && !saved) {
-          attempts++;
-          try {
-            const audioRes = await hostSetAudioConfig({
-              sessionId: newSessionId,
-              audioConfig: audioPayload,
-            });
-            if (activeSessionIdRef.current !== newSessionId || createRequestId !== latestAudioConfigRequestIdRef.current) return;
-            if (audioRes.success) {
-              saved = true;
-            } else {
-              lastErrMsg = audioRes.message || 'Lỗi lưu cấu hình âm thanh.';
-              // Double check via snapshot if it was actually persisted in database with exact matching config
-              try {
-                const verifyRes = await getSessionSnapshot(newSessionId);
-                if (activeSessionIdRef.current !== newSessionId || createRequestId !== latestAudioConfigRequestIdRef.current) return;
-                if (
-                  verifyRes.success &&
-                  verifyRes.data?.audio_config_persisted === true &&
-                  isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
-                ) {
-                  saved = true;
-                  break;
-                }
-              } catch (_vErr) {}
-              if (attempts < 3) {
-                await new Promise((r) => setTimeout(r, attempts * 500));
-              }
-            }
-          } catch (err) {
-            if (activeSessionIdRef.current !== newSessionId || createRequestId !== latestAudioConfigRequestIdRef.current) return;
-            lastErrMsg = err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.';
-            // Timeout/network error: verify if the row actually made it to the DB with exact matching config!
-            try {
-              const verifyRes = await getSessionSnapshot(newSessionId);
-              if (activeSessionIdRef.current !== newSessionId || createRequestId !== latestAudioConfigRequestIdRef.current) return;
-              if (
-                verifyRes.success &&
-                verifyRes.data?.audio_config_persisted === true &&
-                isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
-              ) {
-                saved = true;
-                break;
-              }
-            } catch (_vErr) {}
-
-            if (attempts < 3) {
-              await new Promise((r) => setTimeout(r, attempts * 500));
-            }
-          }
-        }
-
-        if (activeSessionIdRef.current !== newSessionId || createRequestId !== latestAudioConfigRequestIdRef.current) return;
-
-        if (saved) {
-          pendingAudioConfigRef.current = null;
-          lastSavedAudioConfigRef.current = audioPayload;
-          lastAudioConfigSavedAtRef.current = Date.now();
-          setAudioConfigStatus('saved');
-          setAudioConfigError(null);
-          showToast('Tạo phòng thi và lưu cấu hình âm thanh thành công! Mã phòng đã sẵn sàng.', 'success');
-        } else {
-          setAudioConfigStatus('failed');
-          setAudioConfigError(lastErrMsg || 'Chưa thể lưu cấu hình âm thanh vào phòng thi.');
-          showToast('Đã tạo phòng thi nhưng chưa thể lưu cấu hình âm thanh. Vui lòng bấm "Thử lại lưu âm thanh" trước khi bắt đầu!', 'error');
-        }
+        showToast('Tạo phòng thi thành công! Mã phòng đã sẵn sàng.', 'success');
       } else {
         setSetupError(res.message || 'Không thể tạo phòng thi. Vui lòng thử lại.');
       }
@@ -1600,148 +1367,9 @@ export function CompetitionHostPage() {
     }
   };
 
-  // Dedicated handler to save & synchronize audio configuration to Supabase
-  const handleSaveAndSyncAudioConfig = async () => {
-    if (!activeSessionIdRef.current || audioConfigStatus === 'saving') return;
-    const targetSessionId = activeSessionIdRef.current;
-    const requestId = ++latestAudioConfigRequestIdRef.current;
-    setAudioConfigStatus('saving');
-    setAudioConfigError(null);
-    const audioPayload = currentHostAudioConfig;
-    pendingAudioConfigRef.current = audioPayload;
-    try {
-      const audioRes = await hostSetAudioConfig({
-        sessionId: targetSessionId,
-        audioConfig: audioPayload,
-      });
-      if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-      if (audioRes.success) {
-        pendingAudioConfigRef.current = null;
-        lastSavedAudioConfigRef.current = audioPayload;
-        lastAudioConfigSavedAtRef.current = Date.now();
-        setAudioConfigStatus('saved');
-        setAudioConfigError(null);
-        showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
-        await refreshNow();
-      } else {
-        // Re-verify from database before concluding failure (must match exact requested config)
-        try {
-          const verifyRes = await getSessionSnapshot(targetSessionId);
-          if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-          if (
-            verifyRes.success &&
-            verifyRes.data?.audio_config_persisted === true &&
-            isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
-          ) {
-            pendingAudioConfigRef.current = null;
-            lastSavedAudioConfigRef.current = audioPayload;
-            lastAudioConfigSavedAtRef.current = Date.now();
-            setAudioConfigStatus('saved');
-            setAudioConfigError(null);
-            showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
-            await refreshNow();
-            return;
-          }
-        } catch (_vErr) {}
-
-        if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-        setAudioConfigStatus('failed');
-        setAudioConfigError(audioRes.message || 'Lỗi lưu cấu hình âm thanh.');
-        showToast(audioRes.message || 'Chưa thể lưu cấu hình âm thanh.', 'error');
-      }
-    } catch (err) {
-      if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-      // Timeout/network error: re-verify from database before concluding failure (must match exact requested config)
-      try {
-        const verifyRes = await getSessionSnapshot(targetSessionId);
-        if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-        if (
-          verifyRes.success &&
-          verifyRes.data?.audio_config_persisted === true &&
-          isAudioConfigMatching(verifyRes.data?.audio_config, audioPayload)
-        ) {
-          pendingAudioConfigRef.current = null;
-          lastSavedAudioConfigRef.current = audioPayload;
-          lastAudioConfigSavedAtRef.current = Date.now();
-          setAudioConfigStatus('saved');
-          setAudioConfigError(null);
-          showToast('Đã lưu và đồng bộ cấu hình âm thanh thành công!', 'success');
-          await refreshNow();
-          return;
-        }
-      } catch (_vErr) {}
-
-      if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-      setAudioConfigStatus('failed');
-      setAudioConfigError(err.message || 'Lỗi mạng khi lưu cấu hình âm thanh.');
-      showToast('Lỗi mạng khi thử lưu cấu hình âm thanh.', 'error');
-    }
-  };
-
-  const handleRetrySaveAudioConfig = async () => {
-    await handleSaveAndSyncAudioConfig();
-  };
-
-  // Explicit Host confirmation to apply default in_class config for legacy R18 waiting sessions
-  const handleApplyLegacyAudioConfig = async () => {
-    if (!activeSessionIdRef.current || audioConfigStatus === 'saving') return;
-    const targetSessionId = activeSessionIdRef.current;
-    const requestId = ++latestAudioConfigRequestIdRef.current;
-    setAudioConfigStatus('saving');
-    setAudioConfigError(null);
-    try {
-      const res = await hostSetAudioConfig({
-        sessionId: targetSessionId,
-        audioConfig: DEFAULT_SESSION_AUDIO_CONFIG,
-      });
-      if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-      if (res.success) {
-        pendingAudioConfigRef.current = null;
-        lastSavedAudioConfigRef.current = DEFAULT_SESSION_AUDIO_CONFIG;
-        lastAudioConfigSavedAtRef.current = Date.now();
-        setAudioConfigStatus('saved');
-        setAudioConfigError(null);
-        setCompetitionAudioMode('in_class');
-        showToast('Đã áp dụng cấu hình âm thanh mặc định (Thi tại lớp) thành công!', 'success');
-      } else {
-        setAudioConfigStatus('legacy_missing');
-        setAudioConfigError(res.message || 'Chưa thể áp dụng cấu hình mặc định.');
-        showToast(res.message || 'Không thể áp dụng cấu hình mặc định.', 'error');
-      }
-    } catch (err) {
-      if (activeSessionIdRef.current !== targetSessionId || requestId !== latestAudioConfigRequestIdRef.current) return;
-      setAudioConfigStatus('legacy_missing');
-      setAudioConfigError(err.message || 'Lỗi mạng khi áp dụng cấu hình mặc định.');
-      showToast('Lỗi mạng khi áp dụng cấu hình mặc định.', 'error');
-    }
-  };
-
   // Host Lifecycle Actions
   const handleStartSession = async () => {
     if (!activeSessionId || actionPending) return;
-
-    // Guard: Audio configuration MUST be confirmed before starting
-    if (audioConfigStatus === 'saving') {
-      showToast('Đang lưu cấu hình âm thanh, vui lòng chờ trong giây lát...', 'info');
-      return;
-    }
-    if (audioConfigStatus === 'legacy_missing') {
-      showToast('Phòng thi chưa có cấu hình âm thanh. Vui lòng bấm "Áp dụng cấu hình mặc định" hoặc lưu cấu hình trước khi bắt đầu.', 'error');
-      return;
-    }
-    if (audioConfigStatus === 'failed') {
-      showToast('Cấu hình âm thanh chưa được lưu thành công. Vui lòng bấm "Thử lại lưu âm thanh" trước khi bắt đầu.', 'error');
-      return;
-    }
-    if (audioConfigStatus === 'unsynced') {
-      showToast('Cấu hình âm thanh đã thay đổi nhưng chưa được lưu và đồng bộ. Vui lòng bấm "Lưu & Đồng bộ âm thanh" trước khi bắt đầu!', 'error');
-      return;
-    }
-    if (audioConfigStatus !== 'saved') {
-      showToast('Cấu hình âm thanh chưa được lưu thành công vào cơ sở dữ liệu. Vui lòng hoàn tất lưu hoặc xác nhận cấu hình âm thanh trước khi bắt đầu.', 'error');
-      return;
-    }
-
     setActionPending(true);
     // Explicit user click gesture: seamlessly unlock audio controller
     audioControls.unlockAudio().catch(() => {});
@@ -1983,11 +1611,7 @@ export function CompetitionHostPage() {
 
           {activeSessionId && (
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-              <HostAudioControls
-                {...audioControls}
-                audioConfigStatus={audioConfigStatus}
-                onSaveAndSync={handleSaveAndSyncAudioConfig}
-              />
+              <HostAudioControls {...audioControls} />
               <button
                 type="button"
                 onClick={() => setIsLeaderboardOpen(!isLeaderboardOpen)}
@@ -2190,62 +1814,6 @@ export function CompetitionHostPage() {
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Hình thức tổ chức & Âm thanh phòng thi */}
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-                <div className="flex items-center gap-2 border-b border-slate-200/80 pb-2">
-                  <Volume2 className="w-4 h-4 text-sky-600" />
-                  <span className="font-bold text-slate-800 text-sm">Hình thức tổ chức &amp; Âm thanh phòng thi (Audio Mode)</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label
-                    className={`p-3.5 rounded-xl border-2 cursor-pointer transition flex items-start gap-3 ${
-                      competitionAudioMode === 'in_class'
-                        ? 'bg-sky-50 border-sky-500 shadow-2xs'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="competitionAudioMode"
-                      value="in_class"
-                      checked={competitionAudioMode === 'in_class'}
-                      onChange={() => setCompetitionAudioMode('in_class')}
-                      className="mt-0.5 text-sky-600 focus:ring-sky-500 cursor-pointer"
-                    />
-                    <div>
-                      <span className="font-bold text-xs text-slate-800 block">Thi tại lớp (In-Class)</span>
-                      <span className="text-[11px] text-slate-500 leading-relaxed block mt-0.5">
-                        Âm thanh chỉ phát qua loa của Giáo viên. Thiết bị học sinh hoàn toàn tắt tiếng để tránh ồn lớp học.
-                      </span>
-                    </div>
-                  </label>
-
-                  <label
-                    className={`p-3.5 rounded-xl border-2 cursor-pointer transition flex items-start gap-3 ${
-                      competitionAudioMode === 'online'
-                        ? 'bg-sky-50 border-sky-500 shadow-2xs'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="competitionAudioMode"
-                      value="online"
-                      checked={competitionAudioMode === 'online'}
-                      onChange={() => setCompetitionAudioMode('online')}
-                      className="mt-0.5 text-sky-600 focus:ring-sky-500 cursor-pointer"
-                    />
-                    <div>
-                      <span className="font-bold text-xs text-slate-800 block">Thi trực tuyến (Online)</span>
-                      <span className="text-[11px] text-slate-500 leading-relaxed block mt-0.5">
-                        Âm thanh phát đồng bộ trên máy Giáo viên và từng thiết bị của Học sinh (học sinh có nút bật/tắt tiếng riêng).
-                      </span>
-                    </div>
-                  </label>
-                </div>
               </div>
 
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
@@ -2696,17 +2264,6 @@ export function CompetitionHostPage() {
               </div>
 
               {/* Lobby Action Controls */}
-              {/* Authoritative Audio Configuration Status Banner in Waiting Lobby */}
-              <HostAudioLobbyBanner
-                audioConfigStatus={audioConfigStatus}
-                audioConfigError={audioConfigError}
-                competitionAudioMode={competitionAudioMode}
-                onSaveAndSync={handleSaveAndSyncAudioConfig}
-                onRetrySave={handleSaveAndSyncAudioConfig}
-                onApplyDefault={handleApplyLegacyAudioConfig}
-                disabled={actionPending}
-              />
-
               <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <button
                   type="button"
@@ -2724,7 +2281,7 @@ export function CompetitionHostPage() {
 
                 <button
                   type="button"
-                  disabled={actionPending || participants.length === 0 || audioConfigStatus !== 'saved'}
+                  disabled={actionPending || participants.length === 0}
                   onClick={handleStartSession}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition disabled:opacity-50"
                 >
