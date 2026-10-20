@@ -7,24 +7,16 @@ import {
   DEFAULT_MUSIC_THEME,
   isValidThemeId,
   isSelectableThemeId,
-  getStoredMusicSelectionMode,
-  setStoredMusicSelectionMode,
-  getStoredCustomLobbyTrack,
-  setStoredCustomLobbyTrack,
-  getStoredCustomQuestionTrack,
-  setStoredCustomQuestionTrack,
-  SELECTION_MODE_CUSTOM,
-  SELECTION_MODE_THEME,
 } from '../services/competitionMusicThemes.js';
 
 /**
- * Custom React Hook for Competition Host Audio (Music & Sound Effects V1 + Heroic Orchestral V2)
+ * Custom React Hook for Competition Host Audio (Music & Sound Effects V1)
  *
  * Guaranteed Invariants:
  * - 100% Host-Only (zero student / spectator audio execution)
  * - Zero second AudioContext (reuses shared context from soundEffects.js)
  * - Respects repository global sound_enabled from SoundContext
- * - Theme selection & custom selection persisted across reloads via localStorage
+ * - Theme selection persisted across reloads via localStorage
  * - Zero extra Competition timer created (presentation-only sync with host timer)
  * - Sound duplicate on polling: PREVENTED BY DESIGN via Compound Event Key guards
  * - Countdown duplicate: PREVENTED BY DESIGN via per-second tick key guards
@@ -53,14 +45,9 @@ export function useCompetitionAudio({
   const [volume, setVolumeState] = useState(0.5);
   const [isUnlocked, setIsUnlocked] = useState(false);
 
-  // Background music selection mode & theme state (persisted in localStorage)
-  const [selectionMode, setSelectionModeState] = useState(() => getStoredMusicSelectionMode());
+  // Background music theme state (persisted in localStorage)
   const [themeId, setThemeIdState] = useState(() => getStoredThemeId());
-  const [customLobbyTrackId, setCustomLobbyTrackIdState] = useState(() => getStoredCustomLobbyTrack());
-  const [customQuestionTrackId, setCustomQuestionTrackIdState] = useState(() => getStoredCustomQuestionTrack());
-
   const [previewingThemeId, setPreviewingThemeId] = useState(null);
-  const [previewingTrackId, setPreviewingTrackId] = useState(null);
 
   // Determine whether active game lifecycle is running
   const isGameActive = status === 'in_progress' || status === 'paused';
@@ -76,11 +63,6 @@ export function useCompetitionAudio({
     competitionAudioManager.setSfxEnabled(isSfxEnabled);
     competitionAudioManager.setVolume(volume);
     competitionAudioManager.setTheme(themeId);
-    competitionAudioManager.setCustomTracks({
-      lobbyTrackId: customLobbyTrackId,
-      questionTrackId: customQuestionTrackId,
-    });
-    competitionAudioManager.setSelectionMode(selectionMode);
   }, []);
 
   // Synchronize local sub-controls into audio manager
@@ -100,112 +82,42 @@ export function useCompetitionAudio({
     competitionAudioManager.setVolume(clamped);
   }, []);
 
-  // Selection mode switcher (available before and during live competition)
-  const setSelectionMode = useCallback((newMode) => {
-    const valid = newMode === SELECTION_MODE_CUSTOM ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
-    setStoredMusicSelectionMode(valid);
-    setSelectionModeState(valid);
-    competitionAudioManager.setSelectionMode(valid);
-  }, []);
-
-  // Theme selection callback (available before and during live competition)
+  // Theme selection callback
   const setThemeId = useCallback((newThemeId) => {
     const valid = isSelectableThemeId(newThemeId) ? newThemeId : DEFAULT_MUSIC_THEME;
     setStoredThemeId(valid);
     setThemeIdState(valid);
-    // Setting theme also activates theme mode
-    setStoredMusicSelectionMode(SELECTION_MODE_THEME);
-    setSelectionModeState(SELECTION_MODE_THEME);
     competitionAudioManager.setTheme(valid);
   }, []);
 
-  // Custom tracks selection callbacks (available before and during live competition)
-  const setCustomLobbyTrack = useCallback((trackId) => {
-    setStoredCustomLobbyTrack(trackId);
-    setCustomLobbyTrackIdState(trackId);
-    setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
-    setSelectionModeState(SELECTION_MODE_CUSTOM);
-    competitionAudioManager.setCustomTracks({ lobbyTrackId: trackId });
-    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
-  }, []);
-
-  const setCustomQuestionTrack = useCallback((trackId) => {
-    setStoredCustomQuestionTrack(trackId);
-    setCustomQuestionTrackIdState(trackId);
-    setStoredMusicSelectionMode(SELECTION_MODE_CUSTOM);
-    setSelectionModeState(SELECTION_MODE_CUSTOM);
-    competitionAudioManager.setCustomTracks({ questionTrackId: trackId });
-    competitionAudioManager.setSelectionMode(SELECTION_MODE_CUSTOM);
-  }, []);
-
-  // Authoritative sync callback: Syncs local state directly from room's saved config
-  const syncFromAuthoritativeConfig = useCallback((audioConfig) => {
-    if (!audioConfig || typeof audioConfig !== 'object') return;
-    const mode = audioConfig.selection_mode === 'custom' ? SELECTION_MODE_CUSTOM : SELECTION_MODE_THEME;
-    setSelectionModeState(mode);
-    setStoredMusicSelectionMode(mode);
-    competitionAudioManager.setSelectionMode(mode);
-
-    if (mode === SELECTION_MODE_CUSTOM) {
-      const lobbyTrack = audioConfig.custom_lobby_track_id || 'km_at_launch';
-      const questionTrack = audioConfig.custom_question_track_id || 'sb_titan';
-      setCustomLobbyTrackIdState(lobbyTrack);
-      setCustomQuestionTrackIdState(questionTrack);
-      setStoredCustomLobbyTrack(lobbyTrack);
-      setStoredCustomQuestionTrack(questionTrack);
-      competitionAudioManager.setCustomTracks({
-        lobbyTrackId: lobbyTrack,
-        questionTrackId: questionTrack,
-      });
-    } else {
-      const theme = isSelectableThemeId(audioConfig.theme_id) ? audioConfig.theme_id : DEFAULT_MUSIC_THEME;
-      setThemeIdState(theme);
-      setStoredThemeId(theme);
-      competitionAudioManager.setTheme(theme);
-    }
-  }, []);
-
-  // Preview Theme callback (Host only, plays on Host device without affecting students)
+  // Preview callback (gesture-initiated, disabled when active game is running)
   const previewTheme = useCallback((targetThemeId) => {
+    if (isGameActive) return;
     if (previewingThemeId === targetThemeId) {
       competitionAudioManager.stopPreview(true);
       setPreviewingThemeId(null);
-      setPreviewingTrackId(null);
       return;
     }
     const success = competitionAudioManager.previewTheme(targetThemeId, () => {
       setPreviewingThemeId(null);
-      setPreviewingTrackId(null);
     });
     if (success) {
       setPreviewingThemeId(targetThemeId);
-      setPreviewingTrackId(null);
     }
-  }, [previewingThemeId]);
-
-  // Preview Individual Track callback (Host only, plays on Host device without affecting students)
-  const previewTrack = useCallback((targetTrackId) => {
-    if (previewingTrackId === targetTrackId) {
-      competitionAudioManager.stopPreview(true);
-      setPreviewingTrackId(null);
-      setPreviewingThemeId(null);
-      return;
-    }
-    const success = competitionAudioManager.previewTrack(targetTrackId, () => {
-      setPreviewingTrackId(null);
-      setPreviewingThemeId(null);
-    });
-    if (success) {
-      setPreviewingTrackId(targetTrackId);
-      setPreviewingThemeId(null);
-    }
-  }, [previewingTrackId]);
+  }, [isGameActive, previewingThemeId]);
 
   const stopPreview = useCallback(() => {
     competitionAudioManager.stopPreview(true);
     setPreviewingThemeId(null);
-    setPreviewingTrackId(null);
   }, []);
+
+  // Disallow preview during active game
+  useEffect(() => {
+    if (isGameActive) {
+      competitionAudioManager.stopPreview(false);
+      setPreviewingThemeId(null);
+    }
+  }, [isGameActive]);
 
   // Explicit unlock callback on user gesture (Top-bar button or Start Session click)
   const unlockAudio = useCallback(async () => {
@@ -414,15 +326,5 @@ export function useCompetitionAudio({
     stopPreview,
     previewingThemeId,
     isGameActive,
-    // New Heroic Orchestral extensions
-    selectionMode,
-    setSelectionMode,
-    customLobbyTrackId,
-    setCustomLobbyTrack,
-    customQuestionTrackId,
-    setCustomQuestionTrack,
-    previewTrack,
-    previewingTrackId,
-    syncFromAuthoritativeConfig,
   };
 }

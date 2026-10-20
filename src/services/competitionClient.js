@@ -517,37 +517,6 @@ export async function hostCloseQuestion(sessionId) {
   }
 }
 
-export const DEFAULT_SESSION_AUDIO_CONFIG = Object.freeze({
-  mode: 'in_class',
-  selection_mode: 'theme',
-  theme_id: 'classroom_chill',
-  custom_lobby_track_id: null,
-  custom_question_track_id: null,
-});
-
-/**
- * Host: Sets audio configuration for a competition session.
- * RPC: public.competition_host_set_audio_config
- */
-export async function hostSetAudioConfig({
-  sessionId,
-  audioConfig,
-}) {
-  if (!sessionId) {
-    return { success: false, error_code: 'INVALID_SESSION_ID', message: 'ID phòng thi không được để trống.' };
-  }
-  try {
-    const { data, error } = await supabase.rpc('competition_host_set_audio_config', {
-      p_session_id: sessionId,
-      p_audio_config: audioConfig,
-    });
-
-    if (error) return normalizeResponse(null, error.message);
-    return normalizeResponse(data, 'Không thể lưu cấu hình âm thanh.');
-  } catch (err) {
-    return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };
-  }
-}
 
 // ============================================================================
 // 4. STUDENT RPC CLIENT METHODS
@@ -685,10 +654,8 @@ export async function getLeaderboardSnapshot({
 
 /**
  * Reads session snapshot directly via RLS protected SELECT.
- * Non-destructively attaches audio_config from dedicated table with in_class fallback.
  */
 export async function getSessionSnapshot(sessionId) {
-  const fetchStartTime = Date.now();
   try {
     const { data, error, status } = await supabase
       .from('competition_sessions')
@@ -706,44 +673,6 @@ export async function getSessionSnapshot(sessionId) {
       };
     }
     if (!data) return { success: false, error_code: 'NOT_FOUND', message: 'Phòng thi không tồn tại.', status: 404 };
-
-    // Attach audio_config: explicitly distinguish persisted record from missing legacy and query errors
-    const audioFetchStartTime = Date.now();
-    try {
-      const { data: audioRow, error: audioErr, status: audioStatus } = await supabase
-        .from('competition_session_audio_configs')
-        .select('config')
-        .eq('session_id', sessionId)
-        .maybeSingle();
-
-      if (!audioErr && audioRow && audioRow.config && typeof audioRow.config === 'object') {
-        data.audio_config = audioRow.config;
-        data.audio_config_persisted = true;
-        data.audio_config_state = 'persisted';
-        data.audio_config_error = null;
-      } else if (!audioErr && !audioRow) {
-        // DB truly does NOT have audio_config row for this session (legacy R18 session)
-        data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
-        data.audio_config_persisted = false;
-        data.audio_config_state = 'missing';
-        data.audio_config_error = null;
-      } else {
-        // Query had an error (401/403/500/network error)
-        data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
-        data.audio_config_persisted = false;
-        data.audio_config_state = 'error';
-        data.audio_config_error = audioErr ? audioErr.message : 'Lỗi truy vấn cấu hình âm thanh';
-        data.audio_config_status = audioStatus || (audioErr?.code === '42501' ? 403 : 500);
-      }
-    } catch (_audioErr) {
-      data.audio_config = DEFAULT_SESSION_AUDIO_CONFIG;
-      data.audio_config_persisted = false;
-      data.audio_config_state = 'error';
-      data.audio_config_error = _audioErr?.message || 'Lỗi kết nối khi tải cấu hình âm thanh';
-    }
-
-    data._fetched_at = fetchStartTime;
-    data._audio_fetched_at = audioFetchStartTime;
     return { success: true, data };
   } catch (err) {
     return { success: false, error_code: 'CLIENT_EXCEPTION', message: err.message };

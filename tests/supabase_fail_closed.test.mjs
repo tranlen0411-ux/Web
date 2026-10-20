@@ -418,4 +418,164 @@ test('SUPABASE FAIL-CLOSED & ENVIRONMENT ISOLATION HARDENING SUITE', async (t) =
     assert.equal(parsed.failedAsExpected, true, 'Vite build BẮT BUỘC ném lỗi [SECURITY BUILD GUARD] khi Prod ref bị build ngoài Prod!');
   });
 
+  // TEST 19: URL chứa dấu ngoặc kép (double quotes hoặc single quotes) -> Runtime FAIL-CLOSED
+  await t.test('19. Runtime Fail-closed khi VITE_SUPABASE_URL chứa dấu ngoặc kép', () => {
+    const resDouble = runClientSimulation({
+      VERCEL_ENV: 'production',
+      VITE_SUPABASE_URL: `"${PROD_REF}.supabase.co"`,
+      VITE_SUPABASE_ANON_KEY: 'valid-test-key'
+    });
+    assert.equal(resDouble.extractedRef, null, 'extractedRef phải là null khi có dấu ngoặc kép kép');
+    assert.equal(resDouble.isSupabaseConfigured, false, 'URL chứa ngoặc kép kép phải fail-closed');
+
+    const resSingle = runClientSimulation({
+      VERCEL_ENV: 'production',
+      VITE_SUPABASE_URL: `'https://${PROD_REF}.supabase.co'`,
+      VITE_SUPABASE_ANON_KEY: 'valid-test-key'
+    });
+    assert.equal(resSingle.extractedRef, null, 'extractedRef phải là null khi có dấu ngoặc đơn');
+    assert.equal(resSingle.isSupabaseConfigured, false, 'URL chứa ngoặc đơn phải fail-closed');
+  });
+
+  // TEST 20: VITE_SUPABASE_ANON_KEY chứa dấu ngoặc kép -> Runtime FAIL-CLOSED
+  await t.test('20. Runtime Fail-closed khi VITE_SUPABASE_ANON_KEY chứa dấu ngoặc kép', () => {
+    const res = runClientSimulation({
+      VERCEL_ENV: 'production',
+      VITE_SUPABASE_URL: `https://${PROD_REF}.supabase.co`,
+      VITE_SUPABASE_ANON_KEY: '"quoted-key"'
+    });
+    assert.equal(res.isSupabaseConfigured, false, 'Key chứa ngoặc kép phải fail-closed');
+    assert.equal(res.supabaseAnonKey, '');
+  });
+
+  // TEST 21: Build Guard chặn đứng build khi VITE_SUPABASE_URL chứa dấu ngoặc kép (Production)
+  await t.test('21. Build Guard chặn đứng build Production khi URL chứa dấu ngoặc kép', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'production',
+        VITE_SUPABASE_URL: '"https://${PROD_REF}.supabase.co"',
+        VITE_SUPABASE_ANON_KEY: 'valid-key'
+      };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('[SECURITY BUILD GUARD]');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build BẮT BUỘC ném lỗi [SECURITY BUILD GUARD] khi URL chứa dấu ngoặc kép!');
+  });
+
+  // TEST 22: Build Guard chặn đứng build khi thiếu VITE_SUPABASE_ANON_KEY trên Vercel Production
+  await t.test('22. Build Guard chặn đứng build Production khi thiếu VITE_SUPABASE_ANON_KEY', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'production',
+        VITE_SUPABASE_URL: 'https://${PROD_REF}.supabase.co'
+      };
+      delete cleanEnv.VITE_SUPABASE_ANON_KEY;
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('VITE_SUPABASE_ANON_KEY');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build Production BẮT BUỘC ném lỗi khi thiếu anon key!');
+  });
+
+  // TEST 23: Build Guard chặn đứng build khi thiếu VITE_SUPABASE_ANON_KEY trên Vercel Preview
+  await t.test('23. Build Guard chặn đứng build Preview khi thiếu VITE_SUPABASE_ANON_KEY', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'preview',
+        VITE_SUPABASE_URL: 'https://${STAGING_REF}.supabase.co'
+      };
+      delete cleanEnv.VITE_SUPABASE_ANON_KEY;
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('VITE_SUPABASE_ANON_KEY');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build Preview BẮT BUỘC ném lỗi khi thiếu anon key!');
+  });
+
+  // TEST 24: Build Guard chặn đứng build khi VITE_SUPABASE_ANON_KEY chứa dấu ngoặc kép trên Vercel Production
+  await t.test('24. Build Guard chặn đứng build Production khi VITE_SUPABASE_ANON_KEY chứa dấu ngoặc kép', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'production',
+        VITE_SUPABASE_URL: 'https://${PROD_REF}.supabase.co',
+        VITE_SUPABASE_ANON_KEY: '"quoted-key"'
+      };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      const failedAsExpected = proc.status !== 0 && proc.stderr.includes('VITE_SUPABASE_ANON_KEY');
+      console.log(JSON.stringify({ failedAsExpected, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.failedAsExpected, true, 'Vite build Production BẮT BUỘC ném lỗi khi key chứa ngoặc kép!');
+  });
+
+  // TEST 25: Build Guard chấp thuận (PASS) khi Vercel Production URL đúng + Anon Key hợp lệ
+  await t.test('25. Build Guard PASS khi Vercel Production URL đúng + Anon Key hợp lệ', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'production',
+        VITE_SUPABASE_URL: 'https://${PROD_REF}.supabase.co',
+        VITE_SUPABASE_ANON_KEY: 'valid-test-anon-key'
+      };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      console.log(JSON.stringify({ passed: proc.status === 0, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.passed, true, 'Vite build Production BẮT BUỘC thành công khi URL và Anon Key hợp lệ!');
+  });
+
+  // TEST 26: Build Guard chấp thuận (PASS) khi Vercel Preview URL đúng (Staging) + Anon Key hợp lệ
+  await t.test('26. Build Guard PASS khi Vercel Preview URL đúng (Staging) + Anon Key hợp lệ', () => {
+    const buildCheckScript = `
+      import { spawnSync } from 'node:child_process';
+      const cleanEnv = {
+        ...process.env,
+        VERCEL_ENV: 'preview',
+        VITE_SUPABASE_URL: 'https://${STAGING_REF}.supabase.co',
+        VITE_SUPABASE_ANON_KEY: 'valid-test-anon-key'
+      };
+      const proc = spawnSync('node', ['./node_modules/vite/bin/vite.js', 'build'], { env: cleanEnv, encoding: 'utf8' });
+      console.log(JSON.stringify({ passed: proc.status === 0, exitCode: proc.status }));
+    `;
+    const checkProc = spawnSync('node', ['--input-type=module', '-e', buildCheckScript], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8',
+    });
+    const parsed = JSON.parse(checkProc.stdout.trim().split('\n').pop());
+    assert.equal(parsed.passed, true, 'Vite build Preview BẮT BUỘC thành công khi URL Staging và Anon Key hợp lệ!');
+  });
+
 });
