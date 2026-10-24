@@ -153,94 +153,85 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
     }
   });
 
-  // 6. Nạp bài giảng vào Content Frame & Resume Stuck Detector (Content-Readiness)
-  let hasSentStuckMessage = false;
+  // 6. Micro-Geometry Activation Engine (Kích hoạt tính toán layout iSpring 1 lần an toàn)
+  let hasGeometryNudgeExecuted = false;
+  let layoutObserver = null;
+  let rafId1 = null;
+  let rafId2 = null;
 
-  function inspectContentState(frameDoc, frameWin) {
-    if (!frameDoc || !frameWin) {
-      return {
-        slideViewCount: 0,
-        visibleSlideViewCount: 0,
-        quizCanvasCount: 0,
-        visibleQuizCanvasCount: 0,
-        buttonCount: 0,
-        relevantButtonCount: 0,
-        navigationShellPresent: false,
-      };
+  function cleanupLayoutActivation() {
+    if (layoutObserver) {
+      layoutObserver.disconnect();
+      layoutObserver = null;
     }
-
-    // 1. .slideView analysis
-    const slideViews = frameDoc.querySelectorAll('.slideView');
-    const slideViewCount = slideViews ? slideViews.length : 0;
-    let visibleSlideViewCount = 0;
-
-    if (slideViews && slideViews.length > 0) {
-      for (let i = 0; i < slideViews.length; i++) {
-        const sv = slideViews[i];
-        const s = frameWin.getComputedStyle(sv);
-        const r = sv.getBoundingClientRect();
-        const ariaHidden = sv.getAttribute('aria-hidden') || 'null';
-        const isVisible = (
-          s.display !== 'none' &&
-          s.visibility !== 'hidden' &&
-          ariaHidden !== 'true' &&
-          (r.width > 0 || r.height > 0 || sv.offsetWidth > 0 || sv.offsetHeight > 0)
-        );
-        if (isVisible) visibleSlideViewCount++;
-      }
+    if (rafId1) {
+      cancelAnimationFrame(rafId1);
+      rafId1 = null;
     }
-
-    // 2. Quiz Canvas analysis (strictly canvas elements to avoid false READY on quiz shell container)
-    const quizCanvases = frameDoc.querySelectorAll('canvas.quizCanvas, canvas');
-    const quizCanvasCount = quizCanvases ? quizCanvases.length : 0;
-    let visibleQuizCanvasCount = 0;
-    if (quizCanvases && quizCanvases.length > 0) {
-      for (let i = 0; i < quizCanvases.length; i++) {
-        const cv = quizCanvases[i];
-        const cs = frameWin.getComputedStyle(cv);
-        const cr = cv.getBoundingClientRect();
-        if (
-          cs.display !== 'none' &&
-          cs.visibility !== 'hidden' &&
-          (cr.width > 0 || cr.height > 0 || cv.offsetWidth > 0 || cv.offsetHeight > 0)
-        ) {
-          visibleQuizCanvasCount++;
-        }
-      }
+    if (rafId2) {
+      cancelAnimationFrame(rafId2);
+      rafId2 = null;
     }
-
-    // 3. Navigation & Button analysis (Submit, Next, Prev, Previous, etc.)
-    const allButtons = frameDoc.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"], a.btn, [class*="button"], [class*="btn"]');
-    const buttonCount = allButtons ? allButtons.length : 0;
-    const relevantButtons = [];
-    const navPatterns = /submit|nộp|next|tiếp|prev|previous|quay lại|trước|start|bắt đầu|finish|hoàn thành/i;
-
-    if (allButtons && allButtons.length > 0) {
-      for (let i = 0; i < allButtons.length; i++) {
-        const btn = allButtons[i];
-        const text = (btn.innerText || btn.textContent || btn.value || '').trim().substring(0, 30);
-        const ariaLabel = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').trim();
-        const combined = `${text} ${ariaLabel} ${btn.className}`;
-
-        if (navPatterns.test(combined)) {
-          relevantButtons.push(btn);
-        }
-      }
-    }
-
-    const navigationShellPresent = (relevantButtons.length > 0) || (buttonCount >= 2);
-
-    return {
-      slideViewCount,
-      visibleSlideViewCount,
-      quizCanvasCount,
-      visibleQuizCanvasCount,
-      buttonCount,
-      relevantButtonCount: relevantButtons.length,
-      navigationShellPresent,
-    };
   }
 
+  function executeMicroGeometryNudge() {
+    if (hasGeometryNudgeExecuted || !contentFrame) return;
+    hasGeometryNudgeExecuted = true;
+    cleanupLayoutActivation();
+
+    const originalWidth = contentFrame.style.width || '';
+    const originalMaxWidth = contentFrame.style.maxWidth || '';
+
+    // rAF 1: Tạo độ lệch kích thước thật đúng 1px
+    rafId1 = requestAnimationFrame(() => {
+      if (!contentFrame) return;
+      contentFrame.style.width = 'calc(100% - 1px)';
+
+      // rAF 2: Hoàn trả chính xác 100% style ban đầu sau khi browser trigger viewport resize event
+      rafId2 = requestAnimationFrame(() => {
+        if (!contentFrame) return;
+        contentFrame.style.width = originalWidth;
+        contentFrame.style.maxWidth = originalMaxWidth;
+        console.log('📐 [SCORM Player] Micro-geometry layout activation completed successfully (1px delta reverted).');
+      });
+    });
+  }
+
+  function scheduleLayoutActivation() {
+    if (hasGeometryNudgeExecuted || !contentFrame) return;
+
+    const width = contentFrame.clientWidth;
+    const height = contentFrame.clientHeight;
+
+    // Nếu iframe đã có kích thước thực tế hợp lệ (> 1px) -> Thực thi ngay lập tức
+    if (width > 1 && height > 0) {
+      executeMicroGeometryNudge();
+      return;
+    }
+
+    // Nếu chưa có kích thước (đang mount hoặc CSS transition) -> Dùng ResizeObserver đợi đo lường hợp lệ đầu tiên
+    if (typeof ResizeObserver !== 'undefined') {
+      cleanupLayoutActivation();
+      layoutObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const cr = entry.contentRect;
+          if (cr && cr.width > 1 && cr.height > 0) {
+            executeMicroGeometryNudge();
+            break;
+          }
+        }
+      });
+      layoutObserver.observe(contentFrame);
+    } else {
+      // Fallback nếu môi trường không có ResizeObserver
+      executeMicroGeometryNudge();
+    }
+  }
+
+  window.addEventListener('pagehide', cleanupLayoutActivation);
+  window.addEventListener('beforeunload', cleanupLayoutActivation);
+
+  // 7. Nạp bài giảng vào Content Frame
   if (contentFrame) {
     contentFrame.onload = () => {
       console.log('🎯 [SCORM Player] SCO Content loaded successfully into frame from Same-Origin Gateway.');
@@ -250,65 +241,8 @@ import { createScorm12Api, createScorm2004Api } from './scormApi.js';
         window.parent.postMessage({ type: 'SCORM_LOADED', payload: { scoUrl: finalScoUrl } }, parentOrigin);
       }
 
-      // Bounded polling kiểm tra trạng thái Resume Stuck (250ms mỗi lần, tối đa 4 giây)
-      const is2004 = scormVersion === '2004' || String(scormVersion).startsWith('2004');
-      const activeApi = is2004 ? window.API_1484_11 : window.API;
-      const initialEntry = activeApi?._getCmi ? (activeApi._getCmi()['cmi.entry'] || activeApi._getCmi()['cmi.core.entry']) : '';
-      const isResume = (initialEntry === 'resume' || (persistedTracking && Object.keys(persistedTracking).length > 0));
-
-      if (isResume) {
-        let pollCount = 0;
-        const maxPolls = 16; // 16 * 250ms = 4000ms (4 seconds max)
-        const pollInterval = 250;
-
-        const checkResumeStuck = () => {
-          if (hasSentStuckMessage) return;
-
-          pollCount++;
-          const currentFrameWin = contentFrame.contentWindow;
-          const currentFrameDoc = contentFrame.contentDocument || currentFrameWin?.document;
-
-          if (!currentFrameDoc || !currentFrameWin) {
-            if (pollCount < maxPolls) {
-              setTimeout(checkResumeStuck, pollInterval);
-            }
-            return;
-          }
-
-          const state = inspectContentState(currentFrameDoc, currentFrameWin);
-
-          // Content được coi là READY nếu có ít nhất một visible .slideView HOẶC visible quiz canvas
-          const isContentReady = (state.visibleSlideViewCount > 0 || state.visibleQuizCanvasCount > 0);
-
-          if (isContentReady) {
-            // Đã có nội dung visible -> Layout hoạt động tốt, KHÔNG gửi stuck
-            return;
-          }
-
-          // Chưa có nội dung hiển thị: Tiếp tục poll cho đến khi hết giới hạn bounded polling
-          if (pollCount < maxPolls) {
-            setTimeout(checkResumeStuck, pollInterval);
-            return;
-          }
-
-          // Bounded polling kết thúc (pollCount >= maxPolls) mà:
-          // isResume = true
-          // navigationShellPresent = true
-          // visibleSlideViewCount = 0
-          // visibleQuizCanvasCount = 0
-          // -> Coi là content stuck và gửi SCORM_RESUME_LAYOUT_STUCK đúng 1 lần
-          if (isResume && state.navigationShellPresent && state.visibleSlideViewCount === 0 && state.visibleQuizCanvasCount === 0) {
-            hasSentStuckMessage = true;
-            console.log('🔄 [SCORM Player] Resume stuck detected (navigation shell present, 0 visible content). Sending SCORM_RESUME_LAYOUT_STUCK to parent...');
-
-            if (window.parent && window.parent !== window && parentOrigin && parentOrigin !== '*') {
-              window.parent.postMessage({ type: 'SCORM_RESUME_LAYOUT_STUCK' }, parentOrigin);
-            }
-          }
-        };
-
-        setTimeout(checkResumeStuck, pollInterval);
-      }
+      // Kích hoạt Micro-Geometry Layout Engine sau khi SCO hoàn tất nạp DOM
+      scheduleLayoutActivation();
     };
 
     contentFrame.onerror = (err) => {
