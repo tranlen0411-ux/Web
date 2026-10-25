@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SoundToggle } from './SoundToggle';
+import { NotificationBell } from '../notifications/NotificationBell';
 import { useSound } from '../../context/SoundContext';
 import { formatClassLabel } from '../../utils/helpers';
 import { ChangePasswordModal } from './ChangePasswordModal';
@@ -304,6 +305,9 @@ export const Navbar = () => {
         {/* THÔNG TIN NGƯỜI DÙNG & ÂM THANH */}
         <div className="flex items-center gap-3">
           <SoundToggle />
+
+          {/* CHUÔNG THÔNG BÁO CHO HỌC SINH & GIÁO VIÊN (NOTIFICATIONS V1 R3-E1) */}
+          <NotificationBell />
 
           {user ? (
             <div className="relative">
