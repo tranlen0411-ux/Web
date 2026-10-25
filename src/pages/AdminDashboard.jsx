@@ -19,7 +19,8 @@ import {
   Layers,
   Search,
   School,
-  X
+  X,
+  Bell
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -39,6 +40,7 @@ import { useSound } from '../context/SoundContext';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
+import { AdminNotificationManagementTab } from '../components/dashboard/notifications/AdminNotificationManagementTab';
 
 export const normalizeSearchText = (value) => {
   if (value === null || value === undefined) return '';
@@ -54,12 +56,14 @@ export const normalizeSearchText = (value) => {
 export const AdminDashboard = () => {
   const { profile, globalClassFilter, setGlobalClassFilter } = useAuth();
   const { triggerSound } = useSound();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Xác định tab chủ đạo dựa vào URL param ?tab=games hoặc ?tab=users hoặc ?tab=exams hoặc ?tab=academic-assignments
+  // Xác định tab chủ đạo dựa vào URL param ?tab=notifications hoặc ?tab=games hoặc ?tab=users hoặc ?tab=exams hoặc ?tab=academic-assignments
   const tabParam = searchParams.get('tab');
   const [activeAdminTab, setActiveAdminTab] = useState(
-    tabParam === 'exams'
+    tabParam === 'notifications'
+      ? 'notifications'
+      : tabParam === 'exams'
       ? 'exams'
       : tabParam === 'question-bank'
       ? 'question-bank'
@@ -72,7 +76,7 @@ export const AdminDashboard = () => {
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments' || tab === 'question-bank' || tab === 'exams') {
+    if (tab === 'notifications' || tab === 'games' || tab === 'users' || tab === 'exercises' || tab === 'academic-assignments' || tab === 'question-bank' || tab === 'exams') {
       setActiveAdminTab(tab === 'exercises' ? 'academic-assignments' : tab);
     }
   }, [searchParams]);
@@ -548,7 +552,11 @@ export const AdminDashboard = () => {
       {/* TAB NAVIGATION CHÍNH DÀNH CHO ADMIN */}
       <div className="flex flex-wrap bg-white p-2 rounded-2xl border-4 border-amber-200 mb-8 gap-2">
         <button
-          onClick={() => { setActiveAdminTab('users'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveAdminTab('users');
+            triggerSound('click');
+            setSearchParams({ tab: 'users' }, { replace: true });
+          }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'users'
               ? 'bg-amber-500 text-white shadow-md border-b-4 border-amber-700'
@@ -559,7 +567,11 @@ export const AdminDashboard = () => {
         </button>
 
         <button
-          onClick={() => { setActiveAdminTab('games'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveAdminTab('games');
+            triggerSound('click');
+            setSearchParams({ tab: 'games' }, { replace: true });
+          }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'games'
               ? 'bg-sky-500 text-white shadow-md border-b-4 border-sky-700'
@@ -570,7 +582,11 @@ export const AdminDashboard = () => {
         </button>
 
         <button
-          onClick={() => { setActiveAdminTab('exercises'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveAdminTab('exercises');
+            triggerSound('click');
+            setSearchParams({ tab: 'academic-assignments' }, { replace: true });
+          }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'exercises'
               ? 'bg-emerald-500 text-white shadow-md border-b-4 border-emerald-700'
@@ -580,7 +596,11 @@ export const AdminDashboard = () => {
           <ShieldCheck className="w-4 h-4" /> Quản Lý Bài Tập Học Thuật
         </button>
         <button
-          onClick={() => { setActiveAdminTab('question-bank'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveAdminTab('question-bank');
+            triggerSound('click');
+            setSearchParams({ tab: 'question-bank' }, { replace: true });
+          }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'question-bank'
               ? 'bg-indigo-600 text-white shadow-md border-b-4 border-indigo-800'
@@ -590,7 +610,11 @@ export const AdminDashboard = () => {
           <Layers className="w-4 h-4" /> Ngân Hàng Câu Hỏi
         </button>
         <button
-          onClick={() => { setActiveAdminTab('exams'); triggerSound('click'); }}
+          onClick={() => {
+            setActiveAdminTab('exams');
+            triggerSound('click');
+            setSearchParams({ tab: 'exams' }, { replace: true });
+          }}
           className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
             activeAdminTab === 'exams'
               ? 'bg-purple-600 text-white shadow-md border-b-4 border-purple-800'
@@ -599,7 +623,37 @@ export const AdminDashboard = () => {
         >
           <GraduationCap className="w-4 h-4" /> Quản Lý Đề Kiểm Tra
         </button>
+        <button
+          onClick={() => {
+            setActiveAdminTab('notifications');
+            triggerSound('click');
+            setSearchParams({ tab: 'notifications' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeAdminTab === 'notifications'
+              ? 'bg-rose-500 text-white shadow-md border-b-4 border-rose-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <Bell className="w-4 h-4" /> Quản Lý Thông Báo
+        </button>
       </div>
+
+      {activeAdminTab === 'notifications' && (
+        <div className="mb-10 animate-fadeIn">
+          <AdminNotificationManagementTab
+            classes={classesListState}
+            isClassesComplete={
+              !loading &&
+              !classesError &&
+              Array.isArray(classesListState) &&
+              typeof stats.classes === 'number' &&
+              stats.classes >= 0 &&
+              classesListState.length === stats.classes
+            }
+          />
+        </div>
+      )}
 
       {activeAdminTab === 'exercises' && (
         <div className="mb-10">
