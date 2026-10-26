@@ -393,4 +393,45 @@ test('=== NOTIFICATIONS V1 R3-B2: BELL, INBOX & DETAIL MARK AS READ SUITE ===', 
     );
   });
 
+  // =========================================================================
+  // SUITE 9: REACT PORTAL & CHỐNG GIỚI HẠN KHUNG NHÌN (CONTAINING BLOCK CLIPPING GUARD)
+  // =========================================================================
+  await t.test('Suite 9: React createPortal render vào document.body giải phóng Drawer khỏi Navbar backdrop-filter', () => {
+    // 9.1. Import createPortal từ react-dom
+    assert.match(
+      drawerSource,
+      /import\s*\{\s*createPortal\s*\}\s*from\s*['"]react-dom['"]/,
+      'NotificationDrawer phải import createPortal từ react-dom'
+    );
+
+    // 9.2. Kiểm tra guard SSR / headless environment an toàn
+    assert.match(
+      drawerSource,
+      /if\s*\(!isOpen\s*\|\|\s*typeof\s+document\s*===\s*['"]undefined['"]\)\s*return\s+null;?/,
+      'NotificationDrawer phải kiểm tra typeof document === "undefined" trước khi gọi portal'
+    );
+
+    // 9.3. Render NotificationDrawer trực tiếp vào document.body
+    assert.match(
+      drawerSource,
+      /createPortal\s*\([\s\S]*?,\s*document\.body\s*\)/,
+      'NotificationDrawer phải sử dụng createPortal(..., document.body) để thoát khỏi containing block của header'
+    );
+
+    // 9.4. Navbar có backdrop-blur-md trên thẻ header (nguyên nhân gây containing block cho fixed)
+    assert.match(
+      navbarSource,
+      /<header[^>]*className="[^"]*backdrop-blur-md[^"]*"/,
+      'Navbar header có backdrop-blur-md, xác nhận lý do bắt buộc NotificationDrawer phải dùng createPortal'
+    );
+
+    // 9.5. NotificationDetailModal vẫn được mount đầy đủ bên trong portal tree
+    assert.match(
+      drawerSource,
+      /<NotificationDetailModal[\s\S]*?isOpen=\{isDetailOpen\}[\s\S]*?\/>/,
+      'NotificationDetailModal phải được duy trì đầy đủ trong portal tree để kế thừa viewport body'
+    );
+  });
+
 });
+

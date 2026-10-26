@@ -3,6 +3,7 @@
 // Hỗ trợ xem chi tiết NotificationDetailModal & Đánh dấu đã đọc qua RPC markNotificationAsRead
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   RefreshCw,
@@ -287,9 +288,9 @@ export const NotificationDrawer = ({
     }
   }, [user]);
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <>
       <div className="fixed inset-0 z-50 overflow-hidden">
         {/* Nền mờ Backdrop */}
@@ -554,6 +555,7 @@ export const NotificationDrawer = ({
           }
         }}
       />
-    </>
+    </>,
+    document.body
   );
 };
