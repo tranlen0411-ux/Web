@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Navigate } from 'react-router-dom';
 import {
   GraduationCap,
   Users,
@@ -16,7 +16,8 @@ import {
   Clock,
   RotateCcw,
   QrCode,
-  Layers
+  Layers,
+  Bell
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -33,14 +34,22 @@ import { formatClassLabel } from '../utils/helpers';
 import { ExerciseListTab } from '../components/dashboard/exercises/ExerciseListTab';
 import { QuestionBankListTab } from '../components/dashboard/question-bank/QuestionBankListTab';
 import { ExamManagementTab } from '../components/dashboard/exams/ExamManagementTab';
+import { NotificationManagementTab } from '../components/dashboard/notifications/NotificationManagementTab';
 
 export const TeacherDashboard = () => {
   const { profile, globalClassFilter } = useAuth();
+
+  // R3-C2A Phân quyền: Ngăn Admin hoặc vai trò khác truy cập trái phép route Giáo viên
+  if (profile && profile.role !== 'teacher') {
+    return <Navigate to={profile.role === 'admin' ? '/admin' : '/student'} replace />;
+  }
+
   const { triggerSound } = useSound();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(() => {
+    if (tabParam === 'notifications') return 'notifications';
     if (tabParam === 'exams') return 'exams';
     if (tabParam === 'question-bank') return 'question-bank';
     if (tabParam === 'academic-assignments' || tabParam === 'exercises') return 'academic-assignments';
@@ -52,7 +61,7 @@ export const TeacherDashboard = () => {
   // Tự động đồng bộ URL query parameter cho Giáo viên
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'games' || tab === 'classes' || tab === 'question-bank' || tab === 'exams') {
+    if (tab === 'notifications' || tab === 'games' || tab === 'classes' || tab === 'question-bank' || tab === 'exams') {
       setActiveTab(tab);
     } else if (tab === 'academic-assignments' || tab === 'exercises') {
       setActiveTab('academic-assignments');
@@ -312,7 +321,26 @@ export const TeacherDashboard = () => {
         >
           <GraduationCap className="w-4 h-4" /> Quản Lý Đề Kiểm Tra
         </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('notifications');
+            triggerSound('click');
+            setSearchParams({ tab: 'notifications' }, { replace: true });
+          }}
+          className={`flex-1 min-w-[140px] py-3 text-xs sm:text-sm font-black rounded-xl transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'notifications'
+              ? 'bg-rose-500 text-white shadow-md border-b-4 border-rose-700'
+              : 'text-slate-600 hover:bg-amber-50'
+          }`}
+        >
+          <Bell className="w-4 h-4" /> Thông Báo Lớp Học
+        </button>
       </div>
+
+      {activeTab === 'notifications' && (
+        <NotificationManagementTab role="teacher" classes={classes} />
+      )}
 
       {(activeTab === 'academic-assignments' || activeTab === 'exercises') && (
         <ExerciseListTab role="teacher" />
