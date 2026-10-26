@@ -1,10 +1,10 @@
-# Competition V1 & V2 Background Music Themes & Assets
+# Competition V1 Background Music Themes & Assets
 
 ## Origin & Provenance
-- All playable procedural audio tracks in this directory and its subdirectories (themes 1-7) are 100% ORIGINAL PROJECT-GENERATED procedural audio assets.
-- Created specifically for the Competition Host experience in this repository.
+- All playable audio tracks in this directory and its subdirectories are 100% ORIGINAL PROJECT-GENERATED procedural audio assets.
+- Created specifically for the Competition Host V1 experience in this repository.
 - Synthesized algorithmically using pure mathematical oscillators (sine, harmonic overtone blending, ADSR envelopes) and encoded via LAME MP3 encoder.
-- ZERO third-party copyrighted recordings, samples, loops, or external sound libraries were used for themes 1-7.
+- ZERO third-party copyrighted recordings, samples, loops, or external sound libraries were used.
 - Royalty-free, clean-license, and completely self-contained within this project.
 
 ## Curated Theme Registry
@@ -12,8 +12,6 @@
 |---|---|---|---|---|---|---|---|
 | `classroom_chill` | Classroom Chill | Lobby | `/audio/competition/lobby_loop.mp3` | ~36.96s | 128 kbps | 44,100 Hz | Cheerful, warm, classroom-friendly Rhodes keys & kalimba accents. |
 | `classroom_chill` | Classroom Chill | Question | `/audio/competition/question_active_loop.mp3` | ~33.15s | 128 kbps | 44,100 Hz | Balanced modern gameshow pulse, soft marimba ostinato; leaves space for countdown SFX. |
-| `heroic_orchestral` | Heroic Orchestral | Lobby | `/audio/competition/heroic/at_launch.mp3` | ~3:08 | 320 kbps | 44,100 Hz | "At Launch" - Kevin MacLeod. Dàn đồng uy lực, trống trận xuất kích. |
-| `heroic_orchestral` | Heroic Orchestral | Question | `/audio/competition/heroic/titan.mp3` | ~3:39 | 320 kbps | 44,100 Hz | "Titan" - Scott Buckley. Dàn nhạc giao hưởng hùng tráng, cao trào nhiệt huyết. |
 | `light_gameshow` | Light Gameshow | Lobby | `/audio/competition/themes/light_gameshow/lobby.mp3` | ~30.59s | 128 kbps | 44,100 Hz | Brighter, energetic, playful, cheerful bell plucks and bouncy bass. |
 | `light_gameshow` | Light Gameshow | Question | `/audio/competition/themes/light_gameshow/question.mp3` | ~32.03s | 128 kbps | 44,100 Hz | Driving gameshow rhythm, syncopated marimba groove, motivating energy. |
 | `calm_focus` | Calm Focus | Lobby | `/audio/competition/themes/calm_focus/lobby.mp3` | ~36.57s | 128 kbps | 44,100 Hz | Soothing, minimal, warm ambient chords, slow peaceful tempo. |
@@ -26,35 +24,6 @@
 | `scorm_inspired_bright` | SCORM-Inspired Bright | Question | `/audio/competition/themes/scorm_inspired_bright/question.mp3` | ~33.10s | 128 kbps | 44,100 Hz | Playful staccato marimba, bouncing walking bass, light claps; friendly trivia energy without stress. |
 | `scorm_inspired_focus` | SCORM-Inspired Focus | Lobby | `/audio/competition/themes/scorm_inspired_focus/lobby.mp3` | ~36.23s | 128 kbps | 44,100 Hz | Clean electric piano, modern xylophone motifs, minimal shaker; focused and modern atmosphere. |
 | `scorm_inspired_focus` | SCORM-Inspired Focus | Question | `/audio/competition/themes/scorm_inspired_focus/question.mp3` | ~35.56s | 128 kbps | 44,100 Hz | Steady electric piano quarter pulse, subtle xylophone accents; concentration-friendly for trivia. |
-
-## Heroic Orchestral Music Library (Phase 2 Expansion)
-Tất cả 5 tác phẩm được tải về trực tiếp từ trang chính thức của tác giả với bản thu âm nguyên gốc (Full Mix gốc, không nén giảm chất lượng) theo giấy phép bản quyền hợp lệ:
-
-| Tác phẩm | Tác giả | Nguồn chính thức | Giấy phép | Tệp nội bộ | Dung lượng |
-|---|---|---|---|---|---|
-| **Titan** | Scott Buckley | [scottbuckley.com.au/library/titan/](https://www.scottbuckley.com.au/library/titan/) | CC-BY 4.0 | `/audio/competition/heroic/titan.mp3` | 7,034,419 B |
-| **At Launch** | Kevin MacLeod | [incompetech.com (ISRC: USUAN1100539)](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100539) | CC-BY 4.0 | `/audio/competition/heroic/at_launch.mp3` | 7,533,048 B |
-| **Ignis** | Scott Buckley | [scottbuckley.com.au/library/ignis/](https://www.scottbuckley.com.au/library/ignis/) | CC-BY 4.0 | `/audio/competition/heroic/ignis.mp3` | 7,676,027 B |
-| **Monomyth – The Fury** | Scott Buckley | [scottbuckley.com.au/library/the-fury/](https://www.scottbuckley.com.au/library/the-fury/) | CC-BY 4.0 | `/audio/competition/heroic/the_fury.mp3` | 17,037,217 B |
-| **Terminus** | Scott Buckley | [scottbuckley.com.au/library/terminus/](https://www.scottbuckley.com.au/library/terminus/) | CC-BY 4.0 | `/audio/competition/heroic/terminus.mp3` | 10,540,115 B |
-
-### Văn bản ghi công chuẩn (Official Attributions)
-- **Titan**: `'Titan' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au`
-- **At Launch**: `"At Launch" Kevin MacLeod (incompetech.com)\nLicensed under Creative Commons: By Attribution 4.0 License\nhttp://creativecommons.org/licenses/by/4.0/`
-- **Ignis**: `'Ignis' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au`
-- **Monomyth – The Fury**: `'The Fury' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au`
-- **Terminus**: `'Terminus' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au`
-
-### So sánh thông số kỹ thuật: Nhạc Procedural cũ vs. 5 Bản Gốc mới (Comparison Matrix)
-| Tiêu chí | 14 Tệp Procedural cũ (Themes 1-7) | 5 Bản Giao hưởng gốc mới (Heroic Library) |
-|---|---|---|
-| **Phương pháp tạo** | Thuật toán tổng hợp sóng âm LAME (Sine, Harmonics, ADSR) | Bản thu phòng thu giao hưởng thật của Scott Buckley & Kevin MacLeod |
-| **Bitrate** | 128 kbps CBR | 320 kbps High Quality Full Mix |
-| **Tần số lấy mẫu** | 44,100 Hz | 44,100 Hz |
-| **Thời lượng tệp** | Vòng lặp ngắn tối ưu (~30.0s – ~36.9s) | Bản đầy đủ nguyên tác (~3:08 – ~8:52) |
-| **Dung lượng tệp** | ~480 KB – ~580 KB / tệp | 7.0 MB – 17.0 MB / tệp (nguyên gốc không nén giảm chất lượng) |
-| **Giấy phép** | Tự sinh nội bộ (Original Project Generated) | Creative Commons Attribution 4.0 International (CC-BY 4.0) |
-| **Phong cách** | Vòng lặp êm dịu, nhẹ nhàng, tối ưu tải nhanh | Giao hưởng hùng tráng kịch tính, tạo cảm hứng thi đấu đỉnh cao |
 
 ## SCORM-Inspired Music Pack Provenance
 - All 3 SCORM-Inspired themes are 100% ORIGINAL_PROJECT_GENERATED procedural audio compositions.
@@ -72,7 +41,6 @@ Tất cả 5 tác phẩm được tải về trực tiếp từ trang chính th�
 
 ## Special Modes
 - `none` (Không phát nhạc): Suppresses background music completely while keeping Web Audio SFX 100% operational.
-- `custom` (Tùy chỉnh riêng): Cho phép chọn độc lập nhạc sảnh chờ và nhạc làm bài từ kho giao hưởng anh hùng.
 
 ## Engineering & Quality Standards
 - **No Vocals**: 100% instrumental across all themes.

@@ -1,18 +1,12 @@
 /**
  * COMPETITION MUSIC THEMES REGISTRY
  *
- * Centralized registry for curated background music themes and individual heroic tracks.
+ * Centralized registry for curated background music themes.
  * Scope: Host Only.
  */
 
 export const DEFAULT_MUSIC_THEME = 'classroom_chill';
 export const LOCAL_STORAGE_MUSIC_THEME_KEY = 'competition_music_theme';
-
-export const SELECTION_MODE_THEME = 'theme';
-export const SELECTION_MODE_CUSTOM = 'custom';
-export const LOCAL_STORAGE_MUSIC_SELECTION_MODE_KEY = 'competition_music_selection_mode';
-export const LOCAL_STORAGE_CUSTOM_LOBBY_TRACK_KEY = 'competition_music_custom_lobby';
-export const LOCAL_STORAGE_CUSTOM_QUESTION_TRACK_KEY = 'competition_music_custom_question';
 
 export const MUSIC_THEMES = [
   {
@@ -21,14 +15,6 @@ export const MUSIC_THEMES = [
     description: 'Ấm áp, tươi vui nhẹ nhàng, phù hợp cho mọi không gian lớp học.',
     lobbyTrack: '/audio/competition/lobby_loop.mp3',
     questionTrack: '/audio/competition/question_active_loop.mp3',
-    available: true,
-  },
-  {
-    id: 'heroic_orchestral',
-    name: 'Heroic Orchestral',
-    description: 'Tráng lệ, hào hùng và kịch tính với dàn nhạc giao hưởng, thúc đẩy ý chí quyết tâm thi đấu.',
-    lobbyTrack: '/audio/competition/heroic/at_launch.mp3',
-    questionTrack: '/audio/competition/heroic/titan.mp3',
     available: true,
   },
   {
@@ -107,94 +93,6 @@ export const ALL_THEME_OPTIONS = [
 const REGISTERED_THEME_IDS = new Set(['none', ...MUSIC_THEMES.map((t) => t.id)]);
 
 /**
- * 5 BẢN GIAO HƯỞNG HÀO HÙNG GỐC CÓ NGUỒN CẤP PHÉP HỢP LỆ (CC-BY 4.0)
- */
-export const HEROIC_TRACKS = [
-  {
-    id: 'sb_titan',
-    title: 'Titan',
-    artist: 'Scott Buckley',
-    album: 'Creative Commons Music Library',
-    genre: 'Cinematic Orchestral',
-    duration: '~3:39',
-    src: '/audio/competition/heroic/titan.mp3',
-    sourceUrl: 'https://www.scottbuckley.com.au/library/titan/',
-    license: 'Creative Commons Attribution 4.0 International (CC-BY 4.0)',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: "'Titan' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au",
-    description: 'Dàn nhạc giao hưởng hùng tráng, mở đầu bằng tiếng cello trầm ấm rồi vút lên cao trào đầy nhiệt huyết khám phá.',
-    suggestedFor: 'both',
-  },
-  {
-    id: 'km_at_launch',
-    title: 'At Launch',
-    artist: 'Kevin MacLeod',
-    album: 'Incompetech Royalty-Free Music',
-    genre: 'Epic Orchestral',
-    duration: '~3:08',
-    isrc: 'USUAN1100539',
-    src: '/audio/competition/heroic/at_launch.mp3',
-    sourceUrl: 'https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100539',
-    license: 'Creative Commons: By Attribution 4.0 License (CC-BY 4.0)',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: '"At Launch" Kevin MacLeod (incompetech.com)\nLicensed under Creative Commons: By Attribution 4.0 License\nhttp://creativecommons.org/licenses/by/4.0/',
-    description: 'Bộ đồng uy lực kết hợp dàn trống trận dồn dập, tạo không khí chuẩn bị phóng tên lửa và xuất kích bùng nổ.',
-    suggestedFor: 'lobby',
-  },
-  {
-    id: 'sb_ignis',
-    title: 'Ignis',
-    artist: 'Scott Buckley',
-    album: 'Creative Commons Music Library',
-    genre: 'Adventurous Orchestral',
-    duration: '~3:59',
-    src: '/audio/competition/heroic/ignis.mp3',
-    sourceUrl: 'https://www.scottbuckley.com.au/library/ignis/',
-    license: 'Creative Commons Attribution 4.0 International (CC-BY 4.0)',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: "'Ignis' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au",
-    description: 'Giao hưởng phiêu lưu tràn đầy năng lượng, phối hợp synthesizer hiện đại và bè đồng âm thúc đẩy nhịp độ trả lời.',
-    suggestedFor: 'question',
-  },
-  {
-    id: 'sb_the_fury',
-    title: 'Monomyth – The Fury',
-    artist: 'Scott Buckley',
-    album: 'Monomyth (Album)',
-    genre: 'Epic Action Orchestral',
-    duration: '~8:52',
-    src: '/audio/competition/heroic/the_fury.mp3',
-    sourceUrl: 'https://www.scottbuckley.com.au/library/the-fury/',
-    license: 'Creative Commons Attribution 4.0 International (CC-BY 4.0)',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: "'The Fury' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au",
-    description: 'Đỉnh cao thử thách trong hành trình anh hùng (The Hero’s Journey), bộ gõ dồn dập và vĩ cầm căng thẳng kịch tính.',
-    suggestedFor: 'question',
-  },
-  {
-    id: 'sb_terminus',
-    title: 'Terminus',
-    artist: 'Scott Buckley',
-    album: 'Creative Commons Music Library',
-    genre: 'Heroic Action-Adventure',
-    duration: '~5:29',
-    src: '/audio/competition/heroic/terminus.mp3',
-    sourceUrl: 'https://www.scottbuckley.com.au/library/terminus/',
-    license: 'Creative Commons Attribution 4.0 International (CC-BY 4.0)',
-    licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
-    attribution: "'Terminus' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au",
-    description: 'Bản hùng ca về điểm đến cuối cùng, kết hợp dàn hợp xướng, trống trận và dàn dây dũng mãnh.',
-    suggestedFor: 'both',
-  },
-];
-
-const HEROIC_TRACK_MAP = new Map(HEROIC_TRACKS.map((t) => [t.id, t]));
-
-export function getHeroicTrackById(trackId) {
-  return HEROIC_TRACK_MAP.get(trackId) || null;
-}
-
-/**
  * Check if a theme ID is registered in the library
  */
 export function isValidThemeId(themeId) {
@@ -236,6 +134,7 @@ function getStorage() {
 
 /**
  * Safely read stored theme from localStorage with default fallback
+ * If stored theme is unavailable (e.g. scorm_track) or invalid, falls back safely to default.
  */
 export function getStoredThemeId() {
   const storage = getStorage();
@@ -268,76 +167,4 @@ export function setStoredThemeId(themeId) {
   } catch (_e) {
     // Fail-silent
   }
-}
-
-/**
- * Get stored music selection mode ('theme' | 'custom')
- */
-export function getStoredMusicSelectionMode() {
-  const storage = getStorage();
-  if (!storage) return SELECTION_MODE_THEME;
-  try {
-    const stored = storage.getItem(LOCAL_STORAGE_MUSIC_SELECTION_MODE_KEY);
-    if (stored === SELECTION_MODE_CUSTOM || stored === SELECTION_MODE_THEME) {
-      return stored;
-    }
-  } catch (_e) {}
-  return SELECTION_MODE_THEME;
-}
-
-export function setStoredMusicSelectionMode(mode) {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    if (mode === SELECTION_MODE_CUSTOM || mode === SELECTION_MODE_THEME) {
-      storage.setItem(LOCAL_STORAGE_MUSIC_SELECTION_MODE_KEY, mode);
-    }
-  } catch (_e) {}
-}
-
-/**
- * Get & Set stored custom track choices
- */
-export function getStoredCustomLobbyTrack() {
-  const storage = getStorage();
-  if (!storage) return 'km_at_launch';
-  try {
-    const stored = storage.getItem(LOCAL_STORAGE_CUSTOM_LOBBY_TRACK_KEY);
-    if (stored && HEROIC_TRACK_MAP.has(stored)) {
-      return stored;
-    }
-  } catch (_e) {}
-  return 'km_at_launch';
-}
-
-export function setStoredCustomLobbyTrack(trackId) {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    if (HEROIC_TRACK_MAP.has(trackId)) {
-      storage.setItem(LOCAL_STORAGE_CUSTOM_LOBBY_TRACK_KEY, trackId);
-    }
-  } catch (_e) {}
-}
-
-export function getStoredCustomQuestionTrack() {
-  const storage = getStorage();
-  if (!storage) return 'sb_titan';
-  try {
-    const stored = storage.getItem(LOCAL_STORAGE_CUSTOM_QUESTION_TRACK_KEY);
-    if (stored && HEROIC_TRACK_MAP.has(stored)) {
-      return stored;
-    }
-  } catch (_e) {}
-  return 'sb_titan';
-}
-
-export function setStoredCustomQuestionTrack(trackId) {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    if (HEROIC_TRACK_MAP.has(trackId)) {
-      storage.setItem(LOCAL_STORAGE_CUSTOM_QUESTION_TRACK_KEY, trackId);
-    }
-  } catch (_e) {}
 }
