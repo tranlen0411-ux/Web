@@ -405,6 +405,21 @@ async function runAll() {
     assert.ok(adminPublish.includes("targetType === 'individual'"), 'AdminPublishNotificationModal phải hiển thị card cho individual');
   });
 
+  await runTest('3.5. PublishNotificationModal hiển thị câu cảnh báo tương ứng với target_type (individual vs classes)', () => {
+    const teacherPublish = fs.readFileSync(
+      path.join(rootDir, 'src', 'components', 'dashboard', 'notifications', 'PublishNotificationModal.jsx'),
+      'utf8'
+    );
+    assert.ok(
+      teacherPublish.includes('Sau khi xuất bản, chỉ học sinh đã chọn sẽ nhận được thông báo này.'),
+      'PublishNotificationModal phải có câu cảnh báo cho individual: Sau khi xuất bản, chỉ học sinh đã chọn sẽ nhận được thông báo này.'
+    );
+    assert.ok(
+      teacherPublish.includes('Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.'),
+      'PublishNotificationModal phải giữ câu cảnh báo cho classes: Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.'
+    );
+  });
+
   console.log('--------------------------------------------------------------------');
   console.log(`KẾT QUẢ KIỂM THỬ ĐỢT A: ${passedTests}/${totalTests} TESTS PASS`);
   if (passedTests === totalTests) {

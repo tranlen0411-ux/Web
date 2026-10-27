@@ -343,7 +343,9 @@ export const PublishNotificationModal = ({
           <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl text-[11px] text-amber-900 font-bold flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.
+              {isIndividual
+                ? 'Sau khi xuất bản, chỉ học sinh đã chọn sẽ nhận được thông báo này.'
+                : 'Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.'}
             </span>
           </div>
         </div>
