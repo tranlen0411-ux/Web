@@ -78,6 +78,7 @@ export const PublishNotificationModal = ({
   const validClasses = Array.isArray(classes) ? classes : [];
   const validClassMap = new Map(validClasses.map((c) => [c.id, c.name]));
 
+  const isIndividual = draft.target_type === 'individual';
   const targetClassIds = Array.isArray(draft.target_class_ids) ? draft.target_class_ids : [];
 
   // Tên các lớp nhận thông báo
@@ -86,10 +87,12 @@ export const PublishNotificationModal = ({
     return name ? formatClassLabel(name) : null;
   });
 
-  // Kiểm tra tính hợp lệ: mọi lớp trong target_class_ids PHẢI nằm trong danh sách lớp giáo viên đang phụ trách
-  const hasInvalidClass =
-    targetClassIds.length === 0 ||
-    targetClassIds.some((id) => !validClassMap.has(id));
+  // Kiểm tra tính hợp lệ:
+  // Nếu là individual: Bắt buộc có target_student_id hoặc target_student_name_snapshot
+  // Nếu là classes: mọi lớp trong target_class_ids PHẢI nằm trong danh sách lớp giáo viên đang phụ trách
+  const hasInvalidClass = isIndividual
+    ? (!draft.target_student_id && !draft.target_student_name_snapshot)
+    : (targetClassIds.length === 0 || targetClassIds.some((id) => !validClassMap.has(id)));
 
   // Nhãn hiển thị mức độ ưu tiên
   const priorityLabels = {
@@ -113,10 +116,12 @@ export const PublishNotificationModal = ({
       return;
     }
 
-    // 3. Chặn tuyệt đối nếu lớp không xác định hoặc không còn thuộc quyền quản lý
+    // 3. Chặn tuyệt đối nếu lớp hoặc đối tượng không xác định
     if (hasInvalidClass) {
       setErrorMessage(
-        'Một hoặc nhiều lớp nhận không còn thuộc quyền quản lý của Thầy/Cô (hoặc danh sách lớp không xác định). Thao tác xuất bản bị chặn.'
+        isIndividual
+          ? 'Thông tin học sinh nhận thông báo không còn hợp lệ hoặc đã bị vô hiệu hóa. Thao tác xuất bản bị chặn.'
+          : 'Một hoặc nhiều lớp nhận không còn thuộc quyền quản lý của Thầy/Cô (hoặc danh sách lớp không xác định). Thao tác xuất bản bị chặn.'
       );
       return;
     }
@@ -300,22 +305,30 @@ export const PublishNotificationModal = ({
 
             <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
               <span className="text-[11px] font-bold text-slate-400 block mb-1">
-                Lớp nhận thông báo:
+                {isIndividual ? 'Học sinh nhận thông báo:' : 'Lớp nhận thông báo:'}
               </span>
-              <div className="flex flex-wrap gap-1">
-                {targetClassNames.length > 0 && !hasInvalidClass ? (
-                  targetClassNames.map((name, idx) => (
-                    <span
-                      key={idx}
-                      className="px-2 py-0.5 bg-amber-100 text-amber-950 font-black text-[11px] rounded-lg border border-amber-300"
-                    >
-                      {name}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-xs text-rose-600 font-bold">Không xác định / Không hợp lệ</span>
-                )}
-              </div>
+              {isIndividual ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="px-2.5 py-1 bg-amber-100 text-amber-950 font-black text-xs rounded-xl border border-amber-300 truncate">
+                    👨‍🎓 {draft.target_student_name_snapshot || 'Học sinh cá nhân'}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {targetClassNames.length > 0 && !hasInvalidClass ? (
+                    targetClassNames.map((name, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 bg-amber-100 text-amber-950 font-black text-[11px] rounded-lg border border-amber-300"
+                      >
+                        {name}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-rose-600 font-bold">Không xác định / Không hợp lệ</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -330,7 +343,9 @@ export const PublishNotificationModal = ({
           <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl text-[11px] text-amber-900 font-bold flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.
+              {isIndividual
+                ? 'Sau khi xuất bản, chỉ học sinh đã chọn sẽ nhận được thông báo này.'
+                : 'Sau khi xuất bản, toàn bộ học sinh trong các lớp trên sẽ nhận được thông báo ngay lập tức.'}
             </span>
           </div>
         </div>
