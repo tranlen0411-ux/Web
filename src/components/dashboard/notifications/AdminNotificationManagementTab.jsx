@@ -240,6 +240,11 @@ export const AdminNotificationManagementTab = ({ classes = [], isClassesComplete
       return `${classIds.length} lớp học được chọn`;
     }
 
+    if (item.target_type === 'individual') {
+      const studentName = item.target_student_name_snapshot || 'Học sinh cá nhân';
+      return `Học sinh: ${studentName}`;
+    }
+
     if (item.target_type === 'grade') {
       return `Toàn bộ Khối ${item.target_grade_level || ''}`;
     }

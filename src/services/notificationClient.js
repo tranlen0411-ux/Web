@@ -24,6 +24,12 @@ export const NOTIFICATION_ERROR_MAP = {
   FORBIDDEN_REVERT_READ: 'Không thể chuyển trạng thái thông báo từ đã đọc về chưa đọc.',
   FORBIDDEN_UNPUBLISH: 'Thông báo đã xuất bản không thể chuyển về bản nháp. Vui lòng sử dụng tính năng thu hồi.',
   FORBIDDEN_MODIFICATION_PUBLISHED: 'Không thể sửa đổi nội dung thông báo đã xuất bản. Vui lòng thu hồi và tạo thông báo mới.',
+  MISSING_TITLE_OR_CONTENT: 'Tiêu đề và nội dung thông báo không được để trống.',
+  INVALID_TARGET: 'Vui lòng chọn đối tượng hoặc học sinh nhận thông báo.',
+  INVALID_STUDENT: 'Học sinh được chọn không tồn tại trong hệ thống.',
+  INVALID_STUDENT_ROLE: 'Đối tượng được chọn không phải là học sinh.',
+  FORBIDDEN_STUDENT_DISABLED: 'Tài khoản học sinh này đã bị khóa hoặc vô hiệu hóa.',
+  FORBIDDEN_STUDENT_NOT_IN_TEACHER_CLASSES: 'Thầy/Cô chỉ có thể gửi thông báo cá nhân cho học sinh thuộc lớp mình được phân công phụ trách.',
   NETWORK_ERROR: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
 };
 
@@ -346,6 +352,8 @@ export async function getSentNotifications(options = {}, clientOverride = null) 
         target_type,
         target_grade_level,
         target_class_ids,
+        target_student_id,
+        target_student_name_snapshot,
         linked_resource_type,
         linked_resource_id,
         link_url,
@@ -443,6 +451,8 @@ export async function getNotificationById(notificationId, clientOverride = null)
         target_type,
         target_grade_level,
         target_class_ids,
+        target_student_id,
+        target_student_name_snapshot,
         linked_resource_type,
         linked_resource_id,
         link_url,
@@ -467,6 +477,107 @@ export async function getNotificationById(notificationId, clientOverride = null)
     }
 
     return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: formatNotificationError(err) };
+  }
+}
+
+/**
+ * 10. RPC: Tạo thông báo riêng cho một học sinh cá nhân (Individual Notification)
+ * @param {Object} params
+ * @param {string} params.title Tiêu đề thông báo (bắt buộc)
+ * @param {string} params.content Nội dung thông báo (bắt buộc)
+ * @param {string} params.targetStudentId UUID học sinh nhận thông báo (bắt buộc)
+ * @param {('normal'|'high'|'urgent')} [params.priority='normal'] Độ ưu tiên
+ * @param {('general'|'exercise'|'material'|'exam'|'system')} [params.category='general'] Phân loại
+ * @param {string|null} [params.linkedResourceType=null] Loại tài nguyên
+ * @param {string|null} [params.linkedResourceId=null] UUID tài nguyên
+ * @param {string|null} [params.linkUrl=null] Đường dẫn URL
+ * @param {boolean} [params.publishNow=false] Xuất bản ngay
+ * @param {Object} [clientOverride] Mock client dùng cho testing
+ * @returns {Promise<{ ok: boolean, data?: string, error?: Error }>}
+ */
+export async function createIndividualNotification(params = {}, clientOverride = null) {
+  const client = getClient(clientOverride);
+
+  const title = (params.title || '').trim();
+  const content = (params.content || '').trim();
+  const targetStudentId = params.targetStudentId || null;
+
+  if (!title || !content) {
+    return {
+      ok: false,
+      error: formatNotificationError(new Error('MISSING_TITLE_OR_CONTENT')),
+    };
+  }
+
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!targetStudentId || typeof targetStudentId !== 'string' || !UUID_REGEX.test(targetStudentId.trim())) {
+    return {
+      ok: false,
+      error: formatNotificationError(new Error('INVALID_TARGET: Mã định danh học sinh nhận tin không hợp lệ.')),
+    };
+  }
+
+  try {
+    const { data, error } = await client.rpc('rpc_create_individual_notification', {
+      p_title: title,
+      p_content: content,
+      p_target_student_id: targetStudentId,
+      p_priority: params.priority || 'normal',
+      p_category: params.category || 'general',
+      p_linked_resource_type: params.linkedResourceType || null,
+      p_linked_resource_id: params.linkedResourceId || null,
+      p_link_url: params.linkUrl || null,
+      p_publish_now: Boolean(params.publishNow),
+    });
+
+    if (error) {
+      return { ok: false, error: formatNotificationError(error) };
+    }
+
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: formatNotificationError(err) };
+  }
+}
+
+/**
+ * 11. RPC: Tìm kiếm học sinh có kiểm soát quyền từ backend và phân trang
+ * - Admin: Tìm kiếm học sinh toàn trường, có thể lọc theo lớp hoặc khối
+ * - Teacher: Chỉ tìm kiếm học sinh thuộc các lớp mình trực tiếp quản lý
+ * @param {Object} [params={}]
+ * @param {string} [params.query=''] Từ khóa tìm kiếm (Tên hoặc Mã học sinh)
+ * @param {string|null} [params.classId=null] Lọc theo UUID lớp học
+ * @param {number|null} [params.gradeLevel=null] Lọc theo khối lớp (1-5)
+ * @param {number} [params.limit=20] Giới hạn số lượng (1-50)
+ * @param {number} [params.offset=0] Vị trí bắt đầu
+ * @param {Object} [clientOverride] Mock client dùng cho testing
+ * @returns {Promise<{ ok: boolean, data?: Array, error?: Error }>}
+ */
+export async function searchStudentsForNotification(params = {}, clientOverride = null) {
+  const client = getClient(clientOverride);
+
+  const query = (params.query || '').trim();
+  const classId = params.classId || null;
+  const gradeLevel = params.gradeLevel ? Number(params.gradeLevel) : null;
+  const limit = Math.max(1, Math.min(Number(params.limit) || 20, 50));
+  const offset = Math.max(0, Number(params.offset) || 0);
+
+  try {
+    const { data, error } = await client.rpc('rpc_search_students_for_notification', {
+      p_query: query || null,
+      p_class_id: classId,
+      p_grade_level: gradeLevel,
+      p_limit: limit,
+      p_offset: offset,
+    });
+
+    if (error) {
+      return { ok: false, error: formatNotificationError(error) };
+    }
+
+    return { ok: true, data: Array.isArray(data) ? data : [] };
   } catch (err) {
     return { ok: false, error: formatNotificationError(err) };
   }
