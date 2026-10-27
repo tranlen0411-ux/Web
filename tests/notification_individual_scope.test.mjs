@@ -284,7 +284,7 @@ async function runAll() {
     assert.equal(calledPayload.p_publish_now, false);
   });
 
-  await runTest('2.4. searchStudentsForNotification gọi đúng RPC rpc_search_students_for_notification', async () => {
+  await runTest('2.4. searchStudentsForNotification gọi đúng RPC v2 rpc_search_students_for_notification_v2 và chuẩn hóa id = student_id', async () => {
     let calledRpcName = null;
     let calledPayload = null;
 
@@ -295,12 +295,15 @@ async function runAll() {
         return {
           data: [
             {
-              id: '33333333-3333-3333-3333-333333333333',
+              student_id: '33333333-3333-3333-3333-333333333333',
               full_name: 'Nguyễn Văn Em',
               student_code: 'HS001',
-              username: 'em_nguyen',
               class_name: 'Lớp 1A',
               grade_level: 1
+            },
+            {
+              student_id: 'not-a-valid-uuid',
+              full_name: 'Dữ liệu rác'
             }
           ],
           error: null
@@ -313,19 +316,42 @@ async function runAll() {
         query: 'Nguyễn',
         gradeLevel: 1,
         classId: '44444444-4444-4444-4444-444444444444',
-        limit: 5
+        limit: 5,
+        offset: 0
       },
       mockClient
     );
 
     assert.equal(res.ok, true);
-    assert.equal(res.data.length, 1);
+    assert.equal(res.data.length, 1, 'Phải lọc bỏ bản ghi không có UUID hợp lệ');
     assert.equal(res.data[0].student_code, 'HS001');
-    assert.equal(calledRpcName, 'rpc_search_students_for_notification');
-    assert.equal(calledPayload.p_query, 'Nguyễn');
+    assert.equal(res.data[0].student_id, '33333333-3333-3333-3333-333333333333');
+    assert.equal(res.data[0].id, '33333333-3333-3333-3333-333333333333', 'Phải chuẩn hóa id = student_id');
+    assert.equal(calledRpcName, 'rpc_search_students_for_notification_v2');
+    assert.equal(calledPayload.p_search, 'Nguyễn');
     assert.equal(calledPayload.p_grade_level, 1);
     assert.equal(calledPayload.p_class_id, '44444444-4444-4444-4444-444444444444');
     assert.equal(calledPayload.p_limit, 5);
+    assert.equal(calledPayload.p_offset, 0);
+  });
+
+  await runTest('2.5. searchStudentsForNotification không nuốt lỗi PostgREST và trả về fail-closed', async () => {
+    const mockPostgrestErrorClient = {
+      rpc: async () => ({
+        data: null,
+        error: {
+          code: 'PGRST202',
+          message: 'Could not find the function public.rpc_search_students_for_notification_v2 in the schema cache',
+          details: 'Searched for function...',
+          hint: 'Perhaps you meant...'
+        }
+      })
+    };
+
+    const res = await client.searchStudentsForNotification({ query: 'Test' }, mockPostgrestErrorClient);
+    assert.equal(res.ok, false);
+    assert.ok(res.error);
+    assert.ok(res.error.message.includes('PGRST202') || res.error.message.includes('Could not find') || res.error.message.length > 0);
   });
 
   // =========================================================================

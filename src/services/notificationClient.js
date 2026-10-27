@@ -565,8 +565,8 @@ export async function searchStudentsForNotification(params = {}, clientOverride 
   const offset = Math.max(0, Number(params.offset) || 0);
 
   try {
-    const { data, error } = await client.rpc('rpc_search_students_for_notification', {
-      p_query: query || null,
+    const { data, error } = await client.rpc('rpc_search_students_for_notification_v2', {
+      p_search: query || '',
       p_class_id: classId,
       p_grade_level: gradeLevel,
       p_limit: limit,
@@ -577,7 +577,22 @@ export async function searchStudentsForNotification(params = {}, clientOverride 
       return { ok: false, error: formatNotificationError(error) };
     }
 
-    return { ok: true, data: Array.isArray(data) ? data : [] };
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const normalized = (Array.isArray(data) ? data : [])
+      .filter((stu) => {
+        const id = stu?.student_id || stu?.id;
+        return id && typeof id === 'string' && UUID_REGEX.test(id.trim());
+      })
+      .map((stu) => {
+        const studentId = (stu.student_id || stu.id).trim();
+        return {
+          ...stu,
+          id: studentId,
+          student_id: studentId,
+        };
+      });
+
+    return { ok: true, data: normalized };
   } catch (err) {
     return { ok: false, error: formatNotificationError(err) };
   }

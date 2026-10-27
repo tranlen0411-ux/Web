@@ -57,6 +57,9 @@ export const AdminCreateNotificationModal = ({
   const [studentFilterClassId, setStudentFilterClassId] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearchingStudents, setIsSearchingStudents] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [searchRetryCount, setSearchRetryCount] = useState(0);
+  const searchRequestIdRef = useRef(0);
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
@@ -119,6 +122,9 @@ export const AdminCreateNotificationModal = ({
       setStudentFilterClassId('');
       setSearchResults([]);
       setIsSearchingStudents(false);
+      setSearchError(null);
+      setSearchRetryCount(0);
+      searchRequestIdRef.current = 0;
       setErrorMessage(null);
       setIsSaving(false);
       isSubmittingRef.current = false;
@@ -147,18 +153,24 @@ export const AdminCreateNotificationModal = ({
   useEffect(() => {
     if (!isOpen || targetType !== 'individual' || selectedStudent) {
       setSearchResults([]);
+      setSearchError(null);
+      setIsSearchingStudents(false);
       return;
     }
 
     const trimmed = studentSearchQuery.trim();
     if (!trimmed && !studentFilterGrade && !studentFilterClassId) {
       setSearchResults([]);
+      setSearchError(null);
+      setIsSearchingStudents(false);
       return;
     }
 
-    let isCurrent = true;
+    const currentRequestId = ++searchRequestIdRef.current;
+    setIsSearchingStudents(true);
+    setSearchError(null);
+
     const timer = setTimeout(async () => {
-      setIsSearchingStudents(true);
       try {
         const res = await searchStudentsForNotification({
           query: trimmed,
@@ -166,23 +178,37 @@ export const AdminCreateNotificationModal = ({
           classId: studentFilterClassId || null,
           limit: 10
         });
-        if (isCurrent && res.ok && Array.isArray(res.data)) {
+
+        // Bỏ qua kết quả cũ nếu đã có request mới hơn (Chống race-condition)
+        if (searchRequestIdRef.current !== currentRequestId) return;
+
+        if (res.ok && Array.isArray(res.data)) {
           setSearchResults(res.data);
+          setSearchError(null);
+        } else {
+          setSearchResults([]);
+          setSearchError(res.error?.message || 'Không thể tìm kiếm học sinh. Vui lòng thử lại.');
         }
       } catch (err) {
-        // Lỗi tìm kiếm không làm văng form
+        if (searchRequestIdRef.current === currentRequestId) {
+          setSearchResults([]);
+          setSearchError(err?.message || 'Lỗi kết nối khi tìm kiếm học sinh.');
+        }
       } finally {
-        if (isCurrent) {
+        if (searchRequestIdRef.current === currentRequestId) {
           setIsSearchingStudents(false);
         }
       }
     }, 300);
 
     return () => {
-      isCurrent = false;
       clearTimeout(timer);
     };
-  }, [isOpen, targetType, selectedStudent, studentSearchQuery, studentFilterGrade, studentFilterClassId]);
+  }, [isOpen, targetType, selectedStudent, studentSearchQuery, studentFilterGrade, studentFilterClassId, searchRetryCount]);
+
+  const handleRetrySearch = () => {
+    setSearchRetryCount((c) => c + 1);
+  };
 
   if (!isOpen) return null;
 
@@ -996,31 +1022,48 @@ export const AdminCreateNotificationModal = ({
                         <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-600" />
                         <span>Đang tìm kiếm học sinh trong toàn trường...</span>
                       </div>
+                    ) : searchError ? (
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center justify-between gap-2 animate-fadeIn">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span className="font-bold truncate">{searchError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRetrySearch}
+                          className="px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-700 text-[11px] font-black rounded-lg border border-rose-300 transition-all shrink-0 shadow-xs"
+                        >
+                          Thử lại
+                        </button>
+                      </div>
                     ) : searchResults.length > 0 ? (
                       <div className="space-y-1.5 max-h-44 overflow-y-auto p-1 bg-white border border-slate-200 rounded-xl">
-                        {searchResults.map((stu) => (
-                          <div
-                            key={stu.id}
-                            className="p-2 rounded-lg hover:bg-purple-50 border border-transparent hover:border-purple-200 flex items-center justify-between gap-2 transition-all"
-                          >
-                            <div className="truncate">
-                              <span className="text-xs font-black text-slate-900 block truncate">
-                                {stu.full_name || stu.username}
-                              </span>
-                              <span className="text-[10px] font-bold text-slate-500">
-                                Mã: {stu.student_code || '---'} • Lớp: {formatClassLabel(stu.class_name)} {stu.grade_level ? `(Khối ${stu.grade_level})` : ''}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleSelectStudent(stu)}
-                              disabled={isSaving}
-                              className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-black rounded-lg transition-all shrink-0 shadow-xs"
+                        {searchResults.map((stu) => {
+                          const stuKey = stu.student_id || stu.id;
+                          return (
+                            <div
+                              key={stuKey}
+                              className="p-2 rounded-lg hover:bg-purple-50 border border-transparent hover:border-purple-200 flex items-center justify-between gap-2 transition-all"
                             >
-                              Chọn
-                            </button>
-                          </div>
-                        ))}
+                              <div className="truncate">
+                                <span className="text-xs font-black text-slate-900 block truncate">
+                                  {stu.full_name || stu.username}
+                                </span>
+                                <span className="text-[10px] font-bold text-slate-500">
+                                  Mã: {stu.student_code || '---'} • Lớp: {formatClassLabel(stu.class_name)} {stu.grade_level ? `(Khối ${stu.grade_level})` : ''}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleSelectStudent(stu)}
+                                disabled={isSaving}
+                                className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-black rounded-lg transition-all shrink-0 shadow-xs"
+                              >
+                                Chọn
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       (studentSearchQuery.trim() || studentFilterGrade || studentFilterClassId) && (
