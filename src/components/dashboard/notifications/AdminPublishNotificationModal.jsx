@@ -15,7 +15,8 @@ import {
   Layers,
   GraduationCap,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  User
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext.jsx';
 import { publishNotification, getNotificationById } from '../../../services/notificationClient.js';

@@ -420,6 +420,26 @@ async function runAll() {
     );
   });
 
+  await runTest('3.6. Mọi JSX component/icon viết hoa trong cụm Notifications đều được import đầy đủ (ngăn lỗi ReferenceError: User is not defined)', () => {
+    const notifDir = path.join(rootDir, 'src', 'components', 'dashboard', 'notifications');
+    const jsxFiles = fs.readdirSync(notifDir).filter((f) => f.endsWith('.jsx'));
+
+    for (const fileName of jsxFiles) {
+      const content = fs.readFileSync(path.join(notifDir, fileName), 'utf8');
+      const headerSection = content.split(/export\s+(?:const|function|default)/)[0] || '';
+      const jsxTags = [...new Set([...content.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)].map((m) => m[1]))];
+
+      for (const tag of jsxTags) {
+        const isImported = new RegExp(`\\b${tag}\\b`).test(headerSection);
+        const isLocallyDefined = new RegExp(`(?:const|function|class)\\s+${tag}\\b`).test(content);
+        assert.ok(
+          isImported || isLocallyDefined,
+          `${fileName} sử dụng <${tag} /> nhưng chưa import hoặc khai báo ${tag}`
+        );
+      }
+    }
+  });
+
   console.log('--------------------------------------------------------------------');
   console.log(`KẾT QUẢ KIỂM THỬ ĐỢT A: ${passedTests}/${totalTests} TESTS PASS`);
   if (passedTests === totalTests) {
