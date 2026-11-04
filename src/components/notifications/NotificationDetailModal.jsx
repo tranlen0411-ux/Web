@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Sparkles
 } from 'lucide-react';
+import { SafeNotificationContent } from './SafeNotificationContent.jsx';
 
 /**
  * Format thời gian hiển thị đầy đủ ngày giờ
@@ -196,7 +197,7 @@ export const NotificationDetailModal = ({
             id="notification-detail-content"
             className="p-4 bg-amber-50/50 rounded-2xl border-2 border-amber-100 text-sm font-medium text-slate-800 leading-relaxed whitespace-pre-line break-words select-text"
           >
-            {notification.content}
+            <SafeNotificationContent content={notification.content} />
           </div>
 
           {/* Thông tin người gửi chi tiết */}

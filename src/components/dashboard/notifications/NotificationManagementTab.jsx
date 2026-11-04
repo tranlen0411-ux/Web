@@ -24,6 +24,7 @@ import { formatClassLabel } from '../../../utils/helpers.js';
 import { CreateNotificationModal } from './CreateNotificationModal.jsx';
 import { PublishNotificationModal } from './PublishNotificationModal.jsx';
 import { RecallNotificationModal } from './RecallNotificationModal.jsx';
+import { SafeNotificationContent } from '../../notifications/SafeNotificationContent.jsx';
 
 const PAGE_SIZE = 20;
 
@@ -530,7 +531,7 @@ export const NotificationManagementTab = ({ role = 'teacher', classes = [] }) =>
 
                 {/* Nội dung thông báo thuần văn bản an toàn */}
                 <p className="text-xs text-slate-700 whitespace-pre-line line-clamp-3 leading-relaxed break-words font-medium">
-                  {item.content}
+                  <SafeNotificationContent content={item.content} />
                 </p>
 
                 {/* Lý do thu hồi (nếu có) */}

@@ -21,6 +21,7 @@ import {
 import { useAuth } from '../../../context/AuthContext.jsx';
 import { publishNotification, getNotificationById } from '../../../services/notificationClient.js';
 import { formatClassLabel } from '../../../utils/helpers.js';
+import { SafeNotificationContent } from '../../notifications/SafeNotificationContent.jsx';
 
 export const AdminPublishNotificationModal = ({
   isOpen,
@@ -350,7 +351,7 @@ export const AdminPublishNotificationModal = ({
             <div>
               <p className="text-[11px] font-bold text-slate-400 mb-0.5">Nội dung tóm tắt:</p>
               <p className="text-slate-700 whitespace-pre-line break-words max-h-36 overflow-y-auto leading-relaxed bg-white p-3 rounded-xl border border-slate-200 font-medium">
-                {activeNotif.content}
+                <SafeNotificationContent content={activeNotif.content} />
               </p>
             </div>
           </div>
