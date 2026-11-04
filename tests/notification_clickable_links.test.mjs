@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { registerHooks } from 'node:module';
+import { register } from 'node:module';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
@@ -20,19 +20,24 @@ import {
   tokenizeTextWithSafeLinks
 } from '../src/utils/notificationLinks.js';
 
-// Cho phép Node.js ESM nạp trực tiếp file .jsx sử dụng React.createElement
-registerHooks({
-  load(url, context, nextLoad) {
-    if (url.endsWith('.jsx')) {
-      return {
-        format: 'module',
-        shortCircuit: true,
-        source: fs.readFileSync(new URL(url), 'utf8')
-      };
-    }
-    return nextLoad(url, context);
+// Cho phép Node.js ESM (tương thích Node 20 LTS trên CI và Node 22/24+) nạp trực tiếp file .jsx sử dụng React.createElement
+const jsxLoaderSource = `
+import fs from 'node:fs';
+export async function load(url, context, nextLoad) {
+  if (url.endsWith('.jsx')) {
+    return {
+      format: 'module',
+      shortCircuit: true,
+      source: fs.readFileSync(new URL(url), 'utf8')
+    };
   }
-});
+  return nextLoad(url, context);
+}
+`;
+register(
+  `data:text/javascript;base64,${Buffer.from(jsxLoaderSource, 'utf8').toString('base64')}`,
+  import.meta.url
+);
 
 const { SafeNotificationContent } = await import(
   '../src/components/notifications/SafeNotificationContent.jsx'
