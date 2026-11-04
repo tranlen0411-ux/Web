@@ -15,7 +15,8 @@ import {
   Layers,
   GraduationCap,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  User
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext.jsx';
 import { publishNotification, getNotificationById } from '../../../services/notificationClient.js';
@@ -429,6 +430,32 @@ export const AdminPublishNotificationModal = ({
                     </span>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 4. Trường hợp CÁ NHÂN HỌC SINH ('individual') */}
+            {targetType === 'individual' && (
+              <div className="p-3 bg-white rounded-xl border border-purple-200 text-purple-900 font-bold space-y-2">
+                <p className="text-xs text-purple-950 font-black flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-purple-600" />
+                  Gửi riêng cho cá nhân học sinh
+                </p>
+                <div className="p-2.5 bg-purple-50 rounded-lg border border-purple-100 flex items-center gap-2">
+                  <span className="text-sm">👨‍🎓</span>
+                  <div className="truncate">
+                    <p className="text-xs font-black text-purple-950 truncate">
+                      {activeNotif.target_student_name_snapshot || 'Học sinh cá nhân'}
+                    </p>
+                    {activeNotif.target_student_id && (
+                      <p className="text-[10px] text-purple-700 truncate font-mono">
+                        UUID: {activeNotif.target_student_id}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-700 leading-relaxed">
+                  Thông báo sẽ xuất hiện duy nhất trong Hộp thư của học sinh này. Các học sinh khác và giáo viên không thể xem.
+                </p>
               </div>
             )}
 

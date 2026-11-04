@@ -15,10 +15,16 @@ import {
   Check,
   CheckCircle2,
   RefreshCw,
-  Info
+  Info,
+  User,
+  Search
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext.jsx';
-import { createNotification } from '../../../services/notificationClient.js';
+import {
+  createNotification,
+  createIndividualNotification,
+  searchStudentsForNotification
+} from '../../../services/notificationClient.js';
 import { formatClassLabel } from '../../../utils/helpers.js';
 
 // Danh sách khối lớp hợp lệ theo quy chuẩn nghiệp vụ (Khối 1 đến Khối 5)
@@ -39,16 +45,28 @@ export const AdminCreateNotificationModal = ({
   const [priority, setPriority] = useState('normal'); // 'normal' | 'high' | 'urgent'
   const [category, setCategory] = useState('general'); // 'general' | 'system' | 'exercise' | 'exam' | 'material'
 
-  // Phạm vi người nhận: 'all' | 'grade' | 'classes'
+  // Phạm vi người nhận: 'all' | 'grade' | 'classes' | 'individual'
   const [targetType, setTargetType] = useState('all');
   const [targetGradeLevel, setTargetGradeLevel] = useState(1);
   const [selectedClassIds, setSelectedClassIds] = useState([]);
+
+  // Dữ liệu cho phạm vi Cá nhân học sinh ('individual')
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [studentSearchQuery, setStudentSearchQuery] = useState('');
+  const [studentFilterGrade, setStudentFilterGrade] = useState('');
+  const [studentFilterClassId, setStudentFilterClassId] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearchingStudents, setIsSearchingStudents] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [searchRetryCount, setSearchRetryCount] = useState(0);
+  const searchRequestIdRef = useRef(0);
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
 
   // Refs quản lý focus, lifecycle và chống double-submit đồng bộ
   const titleInputRef = useRef(null);
+  const studentSearchInputRef = useRef(null);
   const previouslyFocusedRef = useRef(null);
   const currentUserIdRef = useRef(user?.id);
   const isSubmittingRef = useRef(false);
@@ -98,6 +116,15 @@ export const AdminCreateNotificationModal = ({
       setTargetType('all');
       setTargetGradeLevel(1);
       setSelectedClassIds([]);
+      setSelectedStudent(null);
+      setStudentSearchQuery('');
+      setStudentFilterGrade('');
+      setStudentFilterClassId('');
+      setSearchResults([]);
+      setIsSearchingStudents(false);
+      setSearchError(null);
+      setSearchRetryCount(0);
+      searchRequestIdRef.current = 0;
       setErrorMessage(null);
       setIsSaving(false);
       isSubmittingRef.current = false;
@@ -122,6 +149,67 @@ export const AdminCreateNotificationModal = ({
     }
   }, [user, isOpen, onClose]);
 
+  // Debounced search học sinh toàn trường cho Admin
+  useEffect(() => {
+    if (!isOpen || targetType !== 'individual' || selectedStudent) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchingStudents(false);
+      return;
+    }
+
+    const trimmed = studentSearchQuery.trim();
+    if (!trimmed && !studentFilterGrade && !studentFilterClassId) {
+      setSearchResults([]);
+      setSearchError(null);
+      setIsSearchingStudents(false);
+      return;
+    }
+
+    const currentRequestId = ++searchRequestIdRef.current;
+    setIsSearchingStudents(true);
+    setSearchError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchStudentsForNotification({
+          query: trimmed,
+          gradeLevel: studentFilterGrade ? Number(studentFilterGrade) : null,
+          classId: studentFilterClassId || null,
+          limit: 10
+        });
+
+        // Bỏ qua kết quả cũ nếu đã có request mới hơn (Chống race-condition)
+        if (searchRequestIdRef.current !== currentRequestId) return;
+
+        if (res.ok && Array.isArray(res.data)) {
+          setSearchResults(res.data);
+          setSearchError(null);
+        } else {
+          setSearchResults([]);
+          setSearchError(res.error?.message || 'Không thể tìm kiếm học sinh. Vui lòng thử lại.');
+        }
+      } catch (err) {
+        if (searchRequestIdRef.current === currentRequestId) {
+          setSearchResults([]);
+          setSearchError(err?.message || 'Lỗi kết nối khi tìm kiếm học sinh.');
+        }
+      } finally {
+        if (searchRequestIdRef.current === currentRequestId) {
+          setIsSearchingStudents(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isOpen, targetType, selectedStudent, studentSearchQuery, studentFilterGrade, studentFilterClassId, searchRetryCount]);
+
+  const handleRetrySearch = () => {
+    setSearchRetryCount((c) => c + 1);
+  };
+
   if (!isOpen) return null;
 
   /**
@@ -134,17 +222,47 @@ export const AdminCreateNotificationModal = ({
     setTargetType(newType);
 
     if (newType === 'all') {
-      // Phạm vi toàn trường: Xóa khối và danh sách lớp
+      // Phạm vi toàn trường: Xóa khối và danh sách lớp, học sinh
       setTargetGradeLevel(null);
       setSelectedClassIds([]);
+      setSelectedStudent(null);
     } else if (newType === 'grade') {
-      // Phạm vi theo khối: Đặt khối mặc định (1), xóa danh sách lớp
+      // Phạm vi theo khối: Đặt khối mặc định (1), xóa danh sách lớp, học sinh
       setTargetGradeLevel((prev) => (prev && VALID_GRADE_LEVELS.includes(prev) ? prev : 1));
       setSelectedClassIds([]);
+      setSelectedStudent(null);
     } else if (newType === 'classes') {
-      // Phạm vi theo lớp: Xóa khối
+      // Phạm vi theo lớp: Xóa khối, học sinh
       setTargetGradeLevel(null);
+      setSelectedStudent(null);
+    } else if (newType === 'individual') {
+      // Phạm vi cá nhân: Xóa khối và danh sách lớp
+      setTargetGradeLevel(null);
+      setSelectedClassIds([]);
     }
+  };
+
+  /**
+   * Chọn học sinh mục tiêu trong danh sách tìm kiếm
+   */
+  const handleSelectStudent = (stu) => {
+    if (isSaving || isSubmittingRef.current) return;
+    setSelectedStudent(stu);
+    setSearchResults([]);
+    setStudentSearchQuery('');
+    setErrorMessage(null);
+  };
+
+  /**
+   * Bỏ chọn học sinh hiện tại để tìm học sinh khác
+   */
+  const handleClearSelectedStudent = () => {
+    if (isSaving || isSubmittingRef.current) return;
+    setSelectedStudent(null);
+    setSearchResults([]);
+    setTimeout(() => {
+      studentSearchInputRef.current?.focus();
+    }, 50);
   };
 
   /**
@@ -289,6 +407,16 @@ export const AdminCreateNotificationModal = ({
       payloadTargetType = 'classes';
       payloadGradeLevel = null;
       payloadClassIds = selectedClassIds;
+    } else if (targetType === 'individual') {
+      if (!selectedStudent || !selectedStudent.id) {
+        isSubmittingRef.current = false;
+        setErrorMessage('Vui lòng tìm kiếm và chọn một học sinh nhận thông báo.');
+        studentSearchInputRef.current?.focus();
+        return;
+      }
+      payloadTargetType = 'individual';
+      payloadGradeLevel = null;
+      payloadClassIds = [];
     } else {
       isSubmittingRef.current = false;
       setErrorMessage('Loại phạm vi người nhận không hợp lệ.');
@@ -301,16 +429,28 @@ export const AdminCreateNotificationModal = ({
 
     try {
       // GỌI RPC TẠO BẢN NHÁP: publishNow = false BẮT BUỘC KHÓA CỨNG TRONG MỌI TRƯỜNG HỢP
-      const res = await createNotification({
-        title: trimmedTitle,
-        content: trimmedContent,
-        priority: priority || 'normal',
-        category: category || 'general',
-        targetType: payloadTargetType,
-        targetGradeLevel: payloadGradeLevel,
-        targetClassIds: payloadClassIds,
-        publishNow: false // KHÓA CỨNG BẢN NHÁP - KHÔNG ĐƯỢC PHÁT HÀNH TRONG R3-D2A
-      });
+      let res;
+      if (payloadTargetType === 'individual') {
+        res = await createIndividualNotification({
+          title: trimmedTitle,
+          content: trimmedContent,
+          priority: priority || 'normal',
+          category: category || 'general',
+          targetStudentId: selectedStudent.id,
+          publishNow: false
+        });
+      } else {
+        res = await createNotification({
+          title: trimmedTitle,
+          content: trimmedContent,
+          priority: priority || 'normal',
+          category: category || 'general',
+          targetType: payloadTargetType,
+          targetGradeLevel: payloadGradeLevel,
+          targetClassIds: payloadClassIds,
+          publishNow: false
+        });
+      }
 
       // Chống Race Condition nếu user đăng xuất hoặc đổi tài khoản khi request đang xử lý
       if (currentUserIdRef.current !== activeUserId) {
@@ -373,6 +513,16 @@ export const AdminCreateNotificationModal = ({
       return (
         <span className="text-emerald-700 font-bold">
           {selectedClassIds.length} lớp học được chọn
+        </span>
+      );
+    }
+    if (targetType === 'individual') {
+      if (!selectedStudent) {
+        return <span className="text-rose-600 font-bold">Chưa chọn học sinh nhận tin</span>;
+      }
+      return (
+        <span className="text-purple-800 font-bold">
+          Học sinh: {selectedStudent.full_name || selectedStudent.username} {selectedStudent.student_code ? `(${selectedStudent.student_code})` : ''} {selectedStudent.class_name ? `• ${formatClassLabel(selectedStudent.class_name)}` : ''}
         </span>
       );
     }
@@ -540,8 +690,8 @@ export const AdminCreateNotificationModal = ({
               </span>
             </div>
 
-            {/* 3 LỰA CHỌN PHẠM VI CHỦ ĐẠO */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {/* 4 LỰA CHỌN PHẠM VI CHỦ ĐẠO CHO ADMIN */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <button
                 type="button"
                 onClick={() => handleScopeTypeChange('all')}
@@ -563,7 +713,7 @@ export const AdminCreateNotificationModal = ({
                   )}
                 </div>
                 <p className="text-[10px] font-medium text-slate-500 leading-tight">
-                  Tất cả Giáo viên & Học sinh toàn trường
+                  Tất cả GV & HS toàn trường
                 </p>
               </button>
 
@@ -588,7 +738,7 @@ export const AdminCreateNotificationModal = ({
                   )}
                 </div>
                 <p className="text-[10px] font-medium text-slate-500 leading-tight">
-                  Toàn bộ học sinh thuộc 1 khối cụ thể
+                  Toàn bộ học sinh 1 khối
                 </p>
               </button>
 
@@ -613,7 +763,32 @@ export const AdminCreateNotificationModal = ({
                   )}
                 </div>
                 <p className="text-[10px] font-medium text-slate-500 leading-tight">
-                  Chọn một hoặc nhiều lớp chỉ định
+                  Một hoặc nhiều lớp
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleScopeTypeChange('individual')}
+                disabled={isSaving}
+                className={`p-3 rounded-2xl border-2 text-left transition-all ${
+                  targetType === 'individual'
+                    ? 'border-purple-600 bg-purple-50/70 shadow-sm'
+                    : 'border-slate-200 hover:border-purple-300 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-black text-purple-950 flex items-center gap-1">
+                    <User className="w-3.5 h-3.5 text-purple-600" /> Cá nhân HS
+                  </span>
+                  {targetType === 'individual' && (
+                    <div className="w-4 h-4 rounded-full bg-purple-600 text-white flex items-center justify-center">
+                      <Check className="w-3 h-3" />
+                    </div>
+                  )}
+                </div>
+                <p className="text-[10px] font-medium text-slate-500 leading-tight">
+                  Gửi riêng 1 học sinh
                 </p>
               </button>
             </div>
@@ -723,6 +898,186 @@ export const AdminCreateNotificationModal = ({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* NỘI DUNG TÙY CHỈNH THEO PHẠM VI D: CÁ NHÂN HỌC SINH */}
+            {targetType === 'individual' && (
+              <div className="p-4 bg-purple-50/50 rounded-2xl border border-purple-200 space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-purple-950">
+                    Chọn học sinh nhận thông báo:
+                  </span>
+                  <span className="text-[11px] font-bold text-slate-400">
+                    Phạm vi: Toàn trường
+                  </span>
+                </div>
+
+                {selectedStudent ? (
+                  /* ĐÃ CHỌN HỌC SINH */
+                  <div className="p-3 bg-white border-2 border-purple-400 rounded-xl flex items-center justify-between gap-3 shadow-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-900 border border-purple-300 flex items-center justify-center font-black text-base shrink-0">
+                        👨‍🎓
+                      </div>
+                      <div className="truncate">
+                        <p className="text-xs font-black text-slate-900 truncate">
+                          {selectedStudent.full_name || selectedStudent.username}
+                        </p>
+                        <p className="text-[11px] font-bold text-slate-500 truncate">
+                          Mã HS: <span className="text-purple-950 font-black">{selectedStudent.student_code || '---'}</span>
+                          {selectedStudent.class_name && (
+                            <> • Lớp: <span className="text-purple-950 font-black">{formatClassLabel(selectedStudent.class_name)}</span></>
+                          )}
+                          {selectedStudent.grade_level && (
+                            <> (Khối {selectedStudent.grade_level})</>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleClearSelectedStudent}
+                      disabled={isSaving}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-black rounded-lg transition-all shrink-0 border border-slate-300"
+                    >
+                      Đổi học sinh
+                    </button>
+                  </div>
+                ) : (
+                  /* CHƯA CHỌN: BỘ LỌC VÀ TÌM KIẾM HỌC SINH */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {/* Lọc Khối */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          Lọc theo Khối:
+                        </label>
+                        <select
+                          value={studentFilterGrade}
+                          onChange={(e) => {
+                            setStudentFilterGrade(e.target.value);
+                            setStudentFilterClassId('');
+                          }}
+                          disabled={isSaving}
+                          className="w-full px-2.5 py-2 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-purple-500"
+                        >
+                          <option value="">Tất cả các khối</option>
+                          {VALID_GRADE_LEVELS.map((g) => (
+                            <option key={g} value={g}>
+                              Khối {g}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Lọc Lớp */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          Lọc theo Lớp:
+                        </label>
+                        <select
+                          value={studentFilterClassId}
+                          onChange={(e) => setStudentFilterClassId(e.target.value)}
+                          disabled={isSaving}
+                          className="w-full px-2.5 py-2 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-purple-500"
+                        >
+                          <option value="">Tất cả các lớp</option>
+                          {validClasses
+                            .filter((c) => !studentFilterGrade || Number(c.grade_level) === Number(studentFilterGrade))
+                            .map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {formatClassLabel(c.name)} {c.grade_level ? `(K${c.grade_level})` : ''}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      {/* Ô nhập tìm kiếm */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          Tìm kiếm học sinh:
+                        </label>
+                        <div className="relative">
+                          <input
+                            ref={studentSearchInputRef}
+                            type="text"
+                            value={studentSearchQuery}
+                            onChange={(e) => setStudentSearchQuery(e.target.value)}
+                            disabled={isSaving}
+                            placeholder="Tên hoặc mã HS..."
+                            className="w-full pl-8 pr-3 py-2 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-purple-500 placeholder:text-slate-400"
+                          />
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Trạng thái tìm kiếm & Kết quả */}
+                    {isSearchingStudents ? (
+                      <div className="p-3 bg-white rounded-xl border border-slate-200 text-center text-xs text-slate-500 font-bold flex items-center justify-center gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-600" />
+                        <span>Đang tìm kiếm học sinh trong toàn trường...</span>
+                      </div>
+                    ) : searchError ? (
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center justify-between gap-2 animate-fadeIn">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span className="font-bold truncate">{searchError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRetrySearch}
+                          className="px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-700 text-[11px] font-black rounded-lg border border-rose-300 transition-all shrink-0 shadow-xs"
+                        >
+                          Thử lại
+                        </button>
+                      </div>
+                    ) : searchResults.length > 0 ? (
+                      <div className="space-y-1.5 max-h-44 overflow-y-auto p-1 bg-white border border-slate-200 rounded-xl">
+                        {searchResults.map((stu) => {
+                          const stuKey = stu.student_id || stu.id;
+                          return (
+                            <div
+                              key={stuKey}
+                              className="p-2 rounded-lg hover:bg-purple-50 border border-transparent hover:border-purple-200 flex items-center justify-between gap-2 transition-all"
+                            >
+                              <div className="truncate">
+                                <span className="text-xs font-black text-slate-900 block truncate">
+                                  {stu.full_name || stu.username}
+                                </span>
+                                <span className="text-[10px] font-bold text-slate-500">
+                                  Mã: {stu.student_code || '---'} • Lớp: {formatClassLabel(stu.class_name)} {stu.grade_level ? `(Khối ${stu.grade_level})` : ''}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleSelectStudent(stu)}
+                                disabled={isSaving}
+                                className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-black rounded-lg transition-all shrink-0 shadow-xs"
+                              >
+                                Chọn
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      (studentSearchQuery.trim() || studentFilterGrade || studentFilterClassId) && (
+                        <p className="text-[11px] font-bold text-slate-500 p-2 text-center bg-white rounded-xl border border-slate-200">
+                          Không tìm thấy học sinh nào phù hợp với bộ lọc và từ khóa tìm kiếm.
+                        </p>
+                      )
+                    )}
+
+                    {!selectedStudent && !studentSearchQuery.trim() && !studentFilterGrade && !studentFilterClassId && (
+                      <p className="text-[11px] font-bold text-slate-500 text-center py-1">
+                        * Nhập tên hoặc mã học sinh vào ô trên (hoặc chọn Khối/Lớp) để tìm và chọn đúng một học sinh nhận tin.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
