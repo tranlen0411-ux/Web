@@ -27,6 +27,7 @@ import { formatClassLabel } from '../../../utils/helpers.js';
 import { AdminCreateNotificationModal } from './AdminCreateNotificationModal.jsx';
 import { AdminPublishNotificationModal } from './AdminPublishNotificationModal.jsx';
 import { AdminRecallNotificationModal } from './AdminRecallNotificationModal.jsx';
+import { SafeNotificationContent } from '../../notifications/SafeNotificationContent.jsx';
 
 const PAGE_SIZE = 20;
 
@@ -507,7 +508,7 @@ export const AdminNotificationManagementTab = ({ classes = [], isClassesComplete
 
                 {/* Nội dung thông báo tóm tắt an toàn chống XSS */}
                 <p className="text-xs text-slate-700 whitespace-pre-line line-clamp-3 leading-relaxed break-words font-medium">
-                  {item.content}
+                  <SafeNotificationContent content={item.content} />
                 </p>
 
                 {/* Lý do thu hồi (nếu có) */}

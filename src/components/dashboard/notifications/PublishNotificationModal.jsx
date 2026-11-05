@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../../../context/AuthContext.jsx';
 import { publishNotification } from '../../../services/notificationClient.js';
 import { formatClassLabel } from '../../../utils/helpers.js';
+import { SafeNotificationContent } from '../../notifications/SafeNotificationContent.jsx';
 
 export const PublishNotificationModal = ({
   isOpen,
@@ -335,8 +336,8 @@ export const PublishNotificationModal = ({
           {/* Nội dung thông báo preview */}
           <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
             <span className="text-[11px] font-bold text-slate-400 block mb-1">Nội dung chi tiết:</span>
-            <p className="text-xs text-slate-700 whitespace-pre-line leading-relaxed max-h-40 overflow-y-auto font-medium">
-              {draft.content}
+            <p className="text-xs text-slate-700 whitespace-pre-line break-words leading-relaxed max-h-40 overflow-y-auto font-medium">
+              <SafeNotificationContent content={draft.content} />
             </p>
           </div>
 
