@@ -17,6 +17,21 @@ import { CompetitionHostPage } from './pages/CompetitionHostPage';
 import { CompetitionStudentPage } from './pages/CompetitionStudentPage';
 import { CompetitionSpectatorPage } from './pages/CompetitionSpectatorPage';
 
+// Công tắc build-time cho Wise Bee R1 Mock:
+// Mặc định TẮT (false) trên mọi bản build triển khai (vite build -> import.meta.env.DEV === false).
+// Chỉ bật trong Vite Development Server cục bộ (import.meta.env.DEV === true).
+const WiseBeeLauncher = import.meta.env.DEV
+  ? React.lazy(() =>
+      import('./components/wise-bee/WiseBeeLauncher').then((m) => ({
+        default: m.WiseBeeLauncher,
+      }))
+    )
+  : null;
+
+const WiseBeeLocalTestPage = import.meta.env.DEV
+  ? React.lazy(() => import('./pages/WiseBeeLocalTestPage'))
+  : null;
+
 // Cờ kiểm tra môi trường kích hoạt test harness
 const isHarnessEnabled = Boolean(
   import.meta.env.DEV ||
@@ -94,6 +109,8 @@ const HomeDispatcher = () => {
 function AppRoutes() {
   const location = useLocation();
   const isSpectator = location.pathname.startsWith('/competition/spectator');
+  const isLocalWiseBeeTest =
+    import.meta.env.DEV && location.pathname.startsWith('/wise-bee-local-test');
 
   return (
     <div className={`min-h-screen flex flex-col justify-between ${isSpectator ? 'bg-slate-950 text-slate-100' : 'bg-amber-50/60 font-sans'}`}>
@@ -173,11 +190,26 @@ function AppRoutes() {
           <Route path="/play/:id" element={<GamePlayView />} />
           <Route path="/phase2-device-test" element={<Phase2DeviceTestHarnessPage />} />
           <Route path="/phase2-device-test/*" element={<Phase2DeviceTestHarnessPage />} />
+          {import.meta.env.DEV && WiseBeeLocalTestPage && (
+            <Route
+              path="/wise-bee-local-test"
+              element={
+                <React.Suspense fallback={null}>
+                  <WiseBeeLocalTestPage />
+                </React.Suspense>
+              }
+            />
+          )}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
 
       {!isSpectator && <Footer />}
+      {import.meta.env.DEV && !isSpectator && !isLocalWiseBeeTest && WiseBeeLauncher && (
+        <React.Suspense fallback={null}>
+          <WiseBeeLauncher />
+        </React.Suspense>
+      )}
     </div>
   );
 }
