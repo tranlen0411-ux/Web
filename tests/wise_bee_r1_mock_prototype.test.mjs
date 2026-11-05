@@ -685,12 +685,21 @@ async function ensureLocalDevServer(defaultUrl = 'http://localhost:5173/wise-bee
     [viteBin, '--host', 'localhost', '--port', String(tempPort), '--strictPort'],
     { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'] }
   );
+  viteProc.stdout?.resume();
+  viteProc.stderr?.resume();
 
-  const fallbackUrl = `http://localhost:${tempPort}/wise-bee-local-test`;
+  const baseOrigin = `http://localhost:${tempPort}`;
+  const fallbackUrl = `${baseOrigin}/wise-bee-local-test`;
   for (let i = 0; i < 60; i += 1) {
     try {
       const r = await fetch(fallbackUrl);
       if (r.ok) {
+        await Promise.allSettled([
+          fetch(`${baseOrigin}/src/main.jsx`),
+          fetch(`${baseOrigin}/src/App.jsx`),
+          fetch(`${baseOrigin}/src/pages/WiseBeeLocalTestPage.jsx`),
+          fetch(`${baseOrigin}/src/components/wise-bee/WiseBeeLauncher.jsx`),
+        ]);
         return {
           url: fallbackUrl,
           close: () => {
@@ -803,13 +812,22 @@ async function withHeadlessBrowserSession(defaultTargetUrl, callback) {
     await sendCdp('Page.enable');
     await sendCdp('Runtime.enable');
 
-    // Chờ trang test và nút mở Ong Thông Thái mount xong
+    // Chờ điều kiện DOM sẵn sàng hoàn toàn (document.readyState === 'complete', #root đã mount cây React và nút Mở Ong Thông Thái xuất hiện).
+    // Bỏ qua lỗi chuyển ngữ cảnh tạm thời (Execution context was destroyed) khi trình duyệt vừa commit điều hướng ban đầu.
     let mounted = false;
-    for (let i = 0; i < 50; i += 1) {
-      mounted = await evalDom(
-        `Boolean(document.querySelector('button[aria-label="Mở Ong Thông Thái"]'))`
-      );
-      if (mounted) break;
+    for (let i = 0; i < 120; i += 1) {
+      try {
+        mounted = await evalDom(`
+          Boolean(
+            document.readyState === 'complete' &&
+              document.getElementById('root')?.childElementCount > 0 &&
+              document.querySelector('button[aria-label="Mở Ong Thông Thái"]')
+          )
+        `);
+        if (mounted) break;
+      } catch {
+        // Ngữ cảnh thực thi đang chuyển từ about:blank sang trang đích trong lúc điều hướng ban đầu
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
     assert.equal(mounted, true, 'Nút nổi Mở Ong Thông Thái phải xuất hiện trên DOM thực tế');
@@ -842,9 +860,17 @@ test('Wise Bee R1 — Suite 8: Real Browser DOM Interactive Runtime & Multi-View
         true;
       `);
 
-      // Đợi focus tự động chuyển vào ô nhập câu hỏi (#wise-bee-question-input)
-      await new Promise((r) => setTimeout(r, 80));
-      const initialFocusId = await evalDom(`document.activeElement?.id || ''`);
+      // Chờ điều kiện DOM: Portal của Drawer đã mount và focus tự động chuyển vào ô nhập câu hỏi (#wise-bee-question-input)
+      let initialFocusId = '';
+      for (let i = 0; i < 30; i += 1) {
+        initialFocusId = await evalDom(`
+          document.querySelector('[data-wise-bee-portal="true"]')
+            ? (document.activeElement?.id || '')
+            : ''
+        `);
+        if (initialFocusId === 'wise-bee-question-input') break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
       assert.equal(initialFocusId, 'wise-bee-question-input', 'Mở Drawer phải tự động focus vào ô nhập câu hỏi');
 
       // Kiểm tra Focus Trap: Khi ô nhập là phần tử tương tác cuối cùng (vì nút Gửi đang disabled khi input rỗng),
