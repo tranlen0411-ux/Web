@@ -2,6 +2,11 @@
 // Exam Builder V1 - Phase 3C Frontend Integrity Event HTTP Transport Helper
 // Strictly implements single-request dispatch, token resolution at send time, and failure classification.
 
+import {
+  resolveAssessmentFunctionUrl,
+  assertAssessmentFunctionUrlAllowed,
+} from './assessmentEndpointResolver.js';
+
 export const ALLOWED_INTEGRITY_SOURCES = Object.freeze(
   new Set(['page_hidden', 'page_visible', 'window_blur', 'window_focus'])
 );
@@ -135,8 +140,12 @@ export async function sendIntegrityEvent({
   clientTimestamp,
   getAccessToken,
   fetchImpl,
-  endpoint = DEFAULT_INTEGRITY_ENDPOINT,
+  endpoint,
 }) {
+  const targetEndpoint =
+    typeof endpoint === 'string' && endpoint.trim()
+      ? assertAssessmentFunctionUrlAllowed(endpoint, 'exam-record-integrity-event')
+      : resolveAssessmentFunctionUrl('exam-record-integrity-event');
   // 1. Synchronous Pre-Dispatch Validation
   if (!attemptId || typeof attemptId !== 'string' || !UUID_REGEX.test(attemptId)) {
     return {
@@ -235,10 +244,11 @@ export async function sendIntegrityEvent({
   // 4. Execute Network Request (Protected with failure classification)
   let response;
   try {
-    response = await executeFetch(endpoint, {
+    response = await executeFetch(targetEndpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      redirect: 'error',
     });
   } catch (_) {
     // Network error, TypeError, AbortError, or socket reset after dispatch

@@ -72,6 +72,137 @@ export interface AuthResult {
   adminClient?: RpcClient;
 }
 
+export interface BackendProjectConfig {
+  mode: 'two-project' | 'single-project';
+  coreUrl: string;
+  coreAnonKey: string;
+  coreServiceKey: string;
+  qbUrl: string;
+  qbServiceKey: string;
+}
+
+export interface ConfigResolutionResult {
+  ok: boolean;
+  config?: BackendProjectConfig;
+  error?: string;
+}
+
+export const APPROVED_STAGING_HOSTNAME = 'rcqgxmcqolxbrahhyxji.supabase.co';
+
+function validateProjectUrl(
+  rawUrl: string,
+  varName: string,
+  options?: { requireHttps?: boolean; allowedHostname?: string }
+): { ok: boolean; url?: string; hostname?: string; error?: string } {
+  try {
+    const parsed = new URL(rawUrl);
+    if (options?.requireHttps) {
+      if (parsed.protocol !== 'https:') {
+        return { ok: false, error: `${varName}: Giao thức không an toàn. Bắt buộc sử dụng HTTPS.` };
+      }
+    } else {
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return { ok: false, error: `${varName}: Giao thức không an toàn.` };
+      }
+    }
+    if (parsed.username || parsed.password) {
+      return { ok: false, error: `${varName}: Chứa thông tin đăng nhập trong URL.` };
+    }
+    if (parsed.search || parsed.hash) {
+      return { ok: false, error: `${varName}: Chứa query hoặc hash fragment.` };
+    }
+    if (options?.allowedHostname && parsed.hostname !== options.allowedHostname) {
+      return {
+        ok: false,
+        error: `${varName}: Hostname "${parsed.hostname}" không được phép trong chế độ Single-Project. Chỉ chấp nhận ${options.allowedHostname}.`,
+      };
+    }
+    return { ok: true, url: parsed.origin, hostname: parsed.hostname };
+  } catch (_) {
+    return { ok: false, error: `${varName}: URL không đúng định dạng.` };
+  }
+}
+
+/**
+ * Phân giải cấu hình kết nối backend an toàn cho Question Bank Edge Function:
+ * 1. Chế độ Two-Project (Production): Khi có BẤT KỲ biến nào trong 5 biến CORE_* hoặc QUESTION_BANK_*,
+ *    bắt buộc có đủ cả 5 biến môi trường định danh. Không fallback sang biến khác.
+ * 2. Chế độ Single-Project (Staging): Khi KHÔNG có bất kỳ biến Two-Project nào, đọc 3 biến môi trường
+ *    chuẩn do nền tảng Supabase tự động cung cấp (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY).
+ *    BẮT BUỘC SUPABASE_URL phải trỏ chính xác về Staging rcqgxmcqolxbrahhyxji.supabase.co qua giao thức HTTPS.
+ * 3. Nếu thiếu biến, sai định dạng, hoặc trỏ sang project khác (Production Core, Exam Builder): Fail-Closed và từ chối khởi tạo.
+ */
+export function resolveBackendProjectConfig(
+  getEnv: (key: string) => string | undefined
+): ConfigResolutionResult {
+  const coreUrl = getEnv('CORE_SUPABASE_URL')?.trim();
+  const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY')?.trim();
+  const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY')?.trim();
+  const qbUrl = getEnv('QUESTION_BANK_SUPABASE_URL')?.trim();
+  const qbServiceKey = getEnv('QUESTION_BANK_SUPABASE_SERVICE_ROLE_KEY')?.trim();
+
+  const hasAnyTwoProjectVar = Boolean(
+    coreUrl || coreAnonKey || coreServiceKey || qbUrl || qbServiceKey
+  );
+
+  // Mode 1: Explicit Two-Project Mode (Production)
+  if (hasAnyTwoProjectVar) {
+    if (!coreUrl || !coreAnonKey || !coreServiceKey || !qbUrl || !qbServiceKey) {
+      return {
+        ok: false,
+        error: 'Cấu hình Two-Project không đầy đủ. Bắt buộc đủ cả 5 biến môi trường CORE và QUESTION_BANK.',
+      };
+    }
+    const validatedCore = validateProjectUrl(coreUrl, 'CORE_SUPABASE_URL', { requireHttps: true });
+    if (!validatedCore.ok) return { ok: false, error: validatedCore.error };
+    const validatedQb = validateProjectUrl(qbUrl, 'QUESTION_BANK_SUPABASE_URL', { requireHttps: true });
+    if (!validatedQb.ok) return { ok: false, error: validatedQb.error };
+
+    return {
+      ok: true,
+      config: {
+        mode: 'two-project',
+        coreUrl: validatedCore.url!,
+        coreAnonKey,
+        coreServiceKey,
+        qbUrl: validatedQb.url!,
+        qbServiceKey,
+      },
+    };
+  }
+
+  // Mode 2: Single-Project Unified Mode (Staging) - BẮT BUỘC Staging Identity Pinning
+  const platformUrl = getEnv('SUPABASE_URL')?.trim();
+  const platformAnonKey = getEnv('SUPABASE_ANON_KEY')?.trim();
+  const platformServiceKey = getEnv('SUPABASE_SERVICE_ROLE_KEY')?.trim();
+
+  if (platformUrl && platformAnonKey && platformServiceKey) {
+    const validatedPlatform = validateProjectUrl(platformUrl, 'SUPABASE_URL', {
+      requireHttps: true,
+      allowedHostname: APPROVED_STAGING_HOSTNAME,
+    });
+    if (!validatedPlatform.ok) return { ok: false, error: validatedPlatform.error };
+
+    return {
+      ok: true,
+      config: {
+        mode: 'single-project',
+        coreUrl: validatedPlatform.url!,
+        coreAnonKey: platformAnonKey,
+        coreServiceKey: platformServiceKey,
+        qbUrl: validatedPlatform.url!,
+        qbServiceKey: platformServiceKey,
+      },
+    };
+  }
+
+  // Neither mode is satisfied -> Fail-Closed
+  return {
+    ok: false,
+    error: 'Cấu hình máy chủ bị thiếu. Không tìm thấy cấu hình Two-Project hoặc Single-Project hợp lệ.',
+  };
+}
+
 export async function verifyAuthAndDeriveContext(
   req: Request,
   deps?: AuthDependencies
@@ -120,31 +251,34 @@ export async function verifyAuthAndDeriveContext(
     profileClient = deps.profileQueryClient;
     rpcClient = deps.rpcClient;
   } else {
-    // Production Mode: Đọc đúng 5 biến môi trường cho mô hình Two-Project Auth
+    // Production / Staging Server Mode
     const getEnv = (key: string): string | undefined => {
       try {
         if (deps && 'env' in deps && deps.env && typeof deps.env[key] === 'string') {
           return deps.env[key];
         }
-        return Deno.env.get(key);
+        if (typeof Deno !== 'undefined' && Deno.env && typeof Deno.env.get === 'function') {
+          return Deno.env.get(key);
+        }
       } catch (_) {
         return undefined;
       }
+      return undefined;
     };
 
-    const coreUrl = getEnv('CORE_SUPABASE_URL');
-    const coreAnonKey = getEnv('CORE_SUPABASE_ANON_KEY');
-    const coreServiceKey = getEnv('CORE_SUPABASE_SERVICE_ROLE_KEY');
-    const qbUrl = getEnv('QUESTION_BANK_SUPABASE_URL');
-    const qbServiceKey = getEnv('QUESTION_BANK_SUPABASE_SERVICE_ROLE_KEY');
-
-    // Fail-Closed: Thiếu bất kỳ biến nào trong 5 biến -> 500 INTERNAL_ERROR
-    if (!coreUrl || !coreAnonKey || !coreServiceKey || !qbUrl || !qbServiceKey) {
+    const configResult = resolveBackendProjectConfig(getEnv);
+    if (!configResult.ok || !configResult.config) {
       return {
         ok: false,
-        response: createErrorResponse(500, 'INTERNAL_ERROR', 'Cấu hình máy chủ bị thiếu.'),
+        response: createErrorResponse(
+          500,
+          'INTERNAL_ERROR',
+          configResult.error || 'Cấu hình máy chủ bị thiếu.'
+        ),
       };
     }
+
+    const { coreUrl, coreAnonKey, coreServiceKey, qbUrl, qbServiceKey } = configResult.config;
 
     // 1. Client 1: coreCallerClient - Xác thực JWT danh tính Caller bằng CORE Anon Key trên CORE URL
     const coreCallerClient = createClient(coreUrl, coreAnonKey, {
@@ -157,7 +291,7 @@ export async function verifyAuthAndDeriveContext(
       auth: { persistSession: false },
     });
 
-    // 3. Client 3: questionBankRpcClient - Gọi 7 RPC QB bằng QB Service Role Key trên QB URL
+    // 3. Client 3: questionBankRpcClient - Gọi các RPC QB bằng QB Service Role Key trên QB URL
     const questionBankRpcClient = createClient(qbUrl, qbServiceKey, {
       auth: { persistSession: false },
     });
