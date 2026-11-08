@@ -909,9 +909,10 @@ export const QuestionBankListTab = ({
                   const currentUserId = auth?.user?.id;
                   const isAuthor = Boolean(item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
                   const isOwnQuestion = isAuthor;
+                  const isPublicQuestion = item.visibility === 'public_template' || item.visibility === 'public';
                   const isSharedFromOtherTeacher = role === 'teacher' &&
                     item.status === 'published' &&
-                    item.visibility === 'public_template' &&
+                    isPublicQuestion &&
                     !isOwnQuestion;
                   const isDraft = item.status === 'draft';
                   const isArchived = item.status === 'archived';
@@ -919,12 +920,15 @@ export const QuestionBankListTab = ({
                   // Permissions
                   const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canShare = item.status === 'published' && item.visibility === 'private' && (role === 'admin' || (role === 'teacher' && isAuthor));
-                  const canUnshare = item.status === 'published' && item.visibility === 'public_template' && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canUnshare = item.status === 'published' && isPublicQuestion && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canDelete = (role === 'admin' || (role === 'teacher' && isAuthor)) && !isSharedFromOtherTeacher;
                   const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
-                  const canClone = isSharedFromOtherTeacher;
+                  const canClone = !isArchived && (
+                    role === 'admin' ||
+                    (role === 'teacher' && (isOwnQuestion || (item.status === 'published' && isPublicQuestion)))
+                  );
                   const canAssignToClass = isOwnQuestion && item.status === 'published' && (role === 'admin' || role === 'teacher');
 
                   const authorInfo = getAuthorDisplay(item.author_id);
