@@ -42,6 +42,11 @@ import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 import { QuestionVersionHistoryModal } from './QuestionVersionHistoryModal';
 import { QuestionVersionDetailModal } from './QuestionVersionDetailModal';
 import { AssignQuestionBankToClassModal } from './AssignQuestionBankToClassModal';
+import {
+  formatVietnamDateTime,
+  getQuestionOriginInfo,
+  getModalVisibilityDisplay
+} from './questionBankHelpers';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -62,7 +67,9 @@ const TYPE_LABELS = {
 
 const VISIBILITY_LABELS = {
   private: { label: 'Cá nhân', icon: Lock, color: 'text-slate-500 bg-slate-100' },
-  school_shared: { label: 'Toàn trường', icon: Globe, color: 'text-indigo-600 bg-indigo-50' },
+  school: { label: 'Toàn trường', icon: GraduationCap, color: 'text-indigo-600 bg-indigo-50' },
+  school_shared: { label: 'Toàn trường', icon: GraduationCap, color: 'text-indigo-600 bg-indigo-50' },
+  public: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' },
   public_template: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' }
 };
 
@@ -895,6 +902,7 @@ export const QuestionBankListTab = ({
                   <th className="py-3 px-3">Độ khó</th>
                   <th className="py-3 px-3">Phạm vi</th>
                   <th className="py-3 px-3">Người tạo</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Ngày tạo</th>
                   <th className="py-3 px-3 text-center">Trạng thái</th>
                   <th className="py-3 px-3 text-center">Thao tác</th>
                 </tr>
@@ -932,18 +940,44 @@ export const QuestionBankListTab = ({
                   const canAssignToClass = isOwnQuestion && item.status === 'published' && (role === 'admin' || role === 'teacher');
 
                   const authorInfo = getAuthorDisplay(item.author_id);
+                  const fullTitle = item.title || item.prompt || '(Không có tiêu đề)';
+                  const originInfo = getQuestionOriginInfo(item);
 
                   return (
                     <tr key={item.id || item.item_id || idx} className="hover:bg-amber-50/40 transition-colors">
                       <td className="py-3 px-4 max-w-xs sm:max-w-md">
-                        <div className="font-bold text-slate-900 line-clamp-2">
-                          {item.title || item.prompt || '(Không có tiêu đề)'}
+                        <div
+                          className="font-bold text-slate-900 line-clamp-2 cursor-default"
+                          title={fullTitle}
+                        >
+                          {fullTitle}
                         </div>
-                        {item.id && (
-                          <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                            ID: {item.id.slice(0, 8)}...
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {originInfo.label && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                originInfo.isClone
+                                  ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}
+                              title={
+                                originInfo.isClone && originInfo.forkedFromVersionId
+                                  ? `Bản sao từ phiên bản: ${originInfo.forkedFromVersionId}`
+                                  : originInfo.isOriginal
+                                  ? 'Câu hỏi gốc không qua sao chép'
+                                  : undefined
+                              }
+                            >
+                              <Copy className="w-2.5 h-2.5" />
+                              {originInfo.label}
+                            </span>
+                          )}
+                          {item.id && (
+                            <span className="text-[10px] font-mono text-slate-400" title={`ID đầy đủ: ${item.id}`}>
+                              ID: {item.id.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         <span className="font-bold text-slate-700">{item.subject || 'Chung'}</span>
@@ -979,6 +1013,14 @@ export const QuestionBankListTab = ({
                         }`}>
                           <User className="w-3 h-3" />
                           {authorInfo.label}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span
+                          className="text-[11px] font-medium text-slate-600 font-mono"
+                          title={item.created_at ? `Tạo lúc: ${formatVietnamDateTime(item.created_at)} (Giờ Việt Nam)` : 'Chưa có thông tin ngày tạo'}
+                        >
+                          {formatVietnamDateTime(item.created_at)}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
@@ -1486,7 +1528,10 @@ export const QuestionBankListTab = ({
             <div className="space-y-2 mb-5">
               <div className="text-xs font-semibold text-slate-700 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
                 <div className="text-[11px] font-black text-slate-500 mb-1">Tên câu hỏi:</div>
-                <div className="font-bold text-slate-900 line-clamp-2">
+                <div
+                  className="font-bold text-slate-900 line-clamp-2 cursor-default"
+                  title={cloneModalItem.title || cloneModalItem.prompt || '(Không có tiêu đề)'}
+                >
                   {cloneModalItem.title || cloneModalItem.prompt || '(Không có tiêu đề)'}
                 </div>
               </div>
@@ -1496,10 +1541,16 @@ export const QuestionBankListTab = ({
                   <span className="text-slate-400 font-medium">Tác giả:</span>
                   <span className="text-slate-700">{getAuthorDisplay(cloneModalItem.author_id).label}</span>
                 </div>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-200">
-                  <Globe className="w-3 h-3" />
-                  Mẫu công khai
-                </span>
+                {(() => {
+                  const modalVis = getModalVisibilityDisplay(cloneModalItem.visibility);
+                  const ModalVisIcon = modalVis.icon;
+                  return (
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${modalVis.className}`}>
+                      <ModalVisIcon className="w-3 h-3" />
+                      {modalVis.label}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 
