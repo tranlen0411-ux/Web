@@ -103,6 +103,8 @@ export const QuestionBankListTab = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [toastType, setToastType] = useState('success');
+  const [publishError, setPublishError] = useState('');
 
   // Status view filter state ('active' | 'archived')
   const [selectedStatusView, setSelectedStatusView] = useState('active');
@@ -235,9 +237,13 @@ export const QuestionBankListTab = ({
     setPage(1);
   }, [activeGlobalClassFilter]);
 
-  const showToast = (msg) => {
+  const showToast = (msg, type = 'success') => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 4000);
+    setToastType(type);
+    setTimeout(() => {
+      setToastMsg('');
+      setToastType('success');
+    }, 4000);
   };
 
   const fetchQuestions = useCallback(async () => {
@@ -450,6 +456,7 @@ export const QuestionBankListTab = ({
 
   const handleOpenPublishModal = (item) => {
     setShareOnPublish(true);
+    setPublishError('');
     setPublishModalItem(item);
   };
 
@@ -459,33 +466,37 @@ export const QuestionBankListTab = ({
     if (!targetId) return;
 
     setIsPublishing(true);
+    setPublishError('');
     try {
       // 1. Xác định visibility dựa trên lựa chọn checkbox
       const visibility = shareOnPublish === true ? 'public_template' : 'private';
 
-      // 2. Cập nhật visibility khi câu hỏi vẫn đang ở trạng thái bản nháp
-      await updateQuestionVisibility(targetId, visibility);
-
-      // 3. Tiến hành xuất bản câu hỏi
-      await publishQuestion(targetId);
+      // 2. Tiến hành xuất bản câu hỏi và cập nhật visibility nguyên tử tại backend
+      const publishResult = await publishQuestion(targetId, { visibility });
 
       setPublishModalItem(null);
 
-      // 4. Hiển thị thông báo Toast phù hợp
+      // 3. Hiển thị thông báo Toast phù hợp dựa trên xác nhận từ máy chủ (tránh ngộ nhận nếu BFF cũ bỏ qua payload)
+      const confirmedVisibility = publishResult?.visibility;
       if (visibility === 'public_template') {
-        showToast('Đã xuất bản và chia sẻ câu hỏi với giáo viên khác.');
+        if (confirmedVisibility === 'public_template' || confirmedVisibility === 'public') {
+          showToast('Đã xuất bản và chia sẻ câu hỏi với giáo viên khác.', 'success');
+        } else {
+          showToast('Đã xuất bản câu hỏi. Lưu ý: Máy chủ chưa áp dụng tùy chọn chia sẻ tự động, vui lòng dùng nút Chia sẻ.', 'success');
+        }
       } else {
-        showToast('Đã xuất bản câu hỏi ở chế độ cá nhân.');
+        showToast('Đã xuất bản câu hỏi ở chế độ cá nhân.', 'success');
       }
 
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi xuất bản câu hỏi:', err);
-      if (err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
-        showToast('Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.');
-      } else {
-        showToast(err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.');
-      }
+      const errorMsg =
+        err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION'
+          ? 'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.'
+          : (err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.');
+      setPublishError(errorMsg);
+      showToast(errorMsg, 'error');
     } finally {
       setIsPublishing(false);
     }
@@ -588,10 +599,18 @@ export const QuestionBankListTab = ({
 
   return (
     <div className="bg-white rounded-3xl border-4 border-amber-200 p-4 sm:p-6 shadow-sm mb-8 animate-fadeIn">
-      {/* TOAST THÔNG BÁO THÀNH CÔNG */}
+      {/* TOAST THÔNG BÁO */}
       {toastMsg && (
-        <div className="fixed top-6 right-6 z-[10000] bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce">
-          <CheckCircle2 className="w-5 h-5" />
+        <div
+          className={`fixed top-6 right-6 z-[10000] text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce ${
+            toastType === 'error' ? 'bg-rose-600 border border-rose-700' : 'bg-emerald-600'
+          }`}
+        >
+          {toastType === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-white" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-white" />
+          )}
           <span>{toastMsg}</span>
         </div>
       )}
@@ -1344,10 +1363,18 @@ export const QuestionBankListTab = ({
               </label>
             </div>
 
-            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
+            <div className="text-xs font-semibold text-slate-500 mb-4 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
               <span className="font-bold text-slate-700">Câu hỏi: </span>
               {publishModalItem.title || publishModalItem.prompt || '(Không có tiêu đề)'}
             </div>
+
+            {/* THÔNG BÁO LỖI KHI XUẤT BẢN THẤT BẠI */}
+            {publishError && (
+              <div className="mb-4 p-3 bg-rose-50 border-2 border-rose-200 rounded-2xl flex items-start gap-2.5 text-rose-800 text-xs font-bold animate-shake">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">{publishError}</div>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button

@@ -209,7 +209,7 @@ export const restoreQuestion = async (itemId) => {
  * @param {string} itemId UUID của câu hỏi cần xuất bản
  * @returns {Promise<{ item_id: string, status: string, message: string }>}
  */
-export const publishQuestion = async (itemId) => {
+export const publishQuestion = async (itemId, options = {}) => {
   if (!itemId || typeof itemId !== 'string') {
     const err = new Error('ID câu hỏi không hợp lệ.');
     err.status = 400;
@@ -219,13 +219,16 @@ export const publishQuestion = async (itemId) => {
 
   const accessToken = await getOldAccessToken();
   const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/publish`;
+  const hasBody = options && typeof options === 'object' && Object.keys(options).length > 0;
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       'Accept': 'application/json'
     },
+    body: hasBody ? JSON.stringify(options) : undefined,
     redirect: 'error'
   });
 
