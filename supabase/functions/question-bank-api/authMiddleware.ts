@@ -54,6 +54,7 @@ export interface InjectedAuthDependencies {
   callerAuthClient: CallerAuthClient;
   profileQueryClient: ProfileQueryClient;
   rpcClient?: RpcClient;
+  backendConfig?: BackendProjectConfig;
 }
 
 export interface ProductionAuthDependencies {
@@ -70,6 +71,7 @@ export interface AuthResult {
   context?: TrustedContext;
   response?: Response;
   adminClient?: RpcClient;
+  backendConfig?: BackendProjectConfig;
 }
 
 export interface BackendProjectConfig {
@@ -234,6 +236,7 @@ export async function verifyAuthAndDeriveContext(
   let callerClient: CallerAuthClient;
   let profileClient: ProfileQueryClient;
   let rpcClient: RpcClient | undefined;
+  let resolvedBackendConfig: BackendProjectConfig | undefined;
 
   if (deps && 'mode' in deps && deps.mode === 'injected') {
     // Injected Mock Mode: TUYỆT ĐỐI không fallback sang Deno.env hay createClient
@@ -250,6 +253,7 @@ export async function verifyAuthAndDeriveContext(
     callerClient = deps.callerAuthClient;
     profileClient = deps.profileQueryClient;
     rpcClient = deps.rpcClient;
+    resolvedBackendConfig = deps.backendConfig;
   } else {
     // Production / Staging Server Mode
     const getEnv = (key: string): string | undefined => {
@@ -278,6 +282,7 @@ export async function verifyAuthAndDeriveContext(
       };
     }
 
+    resolvedBackendConfig = configResult.config;
     const { coreUrl, coreAnonKey, coreServiceKey, qbUrl, qbServiceKey } = configResult.config;
 
     // 1. Client 1: coreCallerClient - Xác thực JWT danh tính Caller bằng CORE Anon Key trên CORE URL
@@ -382,5 +387,6 @@ export async function verifyAuthAndDeriveContext(
     ok: true,
     context: trustedContext,
     adminClient: rpcClient,
+    backendConfig: resolvedBackendConfig,
   };
 }
