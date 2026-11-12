@@ -1,9 +1,15 @@
 // src/services/questionBankService.js
 // Question Bank Client Service V2A (Read-Only + Authoring Create Integration)
 
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase.js';
+import { resolveAssessmentFunctionUrl } from './assessmentEndpointResolver.js';
 
-const QUESTION_BANK_BASE_URL = 'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
+export const DEFAULT_QUESTION_BANK_BASE_URL =
+  'https://szptvqkoiphrhlionfoh.supabase.co/functions/v1/question-bank-api';
+
+export function getQuestionBankBaseUrl() {
+  return resolveAssessmentFunctionUrl('question-bank-api');
+}
 
 const ALLOWED_LIST_PARAMS = [
   'page',
@@ -17,11 +23,24 @@ const ALLOWED_LIST_PARAMS = [
   'search'
 ];
 
+let customTokenProvider = null;
+
+/**
+ * Hook for test environments to inject a mock token provider without modifying Supabase client.
+ * @param {Function|null} provider
+ */
+export const setAuthTokenProviderForTesting = (provider) => {
+  customTokenProvider = typeof provider === 'function' ? provider : null;
+};
+
 /**
  * Lấy Bearer Token an toàn từ phiên đăng nhập Supabase OLD
  * @returns {Promise<string>}
  */
 export const getOldAccessToken = async () => {
+  if (typeof customTokenProvider === 'function') {
+    return await customTokenProvider();
+  }
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError || !sessionData?.session?.access_token) {
     throw new Error('Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.');
@@ -46,14 +65,15 @@ export const listQuestions = async (filters = {}) => {
   }
 
   const queryString = searchParams.toString();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions${queryString ? `?${queryString}` : ''}`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions${queryString ? `?${queryString}` : ''}`;
 
   const response = await fetch(requestUrl, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -82,7 +102,7 @@ export const createQuestion = async (payload) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions`;
 
   const response = await fetch(requestUrl, {
     method: 'POST',
@@ -91,7 +111,8 @@ export const createQuestion = async (payload) => {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -120,14 +141,15 @@ export const archiveQuestion = async (itemId) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/archive`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/archive`;
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -156,14 +178,15 @@ export const restoreQuestion = async (itemId) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/restore`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/restore`;
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -186,7 +209,7 @@ export const restoreQuestion = async (itemId) => {
  * @param {string} itemId UUID của câu hỏi cần xuất bản
  * @returns {Promise<{ item_id: string, status: string, message: string }>}
  */
-export const publishQuestion = async (itemId) => {
+export const publishQuestion = async (itemId, options = {}) => {
   if (!itemId || typeof itemId !== 'string') {
     const err = new Error('ID câu hỏi không hợp lệ.');
     err.status = 400;
@@ -195,14 +218,18 @@ export const publishQuestion = async (itemId) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/publish`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/publish`;
+  const hasBody = options && typeof options === 'object' && Object.keys(options).length > 0;
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       'Accept': 'application/json'
-    }
+    },
+    body: hasBody ? JSON.stringify(options) : undefined,
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -240,14 +267,15 @@ export const listQuestionVersions = async (itemId) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/versions`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/versions`;
 
   const response = await fetch(requestUrl, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -292,14 +320,15 @@ export const getQuestionAuthoringDetail = async (itemId, versionId) => {
   }
 
   const queryString = searchParams.toString();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/authoring/questions/${encodeURIComponent(itemId)}${queryString ? `?${queryString}` : ''}`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/authoring/questions/${encodeURIComponent(itemId)}${queryString ? `?${queryString}` : ''}`;
 
   const response = await fetch(requestUrl, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -345,7 +374,7 @@ export const updateQuestionVisibility = async (itemId, visibility) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}/metadata`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/metadata`;
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
@@ -354,7 +383,8 @@ export const updateQuestionVisibility = async (itemId, visibility) => {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify({ visibility })
+    body: JSON.stringify({ visibility }),
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -393,7 +423,7 @@ export const forkQuestion = async (sourceVersionId, overrides = {}) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/versions/${encodeURIComponent(sourceVersionId)}/fork`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/versions/${encodeURIComponent(sourceVersionId)}/fork`;
 
   const response = await fetch(requestUrl, {
     method: 'POST',
@@ -402,7 +432,8 @@ export const forkQuestion = async (sourceVersionId, overrides = {}) => {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify(overrides && typeof overrides === 'object' ? overrides : {})
+    body: JSON.stringify(overrides && typeof overrides === 'object' ? overrides : {}),
+    redirect: 'error'
   });
 
   let jsonResult;
@@ -444,14 +475,15 @@ export const deleteQuestion = async (itemId) => {
   }
 
   const accessToken = await getOldAccessToken();
-  const requestUrl = `${QUESTION_BANK_BASE_URL}/qb/questions/${encodeURIComponent(itemId)}`;
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}`;
 
   const response = await fetch(requestUrl, {
     method: 'DELETE',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Accept': 'application/json'
-    }
+    },
+    redirect: 'error'
   });
 
   let jsonResult;

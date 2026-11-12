@@ -500,7 +500,8 @@ export async function handleQuestionBankRequest(
         return createErrorResponse(err.status, err.errorCode, err.message);
       }
 
-      const mapped = mapForkQuestionSuccess(rpcPayload);
+      const isStaging = authResult.backendConfig?.mode === 'single-project';
+      const mapped = mapForkQuestionSuccess(rpcPayload, { isStaging });
       if (!mapped.ok) {
         return createErrorResponse(
           500,
@@ -550,6 +551,16 @@ export async function handleQuestionBankRequest(
         );
       }
 
+      let sanitizedPayload = validation.sanitizedData;
+      const isStaging = authResult.backendConfig?.mode === 'single-project';
+      if (isStaging) {
+        if (sanitizedPayload.visibility === 'public_template') {
+          sanitizedPayload = { ...sanitizedPayload, visibility: 'public' };
+        } else if (sanitizedPayload.visibility === 'school_shared') {
+          sanitizedPayload = { ...sanitizedPayload, visibility: 'school' };
+        }
+      }
+
       // Gọi RPC 7
       const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
         'rpc_qb_update_item_metadata',
@@ -557,7 +568,7 @@ export async function handleQuestionBankRequest(
           p_caller_id: callerId,
           p_actor_role: actorRole,
           p_item_id: itemId,
-          p_payload: validation.sanitizedData,
+          p_payload: sanitizedPayload,
         }
       );
 
@@ -703,14 +714,57 @@ export async function handleQuestionBankRequest(
         );
       }
 
-      // Gọi RPC với payload { status: 'published' }
+      // Nhận body tùy chọn để cập nhật visibility nguyên tử cùng lúc xuất bản
+      const isStaging = authResult.backendConfig?.mode === 'single-project';
+      let requestedVisibility: string | undefined;
+
+      if (req.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const body = await req.json();
+          if (isPlainObject(body) && typeof body.visibility === 'string') {
+            const rawVis = body.visibility.trim();
+            if (['private', 'school', 'school_shared', 'public', 'public_template'].includes(rawVis)) {
+              requestedVisibility = rawVis;
+            } else {
+              return createErrorResponse(
+                400,
+                'INVALID_INPUT',
+                'Giá trị visibility không hợp lệ. Chỉ chấp nhận private, school hoặc public_template.'
+              );
+            }
+          }
+        } catch (_) {
+          return createErrorResponse(400, 'INVALID_INPUT', 'JSON body không hợp lệ.');
+        }
+      }
+
+      // Chuẩn hóa visibility gửi tới RPC tùy theo môi trường
+      let rpcVisibility: string | undefined;
+      if (requestedVisibility) {
+        if (isStaging) {
+          if (requestedVisibility === 'public_template') rpcVisibility = 'public';
+          else if (requestedVisibility === 'school_shared') rpcVisibility = 'school';
+          else rpcVisibility = requestedVisibility;
+        } else {
+          if (requestedVisibility === 'public') rpcVisibility = 'public_template';
+          else if (requestedVisibility === 'school') rpcVisibility = 'school_shared';
+          else rpcVisibility = requestedVisibility;
+        }
+      }
+
+      const updatePayload: Record<string, unknown> = {
+        status: 'published',
+        ...(rpcVisibility ? { visibility: rpcVisibility } : {}),
+      };
+
+      // Gọi RPC nguyên tử
       const { data: rpcRes, error: rpcError } = await rpcClient.rpc(
         'rpc_qb_update_item_metadata',
         {
           p_caller_id: callerId,
           p_actor_role: actorRole,
           p_item_id: itemId,
-          p_payload: { status: 'published' },
+          p_payload: updatePayload,
         }
       );
 
@@ -729,7 +783,36 @@ export async function handleQuestionBankRequest(
         );
       }
 
-      return createSuccessResponse(mapped.data, 200);
+      // Chỉ sử dụng visibility thực tế do RPC trả về từ database, TUYỆT ĐỐI không dùng request payload làm giá trị dự phòng
+      const actualDbVis = mapped.data.visibility;
+
+      // Xác minh chặt chẽ: RPC bắt buộc phải xác nhận đúng phạm vi yêu cầu sau chuẩn hóa
+      if (requestedVisibility) {
+        const isMatched = (
+          (requestedVisibility === 'private' && actualDbVis === 'private') ||
+          ((requestedVisibility === 'school' || requestedVisibility === 'school_shared') && (actualDbVis === 'school' || actualDbVis === 'school_shared')) ||
+          ((requestedVisibility === 'public' || requestedVisibility === 'public_template') && (actualDbVis === 'public' || actualDbVis === 'public_template'))
+        );
+
+        if (!actualDbVis || !isMatched) {
+          return createErrorResponse(
+            500,
+            'VISIBILITY_PERSISTENCE_FAILED',
+            'Không thể cập nhật phạm vi chia sẻ trên cơ sở dữ liệu.'
+          );
+        }
+      }
+
+      let normalizedVis = actualDbVis;
+      if (actualDbVis === 'public') normalizedVis = 'public_template';
+      if (actualDbVis === 'school') normalizedVis = 'school_shared';
+
+      const responseData = {
+        ...mapped.data,
+        ...(normalizedVis ? { visibility: normalizedVis } : {}),
+      };
+
+      return createSuccessResponse(responseData, 200);
     }
 
     // ------------------------------------------------------------------------

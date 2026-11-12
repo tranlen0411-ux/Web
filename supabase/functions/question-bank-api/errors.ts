@@ -247,30 +247,139 @@ export function mapListQuestionsSuccess(
 export interface ForkQuestionSuccessData {
   item_id: string;
   version_id: string;
-  code: string;
   forked_from_version_id: string;
+  code?: string;
+}
+
+export interface MapForkQuestionOptions {
+  isStaging?: boolean;
 }
 
 export function mapForkQuestionSuccess(
-  res: unknown
+  res: unknown,
+  options?: MapForkQuestionOptions
 ): SuccessMapResult<ForkQuestionSuccessData> {
   if (!isPlainRecord(res)) return { ok: false };
+
+  // Fail-closed if envelope reports explicit failure
+  if ('success' in res && res.success === false) {
+    return { ok: false };
+  }
+
+  // 1. Resolve sub-records if nested structure (Postgres RPC standard: { success: true, item: {...}, version: {...} })
+  const itemRecord = isPlainRecord(res.item) ? res.item : null;
+  const versionRecord = isPlainRecord(res.version) ? res.version : null;
+
+  // 2. Extract item_id (support both flat legacy payload and nested item.id)
+  let itemId: string | null = null;
+  if (isUuidString(res.item_id)) {
+    itemId = res.item_id;
+  } else if (itemRecord && isUuidString(itemRecord.id)) {
+    itemId = itemRecord.id;
+  }
+  if (!itemId) return { ok: false };
+
+  // 3. Extract version_id (support both flat legacy payload and nested version.id)
+  let versionId: string | null = null;
+  if (isUuidString(res.version_id)) {
+    versionId = res.version_id;
+  } else if (versionRecord && isUuidString(versionRecord.id)) {
+    versionId = versionRecord.id;
+  }
+  if (!versionId) return { ok: false };
+
+  // 4. Cross-integrity validation between flat and nested records
   if (
-    !isUuidString(res.item_id) ||
-    !isUuidString(res.version_id) ||
-    !isNonEmptyString(res.code) ||
-    !isUuidString(res.forked_from_version_id)
+    isUuidString(res.item_id) &&
+    itemRecord &&
+    isUuidString(itemRecord.id) &&
+    res.item_id !== itemRecord.id
   ) {
     return { ok: false };
   }
+  if (
+    isUuidString(res.version_id) &&
+    versionRecord &&
+    isUuidString(versionRecord.id) &&
+    res.version_id !== versionRecord.id
+  ) {
+    return { ok: false };
+  }
+  if (versionRecord && 'question_bank_item_id' in versionRecord) {
+    if (versionRecord.question_bank_item_id !== itemId) {
+      return { ok: false };
+    }
+  }
+
+  // 5. Extract forked_from_version_id
+  // Verified empirical sources:
+  // a) res.forked_from_version_id (flat legacy payload)
+  // b) versionRecord.forked_from_version_id (direct column in public.question_bank_versions)
+  // c) itemRecord.metadata.forked_from_version_id (jsonb metadata in public.question_bank_items)
+  let forkedFromId: string | null = null;
+  if (isUuidString(res.forked_from_version_id)) {
+    forkedFromId = res.forked_from_version_id;
+  } else if (versionRecord && isUuidString(versionRecord.forked_from_version_id)) {
+    forkedFromId = versionRecord.forked_from_version_id;
+  } else if (
+    itemRecord &&
+    isPlainRecord(itemRecord.metadata) &&
+    isUuidString(itemRecord.metadata.forked_from_version_id)
+  ) {
+    forkedFromId = itemRecord.metadata.forked_from_version_id;
+  }
+  if (!forkedFromId) return { ok: false };
+
+  // Cross-integrity: If both versionRecord and itemRecord.metadata contain provenance, they must match
+  if (
+    versionRecord &&
+    isUuidString(versionRecord.forked_from_version_id) &&
+    itemRecord &&
+    isPlainRecord(itemRecord.metadata) &&
+    isUuidString(itemRecord.metadata.forked_from_version_id) &&
+    versionRecord.forked_from_version_id !== itemRecord.metadata.forked_from_version_id
+  ) {
+    return { ok: false };
+  }
+
+  // 6. Handle code field based on verified trusted server-side environment
+  // - Staging (isStaging === true): code is optional because Staging schema has no code column.
+  //   If code is present, it must be a valid non-empty string; if absent, it is allowed without fabrication.
+  // - Production (isStaging !== true): code is strictly mandatory (Production schema enforces code NOT NULL).
+  const isStaging = options?.isStaging === true;
+
+  let code: string | undefined = undefined;
+  const rawCode =
+    'code' in res
+      ? res.code
+      : itemRecord && 'code' in itemRecord
+      ? itemRecord.code
+      : undefined;
+
+  if (rawCode !== undefined) {
+    if (!isNonEmptyString(rawCode)) {
+      return { ok: false };
+    }
+    code = rawCode;
+  } else {
+    if (!isStaging) {
+      // Production strictly requires valid code!
+      return { ok: false };
+    }
+  }
+
+  const data: ForkQuestionSuccessData = {
+    item_id: itemId,
+    version_id: versionId,
+    forked_from_version_id: forkedFromId,
+  };
+  if (code !== undefined) {
+    data.code = code;
+  }
+
   return {
     ok: true,
-    data: {
-      item_id: res.item_id,
-      version_id: res.version_id,
-      code: res.code,
-      forked_from_version_id: res.forked_from_version_id,
-    },
+    data,
   };
 }
 
@@ -344,6 +453,7 @@ export function mapRestoreQuestionSuccess(
 export interface PublishQuestionSuccessData {
   item_id: string;
   status: 'published';
+  visibility?: string;
   message: string;
 }
 
@@ -359,6 +469,7 @@ export function mapPublishQuestionSuccess(
     data: {
       item_id: res.item_id,
       status: 'published',
+      visibility: typeof res.visibility === 'string' ? res.visibility : undefined,
       message: res.message,
     },
   };

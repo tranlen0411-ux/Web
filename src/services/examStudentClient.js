@@ -1,3 +1,8 @@
+import {
+  resolveAssessmentBaseUrl,
+  assertAssessmentBaseUrlAllowed,
+} from './assessmentEndpointResolver.js';
+
 async function getDefaultSupabaseClient() {
   try {
     const mod = await import('../lib/supabase.js');
@@ -669,8 +674,8 @@ export class ExamStudentClient {
     this.#getAccessToken = typeof getAccessToken === 'function' ? getAccessToken : null;
     this.#examUrl =
       typeof examUrl === 'string' && examUrl.trim()
-        ? examUrl.trim().replace(/\/$/, '')
-        : DEFAULT_EXAM_URL;
+        ? assertAssessmentBaseUrlAllowed(examUrl)
+        : resolveAssessmentBaseUrl();
     this.#fetchImpl = typeof fetchImpl === 'function' ? fetchImpl : null;
 
     if (typeof invokeFunction === 'function') {
@@ -723,6 +728,7 @@ export class ExamStudentClient {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify(body || {}),
+            redirect: 'error',
           });
 
           let rawJson = null;
