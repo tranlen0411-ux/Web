@@ -544,7 +544,7 @@ export const QuestionBankListTab = ({
     if (!cloneModalItem || isCloning) return;
     const sourceVersionId = cloneModalItem.current_version_id;
     if (!sourceVersionId) {
-      showToast('Không tìm thấy phiên bản câu hỏi nguồn để sao chép.');
+      showToast('Không tìm thấy phiên bản câu hỏi nguồn để sao chép.', 'error');
       return;
     }
 
@@ -560,7 +560,7 @@ export const QuestionBankListTab = ({
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi sao chép câu hỏi:', err);
-      showToast(err?.message || 'Không thể sao chép câu hỏi. Vui lòng thử lại.');
+      showToast(err?.message || 'Không thể sao chép câu hỏi. Vui lòng thử lại.', 'error');
     } finally {
       setIsCloning(false);
     }
