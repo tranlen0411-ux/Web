@@ -674,12 +674,15 @@ export function normalizeRpcError(
         };
       case 'FORBIDDEN':
       case 'UNAUTHORIZED_ROLE':
+      case 'FORBIDDEN_VERSION':
+      case 'QUESTION_NOT_PUBLISHED':
         return {
           status: 403,
           errorCode: 'FORBIDDEN',
           message: 'Bạn không có quyền thực hiện thao tác này trên câu hỏi.',
         };
       case 'ITEM_NOT_FOUND':
+      case 'QUESTION_NOT_FOUND':
         return {
           status: 404,
           errorCode: 'NOT_FOUND',
@@ -697,6 +700,19 @@ export function normalizeRpcError(
           errorCode: 'NOT_FOUND',
           message: 'Không tìm thấy phiên bản câu hỏi nguồn để sao chép.',
         };
+      case 'CONFLICT':
+      case 'VERSION_CONFLICT':
+        return {
+          status: 409,
+          errorCode: 'CONFLICT',
+          message: 'Phiên bản câu hỏi đã thay đổi trên máy chủ (đã có bản nháp mới hơn được tạo). Vui lòng tải lại trang để kiểm tra trước khi xuất bản.',
+        };
+      case 'MISSING_EXPECTED_VERSION':
+      case 'CANNOT_PUBLISH_EMPTY_ITEM':
+      case 'MISSING_ANSWER_KEY':
+      case 'INVALID_PROMPT':
+      case 'INVALID_QUESTION_ID':
+      case 'INVALID_SCHOOL_ID':
       case 'INVALID_INPUT':
       case 'INVALID_SINGLE_CHOICE_ANSWER_KEY':
       case 'INVALID_MULTIPLE_CHOICE_ANSWER_KEY':

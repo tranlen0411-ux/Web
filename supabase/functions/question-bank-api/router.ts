@@ -714,28 +714,49 @@ export async function handleQuestionBankRequest(
         );
       }
 
-      // Nhận body tùy chọn để cập nhật visibility nguyên tử cùng lúc xuất bản
+      // Yêu cầu bắt buộc Content-Type application/json và JSON body chứa expected_version_id
+      if (!req.headers.get('content-type')?.includes('application/json')) {
+        return createErrorResponse(
+          400,
+          'INVALID_INPUT',
+          'Yêu cầu xuất bản bắt buộc gửi JSON payload chứa expected_version_id.'
+        );
+      }
+
       const isStaging = authResult.backendConfig?.mode === 'single-project';
       let requestedVisibility: string | undefined;
+      let expectedVersionId: string;
 
-      if (req.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const body = await req.json();
-          if (isPlainObject(body) && typeof body.visibility === 'string') {
-            const rawVis = body.visibility.trim();
-            if (['private', 'school', 'school_shared', 'public', 'public_template'].includes(rawVis)) {
-              requestedVisibility = rawVis;
-            } else {
-              return createErrorResponse(
-                400,
-                'INVALID_INPUT',
-                'Giá trị visibility không hợp lệ. Chỉ chấp nhận private, school hoặc public_template.'
-              );
-            }
-          }
-        } catch (_) {
-          return createErrorResponse(400, 'INVALID_INPUT', 'JSON body không hợp lệ.');
+      try {
+        const body = await req.json();
+        if (!isPlainObject(body)) {
+          return createErrorResponse(400, 'INVALID_INPUT', 'JSON body phải là một object.');
         }
+
+        // Bắt buộc expected_version_id (chống race condition xuất bản nhầm phiên bản)
+        if (!body.expected_version_id || typeof body.expected_version_id !== 'string' || !isValidUUID(body.expected_version_id)) {
+          return createErrorResponse(
+            400,
+            'INVALID_INPUT',
+            'Tham số expected_version_id là bắt buộc và phải là UUID hợp lệ của phiên bản cần xuất bản.'
+          );
+        }
+        expectedVersionId = body.expected_version_id.trim();
+
+        if (typeof body.visibility === 'string') {
+          const rawVis = body.visibility.trim();
+          if (['private', 'school', 'school_shared', 'public', 'public_template'].includes(rawVis)) {
+            requestedVisibility = rawVis;
+          } else {
+            return createErrorResponse(
+              400,
+              'INVALID_INPUT',
+              'Giá trị visibility không hợp lệ. Chỉ chấp nhận private, school hoặc public_template.'
+            );
+          }
+        }
+      } catch (_) {
+        return createErrorResponse(400, 'INVALID_INPUT', 'JSON body không hợp lệ.');
       }
 
       // Chuẩn hóa visibility gửi tới RPC tùy theo môi trường
@@ -754,6 +775,7 @@ export async function handleQuestionBankRequest(
 
       const updatePayload: Record<string, unknown> = {
         status: 'published',
+        expected_version_id: expectedVersionId,
         ...(rpcVisibility ? { visibility: rpcVisibility } : {}),
       };
 

@@ -502,6 +502,29 @@ Deno.test('normalizeRpcError - VERSION_NOT_FOUND -> 404 NOT_FOUND', () => {
   assertEquals(err.message, 'Không tìm thấy phiên bản câu hỏi yêu cầu.');
 });
 
+Deno.test('normalizeRpcError - Dual-Head access codes -> 403 FORBIDDEN', () => {
+  for (const code of ['FORBIDDEN_VERSION', 'QUESTION_NOT_PUBLISHED']) {
+    const err = normalizeRpcError(null, {
+      success: false,
+      error_code: code,
+      message: 'Access denied',
+    });
+    assertEquals(err.status, 403);
+    assertEquals(err.errorCode, 'FORBIDDEN');
+    assertEquals(err.message, 'Bạn không có quyền thực hiện thao tác này trên câu hỏi.');
+  }
+});
+
+Deno.test('normalizeRpcError - QUESTION_NOT_FOUND -> 404 NOT_FOUND', () => {
+  const err = normalizeRpcError(null, {
+    success: false,
+    error_code: 'QUESTION_NOT_FOUND',
+  });
+  assertEquals(err.status, 404);
+  assertEquals(err.errorCode, 'NOT_FOUND');
+  assertEquals(err.message, 'Không tìm thấy câu hỏi yêu cầu.');
+});
+
 Deno.test('normalizeRpcError - SOURCE_VERSION_NOT_FOUND -> 404 NOT_FOUND', () => {
   const err = normalizeRpcError(null, {
     success: false,
@@ -512,8 +535,27 @@ Deno.test('normalizeRpcError - SOURCE_VERSION_NOT_FOUND -> 404 NOT_FOUND', () =>
   assertEquals(err.message, 'Không tìm thấy phiên bản câu hỏi nguồn để sao chép.');
 });
 
+Deno.test('normalizeRpcError - CONFLICT & VERSION_CONFLICT -> 409 CONFLICT', () => {
+  for (const code of ['CONFLICT', 'VERSION_CONFLICT']) {
+    const err = normalizeRpcError(null, {
+      success: false,
+      error_code: code,
+      message: 'Concurrent version modification detected',
+    });
+    assertEquals(err.status, 409);
+    assertEquals(err.errorCode, 'CONFLICT');
+    assertEquals(err.message, 'Phiên bản câu hỏi đã thay đổi trên máy chủ (đã có bản nháp mới hơn được tạo). Vui lòng tải lại trang để kiểm tra trước khi xuất bản.');
+  }
+});
+
 Deno.test('normalizeRpcError - Known validation codes -> 400 INVALID_INPUT', () => {
   const validationCodes = [
+    'CANNOT_PUBLISH_EMPTY_ITEM',
+    'MISSING_ANSWER_KEY',
+    'MISSING_EXPECTED_VERSION',
+    'INVALID_PROMPT',
+    'INVALID_QUESTION_ID',
+    'INVALID_SCHOOL_ID',
     'INVALID_INPUT',
     'INVALID_SINGLE_CHOICE_ANSWER_KEY',
     'INVALID_MULTIPLE_CHOICE_ANSWER_KEY',

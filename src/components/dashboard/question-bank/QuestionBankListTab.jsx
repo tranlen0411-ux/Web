@@ -123,6 +123,8 @@ export const QuestionBankListTab = ({
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isEditVersionModalOpen, setIsEditVersionModalOpen] = useState(false);
+  const [editVersionModalItem, setEditVersionModalItem] = useState(null);
   const [archiveModalItem, setArchiveModalItem] = useState(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [restoreModalItem, setRestoreModalItem] = useState(null);
@@ -366,6 +368,16 @@ export const QuestionBankListTab = ({
     fetchQuestions();
   };
 
+  const handleOpenNewVersionModal = (item) => {
+    setEditVersionModalItem(item);
+    setIsEditVersionModalOpen(true);
+  };
+
+  const handleNewVersionSuccess = (msg) => {
+    showToast(msg || 'Tạo phiên bản mới thành công!');
+    fetchQuestions();
+  };
+
   const handleImportSuccess = (msg) => {
     showToast(msg);
     fetchQuestions();
@@ -463,7 +475,15 @@ export const QuestionBankListTab = ({
   const handleConfirmPublish = async () => {
     if (!publishModalItem || isPublishing) return;
     const targetId = publishModalItem.id || publishModalItem.item_id;
+    const expectedVersionId = publishModalItem.current_version_id;
     if (!targetId) return;
+
+    if (!expectedVersionId) {
+      const missingErr = 'Không tìm thấy định danh phiên bản (current_version_id) hợp lệ để xuất bản. Vui lòng tải lại danh sách.';
+      setPublishError(missingErr);
+      showToast(missingErr, 'error');
+      return;
+    }
 
     setIsPublishing(true);
     setPublishError('');
@@ -471,8 +491,11 @@ export const QuestionBankListTab = ({
       // 1. Xác định visibility dựa trên lựa chọn checkbox
       const visibility = shareOnPublish === true ? 'public_template' : 'private';
 
-      // 2. Tiến hành xuất bản câu hỏi và cập nhật visibility nguyên tử tại backend
-      const publishResult = await publishQuestion(targetId, { visibility });
+      // 2. Tiến hành xuất bản câu hỏi kèm expected_version_id bắt buộc để chống tương tranh
+      const publishResult = await publishQuestion(targetId, {
+        visibility,
+        expected_version_id: expectedVersionId
+      });
 
       setPublishModalItem(null);
 
@@ -491,10 +514,10 @@ export const QuestionBankListTab = ({
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi xuất bản câu hỏi:', err);
-      const errorMsg =
-        err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION'
-          ? 'Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.'
-          : (err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.');
+      let errorMsg = err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.';
+      if (err?.status === 409 || err?.errorCode === 'CONFLICT' || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
+        errorMsg = 'Phiên bản câu hỏi đã thay đổi trên máy chủ (đã có bản nháp mới hơn được tạo). Vui lòng đóng hộp thoại và tải lại danh sách trước khi xuất bản.';
+      }
       setPublishError(errorMsg);
       showToast(errorMsg, 'error');
     } finally {
@@ -602,9 +625,8 @@ export const QuestionBankListTab = ({
       {/* TOAST THÔNG BÁO */}
       {toastMsg && (
         <div
-          className={`fixed top-6 right-6 z-[10000] text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce ${
-            toastType === 'error' ? 'bg-rose-600 border border-rose-700' : 'bg-emerald-600'
-          }`}
+          className={`fixed top-6 right-6 z-[10000] text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce ${toastType === 'error' ? 'bg-rose-600 border border-rose-700' : 'bg-emerald-600'
+            }`}
         >
           {toastType === 'error' ? (
             <AlertCircle className="w-5 h-5 text-white" />
@@ -668,22 +690,20 @@ export const QuestionBankListTab = ({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={() => handleStatusViewChange('active')}
-          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
-            selectedStatusView === 'active'
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${selectedStatusView === 'active'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-          }`}
+            }`}
         >
           <BookOpen className="w-3.5 h-3.5" />
           <span>Đang sử dụng</span>
         </button>
         <button
           onClick={() => handleStatusViewChange('archived')}
-          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
-            selectedStatusView === 'archived'
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${selectedStatusView === 'archived'
               ? 'bg-amber-600 text-white shadow-sm'
               : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-          }`}
+            }`}
         >
           <Archive className="w-3.5 h-3.5" />
           <span>Đã ẩn</span>
@@ -736,18 +756,17 @@ export const QuestionBankListTab = ({
             <label className="block text-[11px] font-black text-slate-500 mb-1 flex items-center justify-between">
               <span>Khối lớp</span>
               {hasSpecificGlobalClass && (
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
-                  classResolutionStatus === 'loading'
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${classResolutionStatus === 'loading'
                     ? 'text-indigo-700 bg-indigo-100 border-indigo-300 animate-pulse'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'text-amber-700 bg-amber-100/80 border-amber-300'
-                    : 'text-rose-700 bg-rose-100 border-rose-300'
-                }`}>
+                      ? 'text-amber-700 bg-amber-100/80 border-amber-300'
+                      : 'text-rose-700 bg-rose-100 border-rose-300'
+                  }`}>
                   {classResolutionStatus === 'loading'
                     ? 'Đang xác định...'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'Khóa theo Header'
-                    : 'Lỗi bộ lọc'}
+                      ? 'Khóa theo Header'
+                      : 'Lỗi bộ lọc'}
                 </span>
               )}
             </label>
@@ -755,22 +774,21 @@ export const QuestionBankListTab = ({
               value={hasSpecificGlobalClass ? (globalGrade != null ? String(globalGrade) : '') : selectedGrade}
               onChange={(e) => { setSelectedGrade(e.target.value); setPage(1); }}
               disabled={hasSpecificGlobalClass}
-              className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${
-                hasSpecificGlobalClass
+              className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${hasSpecificGlobalClass
                   ? classResolutionStatus === 'loading'
                     ? 'bg-indigo-50/50 border-2 border-indigo-200 text-indigo-800 font-bold cursor-wait'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
-                    : 'bg-rose-50/80 border-2 border-rose-300 text-rose-950 font-bold cursor-not-allowed'
+                      ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
+                      : 'bg-rose-50/80 border-2 border-rose-300 text-rose-950 font-bold cursor-not-allowed'
                   : 'bg-white border border-slate-300 text-slate-700 focus:border-indigo-500'
-              }`}
+                }`}
               title={
                 hasSpecificGlobalClass
                   ? classResolutionStatus === 'loading'
                     ? 'Đang tải thông tin khối lớp từ Header...'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}`
-                    : 'Không thể xác định khối lớp từ bộ lọc Header'
+                      ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}`
+                      : 'Không thể xác định khối lớp từ bộ lọc Header'
                   : 'Chọn khối lớp để lọc'
               }
             >
@@ -946,6 +964,7 @@ export const QuestionBankListTab = ({
 
                   // Permissions
                   const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canEditNewVersion = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canShare = item.status === 'published' && item.visibility === 'private' && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canUnshare = item.status === 'published' && isPublicQuestion && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
@@ -974,17 +993,16 @@ export const QuestionBankListTab = ({
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                           {originInfo.label && (
                             <span
-                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                originInfo.isClone
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${originInfo.isClone
                                   ? 'bg-sky-50 text-sky-700 border border-sky-200'
                                   : 'bg-slate-100 text-slate-600 border border-slate-200'
-                              }`}
+                                }`}
                               title={
                                 originInfo.isClone && originInfo.forkedFromVersionId
                                   ? `Bản sao từ phiên bản: ${originInfo.forkedFromVersionId}`
                                   : originInfo.isOriginal
-                                  ? 'Câu hỏi gốc không qua sao chép'
-                                  : undefined
+                                    ? 'Câu hỏi gốc không qua sao chép'
+                                    : undefined
                               }
                             >
                               <Copy className="w-2.5 h-2.5" />
@@ -1025,11 +1043,10 @@ export const QuestionBankListTab = ({
                         </span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                          authorInfo.isOwn
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${authorInfo.isOwn
                             ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
                             : 'bg-slate-100 text-slate-700'
-                        }`}>
+                          }`}>
                           <User className="w-3 h-3" />
                           {authorInfo.label}
                         </span>
@@ -1092,6 +1109,16 @@ export const QuestionBankListTab = ({
                               <span>Lịch sử</span>
                             </button>
                           )}
+                          {canEditNewVersion && (
+                            <button
+                              onClick={() => handleOpenNewVersionModal(item)}
+                              className="px-2 py-1 text-amber-700 hover:text-amber-800 hover:bg-amber-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Chỉnh sửa câu hỏi thành phiên bản mới (bản nháp độc lập)"
+                            >
+                              <Layers className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Sửa phiên bản</span>
+                            </button>
+                          )}
                           {canPublish && (
                             <button
                               onClick={() => handleOpenPublishModal(item)}
@@ -1152,7 +1179,7 @@ export const QuestionBankListTab = ({
                               <span>Xóa</span>
                             </button>
                           )}
-                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canDelete && !canViewHistory && !canClone && !canAssignToClass && (
+                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canDelete && !canViewHistory && !canClone && !canAssignToClass && !canEditNewVersion && (
                             <span className="text-slate-300 text-xs">—</span>
                           )}
                         </div>
@@ -1210,7 +1237,23 @@ export const QuestionBankListTab = ({
         onClose={() => setIsCreateModalOpen(false)}
         onSuccess={handleCreateSuccess}
         role={role}
+        mode="create"
       />
+
+      {/* EDIT NEW VERSION MODAL (Dual-Head Architecture) */}
+      {isEditVersionModalOpen && editVersionModalItem && (
+        <CreateQuestionBankModal
+          isOpen={isEditVersionModalOpen}
+          mode="new_version"
+          initialQuestion={editVersionModalItem}
+          onClose={() => {
+            setIsEditVersionModalOpen(false);
+            setEditVersionModalItem(null);
+          }}
+          onSuccess={handleNewVersionSuccess}
+          role={role}
+        />
+      )}
 
       {/* IMPORT MODAL */}
       <ImportQuestionBankModal
@@ -1335,9 +1378,29 @@ export const QuestionBankListTab = ({
               <span>Bạn có chắc muốn xuất bản câu hỏi này?</span>
             </div>
 
-            <p className="text-xs sm:text-sm text-slate-600 font-medium my-3 leading-relaxed bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
-              Sau khi xuất bản, câu hỏi sẽ sẵn sàng để sử dụng và giao bài tập.
-            </p>
+            <div className="my-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs text-slate-700 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-600">Phiên bản xuất bản:</span>
+                <span className="font-black px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  {publishModalItem.version_count ? `Phiên bản V${publishModalItem.version_count}` : 'Phiên bản mới nhất'}
+                </span>
+              </div>
+              {publishModalItem.current_version_id && (
+                <div className="text-[10px] text-slate-500 font-mono flex items-center justify-between bg-slate-100/80 px-2 py-1 rounded-lg">
+                  <span className="font-semibold text-slate-600">Con trỏ nháp:</span>
+                  <span title={publishModalItem.current_version_id}>{publishModalItem.current_version_id.slice(0, 18)}...</span>
+                </div>
+              )}
+              {publishModalItem.published_version_id ? (
+                <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 font-medium leading-relaxed">
+                  ⚠️ <strong>Lưu ý kiến trúc Dual-Head:</strong> Câu hỏi này hiện đang có bản xuất bản trước đó. Khi xác nhận, phiên bản nháp mới nhất (V{publishModalItem.version_count || 'mới'}) sẽ chính thức trở thành bản công bố cho học sinh làm bài.
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                  Sau khi xuất bản, câu hỏi sẽ sẵn sàng để giao bài tập và đưa vào đề thi.
+                </p>
+              )}
+            </div>
 
             {/* CHECKBOX CHIA SẺ VỚI GIÁO VIÊN KHÁC */}
             <div className="my-3.5 p-3.5 bg-indigo-50/70 border-2 border-indigo-200 rounded-2xl text-left">
