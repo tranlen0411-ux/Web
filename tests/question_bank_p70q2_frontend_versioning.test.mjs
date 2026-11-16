@@ -538,4 +538,314 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
     assert.deepStrictEqual(mapV0.badges, ['Bản cũ']);
   });
 
+  await t.test('11. SAFE ANSWER KEY RESOLUTION, FAIL-CLOSED GUARD & VISIBILITY INHERITANCE (Phase 28H-FIX-2)', () => {
+    // Pure logic algorithms matching CreateQuestionBankModal.jsx
+
+    const normalizeVisibility = (rawVis) => {
+      if (!rawVis) return 'private';
+      const v = String(rawVis).trim().toLowerCase();
+      if (v === 'public' || v === 'public_template') return 'public_template';
+      if (v === 'school' || v === 'school_shared') return 'school_shared';
+      return 'private';
+    };
+
+    const extractCandidateAnswerValues = (answerKey) => {
+      if (!answerKey) return [];
+      const candidates = [];
+
+      const addCandidate = (val) => {
+        if (val === null || val === undefined) return;
+        if (typeof val === 'string' || typeof val === 'number') {
+          const s = String(val).trim();
+          if (s && !candidates.includes(s)) candidates.push(s);
+        } else if (typeof val === 'object') {
+          if (val.correct_option_id) addCandidate(val.correct_option_id);
+          if (val.correct_answer) addCandidate(val.correct_answer);
+          if (val.correct) addCandidate(val.correct);
+          if (val.id) addCandidate(val.id);
+          if (val.value) addCandidate(val.value);
+        }
+      };
+
+      if (typeof answerKey === 'string' || typeof answerKey === 'number') {
+        addCandidate(answerKey);
+        return candidates;
+      }
+
+      if (typeof answerKey !== 'object') return [];
+
+      addCandidate(answerKey.correct_option_id);
+      addCandidate(answerKey.correct_answer);
+      addCandidate(answerKey.correct);
+
+      const ca = answerKey.correct_answers;
+      if (Array.isArray(ca)) {
+        for (const item of ca) {
+          addCandidate(item);
+        }
+      } else if (ca !== null && ca !== undefined) {
+        addCandidate(ca);
+      }
+
+      const coids = answerKey.correct_option_ids;
+      if (Array.isArray(coids)) {
+        for (const item of coids) {
+          addCandidate(item);
+        }
+      }
+
+      return candidates;
+    };
+
+    const resolveOptionId = (val, currentOptions) => {
+      if (val === null || val === undefined || !Array.isArray(currentOptions) || currentOptions.length === 0) {
+        return null;
+      }
+      const str = String(val).trim();
+      if (!str) return null;
+
+      // 1. Direct ID match
+      const byId = currentOptions.find((o) => o && o.id === str);
+      if (byId) return byId.id;
+
+      // 2. Letter match: A, B, C, D...
+      if (/^[a-zA-Z]$/.test(str)) {
+        const idx = str.toUpperCase().charCodeAt(0) - 65;
+        if (idx >= 0 && idx < currentOptions.length && currentOptions[idx]?.id) {
+          return currentOptions[idx].id;
+        }
+      }
+
+      // 3. Option text match
+      const byText = currentOptions.find(
+        (o) => o && typeof o.text === 'string' && o.text.trim().toLowerCase() === str.toLowerCase()
+      );
+      if (byText) return byText.id;
+
+      return null;
+    };
+
+    const extractAuthoringAnswerState = (answerKey, currentOptions, qType) => {
+      const candidates = extractCandidateAnswerValues(answerKey);
+
+      if (qType === 'single_choice') {
+        let resolvedId = '';
+        for (const c of candidates) {
+          const match = resolveOptionId(c, currentOptions);
+          if (match) {
+            resolvedId = match;
+            break;
+          }
+        }
+        return {
+          questionType: 'single_choice',
+          correctOptionId: resolvedId,
+          correctOptionIds: resolvedId ? [resolvedId] : [],
+          fillBlankAnswer: '',
+          shortAnswer: '',
+          isResolved: Boolean(resolvedId)
+        };
+      }
+
+      if (qType === 'multiple_choice') {
+        const resolvedIds = [];
+        for (const c of candidates) {
+          const match = resolveOptionId(c, currentOptions);
+          if (match && !resolvedIds.includes(match)) {
+            resolvedIds.push(match);
+          }
+        }
+        return {
+          questionType: 'multiple_choice',
+          correctOptionId: resolvedIds[0] || '',
+          correctOptionIds: resolvedIds,
+          fillBlankAnswer: '',
+          shortAnswer: '',
+          isResolved: resolvedIds.length > 0
+        };
+      }
+
+      if (qType === 'fill_blank') {
+        let textAnswer = '';
+        if (answerKey?.correct_answers) {
+          if (Array.isArray(answerKey.correct_answers)) {
+            textAnswer = answerKey.correct_answers.join('; ');
+          } else if (typeof answerKey.correct_answers === 'string') {
+            textAnswer = answerKey.correct_answers;
+          }
+        } else if (candidates.length > 0) {
+          textAnswer = candidates.join('; ');
+        }
+        return {
+          questionType: 'fill_blank',
+          correctOptionId: '',
+          correctOptionIds: [],
+          fillBlankAnswer: textAnswer,
+          shortAnswer: '',
+          isResolved: Boolean(textAnswer.trim())
+        };
+      }
+
+      if (qType === 'short_answer') {
+        let textAnswer = '';
+        if (answerKey?.correct_answers) {
+          if (Array.isArray(answerKey.correct_answers)) {
+            textAnswer = answerKey.correct_answers.join('; ');
+          } else if (typeof answerKey.correct_answers === 'string') {
+            textAnswer = answerKey.correct_answers;
+          }
+        } else if (candidates.length > 0) {
+          textAnswer = candidates.join('; ');
+        }
+        return {
+          questionType: 'short_answer',
+          correctOptionId: '',
+          correctOptionIds: [],
+          fillBlankAnswer: '',
+          shortAnswer: textAnswer,
+          isResolved: Boolean(textAnswer.trim())
+        };
+      }
+
+      return {
+        questionType: qType,
+        correctOptionId: '',
+        correctOptionIds: [],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        isResolved: true
+      };
+    };
+
+    // A. VISIBILITY NORMALIZATION TESTS
+    assert.strictEqual(normalizeVisibility('public'), 'public_template', 'public maps to public_template');
+    assert.strictEqual(normalizeVisibility('public_template'), 'public_template', 'public_template preserved');
+    assert.strictEqual(normalizeVisibility('private'), 'private', 'private preserved');
+    assert.strictEqual(normalizeVisibility('school'), 'school_shared', 'school maps to school_shared');
+    assert.strictEqual(normalizeVisibility(null), 'private', 'null defaults to private');
+    assert.strictEqual(normalizeVisibility(undefined), 'private', 'undefined defaults to private');
+
+    // B. TARGET SMOKE-TEST QUESTION: "2 + 3 = ?" (ddc17fd9)
+    const smokeTestOptions = [
+      { id: 'opt_1', text: '4' },
+      { id: 'opt_2', text: '5' },
+      { id: 'opt_3', text: '6' },
+      { id: 'opt_4', text: '7' }
+    ];
+
+    // Case 1: Nested object { correct_answers: { correct_option_id: 'opt_2' } } (Staging schema)
+    const stagingAnswerKey1 = { correct_answers: { correct_option_id: 'opt_2' } };
+    const res1 = extractAuthoringAnswerState(stagingAnswerKey1, smokeTestOptions, 'single_choice');
+    assert.strictEqual(res1.correctOptionId, 'opt_2', 'Must resolve to opt_2 (Option B = 5)');
+    assert.strictEqual(res1.isResolved, true, 'isResolved must be true');
+
+    // Case 2: Top-level { correct_option_id: 'opt_2' }
+    const stagingAnswerKey2 = { correct_option_id: 'opt_2' };
+    const res2 = extractAuthoringAnswerState(stagingAnswerKey2, smokeTestOptions, 'single_choice');
+    assert.strictEqual(res2.correctOptionId, 'opt_2', 'Must resolve top-level correct_option_id to opt_2');
+    assert.strictEqual(res2.isResolved, true);
+
+    // Case 3: Letter match: { correct: 'B' }
+    const stagingAnswerKey3 = { correct: 'B' };
+    const res3 = extractAuthoringAnswerState(stagingAnswerKey3, smokeTestOptions, 'single_choice');
+    assert.strictEqual(res3.correctOptionId, 'opt_2', 'Letter B must resolve to opt_2');
+    assert.strictEqual(res3.isResolved, true);
+
+    // Case 4: Text match: { correct_answer: '5' }
+    const stagingAnswerKey4 = { correct_answer: '5' };
+    const res4 = extractAuthoringAnswerState(stagingAnswerKey4, smokeTestOptions, 'single_choice');
+    assert.strictEqual(res4.correctOptionId, 'opt_2', 'Text "5" must resolve to opt_2');
+    assert.strictEqual(res4.isResolved, true);
+
+    // Case 5: Array of string { correct_answers: ['opt_2'] }
+    const stagingAnswerKey5 = { correct_answers: ['opt_2'] };
+    const res5 = extractAuthoringAnswerState(stagingAnswerKey5, smokeTestOptions, 'single_choice');
+    assert.strictEqual(res5.correctOptionId, 'opt_2', 'Array with opt_2 must resolve to opt_2');
+    assert.strictEqual(res5.isResolved, true);
+
+    // C. FAIL-CLOSED GUARD: MISSING OR CORRUPTED ANSWER KEY
+    // Must NOT default to opt_1 (Option A). Must leave correctOptionId = '' and block submit!
+    const corruptAnswerKey1 = {};
+    const resFail1 = extractAuthoringAnswerState(corruptAnswerKey1, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resFail1.correctOptionId, '', 'Empty answerKey MUST leave correctOptionId empty (fail-closed)');
+    assert.strictEqual(resFail1.isResolved, false, 'isResolved must be false for empty answerKey');
+
+    const corruptAnswerKey2 = null;
+    const resFail2 = extractAuthoringAnswerState(corruptAnswerKey2, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resFail2.correctOptionId, '', 'Null answerKey MUST leave correctOptionId empty');
+    assert.strictEqual(resFail2.isResolved, false);
+
+    const corruptAnswerKey3 = { invalid_property: 'not_an_option' };
+    const resFail3 = extractAuthoringAnswerState(corruptAnswerKey3, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resFail3.correctOptionId, '', 'Unmatched answerKey MUST leave correctOptionId empty');
+    assert.strictEqual(resFail3.isResolved, false);
+
+    // Form submission validation guard simulation
+    const validateSingleChoiceSubmit = (correctId, opts) => {
+      if (!correctId || !opts.some(o => o.id === correctId)) {
+        throw new Error('Vui lòng chọn đáp án đúng cho câu hỏi trước khi lưu.');
+      }
+      return true;
+    };
+
+    // When fail-closed empty -> submit throws error
+    assert.throws(
+      () => validateSingleChoiceSubmit(resFail1.correctOptionId, smokeTestOptions),
+      /Vui lòng chọn đáp án đúng cho câu hỏi trước khi lưu/
+    );
+
+    // When valid -> submit succeeds
+    assert.strictEqual(validateSingleChoiceSubmit(res1.correctOptionId, smokeTestOptions), true);
+
+    // D. MULTIPLE CHOICE TESTS
+    const multiOptions = [
+      { id: 'opt_1', text: 'Hình vuông' },
+      { id: 'opt_2', text: 'Hình tròn' },
+      { id: 'opt_3', text: 'Hình chữ nhật' },
+      { id: 'opt_4', text: 'Hình tam giác' }
+    ];
+
+    const multiKeyValid = { correct_answers: ['opt_1', 'opt_3'] };
+    const resMultiValid = extractAuthoringAnswerState(multiKeyValid, multiOptions, 'multiple_choice');
+    assert.deepStrictEqual(resMultiValid.correctOptionIds, ['opt_1', 'opt_3']);
+    assert.strictEqual(resMultiValid.isResolved, true);
+
+    // Multi-choice letter match
+    const multiKeyLetters = { correct_answers: ['A', 'C'] };
+    const resMultiLetters = extractAuthoringAnswerState(multiKeyLetters, multiOptions, 'multiple_choice');
+    assert.deepStrictEqual(resMultiLetters.correctOptionIds, ['opt_1', 'opt_3']);
+    assert.strictEqual(resMultiLetters.isResolved, true);
+
+    // Multi-choice fail-closed
+    const multiKeyEmpty = { correct_answers: [] };
+    const resMultiEmpty = extractAuthoringAnswerState(multiKeyEmpty, multiOptions, 'multiple_choice');
+    assert.deepStrictEqual(resMultiEmpty.correctOptionIds, []);
+    assert.strictEqual(resMultiEmpty.isResolved, false);
+
+    const validateMultiChoiceSubmit = (ids) => {
+      if (!Array.isArray(ids) || ids.length === 0) {
+        throw new Error('Vui lòng chọn ít nhất một đáp án đúng.');
+      }
+      return true;
+    };
+
+    assert.throws(
+      () => validateMultiChoiceSubmit(resMultiEmpty.correctOptionIds),
+      /Vui lòng chọn ít nhất một đáp án đúng/
+    );
+    assert.strictEqual(validateMultiChoiceSubmit(resMultiValid.correctOptionIds), true);
+
+    // E. FILL BLANK TESTS
+    const fillBlankKey = { correct_answers: ['Hà Nội', 'Ha Noi'] };
+    const resFill = extractAuthoringAnswerState(fillBlankKey, [], 'fill_blank');
+    assert.strictEqual(resFill.fillBlankAnswer, 'Hà Nội; Ha Noi');
+    assert.strictEqual(resFill.isResolved, true);
+
+    // F. SHORT ANSWER TESTS
+    const shortAnswerKey = { correct_answers: ['Quang Trung'] };
+    const resShort = extractAuthoringAnswerState(shortAnswerKey, [], 'short_answer');
+    assert.strictEqual(resShort.shortAnswer, 'Quang Trung');
+    assert.strictEqual(resShort.isResolved, true);
+  });
+
 });
