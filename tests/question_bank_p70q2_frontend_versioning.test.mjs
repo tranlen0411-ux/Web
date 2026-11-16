@@ -599,69 +599,133 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
 
     const resolveOptionId = (val, currentOptions) => {
       if (val === null || val === undefined || !Array.isArray(currentOptions) || currentOptions.length === 0) {
-        return null;
+        return { id: null, status: 'UNMATCHED' };
       }
       const str = String(val).trim();
-      if (!str) return null;
+      if (!str) return { id: null, status: 'UNMATCHED' };
 
-      // 1. Direct ID match
+      // 1. Ưu tiên khớp chính xác ID (ví dụ: 'opt_2') -> Duy nhất tuyệt đối
       const byId = currentOptions.find((o) => o && o.id === str);
-      if (byId) return byId.id;
+      if (byId) return { id: byId.id, status: 'MATCHED' };
 
-      // 2. Letter match: A, B, C, D...
+      // 2. Khớp chữ cái A, B, C, D (hoặc a, b, c, d)
       if (/^[a-zA-Z]$/.test(str)) {
         const idx = str.toUpperCase().charCodeAt(0) - 65;
         if (idx >= 0 && idx < currentOptions.length && currentOptions[idx]?.id) {
-          return currentOptions[idx].id;
+          return { id: currentOptions[idx].id, status: 'MATCHED' };
         }
       }
 
-      // 3. Option text match
-      const byText = currentOptions.find(
+      // 3. Khớp nội dung text: Chỉ chấp nhận nếu có ĐÚNG 1 lựa chọn khớp
+      const matchingByText = currentOptions.filter(
         (o) => o && typeof o.text === 'string' && o.text.trim().toLowerCase() === str.toLowerCase()
       );
-      if (byText) return byText.id;
+      if (matchingByText.length === 1) {
+        return { id: matchingByText[0].id, status: 'MATCHED' };
+      }
+      if (matchingByText.length > 1) {
+        // Có nhiều lựa chọn cùng text -> AMBIGUOUS! Không tự chọn option đầu!
+        return { id: null, status: 'AMBIGUOUS' };
+      }
 
-      return null;
+      return { id: null, status: 'UNMATCHED' };
     };
 
     const extractAuthoringAnswerState = (answerKey, currentOptions, qType) => {
       const candidates = extractCandidateAnswerValues(answerKey);
 
       if (qType === 'single_choice') {
-        let resolvedId = '';
+        const matchedIds = [];
+        let hasAmbiguousText = false;
+
         for (const c of candidates) {
-          const match = resolveOptionId(c, currentOptions);
-          if (match) {
-            resolvedId = match;
-            break;
+          const res = resolveOptionId(c, currentOptions);
+          if (res.status === 'AMBIGUOUS') {
+            hasAmbiguousText = true;
+          } else if (res.status === 'MATCHED' && res.id) {
+            if (!matchedIds.includes(res.id)) {
+              matchedIds.push(res.id);
+            }
           }
         }
+
+        // 1. Xung đột: Có nhiều hơn 1 đáp án khác nhau được resolve từ answer key
+        // Giữ nguyên questionType = 'single_choice', KHÔNG tự đổi sang multiple_choice!
+        if (matchedIds.length > 1) {
+          return {
+            questionType: 'single_choice',
+            correctOptionId: '',
+            correctOptionIds: [],
+            fillBlankAnswer: '',
+            shortAnswer: '',
+            isResolved: false,
+            ambiguityReason: 'CONFLICT'
+          };
+        }
+
+        // 2. Nhập nhằng do trùng text: Có lựa chọn trùng text và không có ID/chữ cái nào khớp chính xác
+        if (hasAmbiguousText && matchedIds.length === 0) {
+          return {
+            questionType: 'single_choice',
+            correctOptionId: '',
+            correctOptionIds: [],
+            fillBlankAnswer: '',
+            shortAnswer: '',
+            isResolved: false,
+            ambiguityReason: 'AMBIGUOUS'
+          };
+        }
+
+        // 3. Khớp chuẩn xác duy nhất 1 option hợp lệ
+        if (matchedIds.length === 1 && !hasAmbiguousText) {
+          return {
+            questionType: 'single_choice',
+            correctOptionId: matchedIds[0],
+            correctOptionIds: [matchedIds[0]],
+            fillBlankAnswer: '',
+            shortAnswer: '',
+            isResolved: true,
+            ambiguityReason: null
+          };
+        }
+
+        // 4. Không khớp được đáp án nào (thiếu hoặc không tìm thấy)
         return {
           questionType: 'single_choice',
-          correctOptionId: resolvedId,
-          correctOptionIds: resolvedId ? [resolvedId] : [],
+          correctOptionId: '',
+          correctOptionIds: [],
           fillBlankAnswer: '',
           shortAnswer: '',
-          isResolved: Boolean(resolvedId)
+          isResolved: false,
+          ambiguityReason: 'UNRESOLVED'
         };
       }
 
       if (qType === 'multiple_choice') {
-        const resolvedIds = [];
+        const matchedIds = [];
+        let hasAmbiguousText = false;
+
         for (const c of candidates) {
-          const match = resolveOptionId(c, currentOptions);
-          if (match && !resolvedIds.includes(match)) {
-            resolvedIds.push(match);
+          const res = resolveOptionId(c, currentOptions);
+          if (res.status === 'AMBIGUOUS') {
+            hasAmbiguousText = true;
+          } else if (res.status === 'MATCHED' && res.id) {
+            if (!matchedIds.includes(res.id)) {
+              matchedIds.push(res.id);
+            }
           }
         }
+
+        const isResolved = matchedIds.length > 0 && !hasAmbiguousText;
+
         return {
           questionType: 'multiple_choice',
-          correctOptionId: resolvedIds[0] || '',
-          correctOptionIds: resolvedIds,
+          correctOptionId: matchedIds[0] || '',
+          correctOptionIds: matchedIds,
           fillBlankAnswer: '',
           shortAnswer: '',
-          isResolved: resolvedIds.length > 0
+          isResolved,
+          ambiguityReason: hasAmbiguousText ? 'AMBIGUOUS' : (matchedIds.length === 0 ? 'UNRESOLVED' : null)
         };
       }
 
@@ -676,13 +740,15 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
         } else if (candidates.length > 0) {
           textAnswer = candidates.join('; ');
         }
+        const isResolved = Boolean(textAnswer.trim());
         return {
           questionType: 'fill_blank',
           correctOptionId: '',
           correctOptionIds: [],
           fillBlankAnswer: textAnswer,
           shortAnswer: '',
-          isResolved: Boolean(textAnswer.trim())
+          isResolved,
+          ambiguityReason: isResolved ? null : 'UNRESOLVED'
         };
       }
 
@@ -697,13 +763,15 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
         } else if (candidates.length > 0) {
           textAnswer = candidates.join('; ');
         }
+        const isResolved = Boolean(textAnswer.trim());
         return {
           questionType: 'short_answer',
           correctOptionId: '',
           correctOptionIds: [],
           fillBlankAnswer: '',
           shortAnswer: textAnswer,
-          isResolved: Boolean(textAnswer.trim())
+          isResolved,
+          ambiguityReason: isResolved ? null : 'UNRESOLVED'
         };
       }
 
@@ -713,7 +781,8 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
         correctOptionIds: [],
         fillBlankAnswer: '',
         shortAnswer: '',
-        isResolved: true
+        isResolved: true,
+        ambiguityReason: null
       };
     };
 
@@ -769,16 +838,56 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
     const resFail1 = extractAuthoringAnswerState(corruptAnswerKey1, smokeTestOptions, 'single_choice');
     assert.strictEqual(resFail1.correctOptionId, '', 'Empty answerKey MUST leave correctOptionId empty (fail-closed)');
     assert.strictEqual(resFail1.isResolved, false, 'isResolved must be false for empty answerKey');
+    assert.strictEqual(resFail1.ambiguityReason, 'UNRESOLVED');
 
     const corruptAnswerKey2 = null;
     const resFail2 = extractAuthoringAnswerState(corruptAnswerKey2, smokeTestOptions, 'single_choice');
     assert.strictEqual(resFail2.correctOptionId, '', 'Null answerKey MUST leave correctOptionId empty');
     assert.strictEqual(resFail2.isResolved, false);
+    assert.strictEqual(resFail2.ambiguityReason, 'UNRESOLVED');
 
     const corruptAnswerKey3 = { invalid_property: 'not_an_option' };
     const resFail3 = extractAuthoringAnswerState(corruptAnswerKey3, smokeTestOptions, 'single_choice');
     assert.strictEqual(resFail3.correctOptionId, '', 'Unmatched answerKey MUST leave correctOptionId empty');
     assert.strictEqual(resFail3.isResolved, false);
+    assert.strictEqual(resFail3.ambiguityReason, 'UNRESOLVED');
+
+    // D. REGRESSION: DUPLICATE OPTION TEXT AMBIGUITY (Phase 28I-A2)
+    // Nếu hai options có cùng text, tuyệt đối không tự chọn option đầu! Phải đánh dấu AMBIGUOUS
+    const duplicateTextOptions = [
+      { id: 'opt_1', text: '5' },
+      { id: 'opt_2', text: '5' },
+      { id: 'opt_3', text: '6' },
+      { id: 'opt_4', text: '7' }
+    ];
+    const textAnswerKey = { correct_answer: '5' };
+    const resDup = extractAuthoringAnswerState(textAnswerKey, duplicateTextOptions, 'single_choice');
+    assert.strictEqual(resDup.correctOptionId, '', 'Must NOT pick opt_1 when multiple options share same text');
+    assert.strictEqual(resDup.isResolved, false, 'isResolved must be false for ambiguous text');
+    assert.strictEqual(resDup.ambiguityReason, 'AMBIGUOUS', 'Must flag ambiguityReason as AMBIGUOUS');
+
+    // E. REGRESSION: CONFLICTING ANSWERS IN SINGLE CHOICE (Phase 28I-A2)
+    // Nếu answer key chứa nhiều đáp án mâu thuẫn, tuyệt đối KHÔNG tự đổi thành multiple_choice!
+    const conflictAnswerKey1 = { correct_answers: ['opt_1', 'opt_3'] };
+    const resConflict1 = extractAuthoringAnswerState(conflictAnswerKey1, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resConflict1.questionType, 'single_choice', 'MUST strictly keep single_choice, never mutate to multiple_choice');
+    assert.strictEqual(resConflict1.correctOptionId, '', 'Must NOT select any option when answers conflict');
+    assert.strictEqual(resConflict1.isResolved, false);
+    assert.strictEqual(resConflict1.ambiguityReason, 'CONFLICT', 'Must flag ambiguityReason as CONFLICT');
+
+    const conflictAnswerKey2 = { correct_option_id: 'opt_1', correct_answer: 'B' };
+    const resConflict2 = extractAuthoringAnswerState(conflictAnswerKey2, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resConflict2.questionType, 'single_choice');
+    assert.strictEqual(resConflict2.correctOptionId, '');
+    assert.strictEqual(resConflict2.isResolved, false);
+    assert.strictEqual(resConflict2.ambiguityReason, 'CONFLICT');
+
+    // Multiple redundant candidates agreeing on the same option (NOT a conflict)
+    const harmoniousAnswerKey = { correct_option_id: 'opt_2', correct_answer: 'B' };
+    const resHarmonious = extractAuthoringAnswerState(harmoniousAnswerKey, smokeTestOptions, 'single_choice');
+    assert.strictEqual(resHarmonious.correctOptionId, 'opt_2', 'Harmonious candidates must resolve to opt_2');
+    assert.strictEqual(resHarmonious.isResolved, true);
+    assert.strictEqual(resHarmonious.ambiguityReason, null);
 
     // Form submission validation guard simulation
     const validateSingleChoiceSubmit = (correctId, opts) => {
@@ -793,11 +902,20 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
       () => validateSingleChoiceSubmit(resFail1.correctOptionId, smokeTestOptions),
       /Vui lòng chọn đáp án đúng cho câu hỏi trước khi lưu/
     );
+    assert.throws(
+      () => validateSingleChoiceSubmit(resDup.correctOptionId, duplicateTextOptions),
+      /Vui lòng chọn đáp án đúng cho câu hỏi trước khi lưu/
+    );
+    assert.throws(
+      () => validateSingleChoiceSubmit(resConflict1.correctOptionId, smokeTestOptions),
+      /Vui lòng chọn đáp án đúng cho câu hỏi trước khi lưu/
+    );
 
-    // When valid -> submit succeeds
+    // When valid or user has manually selected -> submit succeeds
     assert.strictEqual(validateSingleChoiceSubmit(res1.correctOptionId, smokeTestOptions), true);
+    assert.strictEqual(validateSingleChoiceSubmit('opt_2', duplicateTextOptions), true, 'User manual resolution allows submit');
 
-    // D. MULTIPLE CHOICE TESTS
+    // F. MULTIPLE CHOICE TESTS
     const multiOptions = [
       { id: 'opt_1', text: 'Hình vuông' },
       { id: 'opt_2', text: 'Hình tròn' },
@@ -835,13 +953,13 @@ test('P70Q-2 FRONTEND VERSIONING & DUAL-HEAD WORKFLOW SUITE', async (t) => {
     );
     assert.strictEqual(validateMultiChoiceSubmit(resMultiValid.correctOptionIds), true);
 
-    // E. FILL BLANK TESTS
+    // G. FILL BLANK TESTS
     const fillBlankKey = { correct_answers: ['Hà Nội', 'Ha Noi'] };
     const resFill = extractAuthoringAnswerState(fillBlankKey, [], 'fill_blank');
     assert.strictEqual(resFill.fillBlankAnswer, 'Hà Nội; Ha Noi');
     assert.strictEqual(resFill.isResolved, true);
 
-    // F. SHORT ANSWER TESTS
+    // H. SHORT ANSWER TESTS
     const shortAnswerKey = { correct_answers: ['Quang Trung'] };
     const resShort = extractAuthoringAnswerState(shortAnswerKey, [], 'short_answer');
     assert.strictEqual(resShort.shortAnswer, 'Quang Trung');

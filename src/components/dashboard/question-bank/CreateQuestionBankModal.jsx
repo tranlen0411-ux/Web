@@ -91,83 +91,163 @@ export const extractCandidateAnswerValues = (answerKey) => {
 
 /**
  * Phân giải một giá trị ứng viên (id, chữ cái A-D, text) sang option.id trong options hiện tại.
- * Trả về null nếu không khớp (fail-closed).
+ * Trả về { id: string | null, status: 'MATCHED' | 'AMBIGUOUS' | 'UNMATCHED' }
+ * - MATCHED: Khớp chính xác duy nhất 1 option hợp lệ.
+ * - AMBIGUOUS: Có nhiều hơn 1 option cùng text khớp với giá trị này -> không tự chọn.
+ * - UNMATCHED: Không tìm thấy option nào khớp.
+ *
  * @param {string|number} val
  * @param {Array<{ id: string, text: string }>} currentOptions
- * @returns {string|null}
+ * @returns {{ id: string | null, status: 'MATCHED' | 'AMBIGUOUS' | 'UNMATCHED' }}
  */
 export const resolveOptionId = (val, currentOptions) => {
   if (val === null || val === undefined || !Array.isArray(currentOptions) || currentOptions.length === 0) {
-    return null;
+    return { id: null, status: 'UNMATCHED' };
   }
   const str = String(val).trim();
-  if (!str) return null;
+  if (!str) return { id: null, status: 'UNMATCHED' };
 
-  // 1. Khớp chính xác ID (ví dụ: 'opt_2')
+  // 1. Ưu tiên khớp chính xác ID (ví dụ: 'opt_2') -> Duy nhất tuyệt đối trong options
   const byId = currentOptions.find((o) => o && o.id === str);
-  if (byId) return byId.id;
+  if (byId) return { id: byId.id, status: 'MATCHED' };
 
-  // 2. Khớp chữ cái A, B, C, D (hoặc a, b, c, d)
+  // 2. Khớp chữ cái A, B, C, D (hoặc a, b, c, d) -> Ánh xạ 1-1 theo vị trí index
   if (/^[a-zA-Z]$/.test(str)) {
     const idx = str.toUpperCase().charCodeAt(0) - 65;
     if (idx >= 0 && idx < currentOptions.length && currentOptions[idx]?.id) {
-      return currentOptions[idx].id;
+      return { id: currentOptions[idx].id, status: 'MATCHED' };
     }
   }
 
-  // 3. Khớp nội dung text lựa chọn (không phân biệt hoa thường)
-  const byText = currentOptions.find(
+  // 3. Khớp nội dung text lựa chọn: Chỉ chấp nhận nếu có ĐÚNG 1 lựa chọn khớp
+  const matchingByText = currentOptions.filter(
     (o) => o && typeof o.text === 'string' && o.text.trim().toLowerCase() === str.toLowerCase()
   );
-  if (byText) return byText.id;
+  if (matchingByText.length === 1) {
+    return { id: matchingByText[0].id, status: 'MATCHED' };
+  }
+  if (matchingByText.length > 1) {
+    // Có nhiều lựa chọn cùng text -> AMBIGUOUS! Tuyệt đối không tự chọn option đầu!
+    return { id: null, status: 'AMBIGUOUS' };
+  }
 
-  return null;
+  return { id: null, status: 'UNMATCHED' };
 };
 
 /**
- * Trích xuất trạng thái đáp án hoàn chỉnh cho modal soạn thảo với cơ chế fail-closed.
- * Nếu không xác định được đáp án đúng -> correctOptionId = '', isResolved = false.
+ * Trích xuất trạng thái đáp án hoàn chỉnh cho modal soạn thảo với cơ chế fail-closed chặt chẽ.
+ * - Nếu nhiều đáp án mâu thuẫn trong single_choice -> ambiguityReason = 'CONFLICT', KHÔNG đổi dạng câu.
+ * - Nếu nhiều options trùng text -> ambiguityReason = 'AMBIGUOUS', không tự chọn radio.
+ * - Nếu không tìm thấy hoặc thiếu -> ambiguityReason = 'UNRESOLVED'.
+ * - Khi không xác định được đáp án duy nhất hợp lệ -> correctOptionId = '', isResolved = false.
+ *
  * @param {Object} answerKey
  * @param {Array<{ id: string, text: string }>} currentOptions
  * @param {string} qType
+ * @returns {{
+ *   questionType: string,
+ *   correctOptionId: string,
+ *   correctOptionIds: Array<string>,
+ *   fillBlankAnswer: string,
+ *   shortAnswer: string,
+ *   isResolved: boolean,
+ *   ambiguityReason: 'CONFLICT' | 'AMBIGUOUS' | 'UNRESOLVED' | null
+ * }}
  */
 export const extractAuthoringAnswerState = (answerKey, currentOptions, qType) => {
   const candidates = extractCandidateAnswerValues(answerKey);
 
   if (qType === 'single_choice') {
-    let resolvedId = '';
+    const matchedIds = [];
+    let hasAmbiguousText = false;
+
     for (const c of candidates) {
-      const match = resolveOptionId(c, currentOptions);
-      if (match) {
-        resolvedId = match;
-        break;
+      const res = resolveOptionId(c, currentOptions);
+      if (res.status === 'AMBIGUOUS') {
+        hasAmbiguousText = true;
+      } else if (res.status === 'MATCHED' && res.id) {
+        if (!matchedIds.includes(res.id)) {
+          matchedIds.push(res.id);
+        }
       }
     }
+
+    // 1. Xung đột: Có nhiều hơn 1 đáp án khác nhau được resolve từ answer key
+    if (matchedIds.length > 1) {
+      return {
+        questionType: 'single_choice',
+        correctOptionId: '',
+        correctOptionIds: [],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        isResolved: false,
+        ambiguityReason: 'CONFLICT'
+      };
+    }
+
+    // 2. Nhập nhằng do trùng text: Có lựa chọn trùng text và không có ID/chữ cái nào khớp chính xác
+    if (hasAmbiguousText && matchedIds.length === 0) {
+      return {
+        questionType: 'single_choice',
+        correctOptionId: '',
+        correctOptionIds: [],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        isResolved: false,
+        ambiguityReason: 'AMBIGUOUS'
+      };
+    }
+
+    // 3. Khớp chuẩn xác duy nhất 1 option hợp lệ
+    if (matchedIds.length === 1 && !hasAmbiguousText) {
+      return {
+        questionType: 'single_choice',
+        correctOptionId: matchedIds[0],
+        correctOptionIds: [matchedIds[0]],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        isResolved: true,
+        ambiguityReason: null
+      };
+    }
+
+    // 4. Không khớp được đáp án nào (thiếu hoặc không tìm thấy)
     return {
       questionType: 'single_choice',
-      correctOptionId: resolvedId,
-      correctOptionIds: resolvedId ? [resolvedId] : [],
+      correctOptionId: '',
+      correctOptionIds: [],
       fillBlankAnswer: '',
       shortAnswer: '',
-      isResolved: Boolean(resolvedId)
+      isResolved: false,
+      ambiguityReason: 'UNRESOLVED'
     };
   }
 
   if (qType === 'multiple_choice') {
-    const resolvedIds = [];
+    const matchedIds = [];
+    let hasAmbiguousText = false;
+
     for (const c of candidates) {
-      const match = resolveOptionId(c, currentOptions);
-      if (match && !resolvedIds.includes(match)) {
-        resolvedIds.push(match);
+      const res = resolveOptionId(c, currentOptions);
+      if (res.status === 'AMBIGUOUS') {
+        hasAmbiguousText = true;
+      } else if (res.status === 'MATCHED' && res.id) {
+        if (!matchedIds.includes(res.id)) {
+          matchedIds.push(res.id);
+        }
       }
     }
+
+    const isResolved = matchedIds.length > 0 && !hasAmbiguousText;
+
     return {
       questionType: 'multiple_choice',
-      correctOptionId: resolvedIds[0] || '',
-      correctOptionIds: resolvedIds,
+      correctOptionId: matchedIds[0] || '',
+      correctOptionIds: matchedIds,
       fillBlankAnswer: '',
       shortAnswer: '',
-      isResolved: resolvedIds.length > 0
+      isResolved,
+      ambiguityReason: hasAmbiguousText ? 'AMBIGUOUS' : (matchedIds.length === 0 ? 'UNRESOLVED' : null)
     };
   }
 
@@ -182,13 +262,15 @@ export const extractAuthoringAnswerState = (answerKey, currentOptions, qType) =>
     } else if (candidates.length > 0) {
       textAnswer = candidates.join('; ');
     }
+    const isResolved = Boolean(textAnswer.trim());
     return {
       questionType: 'fill_blank',
       correctOptionId: '',
       correctOptionIds: [],
       fillBlankAnswer: textAnswer,
       shortAnswer: '',
-      isResolved: Boolean(textAnswer.trim())
+      isResolved,
+      ambiguityReason: isResolved ? null : 'UNRESOLVED'
     };
   }
 
@@ -203,13 +285,15 @@ export const extractAuthoringAnswerState = (answerKey, currentOptions, qType) =>
     } else if (candidates.length > 0) {
       textAnswer = candidates.join('; ');
     }
+    const isResolved = Boolean(textAnswer.trim());
     return {
       questionType: 'short_answer',
       correctOptionId: '',
       correctOptionIds: [],
       fillBlankAnswer: '',
       shortAnswer: textAnswer,
-      isResolved: Boolean(textAnswer.trim())
+      isResolved,
+      ambiguityReason: isResolved ? null : 'UNRESOLVED'
     };
   }
 
@@ -219,7 +303,8 @@ export const extractAuthoringAnswerState = (answerKey, currentOptions, qType) =>
     correctOptionIds: [],
     fillBlankAnswer: '',
     shortAnswer: '',
-    isResolved: true
+    isResolved: true,
+    ambiguityReason: null
   };
 };
 
@@ -261,6 +346,7 @@ export const CreateQuestionBankModal = ({
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [ambiguityWarning, setAmbiguityWarning] = useState(null); // 'CONFLICT' | 'AMBIGUOUS' | 'UNRESOLVED' | null
 
   // Snapshot đối chiếu thay đổi (isDirty tracking)
   const initialSnapshotRef = useRef(null);
@@ -280,6 +366,7 @@ export const CreateQuestionBankModal = ({
       setCorrectOptionIds([]);
       setFillBlankAnswer('');
       setShortAnswer('');
+      setAmbiguityWarning(null);
 
       const loadDetail = async () => {
         try {
@@ -323,19 +410,12 @@ export const CreateQuestionBankModal = ({
           setOptions(loadedOptions);
 
           // Xác định dạng câu hỏi và trích xuất đáp án fail-closed
+          // Tuyệt đối không tự động đổi single_choice sang multiple_choice khi có xung đột
           let qType = item.question_type || version.question_type || 'single_choice';
           if (qType === 'choice' || qType === 'trac_nghiem') qType = 'single_choice';
           if (qType === 'dien_khuyet') qType = 'fill_blank';
           if (qType === 'tu_luan') qType = 'essay';
           if (qType === 'tra_loi_ngan') qType = 'short_answer';
-
-          const candidates = extractCandidateAnswerValues(answerKey);
-          if (candidates.length > 1 && qType === 'single_choice') {
-            const matched = candidates.map(c => resolveOptionId(c, loadedOptions)).filter(Boolean);
-            if (matched.length > 1) {
-              qType = 'multiple_choice';
-            }
-          }
 
           const answerState = extractAuthoringAnswerState(answerKey, loadedOptions, qType);
           setQuestionType(answerState.questionType);
@@ -343,6 +423,7 @@ export const CreateQuestionBankModal = ({
           setCorrectOptionIds(answerState.correctOptionIds);
           setFillBlankAnswer(answerState.fillBlankAnswer);
           setShortAnswer(answerState.shortAnswer);
+          setAmbiguityWarning(answerState.ambiguityReason);
 
           // Ghi nhận snapshot ban đầu để kiểm tra isDirty
           initialSnapshotRef.current = {
@@ -396,6 +477,7 @@ export const CreateQuestionBankModal = ({
       setFillBlankAnswer('');
       setShortAnswer('');
       setErrorMsg('');
+      setAmbiguityWarning(null);
       setIsLoadingDetail(false);
     }
   }, [isOpen, mode, initialQuestion]);
@@ -469,6 +551,7 @@ export const CreateQuestionBankModal = ({
     setOptions(updated);
     if (!updated.some(o => o.id === correctOptionId)) {
       setCorrectOptionId('');
+      setAmbiguityWarning('UNRESOLVED');
     }
     setCorrectOptionIds(prev => prev.filter(id => updated.some(o => o.id === id)));
   };
@@ -815,7 +898,13 @@ export const CreateQuestionBankModal = ({
               {!correctOptionId && (
                 <div className="p-3 bg-amber-50 border-2 border-amber-300 rounded-xl text-xs font-bold text-amber-900 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Chưa xác định được đáp án đúng từ phiên bản trước. Vui lòng chọn đáp án đúng bên dưới trước khi lưu.</span>
+                  <span>
+                    {ambiguityWarning === 'CONFLICT'
+                      ? 'Phát hiện nhiều đáp án mâu thuẫn trong phiên bản trước. Vui lòng chọn lại một đáp án đúng chuẩn xác bên dưới trước khi lưu.'
+                      : ambiguityWarning === 'AMBIGUOUS'
+                      ? 'Phát hiện nhiều lựa chọn có cùng nội dung khớp với đáp án của phiên bản trước. Vui lòng chọn lại đáp án đúng bên dưới trước khi lưu.'
+                      : 'Chưa xác định được đáp án đúng từ phiên bản trước. Vui lòng chọn đáp án đúng bên dưới trước khi lưu.'}
+                  </span>
                 </div>
               )}
 
@@ -825,7 +914,10 @@ export const CreateQuestionBankModal = ({
                     type="radio"
                     name="singleChoiceCorrect"
                     checked={correctOptionId === opt.id}
-                    onChange={() => setCorrectOptionId(opt.id)}
+                    onChange={() => {
+                      setCorrectOptionId(opt.id);
+                      setAmbiguityWarning(null);
+                    }}
                     className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
                   <span className="text-xs font-black text-slate-500 w-5">{String.fromCharCode(65 + idx)}.</span>
@@ -885,6 +977,7 @@ export const CreateQuestionBankModal = ({
                         } else {
                           setCorrectOptionIds(correctOptionIds.filter(id => id !== opt.id));
                         }
+                        setAmbiguityWarning(null);
                       }}
                       className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer"
                     />
