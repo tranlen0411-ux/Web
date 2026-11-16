@@ -205,8 +205,12 @@ export const restoreQuestion = async (itemId) => {
 };
 
 /**
- * Xuất bản câu hỏi (Draft -> Published) trong Ngân hàng câu hỏi
+ * Xuất bản câu hỏi (Draft -> Published) trong Ngân hàng câu hỏi Dual-Head
+ * Bắt buộc expected_version_id để loại trừ xuất bản nhầm phiên bản khi có tương tranh.
  * @param {string} itemId UUID của câu hỏi cần xuất bản
+ * @param {Object} options Tùy chọn (visibility, expected_version_id)
+ * @param {string} options.expected_version_id UUID của phiên bản nháp mà giáo viên xác nhận (bắt buộc)
+ * @param {string} [options.visibility] Phạm vi hiển thị ('private' | 'public_template' | 'school_shared')
  * @returns {Promise<{ item_id: string, status: string, message: string }>}
  */
 export const publishQuestion = async (itemId, options = {}) => {
@@ -217,18 +221,29 @@ export const publishQuestion = async (itemId, options = {}) => {
     throw err;
   }
 
+  const expectedVersionId = options?.expected_version_id;
+  if (!expectedVersionId || typeof expectedVersionId !== 'string' || !expectedVersionId.trim()) {
+    const err = new Error('Tham số expected_version_id là bắt buộc để đảm bảo an toàn xuất bản đúng phiên bản.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
   const accessToken = await getOldAccessToken();
   const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/publish`;
-  const hasBody = options && typeof options === 'object' && Object.keys(options).length > 0;
+  const requestBody = {
+    expected_version_id: expectedVersionId.trim(),
+    ...(options?.visibility ? { visibility: options.visibility } : {})
+  };
 
   const response = await fetch(requestUrl, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
-      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: hasBody ? JSON.stringify(options) : undefined,
+    body: JSON.stringify(requestBody),
     redirect: 'error'
   });
 
@@ -290,6 +305,62 @@ export const listQuestionVersions = async (itemId) => {
 
   if (!response.ok || !jsonResult || jsonResult.success !== true) {
     const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi tải lịch sử phiên bản (${response.status})`;
+    const structuredErr = new Error(errorMsg);
+    structuredErr.status = response.status;
+    structuredErr.errorCode = jsonResult?.error_code || null;
+    throw structuredErr;
+  }
+
+  return jsonResult.data;
+};
+
+/**
+ * Tạo phiên bản mới cho một câu hỏi (Create Question Version V2.2)
+ * @param {string} itemId UUID của câu hỏi
+ * @param {Object} payload Payload phiên bản mới (prompt, options, answer_key, change_log, explanation, hints, media_urls, metadata)
+ * @returns {Promise<{ item_id: string, version_id: string, version_number: number }>}
+ */
+export const createQuestionVersion = async (itemId, payload) => {
+  if (!itemId || typeof itemId !== 'string') {
+    const err = new Error('ID câu hỏi không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    const err = new Error('Dữ liệu phiên bản mới không hợp lệ.');
+    err.status = 400;
+    err.errorCode = 'INVALID_INPUT';
+    throw err;
+  }
+
+  const accessToken = await getOldAccessToken();
+  const requestUrl = `${getQuestionBankBaseUrl()}/qb/questions/${encodeURIComponent(itemId)}/versions`;
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(payload),
+    redirect: 'error'
+  });
+
+  let jsonResult;
+  try {
+    jsonResult = await response.json();
+  } catch (_err) {
+    const networkErr = new Error(`Lỗi kết nối máy chủ khi tạo phiên bản mới (HTTP ${response.status})`);
+    networkErr.status = response.status;
+    networkErr.errorCode = null;
+    throw networkErr;
+  }
+
+  if (!response.ok || !jsonResult || jsonResult.success !== true) {
+    const errorMsg = jsonResult?.message || jsonResult?.error || `Lỗi khi tạo phiên bản mới (${response.status})`;
     const structuredErr = new Error(errorMsg);
     structuredErr.status = response.status;
     structuredErr.errorCode = jsonResult?.error_code || null;
@@ -516,6 +587,7 @@ export const questionBankService = {
   publishQuestion,
   updateQuestionVisibility,
   listQuestionVersions,
+  createQuestionVersion,
   getQuestionAuthoringDetail,
   forkQuestion,
   deleteQuestion
