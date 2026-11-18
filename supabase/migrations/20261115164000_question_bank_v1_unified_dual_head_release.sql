@@ -699,6 +699,7 @@ DECLARE
   v_expected_version_id uuid;
   v_updated_visibility text;
   v_updated_status text;
+  v_updated_published_id uuid;
 BEGIN
   IF p_caller_id IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error_code', 'UNAUTHORIZED_CALLER', 'message', 'Caller ID is required');
@@ -821,7 +822,7 @@ BEGIN
     END,
     updated_at = now()
   WHERE id = p_item_id
-  RETURNING visibility, status INTO v_updated_visibility, v_updated_status;
+  RETURNING visibility, status, published_version_id INTO v_updated_visibility, v_updated_status, v_updated_published_id;
 
   -- Trả về trường visibility và status thực tế được lưu vào database để phục vụ Zero-Trust BFF
   RETURN jsonb_build_object(
@@ -829,7 +830,7 @@ BEGIN
     'item_id', p_item_id,
     'status', v_updated_status,
     'visibility', v_updated_visibility,
-    'published_version_id', v_published_id,
+    'published_version_id', v_updated_published_id,
     'current_version_id', v_item.current_version_id,
     'message', CASE
       WHEN v_status = 'published' THEN 'Question published successfully'
