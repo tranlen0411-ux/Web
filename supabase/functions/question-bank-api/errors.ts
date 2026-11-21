@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'CONFLICT'
   | 'SCHOOL_CONTEXT_NOT_AVAILABLE'
   | 'INVALID_STATUS_TRANSITION'
+  | 'VISIBILITY_PERSISTENCE_FAILED'
   | 'INTERNAL_ERROR';
 
 export interface ErrorEnvelope {
@@ -888,6 +889,7 @@ export function normalizeRpcError(
       case 'UNAUTHORIZED_ROLE':
       case 'FORBIDDEN_VERSION':
       case 'QUESTION_NOT_PUBLISHED':
+      case 'FORBIDDEN_PRIVATE_QUESTION':
         return {
           status: 403,
           errorCode: 'FORBIDDEN',

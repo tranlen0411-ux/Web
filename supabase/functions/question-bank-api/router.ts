@@ -287,6 +287,14 @@ export async function handleQuestionBankRequest(
     // ------------------------------------------------------------------------
     const studentMatch = pathname.match(/\/qb\/student\/questions\/([^\/]+)$/);
     if (method === 'GET' && studentMatch) {
+      if (actorRole !== 'admin' && actorRole !== 'teacher') {
+        return createErrorResponse(
+          403,
+          'FORBIDDEN',
+          'Học sinh không có quyền truy cập trực tiếp vào Ngân hàng câu hỏi. Vui lòng truy cập thông qua bài tập hoặc đề kiểm tra được giao.'
+        );
+      }
+
       const itemId = studentMatch[1];
       if (!isValidUUID(itemId)) {
         return createErrorResponse(
