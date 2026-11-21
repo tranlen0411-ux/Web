@@ -190,3 +190,5 @@ export const getModalVisibilityDisplay = (visibility) => {
       };
   }
 };
+
+export { resolveQuestionBankAnswerKey } from '../../../utils/questionBankAdapters';

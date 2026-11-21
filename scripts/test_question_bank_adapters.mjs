@@ -13,6 +13,7 @@ import {
   normalizeOptionsToStableIds,
   buildSingleChoiceAnswerKey,
   buildMultipleChoiceAnswerKey,
+  resolveQuestionBankAnswerKey,
   transformQuestionBankToAcademicExercise
 } from '../src/utils/questionBankAdapters.js';
 
@@ -2348,7 +2349,155 @@ const evaluateCanAssignToClass = ({ role, currentUserId, item }) => {
   console.log('PASS Test 123: ASSIGN-QB-33 short_answer malformed/empty throws fail-closed');
 }
 
-console.log('=== ALL 123 TESTS PASSED SUCCESSFULLY! ===');
+// ============================================================================
+// PHASE 29K-D3G-5: ANSWER MAPPING SAFETY TESTS
+// ============================================================================
+
+const sampleOptions = [
+  { id: 'opt_1', text: '4' },
+  { id: 'opt_2', text: '5' },
+  { id: 'opt_3', text: '6' },
+  { id: 'opt_4', text: '7' }
+];
+
+// 124. Canonical object with correct_option_id = 'opt_2' must resolve to B ('opt_2')
+{
+  const answerKey = {
+    correct_answers: { correct_option_id: 'opt_2' },
+    grading_config: {}
+  };
+  const res = resolveQuestionBankAnswerKey(answerKey, sampleOptions, 'single_choice');
+  assert.strictEqual(res.isValid, true);
+  assert.strictEqual(res.correctOptionId, 'opt_2');
+  assert.deepStrictEqual(res.correctOptionIds, ['opt_2']);
+  assert.strictEqual(res.warningMessage, null);
+  console.log('PASS Test 124: Canonical object correct_option_id = opt_2 resolves to option B');
+}
+
+// 125. Valid string answers (ID, letter, text value)
+{
+  // String ID: 'opt_2'
+  const resId = resolveQuestionBankAnswerKey({ correct_answers: 'opt_2' }, sampleOptions, 'single_choice');
+  assert.strictEqual(resId.isValid, true);
+  assert.strictEqual(resId.correctOptionId, 'opt_2');
+
+  // String letter: 'B'
+  const resLetter = resolveQuestionBankAnswerKey({ correct_answers: 'B' }, sampleOptions, 'single_choice');
+  assert.strictEqual(resLetter.isValid, true);
+  assert.strictEqual(resLetter.correctOptionId, 'opt_2');
+
+  // String text value: '5'
+  const resText = resolveQuestionBankAnswerKey({ correct_answers: '5' }, sampleOptions, 'single_choice');
+  assert.strictEqual(resText.isValid, true);
+  assert.strictEqual(resText.correctOptionId, 'opt_2');
+
+  console.log('PASS Test 125: Valid string answers (ID, letter, text value) resolve correctly');
+}
+
+// 126. Valid array answers
+{
+  // Single choice with array of 1 element
+  const resSingleArr = resolveQuestionBankAnswerKey({ correct_answers: ['opt_2'] }, sampleOptions, 'single_choice');
+  assert.strictEqual(resSingleArr.isValid, true);
+  assert.strictEqual(resSingleArr.correctOptionId, 'opt_2');
+
+  // Multiple choice with array of IDs
+  const resMultiArr = resolveQuestionBankAnswerKey({ correct_answers: ['opt_1', 'opt_3'] }, sampleOptions, 'multiple_choice');
+  assert.strictEqual(resMultiArr.isValid, true);
+  assert.deepStrictEqual(resMultiArr.correctOptionIds, ['opt_1', 'opt_3']);
+
+  console.log('PASS Test 126: Valid array answers resolve correctly');
+}
+
+// 127. Missing or null answer key (FAIL-CLOSED: NO fallback to opt_1)
+{
+  const resNull = resolveQuestionBankAnswerKey(null, sampleOptions, 'single_choice');
+  assert.strictEqual(resNull.isValid, false);
+  assert.strictEqual(resNull.correctOptionId, null);
+  assert.ok(resNull.warningMessage);
+
+  const resUndefined = resolveQuestionBankAnswerKey(undefined, sampleOptions, 'single_choice');
+  assert.strictEqual(resUndefined.isValid, false);
+  assert.strictEqual(resUndefined.correctOptionId, null);
+
+  const resEmptyObj = resolveQuestionBankAnswerKey({}, sampleOptions, 'single_choice');
+  assert.strictEqual(resEmptyObj.isValid, false);
+  assert.strictEqual(resEmptyObj.correctOptionId, null);
+
+  const resNullAnswers = resolveQuestionBankAnswerKey({ correct_answers: null }, sampleOptions, 'single_choice');
+  assert.strictEqual(resNullAnswers.isValid, false);
+  assert.strictEqual(resNullAnswers.correctOptionId, null);
+
+  console.log('PASS Test 127: Missing or null answer key fails closed without defaulting to opt_1');
+}
+
+// 128. Option ID does not exist in options (FAIL-CLOSED)
+{
+  const answerKeyNonExistent = {
+    correct_answers: { correct_option_id: 'opt_99' }
+  };
+  const res = resolveQuestionBankAnswerKey(answerKeyNonExistent, sampleOptions, 'single_choice');
+  assert.strictEqual(res.isValid, false);
+  assert.strictEqual(res.correctOptionId, null);
+  assert.ok(res.warningMessage.includes('opt_99'));
+
+  console.log('PASS Test 128: Non-existent option ID fails closed with warning and null selection');
+}
+
+// 129. Open and re-save invariance (zero answer drift)
+{
+  // Simulates loading existing Staging clone
+  const initialKey = { correct_answers: { correct_option_id: 'opt_2' } };
+  const loaded = resolveQuestionBankAnswerKey(initialKey, sampleOptions, 'single_choice');
+  assert.strictEqual(loaded.correctOptionId, 'opt_2');
+
+  // Simulates form submission without changing answer
+  const formPayload = toQuestionBankPayload({
+    prompt: '2 + 3 = ?',
+    question_type: 'single_choice',
+    options: sampleOptions,
+    correct_answer: loaded.correctOptionId
+  }, { role: 'teacher' });
+
+  assert.deepStrictEqual(formPayload.answer_key, { correct_option_id: 'opt_2' });
+  console.log('PASS Test 129: Open and re-save maintains answer invariance (zero drift)');
+}
+
+// 130. Multiple choice canonical and regression compatibility
+{
+  const canonicalMulti = {
+    correct_answers: { correct_option_ids: ['opt_2', 'opt_4'] }
+  };
+  const resolved = resolveQuestionBankAnswerKey(canonicalMulti, sampleOptions, 'multiple_choice');
+  assert.strictEqual(resolved.isValid, true);
+  assert.deepStrictEqual(resolved.correctOptionIds, ['opt_2', 'opt_4']);
+
+  const formPayload = toQuestionBankPayload({
+    prompt: 'Chọn các số chẵn:',
+    question_type: 'multiple_choice',
+    options: sampleOptions,
+    correct_answers: resolved.correctOptionIds
+  }, { role: 'teacher' });
+
+  assert.deepStrictEqual(formPayload.answer_key, { correct_option_ids: ['opt_2', 'opt_4'] });
+  console.log('PASS Test 130: Multiple choice canonical and regression compatibility verified');
+}
+
+// 131. Create new question mode invariance
+{
+  // Fresh creation payload with default selection opt_1
+  const createPayload = toQuestionBankPayload({
+    prompt: 'Một câu hỏi mới',
+    question_type: 'single_choice',
+    options: sampleOptions,
+    correct_answer: 'opt_1'
+  }, { role: 'teacher' });
+
+  assert.deepStrictEqual(createPayload.answer_key, { correct_option_id: 'opt_1' });
+  console.log('PASS Test 131: Create new question mode invariance verified');
+}
+
+console.log('=== ALL 131 TESTS PASSED SUCCESSFULLY! ===');
 
 
 

@@ -310,6 +310,322 @@ export const buildSingleChoiceAnswerKey = (options, rawCorrectAnswer) => {
 };
 
 /**
+ * Trích xuất và đối chiếu đáp án đúng từ answerKey của Question Bank (Authoring & Detail)
+ * Hỗ trợ cả canonical schema và các định dạng legacy/tương thích.
+ * Tuân thủ nguyên tắc FAIL-CLOSED: nếu không xác định được đáp án hoặc không khớp options,
+ * trả về isValid: false và correctOptionId: null (tuyệt đối không tự động fallback về opt_1).
+ *
+ * @param {Object|null|undefined} answerKey Đối tượng answer_key từ API getQuestionAuthoringDetail
+ * @param {Array<{ id: string, text: string }>} options Danh sách lựa chọn
+ * @param {string} questionType Dạng câu hỏi ('single_choice', 'multiple_choice', 'fill_blank', 'short_answer', 'essay')
+ * @returns {{
+ *   isValid: boolean,
+ *   correctOptionId: string | null,
+ *   correctOptionIds: string[],
+ *   fillBlankAnswer: string,
+ *   shortAnswer: string,
+ *   warningMessage: string | null
+ * }}
+ */
+export const resolveQuestionBankAnswerKey = (answerKey, options = [], questionType = 'single_choice') => {
+  const normOptions = Array.isArray(options)
+    ? options.map((opt, idx) => ({
+        id: (opt && typeof opt === 'object' && opt.id) ? String(opt.id) : `opt_${idx + 1}`,
+        text: (opt && typeof opt === 'object' && typeof opt.text === 'string') ? opt.text.trim() : (typeof opt === 'string' ? opt.trim() : '')
+      }))
+    : [];
+
+  const qType = questionType || 'single_choice';
+
+  if (qType === 'essay') {
+    return {
+      isValid: true,
+      correctOptionId: null,
+      correctOptionIds: [],
+      fillBlankAnswer: '',
+      shortAnswer: '',
+      warningMessage: null
+    };
+  }
+
+  const ca = answerKey?.correct_answers;
+
+  if (qType === 'single_choice') {
+    let candidate = null;
+
+    if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
+      candidate = ca.correct_option_id ?? ca.correct_answer ?? ca.option_id ?? (Array.isArray(ca.accepted_answers) ? ca.accepted_answers[0] : null);
+    } else if (Array.isArray(ca) && ca.length > 0) {
+      candidate = ca[0];
+    } else if (typeof ca === 'string') {
+      candidate = ca;
+    }
+
+    if (candidate === null || candidate === undefined || candidate === '') {
+      if (answerKey && typeof answerKey === 'object') {
+        candidate = answerKey.correct_option_id ?? answerKey.correct_answer ?? answerKey.option_id ?? null;
+      }
+    }
+
+    if (candidate === null || candidate === undefined || String(candidate).trim() === '') {
+      return {
+        isValid: false,
+        correctOptionId: null,
+        correctOptionIds: [],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        warningMessage: 'Không tìm thấy thông tin đáp án đúng từ phiên bản trước. Vui lòng chọn đáp án đúng.'
+      };
+    }
+
+    const rawStr = String(candidate).trim();
+
+    // 1. Khớp theo option ID
+    const directMatch = normOptions.find((o) => o.id === rawStr);
+    if (directMatch) {
+      return {
+        isValid: true,
+        correctOptionId: directMatch.id,
+        correctOptionIds: [directMatch.id],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        warningMessage: null
+      };
+    }
+
+    // 2. Khớp theo text của option (nếu có nội dung)
+    if (rawStr !== '') {
+      const textMatch = normOptions.find(
+        (o) => o.text && o.text.toLowerCase() === rawStr.toLowerCase()
+      );
+      if (textMatch) {
+        return {
+          isValid: true,
+          correctOptionId: textMatch.id,
+          correctOptionIds: [textMatch.id],
+          fillBlankAnswer: '',
+          shortAnswer: '',
+          warningMessage: null
+        };
+      }
+    }
+
+    // 3. Khớp theo ký tự A, B, C, D...
+    const letterMatch = rawStr.toUpperCase().match(/^([A-Z])$/);
+    if (letterMatch) {
+      const letterIdx = letterMatch[1].charCodeAt(0) - 65;
+      if (letterIdx >= 0 && letterIdx < normOptions.length) {
+        const matched = normOptions[letterIdx];
+        return {
+          isValid: true,
+          correctOptionId: matched.id,
+          correctOptionIds: [matched.id],
+          fillBlankAnswer: '',
+          shortAnswer: '',
+          warningMessage: null
+        };
+      }
+    }
+
+    // 4. Khớp theo số thứ tự 1-based nếu đúng tầm
+    const numIdx = parseInt(rawStr, 10);
+    if (!isNaN(numIdx) && numIdx >= 1 && numIdx <= normOptions.length && String(numIdx) === rawStr) {
+      const matched = normOptions[numIdx - 1];
+      return {
+        isValid: true,
+        correctOptionId: matched.id,
+        correctOptionIds: [matched.id],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        warningMessage: null
+      };
+    }
+
+    // Không khớp bất kỳ lựa chọn nào
+    return {
+      isValid: false,
+      correctOptionId: null,
+      correctOptionIds: [],
+      fillBlankAnswer: '',
+      shortAnswer: '',
+      warningMessage: `Đáp án đúng đã lưu ("${rawStr}") không khớp với bất kỳ lựa chọn nào trong danh sách. Vui lòng chọn lại đáp án đúng.`
+    };
+  }
+
+  if (qType === 'multiple_choice') {
+    let candidates = [];
+
+    if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
+      if (Array.isArray(ca.correct_option_ids)) {
+        candidates = ca.correct_option_ids;
+      } else if (Array.isArray(ca.option_ids)) {
+        candidates = ca.option_ids;
+      } else if (Array.isArray(ca.accepted_answers)) {
+        candidates = ca.accepted_answers;
+      } else if (ca.correct_option_id) {
+        candidates = [ca.correct_option_id];
+      } else if (ca.option_id) {
+        candidates = [ca.option_id];
+      }
+    } else if (Array.isArray(ca)) {
+      candidates = ca;
+    } else if (typeof ca === 'string' && ca.trim() !== '') {
+      candidates = ca.split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
+    }
+
+    if (candidates.length === 0 && answerKey && typeof answerKey === 'object') {
+      if (Array.isArray(answerKey.correct_option_ids)) {
+        candidates = answerKey.correct_option_ids;
+      } else if (answerKey.correct_option_id) {
+        candidates = [answerKey.correct_option_id];
+      }
+    }
+
+    if (candidates.length === 0) {
+      return {
+        isValid: false,
+        correctOptionId: null,
+        correctOptionIds: [],
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        warningMessage: 'Không tìm thấy danh sách đáp án đúng từ phiên bản trước. Vui lòng đánh dấu các đáp án đúng.'
+      };
+    }
+
+    const matchedIds = [];
+    let hasUnmatched = false;
+
+    for (const cand of candidates) {
+      const str = String(cand).trim();
+      if (!str) continue;
+
+      let found = normOptions.find((o) => o.id === str);
+      if (!found && str !== '') {
+        found = normOptions.find((o) => o.text && o.text.toLowerCase() === str.toLowerCase());
+      }
+      if (!found) {
+        const lm = str.toUpperCase().match(/^([A-Z])$/);
+        if (lm) {
+          const lIdx = lm[1].charCodeAt(0) - 65;
+          if (lIdx >= 0 && lIdx < normOptions.length) {
+            found = normOptions[lIdx];
+          }
+        }
+      }
+      if (!found) {
+        const nIdx = parseInt(str, 10);
+        if (!isNaN(nIdx) && nIdx >= 1 && nIdx <= normOptions.length && String(nIdx) === str) {
+          found = normOptions[nIdx - 1];
+        }
+      }
+
+      if (found) {
+        if (!matchedIds.includes(found.id)) {
+          matchedIds.push(found.id);
+        }
+      } else {
+        hasUnmatched = true;
+      }
+    }
+
+    if (matchedIds.length === 0 || hasUnmatched) {
+      return {
+        isValid: false,
+        correctOptionId: matchedIds[0] || null,
+        correctOptionIds: matchedIds,
+        fillBlankAnswer: '',
+        shortAnswer: '',
+        warningMessage: hasUnmatched
+          ? 'Một số đáp án đúng đã lưu không còn tồn tại trong danh sách lựa chọn. Vui lòng kiểm tra lại.'
+          : 'Không thể xác định đáp án đúng hợp lệ. Vui lòng đánh dấu lại đáp án đúng.'
+      };
+    }
+
+    return {
+      isValid: true,
+      correctOptionId: matchedIds[0],
+      correctOptionIds: matchedIds,
+      fillBlankAnswer: '',
+      shortAnswer: '',
+      warningMessage: null
+    };
+  }
+
+  if (qType === 'fill_blank') {
+    let text = '';
+    if (Array.isArray(ca)) {
+      text = ca.map((s) => String(s).trim()).filter(Boolean).join('; ');
+    } else if (ca && typeof ca === 'object') {
+      if (Array.isArray(ca.accepted_answers)) {
+        text = ca.accepted_answers.map((s) => String(s).trim()).filter(Boolean).join('; ');
+      } else if (typeof ca.correct_answer === 'string') {
+        text = ca.correct_answer.trim();
+      }
+    } else if (typeof ca === 'string') {
+      text = ca.trim();
+    }
+
+    if (!text && answerKey && typeof answerKey === 'object') {
+      if (typeof answerKey.correct_answer === 'string') {
+        text = answerKey.correct_answer.trim();
+      } else if (Array.isArray(answerKey.accepted_answers)) {
+        text = answerKey.accepted_answers.map((s) => String(s).trim()).filter(Boolean).join('; ');
+      }
+    }
+
+    return {
+      isValid: Boolean(text),
+      correctOptionId: null,
+      correctOptionIds: [],
+      fillBlankAnswer: text,
+      shortAnswer: '',
+      warningMessage: text ? null : 'Chưa có đáp án đúng cho câu điền khuyết. Vui lòng nhập đáp án.'
+    };
+  }
+
+  if (qType === 'short_answer') {
+    let text = '';
+    if (Array.isArray(ca)) {
+      text = ca.map((s) => String(s).trim()).filter(Boolean).join('; ');
+    } else if (ca && typeof ca === 'object') {
+      if (Array.isArray(ca.accepted_answers)) {
+        text = ca.accepted_answers.map((s) => String(s).trim()).filter(Boolean).join('; ');
+      } else if (typeof ca.correct_answer === 'string') {
+        text = ca.correct_answer.trim();
+      }
+    } else if (typeof ca === 'string') {
+      text = ca.trim();
+    }
+
+    if (!text && answerKey && typeof answerKey === 'object') {
+      if (typeof answerKey.correct_answer === 'string') {
+        text = answerKey.correct_answer.trim();
+      } else if (Array.isArray(answerKey.accepted_answers)) {
+        text = answerKey.accepted_answers.map((s) => String(s).trim()).filter(Boolean).join('; ');
+      }
+    }
+
+    return {
+      isValid: Boolean(text),
+      correctOptionId: null,
+      correctOptionIds: [],
+      fillBlankAnswer: '',
+      shortAnswer: text,
+      warningMessage: text ? null : 'Chưa có đáp án đúng cho câu trả lời ngắn. Vui lòng nhập đáp án.'
+    };
+  }
+
+  return {
+    isValid: true,
+    correctOptionId: null,
+    correctOptionIds: [],
+    fillBlankAnswer: '',
+    shortAnswer: '',
+    warningMessage: null
+  };
+};
+
+/**
  * Tạo answer_key chuẩn cho dạng multiple_choice (FAIL-CLOSED)
  * @param {Array<{ id: string, text: string }>} options
  * @param {Array<string>|string} rawCorrectAnswers
@@ -712,6 +1028,7 @@ export default {
   normalizeOptionsToStableIds,
   buildSingleChoiceAnswerKey,
   buildMultipleChoiceAnswerKey,
+  resolveQuestionBankAnswerKey,
   transformQuestionBankToAcademicExercise
 };
 

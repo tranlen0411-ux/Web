@@ -7,6 +7,7 @@ import {
   Save,
   FileText,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   HelpCircle,
   Lock,
@@ -20,7 +21,7 @@ import {
   createQuestionVersion,
   getQuestionAuthoringDetail
 } from '../../../services/questionBankService';
-import { toQuestionBankPayload } from '../../../utils/questionBankAdapters';
+import { toQuestionBankPayload, resolveQuestionBankAnswerKey } from '../../../utils/questionBankAdapters';
 
 export const CreateQuestionBankModal = ({
   isOpen,
@@ -58,6 +59,7 @@ export const CreateQuestionBankModal = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [answerMappingWarning, setAnswerMappingWarning] = useState(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   // Snapshot đối chiếu thay đổi (isDirty tracking)
@@ -73,6 +75,9 @@ export const CreateQuestionBankModal = ({
       let isMounted = true;
       setIsLoadingDetail(true);
       setErrorMsg('');
+      setAnswerMappingWarning(null);
+      setCorrectOptionId('');
+      setCorrectOptionIds([]);
       setShowDiscardConfirm(false);
 
       const loadDetail = async () => {
@@ -117,58 +122,26 @@ export const CreateQuestionBankModal = ({
             setOptions(loadedOptions);
           }
 
-          // Tải dạng câu hỏi và đáp án
-          const rawAnswers = answerKey?.correct_answers || [];
+          // Tải dạng câu hỏi và đối chiếu đáp án an toàn qua adapter (FAIL-CLOSED)
           const qType = item.question_type || version.question_type || 'single_choice';
-          let loadedCorrectId = 'opt_1';
-          let loadedCorrectIds = ['opt_1'];
-          let loadedBlank = '';
-          let loadedShort = '';
+          setQuestionType(qType);
 
-          if (Array.isArray(rawAnswers) && rawAnswers.length > 1) {
-            setQuestionType('multiple_choice');
-            loadedCorrectIds = rawAnswers;
-            loadedCorrectId = rawAnswers[0] || 'opt_1';
-            setCorrectOptionIds(loadedCorrectIds);
-            setCorrectOptionId(loadedCorrectId);
-          } else if (Array.isArray(rawAnswers) && rawAnswers.length === 1) {
-            if (qType === 'multiple_choice') {
-              setQuestionType('multiple_choice');
-              loadedCorrectIds = rawAnswers;
-              loadedCorrectId = rawAnswers[0] || 'opt_1';
-              setCorrectOptionIds(loadedCorrectIds);
-              setCorrectOptionId(loadedCorrectId);
-            } else if (qType === 'fill_blank') {
-              setQuestionType('fill_blank');
-              loadedBlank = String(rawAnswers[0] || '');
-              setFillBlankAnswer(loadedBlank);
-            } else if (qType === 'short_answer') {
-              setQuestionType('short_answer');
-              loadedShort = String(rawAnswers[0] || '');
-              setShortAnswer(loadedShort);
-            } else {
-              setQuestionType('single_choice');
-              loadedCorrectId = rawAnswers[0] || 'opt_1';
-              loadedCorrectIds = [loadedCorrectId];
-              setCorrectOptionId(loadedCorrectId);
-              setCorrectOptionIds(loadedCorrectIds);
-            }
-          } else if (typeof rawAnswers === 'string') {
-            if (qType === 'fill_blank') {
-              setQuestionType('fill_blank');
-              loadedBlank = rawAnswers;
-              setFillBlankAnswer(loadedBlank);
-            } else if (qType === 'short_answer') {
-              setQuestionType('short_answer');
-              loadedShort = rawAnswers;
-              setShortAnswer(loadedShort);
-            } else {
-              setQuestionType('single_choice');
-              loadedCorrectId = rawAnswers;
-              setCorrectOptionId(loadedCorrectId);
-            }
+          const resolved = resolveQuestionBankAnswerKey(answerKey, loadedOptions, qType);
+
+          const loadedCorrectId = resolved.correctOptionId || '';
+          const loadedCorrectIds = resolved.correctOptionIds || [];
+          const loadedBlank = resolved.fillBlankAnswer || '';
+          const loadedShort = resolved.shortAnswer || '';
+
+          setCorrectOptionId(loadedCorrectId);
+          setCorrectOptionIds(loadedCorrectIds);
+          setFillBlankAnswer(loadedBlank);
+          setShortAnswer(loadedShort);
+
+          if (!resolved.isValid && resolved.warningMessage) {
+            setAnswerMappingWarning(resolved.warningMessage);
           } else {
-            setQuestionType(qType);
+            setAnswerMappingWarning(null);
           }
 
           // Ghi nhận snapshot ban đầu để kiểm tra isDirty
@@ -223,6 +196,7 @@ export const CreateQuestionBankModal = ({
       setFillBlankAnswer('');
       setShortAnswer('');
       setErrorMsg('');
+      setAnswerMappingWarning(null);
       setIsLoadingDetail(false);
     }
   }, [isOpen, mode, initialQuestion]);
@@ -337,6 +311,9 @@ export const CreateQuestionBankModal = ({
         if (validOptions.some(t => !t)) {
           throw new Error('Vui lòng nhập đầy đủ nội dung cho các lựa chọn đáp án.');
         }
+        if (!correctOptionId || !options.some(o => o.id === correctOptionId)) {
+          throw new Error('Vui lòng chọn đáp án đúng cho câu hỏi trắc nghiệm một đáp án.');
+        }
         questionInput.options = options;
         questionInput.correct_answer = correctOptionId;
       } else if (questionType === 'multiple_choice') {
@@ -344,11 +321,12 @@ export const CreateQuestionBankModal = ({
         if (validOptions.some(t => !t)) {
           throw new Error('Vui lòng nhập đầy đủ nội dung cho các lựa chọn đáp án.');
         }
-        if (correctOptionIds.length === 0) {
-          throw new Error('Vui lòng chọn ít nhất một đáp án đúng.');
+        const validSelected = correctOptionIds.filter(id => options.some(o => o.id === id));
+        if (validSelected.length === 0) {
+          throw new Error('Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi trắc nghiệm nhiều đáp án.');
         }
         questionInput.options = options;
-        questionInput.correct_answers = correctOptionIds;
+        questionInput.correct_answers = validSelected;
       } else if (questionType === 'fill_blank') {
         if (!fillBlankAnswer.trim()) {
           throw new Error('Vui lòng nhập đáp án đúng cho câu điền khuyết.');
@@ -450,6 +428,17 @@ export const CreateQuestionBankModal = ({
             <div className="p-3 bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* CẢNH BÁO MAPPING ĐÁP ÁN (FAIL-CLOSED GUARD) */}
+          {answerMappingWarning && (
+            <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl text-xs text-amber-950 font-bold flex items-start gap-2.5 animate-fadeIn">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <span className="block font-black text-amber-900 mb-0.5">Lưu ý kiểm tra đáp án:</span>
+                <span>{answerMappingWarning}</span>
+              </div>
             </div>
           )}
 
@@ -625,7 +614,10 @@ export const CreateQuestionBankModal = ({
                     type="radio"
                     name="singleChoiceCorrect"
                     checked={correctOptionId === opt.id}
-                    onChange={() => setCorrectOptionId(opt.id)}
+                    onChange={() => {
+                      setCorrectOptionId(opt.id);
+                      setAnswerMappingWarning(null);
+                    }}
                     className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
                   <span className="text-xs font-black text-slate-500 w-5">{String.fromCharCode(65 + idx)}.</span>
@@ -678,6 +670,7 @@ export const CreateQuestionBankModal = ({
                         } else {
                           setCorrectOptionIds(correctOptionIds.filter(id => id !== opt.id));
                         }
+                        setAnswerMappingWarning(null);
                       }}
                       className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer"
                     />
@@ -842,7 +835,14 @@ export const CreateQuestionBankModal = ({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || isLoadingDetail}
+              disabled={
+                isSubmitting ||
+                isLoadingDetail ||
+                (mode === 'new_version' && Boolean(answerMappingWarning) && (
+                  (questionType === 'single_choice' && !correctOptionId) ||
+                  (questionType === 'multiple_choice' && correctOptionIds.length === 0)
+                ))
+              }
               className={`px-5 py-2 text-white text-xs font-black rounded-xl transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 ${
                 mode === 'new_version'
                   ? 'bg-amber-600 hover:bg-amber-700'
