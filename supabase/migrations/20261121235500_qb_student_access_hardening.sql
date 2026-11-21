@@ -47,8 +47,8 @@ BEGIN
   END IF;
 
   -- 5. BẢO MẬT CHIỀU SÂU: Chặn đọc câu hỏi riêng tư nếu không phải tác giả tạo ra nó
-  -- Xử lý fail-closed an toàn cho cả trường hợp visibility hoặc created_by bị NULL
-  IF (v_item.visibility IS NULL OR v_item.visibility = 'private') AND (v_item.created_by IS NULL OR v_item.created_by <> p_caller_id) THEN
+  -- Xử lý fail-closed an toàn cho cả trường hợp visibility hoặc author_id bị NULL
+  IF (v_item.visibility IS NULL OR v_item.visibility = 'private') AND (v_item.author_id IS NULL OR v_item.author_id <> p_caller_id) THEN
     RETURN jsonb_build_object('success', false, 'error_code', 'FORBIDDEN_PRIVATE_QUESTION', 'message', 'Question is private and not accessible');
   END IF;
 

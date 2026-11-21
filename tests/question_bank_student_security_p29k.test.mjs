@@ -96,7 +96,7 @@ function simulateRpcGetStudentQuestion({ p_caller_id, p_item_id, itemRecord, ver
   // FAIL-CLOSED PRIVATE VISIBILITY GUARD
   if (
     (itemRecord.visibility === null || itemRecord.visibility === 'private') &&
-    (itemRecord.created_by === null || itemRecord.created_by !== p_caller_id)
+    (itemRecord.author_id === null || itemRecord.author_id !== p_caller_id)
   ) {
     return {
       success: false,
@@ -257,7 +257,7 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
       status: 'published',
       published_version_id: VALID_VERSION_ID,
       visibility: 'private',
-      created_by: VALID_TEACHER_ID,
+      author_id: VALID_TEACHER_ID,
       title: 'Private Test Question',
       question_type: 'single_choice',
     };
@@ -268,7 +268,7 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
       options: ['A', 'B'],
     };
 
-    // Caller khác với created_by
+    // Caller khác với author_id
     const anotherCallerId = '22222222-2222-4222-8222-222222222222';
     const rpcRes = simulateRpcGetStudentQuestion({
       p_caller_id: anotherCallerId,
@@ -281,13 +281,13 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
     assert.strictEqual(rpcRes.error_code, 'FORBIDDEN_PRIVATE_QUESTION');
   });
 
-  await t.test('10. RPC Defense-in-depth: NULL visibility hoặc NULL created_by → Fail-closed', () => {
+  await t.test('10. RPC Defense-in-depth: NULL visibility hoặc NULL author_id → Fail-closed', () => {
     const nullVisibilityItem = {
       id: VALID_ITEM_ID,
       status: 'published',
       published_version_id: VALID_VERSION_ID,
       visibility: null, // Bị NULL
-      created_by: VALID_TEACHER_ID,
+      author_id: VALID_TEACHER_ID,
     };
     const rpcRes1 = simulateRpcGetStudentQuestion({
       p_caller_id: '33333333-3333-4333-8333-333333333333',
@@ -298,17 +298,17 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
     assert.strictEqual(rpcRes1.success, false);
     assert.strictEqual(rpcRes1.error_code, 'FORBIDDEN_PRIVATE_QUESTION');
 
-    const nullCreatedByItem = {
+    const nullAuthorIdItem = {
       id: VALID_ITEM_ID,
       status: 'published',
       published_version_id: VALID_VERSION_ID,
       visibility: 'private',
-      created_by: null, // Bị NULL
+      author_id: null, // Bị NULL
     };
     const rpcRes2 = simulateRpcGetStudentQuestion({
       p_caller_id: VALID_TEACHER_ID,
       p_item_id: VALID_ITEM_ID,
-      itemRecord: nullCreatedByItem,
+      itemRecord: nullAuthorIdItem,
       versionRecord: { id: VALID_VERSION_ID },
     });
     assert.strictEqual(rpcRes2.success, false);
@@ -321,7 +321,7 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
       status: 'published',
       published_version_id: VALID_VERSION_ID,
       visibility: 'public_template',
-      created_by: VALID_TEACHER_ID,
+      author_id: VALID_TEACHER_ID,
       title: 'Public Question',
       question_type: 'single_choice',
     };
