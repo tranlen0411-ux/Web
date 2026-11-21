@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -18,6 +18,7 @@ import {
   Check
 } from 'lucide-react';
 import { getQuestionAuthoringDetail } from '../../../services/questionBankService';
+import { resolveQuestionBankAnswerKey } from '../../../utils/questionBankAdapters';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -121,13 +122,19 @@ export const QuestionVersionDetailModal = ({
     }
   };
 
+  const resolvedAnswer = useMemo(() => {
+    const opts = Array.isArray(versionDetail.options) ? versionDetail.options : [];
+    const qType = versionDetail.question_type || itemMeta.question_type || 'single_choice';
+    return resolveQuestionBankAnswerKey(answerKey, opts, qType);
+  }, [answerKey, versionDetail.options, versionDetail.question_type, itemMeta.question_type]);
+
   const isOptionCorrect = (optId) => {
-    if (!answerKey || !optId) return false;
-    if (answerKey.correct_option_id) {
-      return String(answerKey.correct_option_id) === String(optId);
+    if (!resolvedAnswer || !resolvedAnswer.isValid || !optId) return false;
+    if (resolvedAnswer.correctOptionId && String(resolvedAnswer.correctOptionId) === String(optId)) {
+      return true;
     }
-    if (Array.isArray(answerKey.correct_option_ids)) {
-      return answerKey.correct_option_ids.map(String).includes(String(optId));
+    if (Array.isArray(resolvedAnswer.correctOptionIds) && resolvedAnswer.correctOptionIds.map(String).includes(String(optId))) {
+      return true;
     }
     return false;
   };
@@ -298,14 +305,18 @@ export const QuestionVersionDetailModal = ({
               )}
 
               {/* ĐÁP ÁN ĐÚNG CHO DẠNG ĐIỀN KHUYẾT / TRẢ LỜI NGẮN */}
-              {answerKey && Array.isArray(answerKey.correct_answers) && answerKey.correct_answers.length > 0 && (
+              {(resolvedAnswer.fillBlankAnswer || resolvedAnswer.shortAnswer || (answerKey && Array.isArray(answerKey.correct_answers) && answerKey.correct_answers.length > 0)) && (
                 <div className="space-y-2">
                   <label className="block text-xs font-black text-slate-700 uppercase tracking-wider">
                     Đáp án đúng (Điền khuyết / Trả lời ngắn)
                   </label>
                   <div className="p-3.5 rounded-2xl bg-emerald-50 border-2 border-emerald-300 text-xs sm:text-sm font-black text-emerald-900 flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>{answerKey.correct_answers.join(' | ')}</span>
+                    <span>
+                      {resolvedAnswer.fillBlankAnswer ||
+                        resolvedAnswer.shortAnswer ||
+                        (Array.isArray(answerKey.correct_answers) ? answerKey.correct_answers.join(' | ') : '')}
+                    </span>
                   </div>
                 </div>
               )}

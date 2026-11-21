@@ -1442,7 +1442,7 @@ async function runAllManagementTests() {
 
   // 9. REAL PRODUCTION SOURCE CONTRACT ASSERTIONS
   await test('28. Migration file contains secure rpc_exam_get_draft_questions_with_answers with draft check & app_private join', () => {
-    const migrationPath = path.resolve(__dirname, '../supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
+    const migrationPath = path.resolve(__dirname, '../supabase-projects/exam-v1/supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
     assert.equal(fs.existsSync(migrationPath), true);
     const sql = fs.readFileSync(migrationPath, 'utf8');
     assert.equal(sql.includes('rpc_exam_get_draft_questions_with_answers'), true);
@@ -1497,7 +1497,7 @@ async function runAllManagementTests() {
   });
 
   await test('34. [CONTRACT] Migration 20260911000011 has ALL valid RAISE formats with matching placeholders', () => {
-    const migrationPath = path.resolve(__dirname, '../supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
+    const migrationPath = path.resolve(__dirname, '../supabase-projects/exam-v1/supabase/migrations/20260911000011_exam_builder_v1_phase_b1_draft_detail_rpc.sql');
     assert.equal(fs.existsSync(migrationPath), true);
     const sql = fs.readFileSync(migrationPath, 'utf8');
 
@@ -2096,7 +2096,7 @@ async function runAllManagementTests() {
   });
 
   await test('64. [CONTRACT] Migration 20260913000013 defines rpc_exam_delete_or_archive_test with safe FK breakdown & search_path', () => {
-    const migPath = path.resolve(__dirname, '../supabase/migrations/20260913000013_exam_builder_v1_safe_delete_or_archive_rpc.sql');
+    const migPath = path.resolve(__dirname, '../supabase-projects/exam-v1/supabase/migrations/20260913000013_exam_builder_v1_safe_delete_or_archive_rpc.sql');
     assert.equal(fs.existsSync(migPath), true, 'Migration 20260913000013 must exist');
     const sql = fs.readFileSync(migPath, 'utf8');
 

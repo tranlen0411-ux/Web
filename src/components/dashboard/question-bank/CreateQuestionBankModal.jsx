@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -7,17 +7,30 @@ import {
   Save,
   FileText,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   HelpCircle,
   Lock,
   Globe,
   Layers,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
-import { createQuestion } from '../../../services/questionBankService';
-import { toQuestionBankPayload } from '../../../utils/questionBankAdapters';
+import {
+  createQuestion,
+  createQuestionVersion,
+  getQuestionAuthoringDetail
+} from '../../../services/questionBankService';
+import { toQuestionBankPayload, resolveQuestionBankAnswerKey } from '../../../utils/questionBankAdapters';
 
-export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'teacher' }) => {
+export const CreateQuestionBankModal = ({
+  isOpen,
+  onClose,
+  onSuccess,
+  role = 'teacher',
+  mode = 'create', // 'create' | 'new_version'
+  initialQuestion = null,
+}) => {
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('Toán');
   const [gradeLevel, setGradeLevel] = useState('1');
@@ -27,6 +40,7 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   const [prompt, setPrompt] = useState('');
   const [explanation, setExplanation] = useState('');
   const [tags, setTags] = useState('');
+  const [changeLog, setChangeLog] = useState('');
 
   // Options for single_choice / multiple_choice
   const [options, setOptions] = useState([
@@ -43,12 +57,192 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
   const [shortAnswer, setShortAnswer] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [answerMappingWarning, setAnswerMappingWarning] = useState(null);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
-    useEffect(() => {
+  // Snapshot đối chiếu thay đổi (isDirty tracking)
+  const initialSnapshotRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowDiscardConfirm(false);
+      return;
+    }
+
+    if (mode === 'new_version' && initialQuestion) {
+      let isMounted = true;
+      setIsLoadingDetail(true);
+      setErrorMsg('');
+      setAnswerMappingWarning(null);
+      setCorrectOptionId('');
+      setCorrectOptionIds([]);
+      setShowDiscardConfirm(false);
+
+      const loadDetail = async () => {
+        try {
+          const targetId = initialQuestion.id || initialQuestion.item_id;
+          const targetVersionId = initialQuestion.current_version_id || null;
+          const res = await getQuestionAuthoringDetail(targetId, targetVersionId);
+          if (!isMounted) return;
+
+          const item = res?.item || {};
+          const version = res?.version || {};
+          const answerKey = res?.answer_key || {};
+
+          setTitle(item.title || initialQuestion.title || '');
+          setSubject(item.subject || initialQuestion.subject || 'Toán');
+          setGradeLevel(String(item.grade_level || initialQuestion.grade_level || '1'));
+          setDifficulty(item.difficulty || initialQuestion.difficulty || 'medium');
+          setVisibility(item.visibility || initialQuestion.visibility || 'private');
+          setTags(Array.isArray(item.tags) ? item.tags.join(', ') : (item.tags || ''));
+
+          const initialPrompt = version.prompt || initialQuestion.prompt || '';
+          const initialExplanation = version.explanation || '';
+          setPrompt(initialPrompt);
+          setExplanation(initialExplanation);
+          setChangeLog('');
+
+          // Tải options nếu có
+          let loadedOptions = [];
+          if (Array.isArray(version.options) && version.options.length > 0) {
+            loadedOptions = version.options.map((opt, idx) => ({
+              id: opt.id || `opt_${idx + 1}`,
+              text: opt.text || (typeof opt === 'string' ? opt : '')
+            }));
+            setOptions(loadedOptions);
+          } else {
+            loadedOptions = [
+              { id: 'opt_1', text: '' },
+              { id: 'opt_2', text: '' },
+              { id: 'opt_3', text: '' },
+              { id: 'opt_4', text: '' }
+            ];
+            setOptions(loadedOptions);
+          }
+
+          // Tải dạng câu hỏi và đối chiếu đáp án an toàn qua adapter (FAIL-CLOSED)
+          const qType = item.question_type || version.question_type || 'single_choice';
+          setQuestionType(qType);
+
+          const resolved = resolveQuestionBankAnswerKey(answerKey, loadedOptions, qType);
+
+          const loadedCorrectId = resolved.correctOptionId || '';
+          const loadedCorrectIds = resolved.correctOptionIds || [];
+          const loadedBlank = resolved.fillBlankAnswer || '';
+          const loadedShort = resolved.shortAnswer || '';
+
+          setCorrectOptionId(loadedCorrectId);
+          setCorrectOptionIds(loadedCorrectIds);
+          setFillBlankAnswer(loadedBlank);
+          setShortAnswer(loadedShort);
+
+          if (!resolved.isValid && resolved.warningMessage) {
+            setAnswerMappingWarning(resolved.warningMessage);
+          } else {
+            setAnswerMappingWarning(null);
+          }
+
+          // Ghi nhận snapshot ban đầu để kiểm tra isDirty
+          initialSnapshotRef.current = {
+            prompt: initialPrompt,
+            explanation: initialExplanation,
+            changeLog: '',
+            optionsJson: JSON.stringify(loadedOptions),
+            correctOptionId: loadedCorrectId,
+            correctOptionIdsJson: JSON.stringify(loadedCorrectIds),
+            fillBlankAnswer: loadedBlank,
+            shortAnswer: loadedShort
+          };
+        } catch (err) {
+          console.error('Lỗi tải chi tiết soạn thảo câu hỏi:', err);
+          if (isMounted) {
+            setErrorMsg(err.message || 'Không thể tải chi tiết câu hỏi để tạo phiên bản mới.');
+          }
+        } finally {
+          if (isMounted) {
+            setIsLoadingDetail(false);
+          }
+        }
+      };
+
+      loadDetail();
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      // Reset cho mode tạo mới bình thường
+      initialSnapshotRef.current = null;
+      setShowDiscardConfirm(false);
+      setTitle('');
+      setSubject('Toán');
+      setGradeLevel('1');
+      setDifficulty('medium');
+      setVisibility('private');
+      setQuestionType('single_choice');
+      setPrompt('');
+      setExplanation('');
+      setTags('');
+      setChangeLog('');
+      setOptions([
+        { id: 'opt_1', text: '' },
+        { id: 'opt_2', text: '' },
+        { id: 'opt_3', text: '' },
+        { id: 'opt_4', text: '' }
+      ]);
+      setCorrectOptionId('opt_1');
+      setCorrectOptionIds(['opt_1']);
+      setFillBlankAnswer('');
+      setShortAnswer('');
+      setErrorMsg('');
+      setAnswerMappingWarning(null);
+      setIsLoadingDetail(false);
+    }
+  }, [isOpen, mode, initialQuestion]);
+
+  // Kiểm tra form có dữ liệu chưa lưu (isDirty guard)
+  const checkIsDirty = () => {
+    if (mode === 'create') {
+      return Boolean(
+        prompt.trim() ||
+        title.trim() ||
+        explanation.trim() ||
+        tags.trim() ||
+        fillBlankAnswer.trim() ||
+        shortAnswer.trim() ||
+        options.some(o => o.text.trim())
+      );
+    }
+    if (mode === 'new_version') {
+      const snap = initialSnapshotRef.current;
+      if (!snap) return false;
+      if (prompt !== snap.prompt) return true;
+      if (explanation !== snap.explanation) return true;
+      if (changeLog.trim() !== '') return true;
+      if (JSON.stringify(options) !== snap.optionsJson) return true;
+      if (questionType === 'fill_blank' && fillBlankAnswer !== snap.fillBlankAnswer) return true;
+      if (questionType === 'short_answer' && shortAnswer !== snap.shortAnswer) return true;
+      if (questionType === 'single_choice' && correctOptionId !== snap.correctOptionId) return true;
+      if (questionType === 'multiple_choice' && JSON.stringify(correctOptionIds) !== snap.correctOptionIdsJson) return true;
+      return false;
+    }
+    return false;
+  };
+
+  const handleRequestClose = () => {
+    if (isSubmitting) return;
+    if (checkIsDirty()) {
+      setShowDiscardConfirm(true);
+    } else {
+      onClose();
+    }
+  };
+
+  useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && !isSubmitting) {
-        onClose();
+        handleRequestClose();
       }
     };
     if (isOpen) {
@@ -57,7 +251,7 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, isSubmitting, onClose]);
+  }, [isOpen, isSubmitting, options, prompt, explanation, changeLog, title, tags, fillBlankAnswer, shortAnswer, correctOptionId, correctOptionIds]);
 
   if (!isOpen || typeof document === 'undefined') return null;
 
@@ -117,6 +311,9 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
         if (validOptions.some(t => !t)) {
           throw new Error('Vui lòng nhập đầy đủ nội dung cho các lựa chọn đáp án.');
         }
+        if (!correctOptionId || !options.some(o => o.id === correctOptionId)) {
+          throw new Error('Vui lòng chọn đáp án đúng cho câu hỏi trắc nghiệm một đáp án.');
+        }
         questionInput.options = options;
         questionInput.correct_answer = correctOptionId;
       } else if (questionType === 'multiple_choice') {
@@ -124,11 +321,12 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
         if (validOptions.some(t => !t)) {
           throw new Error('Vui lòng nhập đầy đủ nội dung cho các lựa chọn đáp án.');
         }
-        if (correctOptionIds.length === 0) {
-          throw new Error('Vui lòng chọn ít nhất một đáp án đúng.');
+        const validSelected = correctOptionIds.filter(id => options.some(o => o.id === id));
+        if (validSelected.length === 0) {
+          throw new Error('Vui lòng chọn ít nhất một đáp án đúng cho câu hỏi trắc nghiệm nhiều đáp án.');
         }
         questionInput.options = options;
-        questionInput.correct_answers = correctOptionIds;
+        questionInput.correct_answers = validSelected;
       } else if (questionType === 'fill_blank') {
         if (!fillBlankAnswer.trim()) {
           throw new Error('Vui lòng nhập đáp án đúng cho câu điền khuyết.');
@@ -150,19 +348,42 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
         defaultDifficulty: difficulty,
         defaultVisibility: role === 'admin' ? visibility : 'private',
         metadata: {
-          created_via: 'manual_authoring_modal'
+          created_via: mode === 'new_version' ? 'new_version_authoring_modal' : 'manual_authoring_modal'
         }
       });
 
-      await createQuestion(payload);
+      if (mode === 'new_version' && initialQuestion) {
+        const targetId = initialQuestion.id || initialQuestion.item_id;
+        const versionPayload = {
+          prompt: questionInput.prompt,
+          options: questionInput.options || [],
+          answer_key: payload.answer_key,
+          explanation: questionInput.explanation || undefined,
+          change_log: changeLog.trim() || undefined,
+          metadata: {
+            created_via: 'new_version_authoring_modal'
+          }
+        };
 
-      if (typeof onSuccess === 'function') {
-        onSuccess('Tạo câu hỏi mới trong Ngân hàng câu hỏi thành công!');
+        const res = await createQuestionVersion(targetId, versionPayload);
+
+        if (typeof onSuccess === 'function') {
+          onSuccess(
+            `Đã tạo thành công phiên bản mới (V${res?.version_number || 'mới'}) dưới dạng bản nháp độc lập!`
+          );
+        }
+        onClose();
+      } else {
+        await createQuestion(payload);
+
+        if (typeof onSuccess === 'function') {
+          onSuccess('Tạo câu hỏi mới trong Ngân hàng câu hỏi thành công!');
+        }
+        onClose();
       }
-      onClose();
     } catch (err) {
-      console.error('Lỗi khi tạo câu hỏi:', err);
-      setErrorMsg(err.message || 'Không thể tạo câu hỏi. Vui lòng thử lại.');
+      console.error('Lỗi khi lưu câu hỏi / phiên bản:', err);
+      setErrorMsg(err.message || 'Không thể lưu câu hỏi. Vui lòng thử lại.');
     } finally {
       setIsSubmitting(false);
     }
@@ -174,16 +395,26 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
         {/* HEADER */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-amber-100 bg-amber-50/50 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-2xl border border-indigo-200">
+            <div className={`p-2.5 rounded-2xl border ${
+              mode === 'new_version'
+                ? 'bg-amber-100 text-amber-700 border-amber-200'
+                : 'bg-indigo-100 text-indigo-700 border-indigo-200'
+            }`}>
               <Layers className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-black text-slate-800">Soạn Câu Hỏi Mới</h2>
-              <p className="text-xs text-slate-500 font-bold">Thêm câu hỏi chuẩn hóa vào Ngân hàng câu hỏi V2A</p>
+              <h2 className="text-base sm:text-lg font-black text-slate-800">
+                {mode === 'new_version' ? 'Chỉnh Sửa (Tạo Phiên Bản Mới)' : 'Soạn Câu Hỏi Mới'}
+              </h2>
+              <p className="text-xs text-slate-500 font-bold">
+                {mode === 'new_version'
+                  ? 'Tạo bản nháp phiên bản tiếp theo — Bản xuất bản hiện tại không bị ảnh hưởng'
+                  : 'Thêm câu hỏi chuẩn hóa vào Ngân hàng câu hỏi V2A'}
+              </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleRequestClose}
             disabled={isSubmitting}
             className="p-2 hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
           >
@@ -197,6 +428,35 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
             <div className="p-3 bg-rose-50 border-2 border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* CẢNH BÁO MAPPING ĐÁP ÁN (FAIL-CLOSED GUARD) */}
+          {answerMappingWarning && (
+            <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl text-xs text-amber-950 font-bold flex items-start gap-2.5 animate-fadeIn">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <span className="block font-black text-amber-900 mb-0.5">Lưu ý kiểm tra đáp án:</span>
+                <span>{answerMappingWarning}</span>
+              </div>
+            </div>
+          )}
+
+          {/* DUAL-HEAD NOTICE KHI CHỈNH SỬA PHIÊN BẢN */}
+          {mode === 'new_version' && (
+            <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-2xl text-xs text-amber-900 font-medium flex items-start gap-2.5">
+              <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">Kiến trúc Dual-Head an toàn: </span>
+                Phiên bản mới sẽ được lưu dưới dạng <strong>bản nháp độc lập</strong> và không tự động xuất bản. Học sinh vẫn làm bài trên phiên bản đã xuất bản cũ cho tới khi Thầy chủ động bấm <strong>Xuất bản</strong>.
+              </div>
+            </div>
+          )}
+
+          {isLoadingDetail && (
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-600 flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-indigo-600" />
+              <span>Đang tải nội dung phiên bản hiện tại...</span>
             </div>
           )}
 
@@ -354,7 +614,10 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                     type="radio"
                     name="singleChoiceCorrect"
                     checked={correctOptionId === opt.id}
-                    onChange={() => setCorrectOptionId(opt.id)}
+                    onChange={() => {
+                      setCorrectOptionId(opt.id);
+                      setAnswerMappingWarning(null);
+                    }}
                     className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
                   <span className="text-xs font-black text-slate-500 w-5">{String.fromCharCode(65 + idx)}.</span>
@@ -407,6 +670,7 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
                         } else {
                           setCorrectOptionIds(correctOptionIds.filter(id => id !== opt.id));
                         }
+                        setAnswerMappingWarning(null);
                       }}
                       className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer"
                     />
@@ -511,11 +775,59 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
             />
           </div>
 
+          {/* GHI CHÚ THAY ĐỔI (CHANGE LOG - CHỈ CHO MODE TẠO PHIÊN BẢN MỚI) */}
+          {mode === 'new_version' && (
+            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1.5">
+              <label className="block text-xs font-black text-amber-900">
+                Ghi Chú Thay Đổi Phiên Bản (Change Log):
+              </label>
+              <input
+                type="text"
+                placeholder="Ví dụ: Cập nhật đề bài, sửa lại đáp án và giải thích..."
+                value={changeLog}
+                onChange={(e) => setChangeLog(e.target.value)}
+                className="w-full p-2.5 bg-white border border-amber-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              />
+              <p className="text-[11px] text-amber-800 font-medium">
+                Ghi chú này sẽ được lưu vào lịch sử phiên bản để Thầy tiện theo dõi quá trình phát triển câu hỏi.
+              </p>
+            </div>
+          )}
+
+          {/* HỘP THOẠI XÁC NHẬN HỦY THAY ĐỔI CHƯA LƯU (isDirty Guard) */}
+          {showDiscardConfirm && (
+            <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 font-bold animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                <span>Thầy/Cô có thay đổi chưa lưu. Thầy/Cô có chắc chắn muốn hủy bỏ không?</span>
+              </div>
+              <div className="flex items-center justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowDiscardConfirm(false)}
+                  className="px-3 py-1.5 bg-white border border-amber-300 rounded-xl hover:bg-amber-100 text-amber-900 text-xs font-black transition-colors"
+                >
+                  Tiếp tục sửa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiscardConfirm(false);
+                    onClose();
+                  }}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition-colors shadow-sm"
+                >
+                  Hủy bỏ và đóng
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* FOOTER NÚT LƯU */}
           <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleRequestClose}
               disabled={isSubmitting}
               className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black rounded-xl transition-colors"
             >
@@ -523,11 +835,26 @@ export const CreateQuestionBankModal = ({ isOpen, onClose, onSuccess, role = 'te
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
+              disabled={
+                isSubmitting ||
+                isLoadingDetail ||
+                (mode === 'new_version' && Boolean(answerMappingWarning) && (
+                  (questionType === 'single_choice' && !correctOptionId) ||
+                  (questionType === 'multiple_choice' && correctOptionIds.length === 0)
+                ))
+              }
+              className={`px-5 py-2 text-white text-xs font-black rounded-xl transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 ${
+                mode === 'new_version'
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : 'bg-indigo-600 hover:bg-indigo-700'
+              }`}
             >
               <Save className="w-4 h-4" />
-              {isSubmitting ? 'Đang Lưu...' : 'Lưu Vào Ngân Hàng'}
+              {isSubmitting
+                ? 'Đang Lưu...'
+                : mode === 'new_version'
+                ? 'Lưu Phiên Bản Mới (Bản Nháp)'
+                : 'Lưu Vào Ngân Hàng'}
             </button>
           </div>
         </form>

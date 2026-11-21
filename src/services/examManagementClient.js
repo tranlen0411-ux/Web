@@ -1,6 +1,11 @@
 // src/services/examManagementClient.js
 // Exam Builder V1 Management API Client (Admin & Teacher Authoring + Assignment BFF Transport)
 
+import {
+  resolveAssessmentFunctionUrl,
+  assertAssessmentFunctionUrlAllowed,
+} from './assessmentEndpointResolver.js';
+
 async function getDefaultSupabaseClient() {
   try {
     const mod = await import('../lib/supabase.js');
@@ -22,9 +27,18 @@ export const EXAM_UPDATE_GRADED_FEEDBACK_BASE_URL =
 export class ExamManagementClient {
   constructor(options = {}) {
     this.supabase = options.supabase || null;
-    this.baseUrl = options.baseUrl || EXAM_MANAGEMENT_API_BASE_URL;
-    this.gradeManualUrl = options.gradeManualUrl || EXAM_GRADE_MANUAL_BASE_URL;
-    this.updateFeedbackUrl = options.updateFeedbackUrl || EXAM_UPDATE_GRADED_FEEDBACK_BASE_URL;
+    this.baseUrl =
+      typeof options.baseUrl === 'string' && options.baseUrl.trim()
+        ? assertAssessmentFunctionUrlAllowed(options.baseUrl, 'exam-management-api')
+        : resolveAssessmentFunctionUrl('exam-management-api');
+    this.gradeManualUrl =
+      typeof options.gradeManualUrl === 'string' && options.gradeManualUrl.trim()
+        ? assertAssessmentFunctionUrlAllowed(options.gradeManualUrl, 'exam-grade-manual-attempt')
+        : resolveAssessmentFunctionUrl('exam-grade-manual-attempt');
+    this.updateFeedbackUrl =
+      typeof options.updateFeedbackUrl === 'string' && options.updateFeedbackUrl.trim()
+        ? assertAssessmentFunctionUrlAllowed(options.updateFeedbackUrl, 'exam-update-graded-feedback')
+        : resolveAssessmentFunctionUrl('exam-update-graded-feedback');
     this.invokeFunction = options.invokeFunction || null;
   }
 
@@ -83,6 +97,7 @@ export class ExamManagementClient {
       const options = {
         method,
         headers,
+        redirect: 'error',
       };
 
       if (method !== 'GET' && method !== 'HEAD' && payload) {
@@ -238,6 +253,7 @@ export class ExamManagementClient {
           Accept: 'application/json',
         },
         body: JSON.stringify(payload),
+        redirect: 'error',
       });
 
       let jsonResult;
@@ -305,6 +321,7 @@ export class ExamManagementClient {
           Accept: 'application/json',
         },
         body: JSON.stringify(payload),
+        redirect: 'error',
       });
 
       let jsonResult;

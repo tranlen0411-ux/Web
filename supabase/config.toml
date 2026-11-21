@@ -67,5 +67,5 @@ verify_jwt = false
 [functions.competition-capability-token-issuer]
 verify_jwt = false
 
-
-
+[functions.question-bank-api]
+verify_jwt = false

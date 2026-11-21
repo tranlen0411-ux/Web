@@ -3912,7 +3912,7 @@ await test('146. submit_expected_version_can_use_start_attempt_version', async (
 });
 
 await test('147. no_client_version_fallback_contract', async () => {
-  const migrationPath = 'supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
+  const migrationPath = 'supabase-projects/exam-v1/supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
   assert.equal(fs.existsSync(migrationPath), true, 'Hotfix migration file must exist');
   const migrationSql = fs.readFileSync(migrationPath, 'utf8');
 
@@ -3922,7 +3922,7 @@ await test('147. no_client_version_fallback_contract', async () => {
 });
 
 await test('148. migration_exact_five_success_paths_contract', async () => {
-  const migrationPath = 'supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
+  const migrationPath = 'supabase-projects/exam-v1/supabase/migrations/20260906000008_exam_builder_v1_start_attempt_version_hotfix.sql';
   assert.equal(fs.existsSync(migrationPath), true, 'Hotfix migration file must exist');
   const migrationSql = fs.readFileSync(migrationPath, 'utf8');
 
