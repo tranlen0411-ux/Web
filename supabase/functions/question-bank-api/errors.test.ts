@@ -975,7 +975,7 @@ Deno.test('createErrorResponse - constructs compliant ErrorEnvelope and CORS hea
   assertEquals(res.headers.get('Content-Type'), 'application/json');
   assertEquals(res.headers.get('Access-Control-Allow-Origin'), '*');
   assertEquals(res.headers.get('Access-Control-Allow-Headers'), 'authorization, x-client-info, apikey, content-type');
-  assertEquals(res.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PATCH, OPTIONS');
+  assertEquals(res.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
 
   const body = await res.json();
   assertEquals(body.success, false);
@@ -989,7 +989,7 @@ Deno.test('createSuccessResponse - constructs compliant SuccessEnvelope and CORS
   assertEquals(res.headers.get('Content-Type'), 'application/json');
   assertEquals(res.headers.get('Access-Control-Allow-Origin'), '*');
   assertEquals(res.headers.get('Access-Control-Allow-Headers'), 'authorization, x-client-info, apikey, content-type');
-  assertEquals(res.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PATCH, OPTIONS');
+  assertEquals(res.headers.get('Access-Control-Allow-Methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
 
   const body = await res.json();
   assertEquals(body.success, true);
