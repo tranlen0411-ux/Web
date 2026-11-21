@@ -29,6 +29,7 @@ export const QuestionVersionHistoryModal = ({
   const [error, setError] = useState(null);
 
   const itemId = item?.id || item?.item_id;
+  const publishedVersionId = item?.published_version_id || null;
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -163,19 +164,24 @@ export const QuestionVersionHistoryModal = ({
             <div className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-indigo-100">
               {versions.map((v, idx) => {
                 const isCurrent = Boolean(v.is_current || (currentVersionId && v.id === currentVersionId));
+                const isPublished = Boolean(publishedVersionId && v.id === publishedVersionId);
 
                 return (
                   <div key={v.id || idx} className="relative group">
                     {/* TIMELINE NODE */}
                     <div
                       className={`absolute -left-6 top-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                        isCurrent
+                        isPublished
                           ? 'bg-emerald-500 border-emerald-200 text-white shadow-xs'
+                          : isCurrent
+                          ? 'bg-amber-500 border-amber-200 text-white shadow-xs'
                           : 'bg-white border-slate-300 text-slate-400 group-hover:border-indigo-400'
                       }`}
                     >
-                      {isCurrent ? (
+                      {isPublished ? (
                         <CheckCircle2 className="w-3 h-3" />
+                      ) : isCurrent ? (
+                        <Layers className="w-3 h-3" />
                       ) : (
                         <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
                       )}
@@ -184,8 +190,10 @@ export const QuestionVersionHistoryModal = ({
                     {/* CARD NỘI DUNG PHIÊN BẢN */}
                     <div
                       className={`p-4 rounded-2xl border transition-all ${
-                        isCurrent
+                        isPublished
                           ? 'bg-emerald-50/40 border-emerald-200 shadow-xs'
+                          : isCurrent
+                          ? 'bg-amber-50/40 border-amber-200 shadow-xs'
                           : 'bg-slate-50/70 border-slate-200 hover:bg-white hover:border-indigo-200 hover:shadow-xs'
                       }`}
                     >
@@ -194,13 +202,20 @@ export const QuestionVersionHistoryModal = ({
                           <span className="text-xs sm:text-sm font-black text-slate-900">
                             Phiên bản v{v.version_number}
                           </span>
-                          {isCurrent ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          {isPublished && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300" title="Phiên bản học sinh đang làm bài và xem khi thi cử">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              Bản hiện tại
+                              Đang xuất bản (Học sinh)
                             </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-600">
+                          )}
+                          {isCurrent && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300" title="Phiên bản soạn thảo hiện tại dành cho giáo viên">
+                              <Layers className="w-3 h-3 text-amber-600" />
+                              Bản hiện tại (Soạn thảo)
+                            </span>
+                          )}
+                          {!isCurrent && !isPublished && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-600" title="Phiên bản cũ đã qua lưu trữ">
                               Bản cũ
                             </span>
                           )}
@@ -249,7 +264,7 @@ export const QuestionVersionHistoryModal = ({
         {/* MODAL FOOTER */}
         <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs text-slate-500 font-medium">
           <span className="text-[11px] text-slate-400">
-            Chế độ lịch sử: Chỉ hỗ trợ xem chi tiết phiên bản (Read-only).
+            Chế độ lịch sử Dual-Head: Phân biệt rõ bản đang soạn thảo (Soạn thảo) và bản đang phát hành cho học sinh (Đang xuất bản).
           </span>
           <button
             type="button"

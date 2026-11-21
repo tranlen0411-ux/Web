@@ -162,23 +162,223 @@ export interface StudentQuestionSuccessData {
   version: Record<string, unknown>;
 }
 
+// Bảng danh sách các trường nhạy cảm tuyệt đối cấm lọt ra phía học sinh (Zero Leakage Guard)
+const FORBIDDEN_STUDENT_FIELDS = [
+  'answer_key',
+  'correct_answers',
+  'correct_answer',
+  'correct_option_id',
+  'correct_option_ids',
+  'is_correct',
+  'isCorrect',
+  'correct',
+  'score',
+  'solution_explanation',
+  'explanation',
+  'grading_config',
+  'grading_rubric',
+  'scoring_guide',
+  'server_grading',
+];
+
+function containsForbiddenStudentField(record: Record<string, unknown>): boolean {
+  for (const forbidden of FORBIDDEN_STUDENT_FIELDS) {
+    if (forbidden in record && record[forbidden] !== undefined && record[forbidden] !== null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sanitizeStudentMediaField(mediaVal: unknown): { ok: boolean; data?: unknown } {
+  if (mediaVal === undefined || mediaVal === null) return { ok: true, data: null };
+  if (typeof mediaVal === 'string') return { ok: true, data: mediaVal };
+  if (Array.isArray(mediaVal)) {
+    const sanitizedList: unknown[] = [];
+    for (const item of mediaVal) {
+      if (typeof item === 'string') {
+        sanitizedList.push(item);
+      } else if (isPlainRecord(item)) {
+        if (containsForbiddenStudentField(item)) {
+          return { ok: false };
+        }
+        const safeItem: Record<string, unknown> = {};
+        if (typeof item.url === 'string') safeItem.url = item.url;
+        if (typeof item.type === 'string') safeItem.type = item.type;
+        if (typeof item.alt === 'string') safeItem.alt = item.alt;
+        sanitizedList.push(safeItem);
+      } else {
+        return { ok: false };
+      }
+    }
+    return { ok: true, data: sanitizedList };
+  }
+  if (isPlainRecord(mediaVal)) {
+    if (containsForbiddenStudentField(mediaVal)) {
+      return { ok: false };
+    }
+    const safeItem: Record<string, unknown> = {};
+    if (typeof mediaVal.url === 'string') safeItem.url = mediaVal.url;
+    if (typeof mediaVal.type === 'string') safeItem.type = mediaVal.type;
+    if (typeof mediaVal.alt === 'string') safeItem.alt = mediaVal.alt;
+    return { ok: true, data: safeItem };
+  }
+  return { ok: false };
+}
+
 export function mapGetStudentQuestionSuccess(
   res: unknown
 ): SuccessMapResult<StudentQuestionSuccessData> {
   if (!isPlainRecord(res)) return { ok: false };
-  if (
-    res.projection !== 'STUDENT_SAFE' ||
-    !isPlainRecord(res.item) ||
-    !isPlainRecord(res.version)
-  ) {
+
+  // 1. Kiểm tra projection:
+  // - Hợp đồng chuẩn: projection bắt buộc là 'STUDENT_SAFE'.
+  // - Hợp đồng phẳng Staging hiện tại: projection là undefined.
+  // - Nghiêm cấm: Mọi giá trị projection khác (kể cả AUTHORING_SAFE, null, rỗng) đều bị từ chối.
+  if (res.projection !== undefined && res.projection !== 'STUDENT_SAFE') {
     return { ok: false };
   }
+
+  // 2. Chặn đứng nếu payload chứa trực tiếp các trường nhạy cảm bị cấm ở tầng root
+  if (containsForbiddenStudentField(res)) {
+    return { ok: false };
+  }
+
+  let rawItem: Record<string, unknown>;
+  let rawVersion: Record<string, unknown>;
+
+  // Trường hợp A: Hợp đồng chuẩn lồng nhau (Nested format)
+  if (isPlainRecord(res.item) && isPlainRecord(res.version)) {
+    rawItem = res.item;
+    rawVersion = res.version;
+  }
+  // Trường hợp B: Hợp đồng phẳng thực tế trên Supabase Staging RPC (Flat format)
+  else if (typeof res.id === 'string' && typeof res.version_id === 'string') {
+    rawItem = {
+      id: res.id,
+      code: res.code,
+      title: res.title,
+      question_type: res.question_type,
+      subject: res.subject,
+      grade_level: res.grade_level,
+      difficulty: res.difficulty,
+    };
+    rawVersion = {
+      id: res.version_id,
+      version_number: res.version_number,
+      prompt: res.prompt,
+      prompt_media: res.prompt_media ?? res.media_urls ?? null,
+      media_urls: res.media_urls ?? res.prompt_media ?? null,
+      options: res.options,
+    };
+  } else {
+    // Không khớp bất kỳ định dạng hợp lệ nào -> Từ chối fail-closed
+    return { ok: false };
+  }
+
+  // Bắt buộc ID câu hỏi và ID phiên bản phải là chuỗi hợp lệ
+  if (typeof rawItem.id !== 'string' || typeof rawVersion.id !== 'string') {
+    return { ok: false };
+  }
+
+  // Chặn đứng nếu rawItem hoặc rawVersion chứa các trường nhạy cảm
+  if (containsForbiddenStudentField(rawItem) || containsForbiddenStudentField(rawVersion)) {
+    return { ok: false };
+  }
+
+  // 3. Áp dụng Strict Allowlist cho Item (Chỉ chuyển tiếp các trường an toàn được chỉ định)
+  const sanitizedItem: Record<string, unknown> = {
+    id: rawItem.id,
+  };
+  if (typeof rawItem.code === 'string') sanitizedItem.code = rawItem.code;
+  if (typeof rawItem.title === 'string') sanitizedItem.title = rawItem.title;
+  if (typeof rawItem.question_type === 'string') sanitizedItem.question_type = rawItem.question_type;
+  if (typeof rawItem.subject === 'string') sanitizedItem.subject = rawItem.subject;
+  if (typeof rawItem.grade_level === 'number') sanitizedItem.grade_level = rawItem.grade_level;
+  if (typeof rawItem.difficulty === 'string') sanitizedItem.difficulty = rawItem.difficulty;
+
+  // 4. Áp dụng Strict Allowlist & Validation cho Version
+  const sanitizedVersion: Record<string, unknown> = {
+    id: rawVersion.id,
+  };
+  if (typeof rawVersion.version_number === 'number') sanitizedVersion.version_number = rawVersion.version_number;
+  if (typeof rawVersion.prompt === 'string') sanitizedVersion.prompt = rawVersion.prompt;
+
+  // Xử lý media an toàn
+  const mediaResult1 = sanitizeStudentMediaField(rawVersion.prompt_media);
+  if (!mediaResult1.ok) return { ok: false };
+  sanitizedVersion.prompt_media = mediaResult1.data;
+
+  const mediaResult2 = sanitizeStudentMediaField(rawVersion.media_urls);
+  if (!mediaResult2.ok) return { ok: false };
+  sanitizedVersion.media_urls = mediaResult2.data;
+
+  // 5. Khắc phục triệt để đường xử lý Options (Fail-Closed & Deep Field Allowlist)
+  if (rawVersion.options !== undefined && rawVersion.options !== null) {
+    // Nếu options có giá trị, bắt buộc phải là mảng
+    if (!Array.isArray(rawVersion.options)) {
+      return { ok: false };
+    }
+
+    const safeOptionsList: Array<Record<string, unknown>> = [];
+    for (const opt of rawVersion.options) {
+      // Mỗi phần tử options BẮT BUỘC phải là plain object
+      if (!isPlainRecord(opt)) {
+        return { ok: false };
+      }
+
+      // Tuyệt đối không chứa bất kỳ trường nhạy cảm hoặc điểm số/đáp án
+      if (containsForbiddenStudentField(opt)) {
+        return { ok: false };
+      }
+
+      const safeOpt: Record<string, unknown> = {};
+
+      // Kiểm tra id lựa chọn (bắt buộc kiểu string hoặc number nếu có)
+      if (opt.id !== undefined) {
+        if (typeof opt.id !== 'string' && typeof opt.id !== 'number') {
+          return { ok: false };
+        }
+        safeOpt.id = opt.id;
+      }
+
+      // Kiểm tra text lựa chọn (bắt buộc kiểu string nếu có)
+      if (opt.text !== undefined) {
+        if (typeof opt.text !== 'string') {
+          return { ok: false };
+        }
+        safeOpt.text = opt.text;
+      }
+
+      // Kiểm tra media đính kèm lựa chọn (nếu có phải an toàn)
+      if (opt.media !== undefined && opt.media !== null) {
+        const optMediaRes = sanitizeStudentMediaField(opt.media);
+        if (!optMediaRes.ok) return { ok: false };
+        safeOpt.media = optMediaRes.data;
+      }
+
+      if (opt.media_url !== undefined && opt.media_url !== null) {
+        if (typeof opt.media_url !== 'string') {
+          return { ok: false };
+        }
+        safeOpt.media_url = opt.media_url;
+      }
+
+      safeOptionsList.push(safeOpt);
+    }
+
+    sanitizedVersion.options = safeOptionsList;
+  } else {
+    // Câu hỏi không có options (ví dụ tự luận / trả lời ngắn)
+    sanitizedVersion.options = null;
+  }
+
   return {
     ok: true,
     data: {
       projection: 'STUDENT_SAFE',
-      item: res.item,
-      version: res.version,
+      item: sanitizedItem,
+      version: sanitizedVersion,
     },
   };
 }
@@ -194,14 +394,25 @@ export function mapGetAuthoringDetailSuccess(
   res: unknown
 ): SuccessMapResult<AuthoringDetailSuccessData> {
   if (!isPlainRecord(res)) return { ok: false };
-  if (
-    res.projection !== 'AUTHORING_SAFE' ||
-    !isPlainRecord(res.item) ||
-    !isPlainRecord(res.version) ||
-    (!isPlainRecord(res.answer_key) && res.answer_key !== null)
-  ) {
+
+  // 1. Kiểm tra projection:
+  // - Hợp đồng chuẩn mới: projection bắt buộc là 'AUTHORING_SAFE'.
+  // - Hợp đồng legacy Staging: Chấp nhận khi projection là undefined (chưa có nhãn projection trong RPC).
+  // - Nghiêm cấm: Mọi giá trị projection khác (kể cả null, rỗng, hoặc STUDENT_SAFE) đều bị từ chối.
+  if (res.projection !== undefined && res.projection !== 'AUTHORING_SAFE') {
     return { ok: false };
   }
+
+  // 2. Kiểm tra cấu trúc item và version (bắt buộc là plain object):
+  if (!isPlainRecord(res.item) || !isPlainRecord(res.version)) {
+    return { ok: false };
+  }
+
+  // 3. Kiểm tra answer_key (bắt buộc là plain object hoặc null):
+  if (!isPlainRecord(res.answer_key) && res.answer_key !== null) {
+    return { ok: false };
+  }
+
   return {
     ok: true,
     data: {
@@ -353,8 +564,8 @@ export function mapForkQuestionSuccess(
     'code' in res
       ? res.code
       : itemRecord && 'code' in itemRecord
-      ? itemRecord.code
-      : undefined;
+        ? itemRecord.code
+        : undefined;
 
   if (rawCode !== undefined) {
     if (!isNonEmptyString(rawCode)) {

@@ -120,7 +120,7 @@ Deno.test('mapCreateVersionSuccess - FAIL: invalid version_number (negative)', (
 });
 
 // --- RPC 3: mapGetStudentQuestionSuccess ---
-Deno.test('mapGetStudentQuestionSuccess - PASS: valid STUDENT_SAFE projection and objects', () => {
+Deno.test('mapGetStudentQuestionSuccess - PASS: valid nested STUDENT_SAFE projection and objects', () => {
   const payload = {
     projection: 'STUDENT_SAFE',
     item: { id: VALID_UUID_1, title: 'Câu hỏi mẫu' },
@@ -135,42 +135,324 @@ Deno.test('mapGetStudentQuestionSuccess - PASS: valid STUDENT_SAFE projection an
   }
 });
 
-Deno.test('mapGetStudentQuestionSuccess - FAIL: wrong projection (AUTHORING_SAFE)', () => {
+Deno.test('mapGetStudentQuestionSuccess - PASS: valid flat Staging RPC payload without projection', () => {
   const payload = {
+    id: VALID_UUID_1,
+    code: 'QB-DDC17FD97E8D',
+    title: '[SMOKE-TEST] Phép cộng đơn giản',
+    question_type: 'single_choice',
+    version_id: VALID_UUID_2,
+    version_number: 1,
+    prompt: '2 + 3 = ?',
+    prompt_media: null,
+    options: [
+      { id: 'opt_1', text: '4' },
+      { id: 'opt_2', text: '5' },
+    ],
+  };
+  const result = mapGetStudentQuestionSuccess(payload);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.data.projection, 'STUDENT_SAFE');
+    assertEquals(result.data.item.id, VALID_UUID_1);
+    assertEquals(result.data.item.code, 'QB-DDC17FD97E8D');
+    assertEquals(result.data.item.title, '[SMOKE-TEST] Phép cộng đơn giản');
+    assertEquals(result.data.version.id, VALID_UUID_2);
+    assertEquals(result.data.version.prompt, '2 + 3 = ?');
+    assertEquals(Array.isArray(result.data.version.options), true);
+  }
+});
+
+Deno.test('mapGetStudentQuestionSuccess - PASS: strict allowlist strips unauthorized draft or private fields', () => {
+  const payload = {
+    id: VALID_UUID_1,
+    code: 'QB-TEST-ALLOWLIST',
+    title: 'Câu hỏi kiểm tra allowlist',
+    question_type: 'single_choice',
+    version_id: VALID_UUID_2,
+    prompt: 'Đề bài an toàn',
+    options: [
+      { id: 'opt_1', text: 'A', extra_metadata: 'meta', secret_tag: 'hidden' },
+    ],
+    // Các trường ngoài luồng không được phép rò rỉ:
+    author_id: 'secret-author-uuid',
+    school_id: 'secret-school-uuid',
+    status: 'draft',
+    internal_notes: 'ghi chú nhạy cảm',
+  };
+  const result = mapGetStudentQuestionSuccess(payload);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    // Chỉ các trường trong allowlist được giữ lại:
+    assertEquals('author_id' in result.data.item, false);
+    assertEquals('school_id' in result.data.item, false);
+    assertEquals('status' in result.data.item, false);
+    assertEquals('internal_notes' in result.data.item, false);
+    // Option được lọc sạch các trường ngoài allowlist:
+    const opt = (result.data.version.options as Record<string, unknown>[])[0];
+    assertEquals(opt.id, 'opt_1');
+    assertEquals(opt.text, 'A');
+    assertEquals('extra_metadata' in opt, false);
+    assertEquals('secret_tag' in opt, false);
+  }
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: options contain is_correct or sensitive fields (fail-closed)', () => {
+  // Option chứa is_correct: true
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [{ id: 'opt_1', text: 'A', is_correct: true }],
+  }).ok, false);
+
+  // Option chứa is_correct: false
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [{ id: 'opt_1', text: 'A', is_correct: false }],
+  }).ok, false);
+
+  // Option chứa score
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [{ id: 'opt_1', text: 'A', score: 10 }],
+  }).ok, false);
+
+  // Option chứa explanation
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [{ id: 'opt_1', text: 'A', explanation: 'Vì sao đáp án đúng' }],
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: options contain non-plain-object elements (null, string, number, array)', () => {
+  // Option là null
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [{ id: 'opt_1', text: 'A' }, null],
+  }).ok, false);
+
+  // Option là string
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: ['opt_1_as_string'],
+  }).ok, false);
+
+  // Option là number
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [12345],
+  }).ok, false);
+
+  // Option là mảng lồng nhau
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [[{ id: 'opt_1', text: 'A' }]],
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: options is not an array (object, string, number)', () => {
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: { opt_1: 'A', opt_2: 'B' },
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: 'invalid_options_string',
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: 12345,
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: options contain sensitive fields in nested media', () => {
+  // Sensitive field in media object
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [
+      {
+        id: 'opt_1',
+        text: 'A',
+        media: { url: 'https://example.com/img.png', is_correct: true },
+      },
+    ],
+  }).ok, false);
+
+  // Sensitive field in media array
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    options: [
+      {
+        id: 'opt_1',
+        text: 'A',
+        media: [{ url: 'https://example.com/img.png', score: 100 }],
+      },
+    ],
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - PASS: questions without options (essay/short answer)', () => {
+  // options null
+  const res1 = mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Hãy phân tích bài thơ...',
+    options: null,
+  });
+  assertEquals(res1.ok, true);
+  if (res1.ok) {
+    assertEquals(res1.data.version.options, null);
+  }
+
+  // options undefined
+  const res2 = mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Hãy phân tích bài thơ...',
+  });
+  assertEquals(res2.ok, true);
+  if (res2.ok) {
+    assertEquals(res2.data.version.options, null);
+  }
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: payload contains answer_key or correct_answers (leakage prevention)', () => {
+  // Rò rỉ ở root:
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    answer_key: { correct_answer: 'A' },
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    correct_answers: ['A'],
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    solution_explanation: 'Lời giải chi tiết',
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+    grading_config: { points: 10 },
+  }).ok, false);
+
+  // Rò rỉ trong nested version:
+  assertEquals(mapGetStudentQuestionSuccess({
+    projection: 'STUDENT_SAFE',
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2, correct_answers: ['A'] },
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: wrong projection (AUTHORING_SAFE, PUBLIC, empty, null)', () => {
+  assertEquals(mapGetStudentQuestionSuccess({
     projection: 'AUTHORING_SAFE',
     item: { id: VALID_UUID_1 },
     version: { id: VALID_UUID_2 },
-  };
-  const result = mapGetStudentQuestionSuccess(payload);
-  assertEquals(result.ok, false);
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    projection: 'PUBLIC',
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    projection: '',
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+  }).ok, false);
+
+  assertEquals(mapGetStudentQuestionSuccess({
+    projection: null,
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+  }).ok, false);
 });
 
-Deno.test('mapGetStudentQuestionSuccess - FAIL: missing item', () => {
-  const payload = {
+Deno.test('mapGetStudentQuestionSuccess - FAIL: missing item or id in payload', () => {
+  // Thiếu item trong nested
+  assertEquals(mapGetStudentQuestionSuccess({
     projection: 'STUDENT_SAFE',
     version: { id: VALID_UUID_2 },
-  };
-  const result = mapGetStudentQuestionSuccess(payload);
-  assertEquals(result.ok, false);
+  }).ok, false);
+
+  // Thiếu id trong flat
+  assertEquals(mapGetStudentQuestionSuccess({
+    version_id: VALID_UUID_2,
+    prompt: 'Prompt',
+  }).ok, false);
+
+  // id không phải string
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: 12345,
+    version_id: VALID_UUID_2,
+  }).ok, false);
 });
 
-Deno.test('mapGetStudentQuestionSuccess - FAIL: item is array instead of plain object', () => {
-  const payload = {
-    projection: 'STUDENT_SAFE',
-    item: [{ id: VALID_UUID_1 }],
-    version: { id: VALID_UUID_2 },
-  };
-  const result = mapGetStudentQuestionSuccess(payload);
-  assertEquals(result.ok, false);
-});
-
-Deno.test('mapGetStudentQuestionSuccess - FAIL: missing version', () => {
-  const payload = {
+Deno.test('mapGetStudentQuestionSuccess - FAIL: missing version or version_id in payload', () => {
+  // Thiếu version trong nested
+  assertEquals(mapGetStudentQuestionSuccess({
     projection: 'STUDENT_SAFE',
     item: { id: VALID_UUID_1 },
-  };
-  const result = mapGetStudentQuestionSuccess(payload);
-  assertEquals(result.ok, false);
+  }).ok, false);
+
+  // Thiếu version_id trong flat
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    prompt: 'Prompt',
+  }).ok, false);
+
+  // version_id không phải string
+  assertEquals(mapGetStudentQuestionSuccess({
+    id: VALID_UUID_1,
+    version_id: null,
+  }).ok, false);
+});
+
+Deno.test('mapGetStudentQuestionSuccess - FAIL: non-record payload', () => {
+  assertEquals(mapGetStudentQuestionSuccess(null).ok, false);
+  assertEquals(mapGetStudentQuestionSuccess(undefined).ok, false);
+  assertEquals(mapGetStudentQuestionSuccess('string').ok, false);
+  assertEquals(mapGetStudentQuestionSuccess([]).ok, false);
+  assertEquals(mapGetStudentQuestionSuccess(12345).ok, false);
 });
 
 // --- RPC 4: mapGetAuthoringDetailSuccess ---
@@ -204,6 +486,36 @@ Deno.test('mapGetAuthoringDetailSuccess - PASS: valid AUTHORING_SAFE with answer
   }
 });
 
+Deno.test('mapGetAuthoringDetailSuccess - PASS: valid legacy Staging payload without projection (answer_key object)', () => {
+  const payload = {
+    item: { id: VALID_UUID_1, title: '[SMOKE-TEST] Phép cộng đơn giản' },
+    version: { id: VALID_UUID_2, prompt: '2 + 3 = ?' },
+    answer_key: { correct_answers: { correct_option_id: 'opt_2' }, grading_config: null },
+  };
+  const result = mapGetAuthoringDetailSuccess(payload);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.data.projection, 'AUTHORING_SAFE');
+    assertEquals(result.data.item.id, VALID_UUID_1);
+    assertEquals(result.data.version.id, VALID_UUID_2);
+    assertEquals(result.data.answer_key !== null, true);
+  }
+});
+
+Deno.test('mapGetAuthoringDetailSuccess - PASS: valid legacy Staging payload without projection (answer_key null)', () => {
+  const payload = {
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  };
+  const result = mapGetAuthoringDetailSuccess(payload);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.data.projection, 'AUTHORING_SAFE');
+    assertEquals(result.data.answer_key, null);
+  }
+});
+
 Deno.test('mapGetAuthoringDetailSuccess - FAIL: wrong projection (STUDENT_SAFE)', () => {
   const payload = {
     projection: 'STUDENT_SAFE',
@@ -213,6 +525,73 @@ Deno.test('mapGetAuthoringDetailSuccess - FAIL: wrong projection (STUDENT_SAFE)'
   };
   const result = mapGetAuthoringDetailSuccess(payload);
   assertEquals(result.ok, false);
+});
+
+Deno.test('mapGetAuthoringDetailSuccess - FAIL: wrong projection (arbitrary string or empty)', () => {
+  assertEquals(mapGetAuthoringDetailSuccess({
+    projection: 'PUBLIC',
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    projection: '',
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    projection: null,
+    item: { id: VALID_UUID_1 },
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+});
+
+Deno.test('mapGetAuthoringDetailSuccess - FAIL: missing or invalid item', () => {
+  assertEquals(mapGetAuthoringDetailSuccess({
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: null,
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: 'not-an-object',
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: [VALID_UUID_1],
+    version: { id: VALID_UUID_2 },
+    answer_key: null,
+  }).ok, false);
+});
+
+Deno.test('mapGetAuthoringDetailSuccess - FAIL: missing or invalid version', () => {
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: { id: VALID_UUID_1 },
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: { id: VALID_UUID_1 },
+    version: null,
+    answer_key: null,
+  }).ok, false);
+
+  assertEquals(mapGetAuthoringDetailSuccess({
+    item: { id: VALID_UUID_1 },
+    version: 'not-an-object',
+    answer_key: null,
+  }).ok, false);
 });
 
 Deno.test('mapGetAuthoringDetailSuccess - FAIL: answer_key is string instead of object/null', () => {
@@ -235,6 +614,14 @@ Deno.test('mapGetAuthoringDetailSuccess - FAIL: answer_key is array', () => {
   };
   const result = mapGetAuthoringDetailSuccess(payload);
   assertEquals(result.ok, false);
+});
+
+Deno.test('mapGetAuthoringDetailSuccess - FAIL: non-record payload (null, undefined, string, array)', () => {
+  assertEquals(mapGetAuthoringDetailSuccess(null).ok, false);
+  assertEquals(mapGetAuthoringDetailSuccess(undefined).ok, false);
+  assertEquals(mapGetAuthoringDetailSuccess('not-a-record').ok, false);
+  assertEquals(mapGetAuthoringDetailSuccess([]).ok, false);
+  assertEquals(mapGetAuthoringDetailSuccess(12345).ok, false);
 });
 
 // --- RPC 5: mapListQuestionsSuccess ---

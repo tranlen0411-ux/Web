@@ -963,7 +963,12 @@ export const QuestionBankListTab = ({
                   const isArchived = item.status === 'archived';
 
                   // Permissions
-                  const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const hasUnpublishedVersion = !isArchived && (
+                    isDraft ||
+                    (item.status === 'published' &&
+                      Boolean(item.current_version_id && item.published_version_id && item.current_version_id !== item.published_version_id))
+                  );
+                  const canPublish = hasUnpublishedVersion && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canEditNewVersion = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canShare = item.status === 'published' && item.visibility === 'private' && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canUnshare = item.status === 'published' && isPublicQuestion && (role === 'admin' || (role === 'teacher' && isAuthor));
