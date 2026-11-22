@@ -78,3 +78,37 @@ jobs:
 
       - name: Build SCORM isolated player
         run: npm --prefix scorm-player run build
+
+  question-bank-security:
+    name: Question Bank Security Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Run Question Bank Node Security Tests (13 cases)
+        run: node tests/question_bank_student_security_p29k.test.mjs
+
+      - name: Setup Deno 2.9.6
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: '2.9.6'
+
+      - name: Run Question Bank Deno TypeScript Check
+        run: deno check --node-modules-dir=auto supabase/functions/question-bank-api/router.ts
+
+      - name: Run Question Bank Deno Router Tests (100 cases)
+        run: deno test --allow-read --allow-env --no-check supabase/functions/question-bank-api/router.test.ts
