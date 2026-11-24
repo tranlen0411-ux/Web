@@ -80,8 +80,8 @@ BEGIN
     'version_id', v_version.id,
     'version_number', v_version.version_number,
     'prompt', v_version.prompt,
-    'prompt_media', v_version.prompt_media,
-    'media_urls', v_version.prompt_media,
+    'prompt_media', v_version.media_urls,
+    'media_urls', v_version.media_urls,
     'options', v_version.options
   );
 

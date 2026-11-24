@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { PGlite } from '@electric-sql/pglite';
 
 const VALID_ITEM_ID = '2762d1a0-a1b4-461a-8f67-1b739e65f832';
 const VALID_VERSION_ID = 'fb128236-7ea3-46e7-9d95-f3b3656c83b1';
@@ -362,6 +363,175 @@ test('QUESTION BANK V1 — PHASE 29K-D3H-5: STUDENT ACCESS SECURITY MATRIX', asy
     assert.ok(sqlContent.includes('REVOKE ALL ON FUNCTION public.rpc_qb_get_student_question(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;'));
     assert.ok(sqlContent.includes('GRANT EXECUTE ON FUNCTION public.rpc_qb_get_student_question(uuid, uuid, uuid) TO service_role;'));
     assert.ok(sqlContent.includes('FORBIDDEN_PRIVATE_QUESTION'));
+  });
+
+  await t.test('13. Schema Parity Guard: Cấm tham chiếu v_version.prompt_media (D3H-37 Fix)', () => {
+    const migrationPath = path.resolve('supabase/migrations/20261121235500_qb_student_access_hardening.sql');
+    const sqlContent = fs.readFileSync(migrationPath, 'utf8');
+    assert.strictEqual(
+      sqlContent.includes('v_version.prompt_media'),
+      false,
+      'Migration 4 không được tham chiếu v_version.prompt_media vì cột này không tồn tại trong schema'
+    );
+    assert.ok(
+      sqlContent.includes("'prompt_media', v_version.media_urls"),
+      "Migration 4 phải lấy dữ liệu từ v_version.media_urls cho khóa 'prompt_media'"
+    );
+    assert.ok(
+      sqlContent.includes("'media_urls', v_version.media_urls"),
+      "Migration 4 phải lấy dữ liệu từ v_version.media_urls cho khóa 'media_urls'"
+    );
+  });
+
+  await t.test('14. Real PGlite Runtime Verification: rpc_qb_get_student_question thực thi thành công trên PostgreSQL engine', async () => {
+    const pg = new PGlite();
+    await pg.exec(`
+      CREATE ROLE service_role;
+      CREATE ROLE anon;
+      CREATE ROLE authenticated;
+      CREATE SCHEMA IF NOT EXISTS app_private;
+      CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+      CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text PRIMARY KEY, name text);
+
+      CREATE TABLE public.question_bank_items (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        code text NOT NULL UNIQUE,
+        title text NOT NULL,
+        question_type text NOT NULL,
+        subject text NOT NULL,
+        grade_level integer NOT NULL,
+        difficulty text NOT NULL DEFAULT 'medium',
+        status text NOT NULL DEFAULT 'draft',
+        visibility text NOT NULL DEFAULT 'private',
+        school_id uuid NULL,
+        author_id uuid NOT NULL,
+        current_version_id uuid NULL,
+        version_count integer NOT NULL DEFAULT 1,
+        tags text[] NOT NULL DEFAULT '{}'::text[],
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE public.question_bank_versions (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        question_bank_item_id uuid NOT NULL REFERENCES public.question_bank_items(id) ON DELETE RESTRICT,
+        version_number integer NOT NULL CHECK (version_number >= 1),
+        prompt text NOT NULL,
+        media_urls jsonb NOT NULL DEFAULT '[]'::jsonb,
+        options jsonb NOT NULL DEFAULT '[]'::jsonb,
+        hints jsonb NOT NULL DEFAULT '[]'::jsonb,
+        explanation text NULL,
+        metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+        change_log text NULL,
+        forked_from_version_id uuid NULL REFERENCES public.question_bank_versions(id),
+        created_by uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE app_private.question_bank_answer_keys (
+        version_id uuid PRIMARY KEY REFERENCES public.question_bank_versions(id) ON DELETE RESTRICT,
+        correct_answers jsonb NOT NULL,
+        grading_rubric jsonb NOT NULL DEFAULT '{}'::jsonb,
+        case_sensitive boolean NOT NULL DEFAULT false,
+        tolerance numeric NOT NULL DEFAULT 0,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+
+    // Áp dụng 4 migration tuần tự
+    const mig1 = fs.readFileSync('supabase/migrations/20261108220000_question_bank_list_questions_expose_fork_origin.sql', 'utf8');
+    await pg.exec(mig1);
+    const mig2 = fs.readFileSync('supabase/migrations/20261109140000_question_bank_list_questions_persistent_tri_state_origin.sql', 'utf8');
+    await pg.exec(mig2);
+    const mig3 = fs.readFileSync('supabase/migrations/20261115164000_question_bank_v1_unified_dual_head_release.sql', 'utf8');
+    await pg.exec(mig3);
+    const mig4 = fs.readFileSync('supabase/migrations/20261121235500_qb_student_access_hardening.sql', 'utf8');
+    await pg.exec(mig4);
+
+    const authorId = 'a0000000-0000-0000-0000-000000000001';
+    const strangerId = 'b0000000-0000-0000-0000-000000000002';
+
+    // Seed 1 câu hỏi published công khai
+    const pubItemRes = await pg.query(`
+      INSERT INTO public.question_bank_items (code, title, question_type, subject, grade_level, status, visibility, author_id)
+      VALUES ('QB-TEST-PUB', 'Public Question', 'single_choice', 'Math', 10, 'published', 'public_template', $1)
+      RETURNING id;
+    `, [authorId]);
+    const pubItemId = pubItemRes.rows[0].id;
+
+    const pubVerRes = await pg.query(`
+      INSERT INTO public.question_bank_versions (question_bank_item_id, version_number, prompt, media_urls, options, created_by)
+      VALUES ($1, 1, 'What is 1+1?', '[{"url":"https://example.com/image.png"}]'::jsonb, '[{"id":"opt_1","text":"2"}]'::jsonb, $2)
+      RETURNING id;
+    `, [pubItemId, authorId]);
+    const pubVerId = pubVerRes.rows[0].id;
+
+    await pg.query(`UPDATE public.question_bank_items SET current_version_id = $1, published_version_id = $1 WHERE id = $2`, [pubVerId, pubItemId]);
+
+    // Seed 1 câu hỏi published riêng tư
+    const privItemRes = await pg.query(`
+      INSERT INTO public.question_bank_items (code, title, question_type, subject, grade_level, status, visibility, author_id)
+      VALUES ('QB-TEST-PRIV', 'Private Question', 'single_choice', 'Math', 10, 'published', 'private', $1)
+      RETURNING id;
+    `, [authorId]);
+    const privItemId = privItemRes.rows[0].id;
+
+    const privVerRes = await pg.query(`
+      INSERT INTO public.question_bank_versions (question_bank_item_id, version_number, prompt, created_by)
+      VALUES ($1, 1, 'Private Prompt', $2)
+      RETURNING id;
+    `, [privItemId, authorId]);
+    const privVerId = privVerRes.rows[0].id;
+
+    await pg.query(`UPDATE public.question_bank_items SET current_version_id = $1, published_version_id = $1 WHERE id = $2`, [privVerId, privItemId]);
+
+    // Seed 1 câu hỏi draft
+    const draftItemRes = await pg.query(`
+      INSERT INTO public.question_bank_items (code, title, question_type, subject, grade_level, status, visibility, author_id)
+      VALUES ('QB-TEST-DFT', 'Draft Question', 'single_choice', 'Math', 10, 'draft', 'private', $1)
+      RETURNING id;
+    `, [authorId]);
+    const draftItemId = draftItemRes.rows[0].id;
+
+    const draftVerRes = await pg.query(`
+      INSERT INTO public.question_bank_versions (question_bank_item_id, version_number, prompt, created_by)
+      VALUES ($1, 1, 'Draft Prompt', $2)
+      RETURNING id;
+    `, [draftItemId, authorId]);
+    const draftVerId = draftVerRes.rows[0].id;
+    await pg.query(`UPDATE public.question_bank_items SET current_version_id = $1 WHERE id = $2`, [draftVerId, draftItemId]);
+
+    // Test A: Đọc câu hỏi published công khai (thành công 100%, đúng hợp đồng JSON)
+    const pubCall = await pg.query(`
+      SELECT public.rpc_qb_get_student_question($1::uuid, $2::uuid) as result
+    `, [strangerId, pubItemId]);
+    const pubResult = pubCall.rows[0].result;
+    assert.strictEqual(pubResult.success, true);
+    assert.strictEqual(pubResult.prompt, 'What is 1+1?');
+    assert.deepStrictEqual(pubResult.prompt_media, [{ url: 'https://example.com/image.png' }]);
+    assert.deepStrictEqual(pubResult.media_urls, [{ url: 'https://example.com/image.png' }]);
+    assert.strictEqual('answer_key' in pubResult, false);
+    assert.strictEqual('correct_answers' in pubResult, false);
+
+    // Test B: Đọc câu hỏi riêng tư bởi người lạ -> Bị chặn FORBIDDEN_PRIVATE_QUESTION
+    const strangerPrivCall = await pg.query(`
+      SELECT public.rpc_qb_get_student_question($1::uuid, $2::uuid) as result
+    `, [strangerId, privItemId]);
+    assert.strictEqual(strangerPrivCall.rows[0].result.success, false);
+    assert.strictEqual(strangerPrivCall.rows[0].result.error_code, 'FORBIDDEN_PRIVATE_QUESTION');
+
+    // Test C: Đọc câu hỏi riêng tư bởi chính tác giả -> Cho phép thành công
+    const authorPrivCall = await pg.query(`
+      SELECT public.rpc_qb_get_student_question($1::uuid, $2::uuid) as result
+    `, [authorId, privItemId]);
+    assert.strictEqual(authorPrivCall.rows[0].result.success, true);
+
+    // Test D: Đọc câu hỏi draft -> Bị chặn FORBIDDEN
+    const draftCall = await pg.query(`
+      SELECT public.rpc_qb_get_student_question($1::uuid, $2::uuid) as result
+    `, [authorId, draftItemId]);
+    assert.strictEqual(draftCall.rows[0].result.success, false);
+    assert.strictEqual(draftCall.rows[0].result.error_code, 'FORBIDDEN');
   });
 });
 
