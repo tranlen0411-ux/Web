@@ -42,6 +42,11 @@ import { ImportQuestionBankModal } from './ImportQuestionBankModal';
 import { QuestionVersionHistoryModal } from './QuestionVersionHistoryModal';
 import { QuestionVersionDetailModal } from './QuestionVersionDetailModal';
 import { AssignQuestionBankToClassModal } from './AssignQuestionBankToClassModal';
+import {
+  formatVietnamDateTime,
+  getQuestionOriginInfo,
+  getModalVisibilityDisplay
+} from './questionBankHelpers';
 
 const DIFFICULTY_LABELS = {
   easy: { label: 'Nhận biết', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -62,7 +67,9 @@ const TYPE_LABELS = {
 
 const VISIBILITY_LABELS = {
   private: { label: 'Cá nhân', icon: Lock, color: 'text-slate-500 bg-slate-100' },
-  school_shared: { label: 'Toàn trường', icon: Globe, color: 'text-indigo-600 bg-indigo-50' },
+  school: { label: 'Toàn trường', icon: GraduationCap, color: 'text-indigo-600 bg-indigo-50' },
+  school_shared: { label: 'Toàn trường', icon: GraduationCap, color: 'text-indigo-600 bg-indigo-50' },
+  public: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' },
   public_template: { label: 'Mẫu công khai', icon: Globe, color: 'text-emerald-600 bg-emerald-50' }
 };
 
@@ -96,6 +103,8 @@ export const QuestionBankListTab = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [toastType, setToastType] = useState('success');
+  const [publishError, setPublishError] = useState('');
 
   // Status view filter state ('active' | 'archived')
   const [selectedStatusView, setSelectedStatusView] = useState('active');
@@ -114,6 +123,8 @@ export const QuestionBankListTab = ({
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isEditVersionModalOpen, setIsEditVersionModalOpen] = useState(false);
+  const [editVersionModalItem, setEditVersionModalItem] = useState(null);
   const [archiveModalItem, setArchiveModalItem] = useState(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [restoreModalItem, setRestoreModalItem] = useState(null);
@@ -228,9 +239,13 @@ export const QuestionBankListTab = ({
     setPage(1);
   }, [activeGlobalClassFilter]);
 
-  const showToast = (msg) => {
+  const showToast = (msg, type = 'success') => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 4000);
+    setToastType(type);
+    setTimeout(() => {
+      setToastMsg('');
+      setToastType('success');
+    }, 4000);
   };
 
   const fetchQuestions = useCallback(async () => {
@@ -353,6 +368,16 @@ export const QuestionBankListTab = ({
     fetchQuestions();
   };
 
+  const handleOpenNewVersionModal = (item) => {
+    setEditVersionModalItem(item);
+    setIsEditVersionModalOpen(true);
+  };
+
+  const handleNewVersionSuccess = (msg) => {
+    showToast(msg || 'Tạo phiên bản mới thành công!');
+    fetchQuestions();
+  };
+
   const handleImportSuccess = (msg) => {
     showToast(msg);
     fetchQuestions();
@@ -443,42 +468,58 @@ export const QuestionBankListTab = ({
 
   const handleOpenPublishModal = (item) => {
     setShareOnPublish(true);
+    setPublishError('');
     setPublishModalItem(item);
   };
 
   const handleConfirmPublish = async () => {
     if (!publishModalItem || isPublishing) return;
     const targetId = publishModalItem.id || publishModalItem.item_id;
+    const expectedVersionId = publishModalItem.current_version_id;
     if (!targetId) return;
 
+    if (!expectedVersionId) {
+      const missingErr = 'Không tìm thấy định danh phiên bản (current_version_id) hợp lệ để xuất bản. Vui lòng tải lại danh sách.';
+      setPublishError(missingErr);
+      showToast(missingErr, 'error');
+      return;
+    }
+
     setIsPublishing(true);
+    setPublishError('');
     try {
       // 1. Xác định visibility dựa trên lựa chọn checkbox
       const visibility = shareOnPublish === true ? 'public_template' : 'private';
 
-      // 2. Cập nhật visibility khi câu hỏi vẫn đang ở trạng thái bản nháp
-      await updateQuestionVisibility(targetId, visibility);
-
-      // 3. Tiến hành xuất bản câu hỏi
-      await publishQuestion(targetId);
+      // 2. Tiến hành xuất bản câu hỏi kèm expected_version_id bắt buộc để chống tương tranh
+      const publishResult = await publishQuestion(targetId, {
+        visibility,
+        expected_version_id: expectedVersionId
+      });
 
       setPublishModalItem(null);
 
-      // 4. Hiển thị thông báo Toast phù hợp
+      // 3. Hiển thị thông báo Toast phù hợp dựa trên xác nhận từ máy chủ (tránh ngộ nhận nếu BFF cũ bỏ qua payload)
+      const confirmedVisibility = publishResult?.visibility;
       if (visibility === 'public_template') {
-        showToast('Đã xuất bản và chia sẻ câu hỏi với giáo viên khác.');
+        if (confirmedVisibility === 'public_template' || confirmedVisibility === 'public') {
+          showToast('Đã xuất bản và chia sẻ câu hỏi với giáo viên khác.', 'success');
+        } else {
+          showToast('Đã xuất bản câu hỏi. Lưu ý: Máy chủ chưa áp dụng tùy chọn chia sẻ tự động, vui lòng dùng nút Chia sẻ.', 'success');
+        }
       } else {
-        showToast('Đã xuất bản câu hỏi ở chế độ cá nhân.');
+        showToast('Đã xuất bản câu hỏi ở chế độ cá nhân.', 'success');
       }
 
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi xuất bản câu hỏi:', err);
-      if (err?.status === 409 || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
-        showToast('Trạng thái câu hỏi đã thay đổi. Vui lòng tải lại danh sách.');
-      } else {
-        showToast(err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.');
+      let errorMsg = err?.message || 'Không thể xuất bản câu hỏi. Vui lòng thử lại.';
+      if (err?.status === 409 || err?.errorCode === 'CONFLICT' || err?.errorCode === 'INVALID_STATUS_TRANSITION') {
+        errorMsg = 'Phiên bản câu hỏi đã thay đổi trên máy chủ (đã có bản nháp mới hơn được tạo). Vui lòng đóng hộp thoại và tải lại danh sách trước khi xuất bản.';
       }
+      setPublishError(errorMsg);
+      showToast(errorMsg, 'error');
     } finally {
       setIsPublishing(false);
     }
@@ -526,7 +567,7 @@ export const QuestionBankListTab = ({
     if (!cloneModalItem || isCloning) return;
     const sourceVersionId = cloneModalItem.current_version_id;
     if (!sourceVersionId) {
-      showToast('Không tìm thấy phiên bản câu hỏi nguồn để sao chép.');
+      showToast('Không tìm thấy phiên bản câu hỏi nguồn để sao chép.', 'error');
       return;
     }
 
@@ -542,7 +583,7 @@ export const QuestionBankListTab = ({
       fetchQuestions();
     } catch (err) {
       console.error('Lỗi khi sao chép câu hỏi:', err);
-      showToast(err?.message || 'Không thể sao chép câu hỏi. Vui lòng thử lại.');
+      showToast(err?.message || 'Không thể sao chép câu hỏi. Vui lòng thử lại.', 'error');
     } finally {
       setIsCloning(false);
     }
@@ -581,10 +622,17 @@ export const QuestionBankListTab = ({
 
   return (
     <div className="bg-white rounded-3xl border-4 border-amber-200 p-4 sm:p-6 shadow-sm mb-8 animate-fadeIn">
-      {/* TOAST THÔNG BÁO THÀNH CÔNG */}
+      {/* TOAST THÔNG BÁO */}
       {toastMsg && (
-        <div className="fixed top-6 right-6 z-[10000] bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce">
-          <CheckCircle2 className="w-5 h-5" />
+        <div
+          className={`fixed top-6 right-6 z-[10000] text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-black animate-bounce ${toastType === 'error' ? 'bg-rose-600 border border-rose-700' : 'bg-emerald-600'
+            }`}
+        >
+          {toastType === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-white" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-white" />
+          )}
           <span>{toastMsg}</span>
         </div>
       )}
@@ -642,22 +690,20 @@ export const QuestionBankListTab = ({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={() => handleStatusViewChange('active')}
-          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
-            selectedStatusView === 'active'
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${selectedStatusView === 'active'
               ? 'bg-indigo-600 text-white shadow-sm'
               : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-          }`}
+            }`}
         >
           <BookOpen className="w-3.5 h-3.5" />
           <span>Đang sử dụng</span>
         </button>
         <button
           onClick={() => handleStatusViewChange('archived')}
-          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${
-            selectedStatusView === 'archived'
+          className={`px-4 py-2 text-xs font-black rounded-xl transition-all flex items-center gap-1.5 ${selectedStatusView === 'archived'
               ? 'bg-amber-600 text-white shadow-sm'
               : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-          }`}
+            }`}
         >
           <Archive className="w-3.5 h-3.5" />
           <span>Đã ẩn</span>
@@ -710,18 +756,17 @@ export const QuestionBankListTab = ({
             <label className="block text-[11px] font-black text-slate-500 mb-1 flex items-center justify-between">
               <span>Khối lớp</span>
               {hasSpecificGlobalClass && (
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
-                  classResolutionStatus === 'loading'
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${classResolutionStatus === 'loading'
                     ? 'text-indigo-700 bg-indigo-100 border-indigo-300 animate-pulse'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'text-amber-700 bg-amber-100/80 border-amber-300'
-                    : 'text-rose-700 bg-rose-100 border-rose-300'
-                }`}>
+                      ? 'text-amber-700 bg-amber-100/80 border-amber-300'
+                      : 'text-rose-700 bg-rose-100 border-rose-300'
+                  }`}>
                   {classResolutionStatus === 'loading'
                     ? 'Đang xác định...'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'Khóa theo Header'
-                    : 'Lỗi bộ lọc'}
+                      ? 'Khóa theo Header'
+                      : 'Lỗi bộ lọc'}
                 </span>
               )}
             </label>
@@ -729,22 +774,21 @@ export const QuestionBankListTab = ({
               value={hasSpecificGlobalClass ? (globalGrade != null ? String(globalGrade) : '') : selectedGrade}
               onChange={(e) => { setSelectedGrade(e.target.value); setPage(1); }}
               disabled={hasSpecificGlobalClass}
-              className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${
-                hasSpecificGlobalClass
+              className={`w-full rounded-xl px-2.5 py-2 text-xs focus:outline-none transition-all ${hasSpecificGlobalClass
                   ? classResolutionStatus === 'loading'
                     ? 'bg-indigo-50/50 border-2 border-indigo-200 text-indigo-800 font-bold cursor-wait'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
-                    : 'bg-rose-50/80 border-2 border-rose-300 text-rose-950 font-bold cursor-not-allowed'
+                      ? 'bg-amber-50/80 border-2 border-amber-300 text-amber-950 font-black cursor-not-allowed shadow-inner'
+                      : 'bg-rose-50/80 border-2 border-rose-300 text-rose-950 font-bold cursor-not-allowed'
                   : 'bg-white border border-slate-300 text-slate-700 focus:border-indigo-500'
-              }`}
+                }`}
               title={
                 hasSpecificGlobalClass
                   ? classResolutionStatus === 'loading'
                     ? 'Đang tải thông tin khối lớp từ Header...'
                     : classResolutionStatus === 'resolved' && globalGrade != null
-                    ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}`
-                    : 'Không thể xác định khối lớp từ bộ lọc Header'
+                      ? `Đang khóa theo bộ lọc Header: ${resolvedClass?.name ? formatClassLabel(resolvedClass.name) : `Khối ${globalGrade}`}`
+                      : 'Không thể xác định khối lớp từ bộ lọc Header'
                   : 'Chọn khối lớp để lọc'
               }
             >
@@ -895,6 +939,7 @@ export const QuestionBankListTab = ({
                   <th className="py-3 px-3">Độ khó</th>
                   <th className="py-3 px-3">Phạm vi</th>
                   <th className="py-3 px-3">Người tạo</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Ngày tạo</th>
                   <th className="py-3 px-3 text-center">Trạng thái</th>
                   <th className="py-3 px-3 text-center">Thao tác</th>
                 </tr>
@@ -909,37 +954,72 @@ export const QuestionBankListTab = ({
                   const currentUserId = auth?.user?.id;
                   const isAuthor = Boolean(item.author_id && currentUserId && String(item.author_id) === String(currentUserId));
                   const isOwnQuestion = isAuthor;
+                  const isPublicQuestion = item.visibility === 'public_template' || item.visibility === 'public';
                   const isSharedFromOtherTeacher = role === 'teacher' &&
                     item.status === 'published' &&
-                    item.visibility === 'public_template' &&
+                    isPublicQuestion &&
                     !isOwnQuestion;
                   const isDraft = item.status === 'draft';
                   const isArchived = item.status === 'archived';
 
                   // Permissions
-                  const canPublish = isDraft && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const hasUnpublishedVersion = !isArchived && (
+                    isDraft ||
+                    (item.status === 'published' &&
+                      Boolean(item.current_version_id && item.published_version_id && item.current_version_id !== item.published_version_id))
+                  );
+                  const canPublish = hasUnpublishedVersion && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canEditNewVersion = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canShare = item.status === 'published' && item.visibility === 'private' && (role === 'admin' || (role === 'teacher' && isAuthor));
-                  const canUnshare = item.status === 'published' && item.visibility === 'public_template' && (role === 'admin' || (role === 'teacher' && isAuthor));
+                  const canUnshare = item.status === 'published' && isPublicQuestion && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canArchive = !isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canRestore = isArchived && (role === 'admin' || (role === 'teacher' && isAuthor));
                   const canDelete = (role === 'admin' || (role === 'teacher' && isAuthor)) && !isSharedFromOtherTeacher;
                   const canViewHistory = role === 'admin' || (role === 'teacher' && isAuthor);
-                  const canClone = isSharedFromOtherTeacher;
+                  const canClone = !isArchived && (
+                    role === 'admin' ||
+                    (role === 'teacher' && (isOwnQuestion || (item.status === 'published' && isPublicQuestion)))
+                  );
                   const canAssignToClass = isOwnQuestion && item.status === 'published' && (role === 'admin' || role === 'teacher');
 
                   const authorInfo = getAuthorDisplay(item.author_id);
+                  const fullTitle = item.title || item.prompt || '(Không có tiêu đề)';
+                  const originInfo = getQuestionOriginInfo(item);
 
                   return (
                     <tr key={item.id || item.item_id || idx} className="hover:bg-amber-50/40 transition-colors">
                       <td className="py-3 px-4 max-w-xs sm:max-w-md">
-                        <div className="font-bold text-slate-900 line-clamp-2">
-                          {item.title || item.prompt || '(Không có tiêu đề)'}
+                        <div
+                          className="font-bold text-slate-900 line-clamp-2 cursor-default"
+                          title={fullTitle}
+                        >
+                          {fullTitle}
                         </div>
-                        {item.id && (
-                          <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                            ID: {item.id.slice(0, 8)}...
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {originInfo.label && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${originInfo.isClone
+                                  ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}
+                              title={
+                                originInfo.isClone && originInfo.forkedFromVersionId
+                                  ? `Bản sao từ phiên bản: ${originInfo.forkedFromVersionId}`
+                                  : originInfo.isOriginal
+                                    ? 'Câu hỏi gốc không qua sao chép'
+                                    : undefined
+                              }
+                            >
+                              <Copy className="w-2.5 h-2.5" />
+                              {originInfo.label}
+                            </span>
+                          )}
+                          {item.id && (
+                            <span className="text-[10px] font-mono text-slate-400" title={`ID đầy đủ: ${item.id}`}>
+                              ID: {item.id.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         <span className="font-bold text-slate-700">{item.subject || 'Chung'}</span>
@@ -968,13 +1048,20 @@ export const QuestionBankListTab = ({
                         </span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                          authorInfo.isOwn
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${authorInfo.isOwn
                             ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
                             : 'bg-slate-100 text-slate-700'
-                        }`}>
+                          }`}>
                           <User className="w-3 h-3" />
                           {authorInfo.label}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span
+                          className="text-[11px] font-medium text-slate-600 font-mono"
+                          title={item.created_at ? `Tạo lúc: ${formatVietnamDateTime(item.created_at)} (Giờ Việt Nam)` : 'Chưa có thông tin ngày tạo'}
+                        >
+                          {formatVietnamDateTime(item.created_at)}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
@@ -1025,6 +1112,16 @@ export const QuestionBankListTab = ({
                             >
                               <History className="w-3.5 h-3.5 text-indigo-600" />
                               <span>Lịch sử</span>
+                            </button>
+                          )}
+                          {canEditNewVersion && (
+                            <button
+                              onClick={() => handleOpenNewVersionModal(item)}
+                              className="px-2 py-1 text-amber-700 hover:text-amber-800 hover:bg-amber-100/80 rounded-lg transition-colors inline-flex items-center gap-1 font-bold text-xs"
+                              title="Chỉnh sửa câu hỏi thành phiên bản mới (bản nháp độc lập)"
+                            >
+                              <Layers className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Sửa phiên bản</span>
                             </button>
                           )}
                           {canPublish && (
@@ -1087,7 +1184,7 @@ export const QuestionBankListTab = ({
                               <span>Xóa</span>
                             </button>
                           )}
-                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canDelete && !canViewHistory && !canClone && !canAssignToClass && (
+                          {!canPublish && !canShare && !canUnshare && !canArchive && !canRestore && !canDelete && !canViewHistory && !canClone && !canAssignToClass && !canEditNewVersion && (
                             <span className="text-slate-300 text-xs">—</span>
                           )}
                         </div>
@@ -1145,7 +1242,23 @@ export const QuestionBankListTab = ({
         onClose={() => setIsCreateModalOpen(false)}
         onSuccess={handleCreateSuccess}
         role={role}
+        mode="create"
       />
+
+      {/* EDIT NEW VERSION MODAL (Dual-Head Architecture) */}
+      {isEditVersionModalOpen && editVersionModalItem && (
+        <CreateQuestionBankModal
+          isOpen={isEditVersionModalOpen}
+          mode="new_version"
+          initialQuestion={editVersionModalItem}
+          onClose={() => {
+            setIsEditVersionModalOpen(false);
+            setEditVersionModalItem(null);
+          }}
+          onSuccess={handleNewVersionSuccess}
+          role={role}
+        />
+      )}
 
       {/* IMPORT MODAL */}
       <ImportQuestionBankModal
@@ -1270,9 +1383,29 @@ export const QuestionBankListTab = ({
               <span>Bạn có chắc muốn xuất bản câu hỏi này?</span>
             </div>
 
-            <p className="text-xs sm:text-sm text-slate-600 font-medium my-3 leading-relaxed bg-slate-50 p-3 rounded-2xl border border-slate-200/80">
-              Sau khi xuất bản, câu hỏi sẽ sẵn sàng để sử dụng và giao bài tập.
-            </p>
+            <div className="my-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs text-slate-700 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-600">Phiên bản xuất bản:</span>
+                <span className="font-black px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  {publishModalItem.version_count ? `Phiên bản V${publishModalItem.version_count}` : 'Phiên bản mới nhất'}
+                </span>
+              </div>
+              {publishModalItem.current_version_id && (
+                <div className="text-[10px] text-slate-500 font-mono flex items-center justify-between bg-slate-100/80 px-2 py-1 rounded-lg">
+                  <span className="font-semibold text-slate-600">Con trỏ nháp:</span>
+                  <span title={publishModalItem.current_version_id}>{publishModalItem.current_version_id.slice(0, 18)}...</span>
+                </div>
+              )}
+              {publishModalItem.published_version_id ? (
+                <div className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 font-medium leading-relaxed">
+                  ⚠️ <strong>Lưu ý kiến trúc Dual-Head:</strong> Câu hỏi này hiện đang có bản xuất bản trước đó. Khi xác nhận, phiên bản nháp mới nhất (V{publishModalItem.version_count || 'mới'}) sẽ chính thức trở thành bản công bố cho học sinh làm bài.
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                  Sau khi xuất bản, câu hỏi sẽ sẵn sàng để giao bài tập và đưa vào đề thi.
+                </p>
+              )}
+            </div>
 
             {/* CHECKBOX CHIA SẺ VỚI GIÁO VIÊN KHÁC */}
             <div className="my-3.5 p-3.5 bg-indigo-50/70 border-2 border-indigo-200 rounded-2xl text-left">
@@ -1298,10 +1431,18 @@ export const QuestionBankListTab = ({
               </label>
             </div>
 
-            <div className="text-xs font-semibold text-slate-500 mb-5 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
+            <div className="text-xs font-semibold text-slate-500 mb-4 truncate bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
               <span className="font-bold text-slate-700">Câu hỏi: </span>
               {publishModalItem.title || publishModalItem.prompt || '(Không có tiêu đề)'}
             </div>
+
+            {/* THÔNG BÁO LỖI KHI XUẤT BẢN THẤT BẠI */}
+            {publishError && (
+              <div className="mb-4 p-3 bg-rose-50 border-2 border-rose-200 rounded-2xl flex items-start gap-2.5 text-rose-800 text-xs font-bold animate-shake">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">{publishError}</div>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
@@ -1482,7 +1623,10 @@ export const QuestionBankListTab = ({
             <div className="space-y-2 mb-5">
               <div className="text-xs font-semibold text-slate-700 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
                 <div className="text-[11px] font-black text-slate-500 mb-1">Tên câu hỏi:</div>
-                <div className="font-bold text-slate-900 line-clamp-2">
+                <div
+                  className="font-bold text-slate-900 line-clamp-2 cursor-default"
+                  title={cloneModalItem.title || cloneModalItem.prompt || '(Không có tiêu đề)'}
+                >
                   {cloneModalItem.title || cloneModalItem.prompt || '(Không có tiêu đề)'}
                 </div>
               </div>
@@ -1492,10 +1636,16 @@ export const QuestionBankListTab = ({
                   <span className="text-slate-400 font-medium">Tác giả:</span>
                   <span className="text-slate-700">{getAuthorDisplay(cloneModalItem.author_id).label}</span>
                 </div>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-200">
-                  <Globe className="w-3 h-3" />
-                  Mẫu công khai
-                </span>
+                {(() => {
+                  const modalVis = getModalVisibilityDisplay(cloneModalItem.visibility);
+                  const ModalVisIcon = modalVis.icon;
+                  return (
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] ${modalVis.className}`}>
+                      <ModalVisIcon className="w-3 h-3" />
+                      {modalVis.label}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 

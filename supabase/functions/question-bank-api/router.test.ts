@@ -332,8 +332,8 @@ Deno.test('RT-05 - ID câu hỏi không phải UUID (/qb/questions/bad-id/versio
   assertStrictEquals(mockRpc.calls.length, 0);
 });
 
-Deno.test('RT-06 - ID học sinh không phải UUID (/qb/student/questions/bad-id) -> 400 INVALID_INPUT', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+Deno.test('RT-06 - Giáo viên gọi ID không phải UUID (/qb/student/questions/bad-id) -> 400 INVALID_INPUT', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient();
   const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
 
@@ -341,6 +341,23 @@ Deno.test('RT-06 - ID học sinh không phải UUID (/qb/student/questions/bad-i
   const res = await handleQuestionBankRequest(req, deps);
 
   await assertErrorResponse(res, 400, 'INVALID_INPUT', 'ID câu hỏi không đúng định dạng UUID.');
+  assertStrictEquals(mockRpc.calls.length, 0);
+});
+
+Deno.test('RT-06B - Học sinh gọi ID bất kỳ (/qb/student/questions/:id) -> 403 FORBIDDEN trước RPC', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest('https://example.test/qb/student/questions/123-bad-uuid');
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Học sinh không có quyền truy cập trực tiếp vào Ngân hàng câu hỏi. Vui lòng truy cập thông qua bài tập hoặc đề kiểm tra được giao.'
+  );
   assertStrictEquals(mockRpc.calls.length, 0);
 });
 
@@ -628,7 +645,7 @@ Deno.test('RT-18B - Gửi trường không nằm trong allowlist (id) -> 400 INV
 });
 
 Deno.test('RT-19 - Query param lạ ngoài allowlist (GET /qb/student/questions/:id) -> 400 INVALID_REQUEST_FIELD', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient();
   const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
 
@@ -647,7 +664,7 @@ Deno.test('RT-19 - Query param lạ ngoài allowlist (GET /qb/student/questions/
 });
 
 Deno.test('RT-20 - version_id trong query không phải UUID -> 400 INVALID_INPUT', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient();
   const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
 
@@ -821,8 +838,8 @@ Deno.test('RT-26 - RPC2 rpc_qb_create_version thành công -> 201 CREATED', asyn
   assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
 });
 
-Deno.test('RT-27 - RPC3 rpc_qb_get_student_question thành công (Projection STUDENT_SAFE) -> 200 OK', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+Deno.test('RT-27 - Giáo viên xem trước định dạng học sinh (Projection STUDENT_SAFE) -> 200 OK', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient({
     data: {
       success: true,
@@ -851,6 +868,23 @@ Deno.test('RT-27 - RPC3 rpc_qb_get_student_question thành công (Projection STU
 
   assertStrictEquals(mockRpc.calls.length, 1);
   assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_get_student_question');
+});
+
+Deno.test('RT-27B - Học sinh gọi GET /qb/student/questions/:id -> 403 FORBIDDEN, RPC không bao giờ được gọi', async () => {
+  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockRpc = createMockRpcClient();
+  const deps = createRouterDeps(mockAuth.authDeps, mockRpc.client);
+
+  const req = createTestRequest(`https://example.test/qb/student/questions/${VALID_ITEM_ID}`);
+  const res = await handleQuestionBankRequest(req, deps);
+
+  await assertErrorResponse(
+    res,
+    403,
+    'FORBIDDEN',
+    'Học sinh không có quyền truy cập trực tiếp vào Ngân hàng câu hỏi. Vui lòng truy cập thông qua bài tập hoặc đề kiểm tra được giao.'
+  );
+  assertStrictEquals(mockRpc.calls.length, 0);
 });
 
 Deno.test('RT-28 - RPC4 rpc_qb_get_authoring_detail thành công (Projection AUTHORING_SAFE) -> 200 OK', async () => {
@@ -1018,7 +1052,7 @@ Deno.test('RT-33 - RPC2 trả ITEM_NOT_FOUND -> 404 NOT_FOUND', async () => {
 });
 
 Deno.test('RT-34 - RPC3 trả ITEM_NOT_FOUND -> 404 NOT_FOUND', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient({
     data: { success: false, error_code: 'ITEM_NOT_FOUND' },
   });
@@ -1183,7 +1217,7 @@ Deno.test('RT-40 - RPC2 trả version_number âm -> Fail-closed 500 INTERNAL_ERR
 });
 
 Deno.test('RT-41 - RPC3 trả sai projection (AUTHORING_SAFE thay vì STUDENT_SAFE) -> Fail-closed 500', async () => {
-  const mockAuth = createMockAuthDeps({ role: 'student', userId: VALID_STUDENT_ID });
+  const mockAuth = createMockAuthDeps({ role: 'teacher' });
   const mockRpc = createMockRpcClient({
     data: {
       success: true,
@@ -1981,6 +2015,7 @@ Deno.test('RT-PUBLISH-01 - Admin publish câu draft bất kỳ thành công -> 2
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -1996,7 +2031,7 @@ Deno.test('RT-PUBLISH-01 - Admin publish câu draft bất kỳ thành công -> 2
   assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
   assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'admin');
   assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
-  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published' });
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published', expected_version_id: VALID_VERSION_ID });
 });
 
 Deno.test('RT-PUBLISH-02 - Giáo viên publish câu draft của chính mình thành công -> 200 OK & status: published', async () => {
@@ -2012,6 +2047,7 @@ Deno.test('RT-PUBLISH-02 - Giáo viên publish câu draft của chính mình th�
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -2026,7 +2062,7 @@ Deno.test('RT-PUBLISH-02 - Giáo viên publish câu draft của chính mình th�
   assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
   assertStrictEquals(mockRpc.calls[0].args.p_caller_id, VALID_USER_ID);
   assertStrictEquals(mockRpc.calls[0].args.p_actor_role, 'teacher');
-  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published' });
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published', expected_version_id: VALID_VERSION_ID });
 });
 
 Deno.test('RT-PUBLISH-03 - Giáo viên cố publish câu hỏi của giáo viên khác -> DB RPC trả FORBIDDEN -> 403 FORBIDDEN', async () => {
@@ -2042,6 +2078,7 @@ Deno.test('RT-PUBLISH-03 - Giáo viên cố publish câu hỏi của giáo viên
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -2107,6 +2144,7 @@ Deno.test('RT-PUBLISH-06 - Item không tồn tại (ITEM_NOT_FOUND) -> 404 NOT_F
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -2132,6 +2170,7 @@ Deno.test('RT-PUBLISH-07 - Chuyển đổi từ archived -> published bị chặ
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -2158,6 +2197,7 @@ Deno.test('RT-PUBLISH-08 - Idempotent publish (câu hỏi đã published) -> 200
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
@@ -2180,13 +2220,14 @@ Deno.test('RT-PUBLISH-09 - Payload RPC truyền đúng { status: \'published\' }
 
   const req = createTestRequest(`https://example.test/qb/questions/${VALID_ITEM_ID}/publish`, {
     method: 'PATCH',
+    body: { expected_version_id: VALID_VERSION_ID },
   });
   const res = await handleQuestionBankRequest(req, deps);
 
   await assertSuccessResponse(res, 200);
   assertStrictEquals(mockRpc.calls.length, 1);
   assertStrictEquals(mockRpc.calls[0].name, 'rpc_qb_update_item_metadata');
-  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published' });
+  assertEquals(mockRpc.calls[0].args.p_payload, { status: 'published', expected_version_id: VALID_VERSION_ID });
   assertStrictEquals(mockRpc.calls[0].args.p_item_id, VALID_ITEM_ID);
 });
 
